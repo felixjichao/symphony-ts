@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@symphony/sym": ["packages/sym/src/index.ts"],
+      "@symphony/proto": ["packages/proto/src/index.ts"],
+      "@symphony/transport": ["packages/transport/src/index.ts"],
+      "@symphony/gateway": ["packages/gateway/src/index.ts"],
+      "@symphony/relay": ["packages/relay/src/index.ts"],
+      "@symphony/ctl": ["packages/ctl/src/index.ts"],
+      "@symphony/plugins": ["packages/plugins/src/index.ts"]
+    }
+  }
+}
