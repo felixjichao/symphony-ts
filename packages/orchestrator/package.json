@@ -11,6 +11,13 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@symphony/agent": "*",
+    "@symphony/config": "*",
+    "@symphony/domain": "*",
+    "@symphony/tracker": "*",
+    "@symphony/workspace": "*"
+  },
   "devDependencies": {
     "@types/node": "^22.7.0",
     "typescript": "^5.6.2",
