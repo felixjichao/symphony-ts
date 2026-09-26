@@ -54,7 +54,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
-里程碑顺序跟随依赖方向（orchestrator 在 tracker / workspace / agent 之后接线），单个里程碑的范围以 issue 标注的 SPEC section 与 `docs/conformance.md` 矩阵为准。
+里程碑顺序跟随依赖方向（orchestrator 在 tracker / workspace / agent 之后接线），单个里程碑的范围以 issue 标注的 SPEC section 与 [conformance.md](conformance.md) 矩阵为准。
 
 ## 历史：M0 协议栈 scaffold 已删除
 
@@ -62,6 +62,6 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 
 ## 后续基建批次（随里程碑另行跟踪）
 
-- `docs/conformance.md` 矩阵的持续更新纪律（每个 milestone PR 必须更新对应行）；
+- [conformance.md](conformance.md) 矩阵的持续更新纪律（每个 milestone PR 必须更新对应行）；
 - 测试分层落地（unit → 组件集成 → 端到端 loop，见 [testing.md](testing.md)）；
 - CI lane 化（当前单 lane：`npm ci && npm run gate`）。

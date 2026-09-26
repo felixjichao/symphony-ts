@@ -2,7 +2,7 @@
 
 ## 分层与验收口径
 
-分层对齐官方 SPEC §17 Test and Validation Matrix 的三个 profile（core / extension / real-environment）；进度以 `docs/conformance.md` 矩阵为准。
+分层对齐官方 SPEC §17 Test and Validation Matrix 的三个 profile（core / extension / real-environment）；进度以 [conformance.md](conformance.md) 矩阵为准。
 
 | 层 | 范围 | 状态 |
 |---|---|---|

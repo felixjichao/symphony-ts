@@ -11,7 +11,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 规范来源与进度追踪：
 
 - 唯一产品规范是官方 `SPEC.md`，baseline 固定为 `be10a1b79df723d6d7612b5651c8522704dafb2e`——同步 / 升级规则见 [docs/upstream.md](docs/upstream.md)；
-- 实现与 SPEC §17 / §18 验收项的映射见 `docs/conformance.md`；
+- 实现与 SPEC §17 / §18 验收项的映射见 [docs/conformance.md](docs/conformance.md)；
 - 参考实现与第三方 TypeScript 实现只用于设计对照，不构成规范。
 
 ## 快速开始
@@ -47,6 +47,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 |---|---|
 | [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders：命令矩阵、扩展点表、TODO 分级 |
 | [docs/upstream.md](docs/upstream.md) | 上游 SPEC baseline（SHA、同步 / 升级规则） |
+| [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新） |
 | [docs/architecture.md](docs/architecture.md) | 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑 |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
 | [docs/testing.md](docs/testing.md) | 测试分层（对齐 SPEC §17 profiles）与三条测试哲学 |
@@ -66,7 +67,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
-里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 `docs/conformance.md` 矩阵为准。
+里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 [docs/conformance.md](docs/conformance.md) 矩阵为准。
 
 ## 注意事项
 

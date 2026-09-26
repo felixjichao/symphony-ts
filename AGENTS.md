@@ -20,7 +20,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 ## Working Rules
 
 1. **每个 SPEC section 有唯一 owner 包**：修改前先按下方扩展点表定位所属 workspace，在该包内改代码、补该包的测试。
-2. **新增实现必须标注 SPEC section**：issue / PR / 提交说明写清对应 section（baseline 见 [docs/upstream.md](docs/upstream.md)），并更新 `docs/conformance.md` 矩阵对应行。
+2. **新增实现必须标注 SPEC section**：issue / PR / 提交说明写清对应 section（baseline 见 [docs/upstream.md](docs/upstream.md)），并更新 [docs/conformance.md](docs/conformance.md) 矩阵对应行。
 3. 本地跑最小相关检查（受影响 workspace 的 `test` + 根 `typecheck`）；提交前 / CI 跑全量 `npm run gate`。
 4. 不跨包复制类型或配置语义——领域类型的唯一权威是 `@symphony/domain`，配置解析的唯一落点是 `@symphony/config`；跨包只 import，不重声明。
 5. 架构 / 选型 / 跨包契约的决策要写 Agent Note（流程与模板见 [notes/README.md](notes/README.md)）；`## Alternatives considered` 为强制小节，不允许空标题。
@@ -68,6 +68,7 @@ apps/cli            → config + tracker + workspace + agent + orchestrator + ob
 ## 文档导航
 
 - [docs/upstream.md](docs/upstream.md) — 上游 SPEC baseline（SHA、同步 / 升级规则）
+- [docs/conformance.md](docs/conformance.md) — 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新对应行）
 - [docs/architecture.md](docs/architecture.md) — 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑
 - [docs/development.md](docs/development.md) — 环境搭建、日常命令、TS 布局与依赖约定
 - [docs/testing.md](docs/testing.md) — 测试分层（对齐 SPEC §17 profiles）与三条测试哲学
