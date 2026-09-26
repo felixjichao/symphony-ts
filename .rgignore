@@ -1,0 +1,7 @@
+# ripgrep 忽略：依赖、构建产物、测试产物与临时文件
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store

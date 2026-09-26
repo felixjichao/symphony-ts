@@ -15,7 +15,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run build --workspaces --if-present",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "gate": "npm run typecheck && npm test && npm run lint"
   },
   "devDependencies": {
     "@eslint/js": "^9.12.0",
