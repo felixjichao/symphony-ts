@@ -28,7 +28,7 @@ symphony-ts 是 [OpenAI Symphony](https://github.com/openai/symphony)（Rust 实
 | `packages/plugins` | controller-modules | `Plugin` 接口 + `PluginRegistry`（注册 / 顺序分发 / 定向分发）+ 5 个占位模块 | `sym`, `transport` |
 | `packages/gateway` | `gateway`/core | `GatewayServer`：持有 transport 与插件注册表，收包 → JSON 解信封 → 插件分发；M3 加认证与路由表，M6 加上游转发 | `sym`, `proto`, `transport`, `plugins` |
 | `packages/relay` | `relay` | L4/UDP 前端：`RelayRule`、`pickBackend` 轮询；M6 落地真实转发 | `transport`（仅类型） |
-| `packages/ctl` | `symphony-ctl` | `symctl` CLI：参数解析 + 用法表；M5 实现 list/send/spawn/inspect | `sym` |
+| `packages/ctl` | `symphony-ctl` | `symctl` CLI：参数解析 + 用法表；M5 以普通 Agent 客户端身份直连网关，实现 list/send/spawn/inspect | `sym`（M5 起加 `transport`/`proto`，见 [note](../notes/accepted/architecture/2026-09-26-ctl-gateway-access.md)） |
 | `apps/examples` | examples | echo Agent：`echoHandler` 纯函数；M3 接入网关 | `sym`, `gateway` |
 
 依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。

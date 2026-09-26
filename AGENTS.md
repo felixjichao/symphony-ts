@@ -39,7 +39,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 | 可运行示例 | `apps/examples` |
 
 依赖方向（下游可依赖上游，反向禁止）：
-`sym` ← `transport` / `proto` ← `plugins` ← `gateway` ← `apps/examples`；`relay` 只依赖 `transport`；`ctl` 只依赖 `sym`。
+`sym` ← `transport` / `proto` ← `plugins` ← `gateway` ← `apps/examples`；`relay` 只依赖 `transport`；`ctl` 当前只依赖 `sym`，M5 起允许加 `transport` / `proto` 以直连网关，永不依赖 `gateway`（决策见 [notes/accepted/architecture/2026-09-26-ctl-gateway-access.md](notes/accepted/architecture/2026-09-26-ctl-gateway-access.md)）。
 
 ## TODO 三级标记
 

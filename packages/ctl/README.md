@@ -22,7 +22,7 @@ commands:
 
 ## Extension points
 
-- **子命令（M5）**：命令表在 `SYMCTL_USAGE`，`main` 是真实入口——新子命令沿 `parseArgs → main` 链路扩展，交互经 transport 直连网关；
+- **子命令（M5）**：命令表在 `SYMCTL_USAGE`，`main` 是真实入口——新子命令沿 `parseArgs → main` 链路扩展。交互以**普通 Agent 客户端**身份直连网关：M5 起允许新增 `@symphony/transport`（收发数据报）与 `@symphony/proto`（信封编解码）依赖，永不依赖 `@symphony/gateway`；M0 阶段依赖只有 `@symphony/sym`（契约决策见 [note](../../notes/accepted/architecture/2026-09-26-ctl-gateway-access.md)）；
 - 输出契约：`main` 返回 string（无参 / 非法参时返回 usage），便于按 [testing.md](../../docs/testing.md) "test the real entry path" 直接断言。
 
 ## Known limitations

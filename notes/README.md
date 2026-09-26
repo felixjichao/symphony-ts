@@ -48,4 +48,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 ## 现有 Notes
 
 - [accepted/architecture/2026-09-25-m0-scaffold.md](accepted/architecture/2026-09-25-m0-scaffold.md) — M0 脚手架：8-workspace 边界先行
+- [accepted/architecture/2026-09-26-ctl-gateway-access.md](accepted/architecture/2026-09-26-ctl-gateway-access.md) — symctl 访问网关的路径：M5 起经 transport/proto 直连
 - [accepted/tooling/2026-09-25-npm-workspaces.md](accepted/tooling/2026-09-25-npm-workspaces.md) — npm workspaces 为唯一 canonical 包管理
