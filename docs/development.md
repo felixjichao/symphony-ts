@@ -51,8 +51,8 @@ npm run echo -w @symphony/examples     # tsx src/echoAgent.ts
 ## TypeScript 布局约定
 
 - 严格模式全家桶：`strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` + `noFallthroughCasesInSwitch`（见根 `tsconfig.base.json`，各包 tsconfig 继承它）。
-- 每个包结构固定：`src/index.ts`（公共 API 唯一出口）、`src/*.test.ts`（vitest 单测，与被测文件同目录）。
-- `package.json` 的 `main`/`exports` 直接指向 `src/index.ts`（TS 源码即入口，无 dist 产物）；根 tsconfig 的 `paths` 把 `@symphony/*` 映射到各包 `src/index.ts`。**发布形态（dist 产物）在 M1 打包时切换。**
+- library 包（`packages/*`）结构固定：`src/index.ts`（公共 API 唯一出口）、`src/*.test.ts`（vitest 单测，与被测文件同目录）；`apps/*` 以可运行入口为准（如 examples 的 `src/echoAgent.ts`），测试同样是同目录 `.test.ts`。
+- `package.json` 的 `main`/`exports` 直接指向 TS 源码（library 包为 `src/index.ts`；app 为可运行入口，如 `@symphony/examples` 指向 `src/echoAgent.ts`），无 dist 产物；根 tsconfig 的 `paths` 把 `@symphony/*`（library 包）映射到各自 `src/index.ts`。**发布形态（dist 产物）在 M1 打包时切换。**
 - 跨包 import 一律用包名（`import { createMessage } from "@symphony/sym"`），不要写跨包相对路径。
 - 包间依赖在 `package.json` 里用语义 `*`（npm workspaces 自动链接本地包）；新增依赖边前先确认方向符合 [architecture.md](architecture.md) 的依赖表。
 - 不跨包复制类型 / 协议定义；wire 模型的唯一权威是 `@symphony/sym`。
