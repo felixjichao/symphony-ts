@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "TypeScript reimplementation of OpenAI Symphony — agent orchestration protocol + runtime (M0 scaffold)",
+  "description": "TypeScript implementation of OpenAI Symphony (official SPEC.md) — long-running orchestrator that runs coding agents against issue-tracker work",
   "workspaces": [
     "packages/*",
     "apps/*"
