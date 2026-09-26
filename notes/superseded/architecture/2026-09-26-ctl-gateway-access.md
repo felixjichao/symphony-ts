@@ -1,5 +1,6 @@
 # Agent Note: symctl 访问网关的路径——M5 起经 transport/proto 直连
-Status: accepted
+Status: superseded
+Superseded by: [2026-09-26-align-with-upstream-spec.md](../../accepted/architecture/2026-09-26-align-with-upstream-spec.md)（M0.6 对齐官方 SPEC：ctl / gateway / transport / proto 均已删除，本契约随之失效，原文保留不改写）
 
 ## Problem
 
