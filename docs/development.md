@@ -32,11 +32,12 @@ apps/cli                @symphony/cli            CLI / 进程生命周期（§17
 ## 日常命令
 
 ```bash
-npm run gate        # 一键门禁 = typecheck + test + lint（提交前 / CI 必须全绿）
+npm run gate        # 一键门禁 = typecheck + test + lint + docs:check（提交前 / CI 必须全绿）
 
 npm run typecheck   # 全仓 tsc 严格编译（noEmit）
 npm test            # 全仓单元测试（vitest）
 npm run lint        # eslint
+npm run docs:check  # 文档门禁：Markdown 相对链接存在 + AGENTS.md ≤ 150 行
 
 # 单 workspace（-w 用包名或路径均可）：
 npm test -w @symphony/config
@@ -44,6 +45,14 @@ npm run build -w @symphony/domain
 ```
 
 约定：**本地跑最小相关检查**（受影响 workspace 的测试 + 根 typecheck），**全量归 CI / 提交前**（`npm run gate`）。
+
+## CI 与文档门禁
+
+- CI（`.github/workflows/ci.yml`）：PR 与 main push 上执行 `npm ci && npm run gate`——本地与 CI 使用同一个验收口径。
+- doc gate（`scripts/docs-check.mjs`，零依赖）：
+  1. 仓库内所有 Markdown 的**相对链接必须指向存在的文件 / 目录**（外部 URL 与纯 anchor 跳过）；
+  2. **`AGENTS.md` ≤ 150 行**——standing orders 保持短小可导航，详细内容下沉到 `docs/` 与各包 README。
+- 移动 / 重命名 Markdown 文件或目录时，跑一次 `npm run docs:check` 再提交。
 
 ## TypeScript 布局约定
 

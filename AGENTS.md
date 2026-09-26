@@ -12,7 +12,8 @@ symphony-ts：按官方 [OpenAI Symphony](https://github.com/openai/symphony) `S
 | 全仓测试（vitest） | `npm test` |
 | 单个 workspace 测试 | `npm test -w @symphony/config` |
 | 静态检查 | `npm run lint` |
-| 一键门禁（typecheck + test + lint） | `npm run gate` |
+| 文档门禁（Markdown 相对链接 + AGENTS.md 行数预算） | `npm run docs:check` |
+| 一键门禁（typecheck + test + lint + docs:check） | `npm run gate` |
 
 npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）。不要引入 pnpm/yarn，不要提交第二份 lockfile。要求 Node >= 20。
 
