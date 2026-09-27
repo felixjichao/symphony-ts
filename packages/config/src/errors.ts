@@ -4,13 +4,13 @@
  * {@link SymphonyConfigError}，原始异常经 `cause` 保留供诊断（父 issue §7）。
  *
  * 判别式是 {@link SymphonyConfigError.code}，取值来自 {@link ConfigErrorCode}。
- * M1.2（SPEC §5.1–§5.3）只涉及 workflow 发现 / 解析相关的三个码；后续里程碑
- * （§6 typed config 校验、§5.4 模板渲染）会向该联合追加新码，消费方应容忍
- * 未知码并按 `code` 精确分支。
+ * M1.2（§5.1–§5.3）落地发现 / 解析三码，M1.3（§6 typed config 校验）追加
+ * `invalid_config` / `missing_env_reference`；后续里程碑（§5.4 模板渲染）会继续
+ * 向该联合追加新码，消费方应容忍未知码并按 `code` 精确分支。
  */
 
 /**
- * config 包对外错误码（SPEC §5.5）。M1.2 落地前三个：
+ * config 包对外错误码（SPEC §5.5）。M1.2 落地前三个，M1.3 追加后两个：
  *
  * - `missing_workflow_file`：workflow 文件缺失或不可读（§5.1）。ENOENT 与
  *   EACCES / EISDIR 等**读取失败**统一用本码，具体 fs 错误经 `cause` 区分。
@@ -18,14 +18,20 @@
  *   （以 `---` 开头却缺少结束的 `---`）。
  * - `workflow_front_matter_not_a_map`：front matter 解析成功但根不是 map/object
  *   （§5.2，如 list / 标量）。
+ * - `invalid_config`：front matter 值未通过 typed 校验（§5.3 / §6.1，如错类型、
+ *   非正整数、section 非 map）。message 携带字段路径（如 `agent.max_turns`）与
+ *   诊断详情；`path` 为 workflow 文件路径（纯 resolver 调用时为 `workflowDir`）。
+ * - `missing_env_reference`：显式 `$VAR` / `${VAR}` 环境引用（核心层仅
+ *   `workspace.root`，§6.1）未设置或为空。message 携带变量名与字段路径。
  *
- * `template_parse_error` / `template_render_error`（§5.4 渲染期）与 §6 的
- * invalid-config / missing-env 类码留待 M1.4 / M1.3 追加。
+ * `template_parse_error` / `template_render_error`（§5.4 渲染期）留待 M1.4 追加。
  */
 export type ConfigErrorCode =
   | "missing_workflow_file"
   | "workflow_parse_error"
-  | "workflow_front_matter_not_a_map";
+  | "workflow_front_matter_not_a_map"
+  | "invalid_config"
+  | "missing_env_reference";
 
 /**
  * config 包的统一 typed error。除标准 `Error` 字段外携带：

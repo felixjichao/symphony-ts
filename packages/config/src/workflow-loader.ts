@@ -5,7 +5,8 @@
  * 本文件只做 discovery + 基础解析，产出 `@symphony/domain` 的
  * {@link WorkflowDefinition}：`config` 是**未经校验的原始 YAML 根对象**，
  * `promptTemplate` 是 trim 后的 Markdown 正文。typed config resolution
- * （默认值 / `$VAR` / 路径规范化，§6.1）归 M1.3，模板渲染（§5.4）归 M1.4。
+ * （默认值 / `$VAR` / 路径规范化，§6.1）归 `config-resolution.ts`（M1.3），
+ * 模板渲染（§5.4）归 M1.4。
  *
  * 边缘语义决策（未闭合 front matter、空 front matter、定界符严格度、
  * BOM / CRLF）记录于
@@ -42,10 +43,11 @@ function isFrontMatterDelimiter(line: string): boolean {
 }
 
 /**
- * YAML 解析结果是否为可作 `config` 的 plain map：排除 `null`、数组与
+ * YAML 解析结果是否为可作 `config` / section 的 plain map：排除 `null`、数组与
  * Date / Map 等非 plain object（§5.2 "MUST decode to a map/object"）。
+ * 包内共享（config-resolution 的 section 校验复用同一判定），不经 `index.ts` 导出。
  */
-function isPlainMap(value: unknown): value is Record<string, unknown> {
+export function isPlainMap(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
@@ -69,9 +71,27 @@ function isPlainMap(value: unknown): value is Record<string, unknown> {
  * unknown top-level keys 原样保留、不校验（§5.3 forward compatibility）。
  */
 export function loadWorkflow(options: LoadWorkflowOptions = {}): WorkflowDefinition {
-  const cwd = options.cwd ?? process.cwd();
-  const filePath = resolve(cwd, options.path ?? "WORKFLOW.md");
+  return loadWorkflowFromFile(resolveWorkflowPath(options));
+}
 
+/**
+ * 按 §5.1 优先级把 {@link LoadWorkflowOptions} 解析为 workflow 文件的绝对路径
+ * （显式 `path` 相对 `cwd` 解析；缺省为 `cwd` 下的 `WORKFLOW.md`）。
+ *
+ * 包内共享：`loadEffectiveWorkflow`（config-resolution）复用本函数拿到同一条
+ * 路径，再把其所在目录作为相对 `workspace.root` 的解析基准——不得存在第二份
+ * 路径解析逻辑。不经 `index.ts` 导出。
+ */
+export function resolveWorkflowPath(options: LoadWorkflowOptions = {}): string {
+  const cwd = options.cwd ?? process.cwd();
+  return resolve(cwd, options.path ?? "WORKFLOW.md");
+}
+
+/**
+ * 从已解析的绝对路径加载 workflow（{@link loadWorkflow} 的实现体；供
+ * `loadEffectiveWorkflow` 复用，避免二次路径解析）。不经 `index.ts` 导出。
+ */
+export function loadWorkflowFromFile(filePath: string): WorkflowDefinition {
   let raw: string;
   try {
     raw = readFileSync(filePath, "utf8");
@@ -137,8 +157,8 @@ export function loadWorkflow(options: LoadWorkflowOptions = {}): WorkflowDefinit
   return { config: parsed, promptTemplate };
 }
 
-/** not-a-map 错误消息里的类型描述（诊断用，非契约面）。 */
-function describeValueType(value: unknown): string {
+/** 错误消息里的类型描述（诊断用，非契约面）；包内共享，不经 `index.ts` 导出。 */
+export function describeValueType(value: unknown): string {
   if (Array.isArray(value)) {
     return "a list";
   }

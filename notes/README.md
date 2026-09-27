@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-09-27-config-resolution-contract.md](accepted/architecture/2026-09-27-config-resolution-contract.md) — typed config resolution 的管道语义与边缘裁定：`tracker.kind` 空串哨兵、`$VAR` 仅限 `workspace.root`、双 invalid-value 策略、显式 null / `~user` / by-state last-wins，M1.3（SPEC §5.3 / §6）
 - [accepted/architecture/2026-09-27-workflow-loader-contract.md](accepted/architecture/2026-09-27-workflow-loader-contract.md) — WORKFLOW.md loader 的公共 API、`SymphonyConfigError` 错误契约与边缘语义（空块 / 未闭合 / 非 map 根 / BOM·CRLF），M1.2（SPEC §5.1–§5.3）
 - [accepted/tooling/2026-09-27-config-yaml-dependency.md](accepted/tooling/2026-09-27-config-yaml-dependency.md) — `@symphony/config` 引入 `yaml` 作为仓库首个运行时外部依赖的选型（M1.2）
 - [accepted/tooling/2026-09-27-typescript-5x-pin.md](accepted/tooling/2026-09-27-typescript-5x-pin.md) — 根级 TypeScript 收敛到 5.x（devDependencies + overrides）并移除已弃用的 `baseUrl`（TS5101 隐患）
