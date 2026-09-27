@@ -10,7 +10,8 @@ M1.4 要在 `packages/config` 实现 SPEC §5.4 的严格 prompt 渲染。SPEC �
 会被 M4（agent prompt 组装）与 M5（orchestrator 渲染）直接依赖的裁定未逐字规定：
 变量面用 camelCase 还是 SPEC 的 snake_case、`attempt` 首次运行为 null 还是缺席、
 空正文的 fallback 粒度、时间戳以 number 还是字符串暴露、无文件上下文时错误的 `path`
-取什么、以及 `liquidjs` 把未知 filter 报在 parse 阶段时如何对齐 §5.5 的分类。这些须
+取什么、`liquidjs` 把未知 filter 报在 parse 阶段时如何对齐 §5.5 的分类，以及引擎的
+读盘类标签（`{% include %}` 等）是否允许——即"纯函数、无 IO"是不是真的成立。这些须
 一次定死，避免 M4 / M5 各自漂移。
 
 ## Decision
@@ -51,6 +52,14 @@ M1.4 要在 `packages/config` 实现 SPEC §5.4 的严格 prompt 渲染。SPEC �
    裸模板调用用哨兵值 `"<inline>"`（类形状 `code` / `path` / `cause` 不变）。
 9. **失败只影响当次调用**：`renderPrompt` 是纯函数，失败抛 typed error；重试 / 派发
    处置归 orchestrator（§12.4 / §5.5，M5），本层不缓存、不重试、不改 effective config。
+10. **引擎文件系统无关（"无 IO" 契约由结构保证）**：`liquidjs` 的 `{% include %}` /
+    `{% render %}` / `{% layout %}` 在求值时按 `process.cwd()` 真实读盘——这会让渲染
+   结果依赖进程环境，并把任意仓库文件内容带进 prompt，使"纯函数、无 IO"的契约名不副实。
+   本层给引擎注入一个**拒绝一切读盘的 `fs`**（`exists` / `existsSync` / `readFile` /
+   `readFileSync` / `resolve` 全部抛错），并把 `relativeReference` 置 `false`。渲染层
+   只消费显式注入的 `issue` / `attempt`，不读文件；读盘类标签的使用会得到
+   `template_render_error`，而不是文件内容。SPEC §5.4 只要求 "Liquid-compatible
+   semantics"，禁用读盘标签不违反 SPEC。
 
 ## Alternatives considered
 
@@ -68,6 +77,13 @@ M1.4 要在 `packages/config` 实现 SPEC §5.4 的严格 prompt 渲染。SPEC �
 - **手写 AST 遍历区分 filter 错误（不依赖消息前缀）**：否——需遍历 `liquidjs` 内部
   token 结构、与版本耦合更深，收益不抵复杂度；前缀判定有测试锁定，退化时也只落到
   `template_parse_error`（仍是 typed error，不会静默通过）。
+- **保留读盘标签、把"纯函数无 IO"改成"渲染可能读 cwd 下文件"**：否——模板来自
+  仓库内 `WORKFLOW.md`，允许 `{% include %}` 等于让 prompt 内容随进程 cwd 与仓库文件
+  漂移，且与 §5.4 的输入面（只有 `issue` / `attempt`）相矛盾；M4 / M5 会把这些文本
+  当契约引用，假契约比少一个标签更危险。禁用读盘把契约变成结构事实。
+- **在 parse 阶段拒绝读盘标签（白名单标签集）**：否——需枚举 `liquidjs` 全部标签并
+  随版本维护，而注入拒绝式 `fs` 只依赖稳定的 `FS` 接口，覆盖面更全（含未来新增的
+  读取型标签）。
 
 ## Consequences
 
@@ -79,3 +95,6 @@ M1.4 要在 `packages/config` 实现 SPEC §5.4 的严格 prompt 渲染。SPEC �
   里程碑不得各自漂移；需要变更时先改本 Note 再改代码。
 - 新增模板变量（如 §12.3 提及的 OPTIONAL `retry_kind`，非 core conformance）须回到
   本层显式扩展映射，并在 README 记录。
+- **`{% include %}` / `{% render %}` / `{% layout %}` 不可用**（Decision 10）：模板若
+  需要复用片段，必须把内容内联进 `WORKFLOW.md` 正文。若未来确需片段能力，应经显式
+  的、受控的注入面（而非读 cwd）实现，并先改本 Note。

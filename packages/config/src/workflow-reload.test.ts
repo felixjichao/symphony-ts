@@ -17,7 +17,34 @@ import { join } from "node:path";
 
 import { describe, afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { watchWorkflow, type WorkflowReloadEvent, type WorkflowWatchHandle } from "./index";
+import type { Issue } from "@symphony/domain";
+
+import {
+  renderPrompt,
+  SymphonyConfigError,
+  watchWorkflow,
+  type WorkflowReloadEvent,
+  type WorkflowWatchHandle,
+} from "./index";
+
+/** 渲染用的归一化 {@link Issue}（§4.1.1）；本文件的断言不依赖其字段值。 */
+const ISSUE: Issue = {
+  id: "issue-1",
+  nativeRef: null,
+  identifier: "ABC-123",
+  title: "Fix the widget",
+  description: null,
+  priority: null,
+  state: "In Progress",
+  branchName: null,
+  url: null,
+  assigneeId: null,
+  labels: [],
+  blockedBy: [],
+  dispatchable: true,
+  createdAt: null,
+  updatedAt: null,
+};
 
 let dir: string;
 let handle: WorkflowWatchHandle | undefined;
@@ -47,13 +74,19 @@ function workflowBody(options: { intervalMs: number; body: string }): string {
 }
 
 /** 启动 watcher（注入临时目录、空 env、固定 home、短轮询间隔）。 */
-function watch(intervalMs = 10): WorkflowWatchHandle {
+function watch(
+  intervalMs = 10,
+  onEvent?: (event: WorkflowReloadEvent) => void,
+): WorkflowWatchHandle {
   handle = watchWorkflow({
     cwd: dir,
     env: {},
     home: "/home/test-user",
     intervalMs,
-    onEvent: (event) => events.push(event),
+    onEvent: (event) => {
+      events.push(event);
+      onEvent?.(event);
+    },
   });
   return handle;
 }
@@ -148,6 +181,102 @@ describe("watchWorkflow — invalid reload keeps last-known-good (SPEC §6.2 / �
     await vi.waitFor(() => expect(events.length).toBe(2));
     expect(events[1]?.kind).toBe("reloaded");
     expect(watcher.current().serviceConfig.polling.intervalMs).toBe(6000);
+  });
+
+  it("reports a non-map front matter reload as workflow_front_matter_not_a_map, keeping last-known-good", async () => {
+    write(workflowBody({ intervalMs: 5000, body: "good body" }));
+    const watcher = watch();
+    const before = watcher.current();
+
+    // front matter 解析成功但根是 list（§5.2 MUST decode to a map/object）。
+    write("---\n- just\n- a\n- list\n- here\n---\nbody");
+    await vi.waitFor(() => expect(events.length).toBe(1));
+    const event = events[0];
+    expect(event?.kind).toBe("error");
+    if (event?.kind === "error") {
+      expect(event.error.code).toBe("workflow_front_matter_not_a_map");
+    }
+    expect(watcher.current()).toBe(before);
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(5000);
+  });
+});
+
+describe("watchWorkflow — prompt template failures stay out of reload (SPEC §5.5 gating)", () => {
+  const BROKEN_BODY = "Hello {{ unclosed ";
+
+  it("reloads a workflow whose prompt body is a broken template, and fails only on render", async () => {
+    write(workflowBody({ intervalMs: 5000, body: "good body" }));
+    const watcher = watch();
+
+    // 合法 front matter + 语法坏模板正文：reload 不做模板 parse（§5.5 只把文件
+    // read/YAML 错误列为 gating），故这是一次 valid reload。
+    write(`---\npolling:\n  interval_ms: 7000\n---\n${BROKEN_BODY}`);
+
+    await vi.waitFor(() => expect(events.length).toBe(1));
+    expect(events[0]?.kind).toBe("reloaded");
+    // effective config 完好：模板正文只是文本，未被 reload 路径解析。
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(7000);
+    expect(watcher.current().definition.promptTemplate).toBe("Hello {{ unclosed");
+
+    // 模板错误只 fail 当次 attempt（§5.5），不构成 config 错误。
+    const effective = watcher.current();
+    let renderError: unknown;
+    try {
+      renderPrompt(effective.definition.promptTemplate, { issue: ISSUE, attempt: 2 });
+    } catch (error) {
+      renderError = error;
+    }
+    expect(renderError).toBeInstanceOf(SymphonyConfigError);
+    expect((renderError as SymphonyConfigError).code).toBe("template_parse_error");
+
+    // 模板失败不污染 last-known-good：current() 仍是同一对象、逐字段不变。
+    expect(watcher.current()).toBe(effective);
+
+    // 防御性 reload() 同样不把模板错误升级为 config 错误（重新 load 会产生结构
+    // 相等的新 effective 对象，故此处断言值相等）。
+    watcher.reload();
+    expect(events.length).toBe(2);
+    expect(events[1]?.kind).toBe("reloaded");
+    expect(watcher.current()).toEqual(effective);
+  });
+});
+
+describe("watchWorkflow — listener isolation (SPEC §6.2 crash resistance)", () => {
+  it("survives a throwing onEvent and keeps detecting further changes", async () => {
+    write(workflowBody({ intervalMs: 5000, body: "good body" }));
+    let calls = 0;
+    const watcher = watch(10, () => {
+      calls += 1;
+      throw new TypeError("listener bug");
+    });
+
+    write(workflowBody({ intervalMs: 7000, body: "new body" }));
+    await vi.waitFor(() => expect(calls).toBe(1));
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(7000);
+
+    // watcher 未被监听器异常终结：后续变化照常检出。
+    write(workflowBody({ intervalMs: 8000, body: "newer body!" }));
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(8000);
+  });
+
+  it("does not misreport a throwing listener as an invalid reload", async () => {
+    write(workflowBody({ intervalMs: 5000, body: "good body" }));
+    const watcher = watch(10, (event) => {
+      if (event.kind === "reloaded") {
+        // 监听器抛出的 SymphonyConfigError 属于监听器自身缺陷，不得被 reload 的
+        // 失败域捕获后误报成一次 config error。
+        throw new SymphonyConfigError("invalid_config", "listener bug", { path: dir });
+      }
+    });
+
+    write(workflowBody({ intervalMs: 7000, body: "new body" }));
+    await vi.waitFor(() => expect(events.length).toBe(1));
+    expect(events[0]?.kind).toBe("reloaded");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(events.map((event) => event.kind)).toEqual(["reloaded"]);
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(7000);
   });
 });
 

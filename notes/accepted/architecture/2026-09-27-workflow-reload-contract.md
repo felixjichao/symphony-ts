@@ -19,7 +19,7 @@ SHOULD 在运行期防御性再校验（如 dispatch 前）。SPEC 未规定检�
    type WorkflowReloadEvent =
      | { kind: "reloaded"; effective: EffectiveWorkflow }
      | { kind: "error"; error: SymphonyConfigError };
-   interface WorkflowWatchOptions extends LoadEffectiveWorkflowOptions {
+   interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
      intervalMs?: number;                       // 默认 1000
      onEvent?: (event: WorkflowReloadEvent) => void;
    }
@@ -28,10 +28,12 @@ SHOULD 在运行期防御性再校验（如 dispatch 前）。SPEC 未规定检�
      reload(): void;
      close(): void;
    }
-   function watchWorkflow(options?: WorkflowWatchOptions): WorkflowWatchHandle;
+   function watchWorkflow(options?: WatchWorkflowOptions): WorkflowWatchHandle;
    ```
 2. **检测机制：轮询 + stamp 对比**（`mtimeMs` + `size`），默认 1000ms，`intervalMs`
    可注入。与上游参考实现 `workflow_store.ex`（1s 轮询 + mtime/size stamp）一致。
+   初始 stamp **先于**首次 load 读取：文件恰在两者之间被改写时只会多触发一次无害的
+   reload，而不会让新内容被漏检、把陈旧 effective config 保留到下次变化。
 3. **初始加载 fail-fast**：`watchWorkflow` 同步执行首次 `loadEffectiveWorkflow`，
    失败直接 throw `SymphonyConfigError`，不返回半初始化 handle（支撑 §6.3 startup
    validation；呈现方式归调用方）。初始成功**不**发 `reloaded` 事件。
@@ -41,22 +43,32 @@ SHOULD 在运行期防御性再校验（如 dispatch 前）。SPEC 未规定检�
    出的 `SymphonyConfigError` 经 `onEvent({ kind: "error" })` 上报；
    `current()` 保持旧值。**stamp 在尝试前即推进**，故持续写坏的文件只上报一次，不
    每 tick 重复刷事件；文件写好（stamp 变化）后自愈。
-6. **文件删除 = 一次 invalid reload**：`statSync` 失败 → stamp 变为 `<missing>` →
+6. **监听器（`onEvent`）异常被隔离**：`reloaded` / `error` 事件的上报都在加载失败
+   域**之外**，且 `emit` 内部 catch 掉监听器抛出的一切异常。两条硬理由：
+   （a）watcher 是 §6.2 crash-resistance 的载体，监听器异常若从 `setInterval` 回调
+   逃逸会成为 uncaught exception 直接崩掉 daemon；（b）`error` 事件的唯一语义是
+   "一次 invalid reload"，若把监听器自身缺陷（哪怕是 `SymphonyConfigError`）捕获后
+   转报为 `error`，会产生误导 operator 的假事件。代价：监听器缺陷被静默吞掉，
+   故监听器必须自己保证不抛（JSDoc / README 已写明契约），其错误上报由监听器侧负责。
+7. **文件删除 = 一次 invalid reload**：`statSync` 失败 → stamp 变为 `<missing>` →
    触发一次 reload 尝试 → `missing_workflow_file` 事件，服务不 crash；文件恢复后
    stamp 变化 → `reloaded`。
-7. **`reload()` 是防御性同步再校验**（§6.2 SHOULD / §6.3 dispatch 前）：立即
+8. **`reload()` 是防御性同步再校验**（§6.2 SHOULD / §6.3 dispatch 前）：立即
    read / parse / resolve、**不看 stamp**；成功更新 last-known-good + `reloaded`，
    失败保持旧值 + `error`。`close()` 后为 no-op。
-8. **`close()` 幂等**：`clearInterval` 后不再产生事件；`current()` 仍可读。定时器
+9. **`close()` 幂等**：`clearInterval` 后不再产生事件；`current()` 仍可读。定时器
    保持默认 ref（daemon 场景 watcher 应维持事件循环存活）；测试须 `afterEach`
    `close()`，不遗留 handle。
-9. **reload 不做模板 parse 校验**：§5.5 明确 workflow 文件 read / YAML 错误才阻塞
-   dispatch，模板错误只 fail 当次 attempt；上游也只在 build prompt 时 parse。因此
-   template failure 在结构上不可能污染 last-known-good config（补显式测试锁定）。
-   `current().definition.promptTemplate` 始终反映最后一次成功读取的正文。
-10. **watcher 绑定创建时的 workflow 路径**：路径变化 = 新建实例（上游支持运行期换
+10. **reload 不做模板 parse 校验**：§5.5 明确 workflow 文件 read / YAML 错误才阻塞
+    dispatch，模板错误只 fail 当次 attempt；上游也只在 build prompt 时 parse。因此
+    template failure 在结构上不可能污染 last-known-good config（**已由
+    `workflow-reload.test.ts` 的 "prompt template failures stay out of reload" 用例
+    显式锁定**：坏模板正文仍产生 valid `reloaded`，`renderPrompt` 单独抛
+    `template_parse_error`，`current()` 不被污染）。
+    `current().definition.promptTemplate` 始终反映最后一次成功读取的正文。
+11. **watcher 绑定创建时的 workflow 路径**：路径变化 = 新建实例（上游支持运行期换
     路径，M1.4 非目标，记入 Known limitations）。
-11. **本层不 import tracker / workspace / agent / orchestrator**：`onEvent` 即
+12. **本层不 import tracker / workspace / agent / orchestrator**：`onEvent` 即
     operator-visible error contract 的 config 层载体，接线到日志 / dashboard 归
     observability（M6）。
 
@@ -79,6 +91,14 @@ SHOULD 在运行期防御性再校验（如 dispatch 前）。SPEC 未规定检�
   parse 会把模板错误提升为 config 错误，改变 SPEC 语义并可能阻断 dispatch。
 - **支持运行期切换 workflow 路径**：否——超出 M1.4 范围；上游有该能力但无 SPEC 强制，
   记入 Known limitations，需要时另开里程碑。
+- **监听器异常异步 rethrow（如 `queueMicrotask(() => { throw error })`）**：否——只是
+  把崩溃从定时器栈挪到微任务栈，进程仍会退出，§6.2 的 "MUST NOT crash the service"
+  不成立；真正需要的是隔离，且不能让监听器异常反向影响 watcher 自身状态。
+- **把监听器异常转报为 `error` 事件**：否——`error` 的语义被固定为"一次 invalid
+  reload"，用它承载监听器缺陷会让 operator 误以为 `WORKFLOW.md` 出了问题（且第二次
+  回调调用同样可能抛）。隔离 + 监听器自担错误上报是唯一不污染语义的方案。
+- **初始 stamp 在首次 load 之后读取**：否——见 Decision 2；两者对调后竞态方向从
+  "新内容被漏检、陈旧 config 长期驻留"变成"多一次无害的 reload"，成本相同、后果更轻。
 
 ## Consequences
 
@@ -92,3 +112,7 @@ SHOULD 在运行期防御性再校验（如 dispatch 前）。SPEC 未规定检�
 - watcher 只在文件内容 / 存在性变化时动作；纯环境变量变化（如 `workspace.root` 引用
   的 env）不会触发 reload，需文件变化或显式 `reload()`。
 - `close()` 后实例不可再启动；需要重启 watcher 请新建实例。
+- **监听器异常被静默隔离**（Decision 6）：`onEvent` 抛出的异常不会出现在任何面上。
+  M5 / M6 接线时必须让监听器自身不抛（try/catch + 自带日志），否则其缺陷不可见。
+- 模板正文损坏（坏模板但合法 front matter）**不是** invalid reload：它以 `reloaded`
+  事件更新 `promptTemplate`，错误只在 `renderPrompt` 调用处暴露（§5.5 gating）。

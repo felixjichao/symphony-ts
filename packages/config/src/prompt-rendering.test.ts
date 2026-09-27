@@ -84,6 +84,7 @@ describe("renderPrompt — successful rendering (SPEC §5.4 / §12.2)", () => {
       [
         "id={{ issue.id }}",
         "native={{ issue.native_ref.provider }}",
+        "description={{ issue.description }}",
         "branch={{ issue.branch_name }}",
         "url={{ issue.url }}",
         "assignee={{ issue.assignee_id }}",
@@ -98,6 +99,7 @@ describe("renderPrompt — successful rendering (SPEC §5.4 / §12.2)", () => {
       [
         "id=issue-1",
         "native=linear",
+        "description=Widgets are broken.",
         "branch=feature/abc-123",
         "url=https://tracker.example/ABC-123",
         "assignee=user-9",
@@ -195,6 +197,22 @@ describe("renderPrompt — strict failures (SPEC §5.4 / §5.5)", () => {
     );
     expect(error.path).toBe("/repo/WORKFLOW.md");
   });
+});
+
+describe("renderPrompt — filesystem-free contract", () => {
+  it.each(["include", "render", "layout"])(
+    "fails on the `%s` tag instead of reading the filesystem",
+    (tag) => {
+      // 读盘类标签若可用，会把 cwd 下的任意仓库文件内容带进 prompt，并使渲染结果
+      // 依赖进程环境；本层契约是"纯函数、不读文件"，故结构性拒绝
+      // （`package.json` 确实存在于包目录，若读盘则会输出其全文）。
+      const error = expectConfigError(
+        () => renderPrompt(`{% ${tag} "package.json" %}`, { issue: makeIssue(), attempt: null }),
+        "template_render_error",
+      );
+      expect(error.message).toContain("filesystem-free");
+    },
+  );
 });
 
 describe("renderPrompt — empty prompt fallback (SPEC §5.4)", () => {

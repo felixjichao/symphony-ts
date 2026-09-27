@@ -56,6 +56,10 @@ export interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
   /**
    * 重载事件回调（operator-visible error contract 的载体）。初始加载**不**触发
    * 事件——初始失败由 {@link watchWorkflow} 直接 throw。
+   *
+   * **监听器不得抛异常**：watcher 会隔离（catch + 忽略）监听器抛出的任何异常，
+   * 既不让它逃逸出轮询定时器崩溃进程，也不把监听器自身缺陷误报为一次 config
+   * `error` 事件。监听器侧的错误上报由监听器自己负责（M6 接线日志 / dashboard）。
    */
   readonly onEvent?: (event: WorkflowReloadEvent) => void;
 }
@@ -84,28 +88,52 @@ export interface WorkflowWatchHandle {
  * watcher 实例绑定创建时的 workflow 路径；运行期换路径需新建实例（M1.4 非目标）。
  * 定时器保持默认 ref（daemon 场景应维持事件循环存活）；测试须在 `afterEach`
  * 显式 `close()`，不遗留 handle。
+ *
+ * 监听器（`onEvent`）异常被**隔离**：见 {@link WatchWorkflowOptions.onEvent}。
  */
 export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatchHandle {
   const workflowPath = resolveWorkflowPath(options);
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const onEvent = options.onEvent;
 
-  let lastKnownGood = loadEffectiveWorkflow(options);
+  // stamp 先于初始 load 读取：文件恰在两者之间被改写时，只会多触发一次（无害的）
+  // reload，而不是让新内容被漏检、把陈旧 effective config 一直保留到下次变化。
   let stamp = readWorkflowStamp(workflowPath);
+  let lastKnownGood = loadEffectiveWorkflow(options);
   let closed = false;
 
-  const reloadNow = (): void => {
+  /**
+   * 上报事件并隔离监听器异常：watcher 是 §6.2 crash-resistance 的载体，不能因下游
+   * 接线的 bug 崩溃（从定时器逃逸为 uncaught exception），也不得把监听器缺陷误报成
+   * config 错误——`error` 事件的唯一语义是"一次 invalid reload"。
+   */
+  const emit = (event: WorkflowReloadEvent): void => {
+    if (onEvent === undefined) {
+      return;
+    }
     try {
-      lastKnownGood = loadEffectiveWorkflow(options);
-      onEvent?.({ kind: "reloaded", effective: lastKnownGood });
+      onEvent(event);
+    } catch {
+      // 有意忽略：见上；监听器须自行保证不抛（JSDoc / Agent Note 已记录契约）。
+    }
+  };
+
+  const reloadNow = (): void => {
+    let next: EffectiveWorkflow;
+    try {
+      next = loadEffectiveWorkflow(options);
     } catch (error) {
       if (!(error instanceof SymphonyConfigError)) {
         // loader / resolver 的契约保证 typed error；非契约异常是内部缺陷，不静默吞掉。
         throw error;
       }
       // §6.2：invalid reload 保留 last-known-good，只上报 operator-visible error。
-      onEvent?.({ kind: "error", error });
+      emit({ kind: "error", error });
+      return;
     }
+    // 成功路径：事件在 try 之外上报——监听器异常绝不能被当成加载失败。
+    lastKnownGood = next;
+    emit({ kind: "reloaded", effective: next });
   };
 
   const timer = setInterval(() => {

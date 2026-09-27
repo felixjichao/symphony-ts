@@ -45,13 +45,16 @@ const prompt = renderPrompt(eff.definition.promptTemplate, {
 });
 ```
 
-- `renderPrompt(template, { issue, attempt?, workflowPath? })`（§5.4）：纯函数（无 IO）。
-  严格变量检查（未知变量 → 失败）与严格 filter 检查（未注册 filter → 失败），失败抛
-  `template_render_error`；模板语法 / tokenization 错误抛 `template_parse_error`；
+- `renderPrompt(template, { issue, attempt?, workflowPath? })`（§5.4）：纯函数，**不读
+  文件**。严格变量检查（未知变量 → 失败）与严格 filter 检查（未注册 filter → 失败），
+  失败抛 `template_render_error`；模板语法 / tokenization 错误抛 `template_parse_error`；
   第三方引擎异常经 `cause` 保留、不越过包边界。
 - 变量面：`issue` 映射为 **SPEC §4.1.1 的 snake_case 键**（`identifier` / `title` /
   `state` / `branch_name` / `assignee_id` / `labels` / `blocked_by` / `created_at` …），
   集合原样保留供 `{% for %}` 迭代；`attempt` 恒在场（首次为 `null`）。
+- **文件系统无关**：引擎的 `fs` 被替换为拒绝一切读盘的实现，`{% include %}` /
+  `{% render %}` / `{% layout %}` 等读盘标签会失败（`template_render_error`）而非把
+  cwd 下的文件内容带进 prompt；渲染结果只取决于入参。
 - **空正文 fallback**：`promptTemplate` 为空 / 纯空白时返回常量
   `DEFAULT_PROMPT_TEMPLATE`（`You are working on an issue from the configured tracker.`，
   §5.4 MAY），不报错、不经引擎。
@@ -83,7 +86,11 @@ watcher.close();                    // 显式停止轮询；幂等
   对应 `code`（坏 YAML / 非 map 根 / 非法 typed 值 / 文件删除）；文件修好后自愈。持续
   写坏的文件只上报一次（stamp 先行推进），不每 tick 重复刷事件。
 - **template failure 不污染 config**：reload 不做模板 parse（§5.5 的 gating 语义），
-  模板错误只 fail 当次渲染 attempt。
+  合法 front matter + 坏模板正文仍是一次 valid `reloaded`，模板错误只在 `renderPrompt`
+  调用处抛 `template_parse_error`；模板错误绝不升级为 config / reload 错误。
+- **监听器异常被隔离**：`onEvent` 抛出的任何异常都被 watcher 捕获忽略——既不逃逸出
+  轮询定时器崩溃进程，也不会被误报成一次 `error`（假 invalid reload）事件。**监听器
+  必须自行保证不抛**（其错误上报由监听器侧负责）。
 - `close()` 幂等；close 后不再产生事件，`current()` 仍可读。定时器保持默认 ref
   （daemon 存活），测试须显式 `close()` 不遗留 handle。
 
@@ -172,6 +179,8 @@ SPEC 未逐字规定的边缘情形，本包择一并固化（决策记录见
 - **模板错误归类**：`liquidjs` 在 `parse()` 阶段即解析 filter 名，本包把"未注册
   filter"归 `template_render_error`（对齐 §5.5 的分类），其余 parse 失败
   （语法 / tokenization）归 `template_parse_error`。
+- **读盘类标签被拒绝**：`{% include %}` / `{% render %}` / `{% layout %}` 等一律
+  `template_render_error`（渲染层文件系统无关，结果不依赖 `process.cwd()`）。
 - **reload 检测粒度**：仅文件名 / 存在性 / 内容变化触发；纯环境变量变化不触发（需文件
   变化或显式 `reload()`）。持续写坏的文件只上报一次 `error`（stamp 先行推进），修好后
   自愈。
@@ -201,4 +210,6 @@ SPEC 未逐字规定的边缘情形，本包择一并固化（决策记录见
 - `watchWorkflow` 用轮询（默认 1000ms，`intervalMs` 可注入）而非 `fs.watch`：跨平台
   行为一致、可确定性测试；检测有最多约一个轮询间隔的延迟。
 - 模板渲染不缓存已 parse 的模板（性能优化，非契约，默认不做）。
+- prompt 模板不支持读盘类标签（`{% include %}` / `{% render %}` / `{% layout %}`）：
+  渲染层保持文件系统无关，需要复用片段时须把内容内联进 `WORKFLOW.md` 正文。
 - 进度见 [docs/conformance.md](../../docs/conformance.md)。
