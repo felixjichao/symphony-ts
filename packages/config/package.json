@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@symphony/domain": "*",
+    "liquidjs": "^10.29.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
