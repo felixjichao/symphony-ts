@@ -443,14 +443,16 @@ describe("M1 integration — renderPrompt over the loaded template (acceptance 1
     // front matter 合法 + 模板正文引用未知变量：load/resolve 成功，渲染失败。
     write("WORKFLOW.md", "---\npolling:\n  interval_ms: 4200\n---\nHi {{ issue.does_not_exist }}");
     const eff = load();
-    const snapshot = eff.serviceConfig;
+    // 渲染前的深拷贝：渲染失败后逐字段比对，证明 resolved config 未被改写
+    // （直接比对同一引用是恒真的自我比较，不构成断言）。
+    const beforeRender = structuredClone(eff.serviceConfig);
 
     expectConfigError(
       () => renderPrompt(eff.definition.promptTemplate, { issue: ISSUE, attempt: null }),
       "template_render_error",
     );
     // 渲染失败只影响当次调用：已 resolved config 逐字段不变。
-    expect(eff.serviceConfig).toBe(snapshot);
+    expect(eff.serviceConfig).toEqual(beforeRender);
     expect(eff.serviceConfig.polling.intervalMs).toBe(4200);
   });
 });

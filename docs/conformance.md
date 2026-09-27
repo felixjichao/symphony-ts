@@ -43,4 +43,4 @@
 
 M1 的 config / domain 行落地时，以 **§17.1（Workflow and Config Parsing）** 的验收项作为 Test 列的逐项口径。
 
-**§17.1 延后项（M1.5 决策）**：`tracker.kind` 校验实现支持的 adapter、`tracker.provider` 经所选 adapter 校验两项需 adapter 注册表（§6.3 / §11），M1.5 不实现、显式延后 M2；config 包当前对二者只做 string / map 类型校验（`tracker.provider` 内容原样保留、不展开 `$VAR`），限制见 [packages/config/README.md](../packages/config/README.md) 的 Known limitations。
+**§17.1 延后项（M1.5 决策）**：`tracker.kind` 校验实现支持的 adapter、`tracker.provider` 经所选 adapter 校验两项需 adapter 注册表（§6.3 / §11），M1.5 不实现、显式延后 M2；config 包当前对二者只做 string / map 类型校验（`tracker.provider` 内容原样保留、不展开 `$VAR`）。§17.1 的 `$VAR` 条目（"works for documented adapter secret keys and path values"）同理只落地 path values 一半（`workspace.root`），adapter secret key 一半随 adapter 注册表延后 M2（决策见 [config-resolution Agent Note](../notes/accepted/architecture/2026-09-27-config-resolution-contract.md)）。限制见 [packages/config/README.md](../packages/config/README.md) 的 Known limitations。
