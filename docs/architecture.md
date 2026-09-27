@@ -1,6 +1,6 @@
 # 架构
 
-> 本文描述 symphony-ts 的**当前真实状态**（M0.6 重校准后：owner 边界与工程基建就绪，业务能力尚未实现）与里程碑规划。写作原则：不把 scaffold 写成已实现能力——当前每个组件只有包边界与占位 `src/index.ts`，凡标注 M1+ 的部分代码中尚不存在。
+> 本文描述 symphony-ts 的**当前真实状态**（M1 完成后：`@symphony/domain` 的 §4 契约与 `@symphony/config` 的 `WORKFLOW.md` 加载 / 解析 / 校验 / 渲染 / 热重载已实现并有测试，其余组件仍为占位）与里程碑规划。写作原则：不把 scaffold 写成已实现能力——未落地的组件只有包边界与占位 `src/index.ts`，凡标注 M2+ 的部分代码中尚不存在。
 
 ## 产品模型
 
@@ -46,7 +46,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 |---|---|---|
 | M0 / M0.5 | 工程基建：monorepo、strict TS、测试、`npm run gate`、AGENTS / docs / notes | ✅ 已完成 |
 | M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建边界、删除旧协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
-| M1 | Domain + Workflow + Config（§4、§5、§6，验收 §17.1） | 未开始 |
+| M1 | Domain + Workflow + Config（§4、§5、§6，验收 §17.1） | ✅ 已完成（M1.5 集成与 conformance 收口） |
 | M2 | Issue Tracker Adapter（§11） | 未开始 |
 | M3 | Workspace Manager（§9） | 未开始 |
 | M4 | Agent Runner（§10、§12） | 未开始 |
