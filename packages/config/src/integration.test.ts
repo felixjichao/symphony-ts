@@ -332,7 +332,7 @@ describe("M1 integration — typed error surface is distinguishable (acceptance 
     expect(parseError.cause).toBeInstanceOf(Error);
 
     write(join("non-map", "WORKFLOW.md"), "---\n- just\n- a\n- list\n---\nbody");
-    expectConfigError(
+    const notAMap = expectConfigError(
       () => load({ path: join("non-map", "WORKFLOW.md") }),
       "workflow_front_matter_not_a_map",
     );
@@ -369,7 +369,7 @@ describe("M1 integration — typed error surface is distinguishable (acceptance 
     const codes: ConfigErrorCode[] = [
       missing.code,
       parseError.code,
-      "workflow_front_matter_not_a_map",
+      notAMap.code,
       invalid.code,
       missingEnv.code,
       parseTemplate.code,
@@ -417,16 +417,16 @@ describe("M1 integration — renderPrompt over the loaded template (acceptance 1
     expect(first).toContain("Labels: bug,p1");
     expect(first).toContain("Blockers: ABC-124=Blocked");
     expect(first).toContain("Created: 2023-11-14T22:13:20.000Z");
-    // 首次尝试 attempt = null 渲染为空串（§5.4 "null/absent on first attempt"）。
-    expect(first).toContain("Attempt: \n".trimEnd());
-    expect(first.trimEnd().endsWith("Attempt:")).toBe(true);
+    // 首次尝试 attempt = null 渲染为空串（§5.4 "null/absent on first attempt"）：
+    // 末行只允许 "Attempt:" 与空白，不含任何数字。
+    expect(first).toMatch(/Attempt:\s*$/);
 
     const retry = renderPrompt(eff.definition.promptTemplate, {
       issue: ISSUE,
       attempt: 3,
       workflowPath: eff.workflowPath,
     });
-    expect(retry.trimEnd().endsWith("Attempt: 3")).toBe(true);
+    expect(retry).toMatch(/Attempt: 3\s*$/);
   });
 
   it("falls back to DEFAULT_PROMPT_TEMPLATE when the on-disk body is empty", () => {
