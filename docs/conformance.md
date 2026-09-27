@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | §4 | Issue / WorkflowDefinition / ServiceConfig 等领域类型 | `packages/domain` | implemented | Core Conformance — `npm test -w @symphony/domain`（`src/issue.test.ts`、`src/contracts.test.ts`：§4.1.1–§4.1.3 字段 / 缺值语义，§11.3 在场性约束；§6.4 cheat-sheet 形状） |
 | §4 | Workspace / RunAttempt / LiveSession / RetryEntry / RuntimeState 类型 | `packages/domain` | implemented | Core Conformance — `npm test -w @symphony/domain`（`src/workspace.test.ts`、`src/session.test.ts`、`src/contracts.test.ts`：§4.1.4–§4.1.8 + §4.2 归一化纯函数；workspace-key 净化 / 防碰撞为 §17.2 的纯函数层预覆盖，provisioning 行为仍见 §9 行） |
-| §5 | `WORKFLOW.md` 发现与加载（解析优先级） | `packages/config` | planned M1 | — |
+| §5 | `WORKFLOW.md` 发现与加载（解析优先级） | `packages/config` | implemented | Core Conformance — `npm test -w @symphony/config`（`src/workflow-loader.test.ts`：§17.1 explicit/default path 优先级、missing file 与 read failure 的 typed error、无 front matter、合法 YAML、unknown keys 原样保留、malformed YAML、非 map 根、prompt trim） |
 | §5 | front matter schema 解析与校验 | `packages/config` | planned M1 | — |
 | §5 | 严格模板渲染（未识别变量 / filter 即失败） | `packages/config` | planned M1 | — |
 | §5 / §6 | 热重载、无效配置安全回退与类型化报错 | `packages/config` | planned M1 | — |
