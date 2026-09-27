@@ -17,11 +17,19 @@
  *   {@link loadEffectiveWorkflow}（文件级组合入口：load + resolve），产出
  *   `@symphony/domain` 的 `ServiceConfig`（§4.1.3 typed view）。
  *
- * 稳定错误契约（§5.5）：{@link SymphonyConfigError} + {@link ConfigErrorCode}，
- * 第三方 fs / YAML / schema 异常一律转换后经 `cause` 保留。
+ * M1.4 落地（§5.4 严格渲染 / §6.2 热重载）：
  *
- * 尚未落地（后续里程碑）：严格模板渲染（§5.4，M1.4）；热重载与安全回退
- * （§6.2，M1.4）；`tracker.kind` supported-adapter 校验与 `provider` 键校验
+ * - 严格 prompt 渲染：{@link renderPrompt}（`issue` / `attempt` 上下文、严格变量与
+ *   filter 检查、空正文 {@link DEFAULT_PROMPT_TEMPLATE} fallback），渲染失败抛
+ *   `template_parse_error` / `template_render_error`。
+ * - 动态热重载：{@link watchWorkflow}（轮询检测 `WORKFLOW.md` 变化、valid reload
+ *   更新 effective config、invalid reload 保留 last-known-good 并经 `onEvent` 上报
+ *   operator-visible error、handle 可显式 `close`）。
+ *
+ * 稳定错误契约（§5.5）：{@link SymphonyConfigError} + {@link ConfigErrorCode}，
+ * 第三方 fs / YAML / liquidjs 异常一律转换后经 `cause` 保留。
+ *
+ * 尚未落地（后续里程碑）：`tracker.kind` supported-adapter 校验与 `provider` 键校验
  * （需 adapter 注册表，§6.3 / §11，M2）。进度见 docs/conformance.md。
  */
 
@@ -34,6 +42,12 @@ export type {
   LoadEffectiveWorkflowOptions,
   ResolveServiceConfigOptions,
 } from "./config-resolution";
+
+export { DEFAULT_PROMPT_TEMPLATE, renderPrompt } from "./prompt-rendering";
+export type { RenderPromptOptions } from "./prompt-rendering";
+
+export { watchWorkflow } from "./workflow-reload";
+export type { WatchWorkflowOptions, WorkflowReloadEvent, WorkflowWatchHandle } from "./workflow-reload";
 
 export { SymphonyConfigError } from "./errors";
 export type { ConfigErrorCode } from "./errors";
