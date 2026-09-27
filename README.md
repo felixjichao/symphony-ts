@@ -1,50 +1,76 @@
-# symphony-ts — TypeScript 版 Symphony
+# symphony-ts — OpenAI Symphony 的 TypeScript 实现
 
-参考 [OpenAI Symphony](https://github.com/openai/symphony)（开源 Rust 实现）用 TypeScript 自研的 Agent 编排协议 + 运行时。当前处于 **M0（脚手架）** 阶段：monorepo 骨架、类型骨架、构建/测试/静态检查全绿；wire 协议（M1）、可靠传输（M2）等按里程碑推进（见 [docs/architecture.md](docs/architecture.md)）。
+按 [OpenAI Symphony](https://github.com/openai/symphony) 官方 `SPEC.md` 实现的 TypeScript 版本：**一个长运行的 orchestrator**，从 issue tracker 读取工作（issue），为每个 issue 建立隔离的 workspace，运行 coding agent（如 Codex）完成工作，并负责 retry / reconciliation / observability。
+
+运行模型（SPEC §3）：
+
+```
+WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agent Runner → Observability
+```
+
+规范来源与进度追踪：
+
+- 唯一产品规范是官方 `SPEC.md`，baseline 固定为 `be10a1b79df723d6d7612b5651c8522704dafb2e`——同步 / 升级规则见 [docs/upstream.md](docs/upstream.md)；
+- 实现与 SPEC §17 / §18 验收项的映射见 [docs/conformance.md](docs/conformance.md)；
+- 参考实现与第三方 TypeScript 实现只用于设计对照，不构成规范。
 
 ## 快速开始
 
 要求 Node >= 20；npm 是唯一 canonical 包管理器。
 
 ```bash
-npm ci                     # 安装（严格按 package-lock.json）
-npm run gate               # 一键门禁：typecheck + test + lint
-npm test -w @symphony/sym  # 只跑某个 workspace 的测试
+npm ci                        # 安装（严格按 package-lock.json）
+npm run gate                  # 一键门禁：typecheck + test + lint + docs:check
+npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 ```
 
 日常开发命令、TS 布局约定见 [docs/development.md](docs/development.md)。
 
 ## 包布局
 
-| 包 | 对应上游 | M0 内容 |
-|---|---|---|
-| `packages/sym` | `sym`（协议） | `Message{Route,Header,Payload}` 模型、常量、`createMessage` |
-| `packages/proto` | `proto-transcoder` | 转码器接口 + 零依赖 JSON 实现 |
-| `packages/transport` | `symphony-transport` | `Transport` 抽象 + 最小 UDP bind/send/close |
-| `packages/gateway` | `gateway`/core | 网关骨架：依赖注入、插件分发、start/stop |
-| `packages/relay` | `relay` | L4 转发规则与轮询选择（M6 落地） |
-| `packages/ctl` | `symphony-ctl` | `symctl` CLI 骨架：参数解析 + 命令表 |
-| `packages/plugins` | controller-modules | 插件注册表 + mdns/a2a/workspace/registry/external-runner 占位 |
-| `apps/examples` | examples | echo Agent 纯逻辑骨架 |
+| 包 | SPEC §3 组件 | SPEC sections | 职责 |
+|---|---|---|---|
+| `packages/domain` | —（共享契约） | §4 | 领域类型唯一权威：Issue、WorkflowDefinition、ServiceConfig、Workspace、RunAttempt、RetryEntry… |
+| `packages/config` | Workflow Loader + Config Layer | §5、§6 | `WORKFLOW.md` 解析、front matter schema、typed config、env / path resolution、模板渲染 |
+| `packages/tracker` | Issue Tracker Adapter | §11 | provider 无关的工单读取、认证、payload → Issue 归一化 |
+| `packages/workspace` | Workspace Manager | §9 | per-issue 隔离目录、路径 containment、生命周期 hooks |
+| `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程、live session 事件流 |
+| `packages/orchestrator` | Orchestrator | §7、§8、§14 | 状态机、polling / scheduling / reconciliation、retry / backoff |
+| `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 |
+| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 |
 
-每个包都有自己的 `README.md`（purpose / configuration / extension points / known limitations）。
+每个包都有自己的 `README.md`（purpose / configuration / extension points / known limitations）。依赖方向与两条硬约束（tracker 不 import orchestrator；agent 不拥有调度 / retry）见 [docs/architecture.md](docs/architecture.md)。
 
 ## 文档导航
 
 | 文档 | 内容 |
 |---|---|
 | [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders：命令矩阵、扩展点表、TODO 分级 |
-| [docs/architecture.md](docs/architecture.md) | 系统边界、包职责与依赖方向、消息流、M0–M7 里程碑 |
+| [docs/upstream.md](docs/upstream.md) | 上游 SPEC baseline（SHA、同步 / 升级规则） |
+| [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新） |
+| [docs/architecture.md](docs/architecture.md) | 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑 |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
-| [docs/testing.md](docs/testing.md) | 测试分层、验收口径、三条测试哲学 |
+| [docs/testing.md](docs/testing.md) | 测试分层（对齐 SPEC §17 profiles）与三条测试哲学 |
 | [notes/](notes/README.md) | 架构 / 选型决策记录（Agent Notes） |
 
 ## 里程碑
 
-M0 脚手架 → M1 wire 编解码/签名 → M2 可靠传输（UDP 握手/重传 + WS 适配）→ M3 网关单机闭环（hello Agent 互发消息）→ M4 插件最小可用 → M5 `symctl` 交互 → M6 relay+多网关集群 → M7 加固与可观测。各里程碑的当前状态见 [docs/architecture.md](docs/architecture.md#里程碑)。
+| 里程碑 | 内容 | 状态 |
+|---|---|---|
+| M0 / M0.5 | 工程基建：monorepo、strict TS、测试、`npm run gate`、AGENTS / docs / notes | ✅ 已完成 |
+| M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建 workspace 边界、删除协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
+| M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | 未开始 |
+| M2 | Issue Tracker Adapter：provider 接口与归一化（§11） | 未开始 |
+| M3 | Workspace Manager：目录 provisioning、containment、lifecycle hooks（§9） | 未开始 |
+| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 未开始 |
+| M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | 未开始 |
+| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
+| M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
+
+里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 [docs/conformance.md](docs/conformance.md) 矩阵为准。
 
 ## 注意事项
 
-- 包间依赖使用 `*` 语义（npm workspaces 自动链接本地包），tsconfig `paths` 映射到各包 `src`；发布形态（dist 产物）在 M1 打包时切换。
+- 包间依赖使用 `*` 语义（npm workspaces 自动链接本地包），tsconfig `paths` 映射到各包 `src`；发布形态（dist 产物）在首个打包里程碑切换。
 - 严格模式：`strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`。
-- 首次推进（M1）建议先校准上游常量与 proto 字段。
+- M0 的协议栈 scaffold（`sym/0` / protobuf / UDP / gateway / relay）已随 M0.6 架构重校准删除，历史见 Git；决策记录见 [align-with-upstream-spec note](notes/accepted/architecture/2026-09-26-align-with-upstream-spec.md)。

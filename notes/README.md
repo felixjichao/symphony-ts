@@ -47,6 +47,10 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
-- [accepted/architecture/2026-09-25-m0-scaffold.md](accepted/architecture/2026-09-25-m0-scaffold.md) — M0 脚手架：8-workspace 边界先行
-- [accepted/architecture/2026-09-26-ctl-gateway-access.md](accepted/architecture/2026-09-26-ctl-gateway-access.md) — symctl 访问网关的路径：M5 起经 transport/proto 直连
+- [accepted/architecture/2026-09-26-align-with-upstream-spec.md](accepted/architecture/2026-09-26-align-with-upstream-spec.md) — 对齐官方 SPEC：固定 baseline、删除协议栈 scaffold、按 SPEC 主组件重建 workspace 边界（M0.6）
 - [accepted/tooling/2026-09-25-npm-workspaces.md](accepted/tooling/2026-09-25-npm-workspaces.md) — npm workspaces 为唯一 canonical 包管理
+
+### Superseded（保留原文，不改写历史）
+
+- [superseded/architecture/2026-09-25-m0-scaffold.md](superseded/architecture/2026-09-25-m0-scaffold.md) — M0 脚手架：8-workspace 边界先行（被 align-with-upstream-spec 取代）
+- [superseded/architecture/2026-09-26-ctl-gateway-access.md](superseded/architecture/2026-09-26-ctl-gateway-access.md) — symctl 访问网关的路径（被 align-with-upstream-spec 取代，ctl / gateway 已删除）
