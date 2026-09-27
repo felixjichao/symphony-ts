@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/tooling/2026-09-27-typescript-5x-pin.md](accepted/tooling/2026-09-27-typescript-5x-pin.md) — 根级 TypeScript 收敛到 5.x（devDependencies + overrides）并移除已弃用的 `baseUrl`（TS5101 隐患）
 - [accepted/architecture/2026-09-27-domain-contracts.md](accepted/architecture/2026-09-27-domain-contracts.md) — SPEC §4 领域契约的 TypeScript 建模约定：命名映射、nullable vs optional、时钟域、不透明句柄、§4.2 纯函数归属（M1.1）
 - [accepted/architecture/2026-09-26-align-with-upstream-spec.md](accepted/architecture/2026-09-26-align-with-upstream-spec.md) — 对齐官方 SPEC：固定 baseline、删除协议栈 scaffold、按 SPEC 主组件重建 workspace 边界（M0.6）
 - [accepted/tooling/2026-09-25-npm-workspaces.md](accepted/tooling/2026-09-25-npm-workspaces.md) — npm workspaces 为唯一 canonical 包管理

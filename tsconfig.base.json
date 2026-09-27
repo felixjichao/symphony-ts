@@ -12,15 +12,14 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
-      "@symphony/domain": ["packages/domain/src/index.ts"],
-      "@symphony/config": ["packages/config/src/index.ts"],
-      "@symphony/tracker": ["packages/tracker/src/index.ts"],
-      "@symphony/workspace": ["packages/workspace/src/index.ts"],
-      "@symphony/orchestrator": ["packages/orchestrator/src/index.ts"],
-      "@symphony/agent": ["packages/agent/src/index.ts"],
-      "@symphony/observability": ["packages/observability/src/index.ts"]
+      "@symphony/domain": ["./packages/domain/src/index.ts"],
+      "@symphony/config": ["./packages/config/src/index.ts"],
+      "@symphony/tracker": ["./packages/tracker/src/index.ts"],
+      "@symphony/workspace": ["./packages/workspace/src/index.ts"],
+      "@symphony/orchestrator": ["./packages/orchestrator/src/index.ts"],
+      "@symphony/agent": ["./packages/agent/src/index.ts"],
+      "@symphony/observability": ["./packages/observability/src/index.ts"]
     }
   }
 }
