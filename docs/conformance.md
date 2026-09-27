@@ -7,7 +7,7 @@
 1. **状态词汇**：`planned M#`（已排入里程碑）→ `in-progress`（实现中）→ `implemented`。**只有代码 + 验收测试都落地后才能标 `implemented`**，Test 列同时从 `—` 变为可复跑的测试入口。
 2. **每个 milestone PR 必须更新对应行**（Status 与 Test 列），属于 review 的一部分；不更新矩阵的实现 PR 不完整。
 3. **升级 SPEC baseline 时优先 diff 本表**：新增 / 变化的 section 先补行或改标注，再排期实现（流程见 [upstream.md](upstream.md)）。
-4. Test 列填写对应 SPEC §17 profile（core / extension / real-environment）与 §18 checklist 项的可复跑入口（如 `npm test -w @symphony/config` + 具体测试文件）。
+4. Test 列填写对应 SPEC §17 validation profile（`Core Conformance` / `Extension Conformance` / `Real Integration Profile`）与 §18 checklist 项的可复跑入口（如 `npm test -w @symphony/config` + 具体测试文件）。
 
 ## 矩阵
 

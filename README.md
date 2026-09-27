@@ -20,7 +20,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 ```bash
 npm ci                        # 安装（严格按 package-lock.json）
-npm run gate                  # 一键门禁：typecheck + test + lint
+npm run gate                  # 一键门禁：typecheck + test + lint + docs:check
 npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 ```
 
