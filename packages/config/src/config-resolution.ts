@@ -418,7 +418,9 @@ function expandTilde(value: string, home: string): string {
  * - value 非正整数（非数值 / 非整数 / `<= 0`）→ **静默忽略**（SPEC 原文 "Values
  *   that are not positive integers are ignored"——不报错，与 `max_turns` 的
  *   fail-validation 是刻意对比）；
- * - 归一化后 key 冲突 → 按文档序 last-wins。
+ * - 归一化后 key 冲突 → last-wins，序**定义为 JS 对象键迭代序**：与 YAML 文档序
+ *   一致，整数样 key（如 `"7"`）除外——V8 将整数样键按升序前置，冲突对含整数样
+ *   key 时以迭代序为准（有测试锁定；真实 provider state 名均为词语，无实际影响）。
  */
 function readByStateMap(
   section: Record<string, unknown>,

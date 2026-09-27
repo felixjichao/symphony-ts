@@ -408,6 +408,16 @@ describe("resolveServiceConfig — max_concurrent_agents_by_state (SPEC §5.3.5)
     expect(eff.serviceConfig.agent.maxConcurrentAgentsByState).toEqual({ blocked: 2 });
   });
 
+  it("defines last-wins order as JS object key iteration order (integer-like keys go first)", () => {
+    // 契约限定（Note Decision 5）：V8 把整数样 key（"7"）按升序前置，迭代序为
+    // [["7",1],[" 7 ",2]] → last-wins 得 2；与严格 YAML 文档序（"7" 在后 → 1）
+    // 不同。真实 provider state 名均为词语，此处仅锁定文档化的迭代序语义。
+    const eff = loadWithFrontMatter(
+      ["agent:", "  max_concurrent_agents_by_state:", '    " 7 ": 2', '    "7": 1'].join("\n"),
+    );
+    expect(eff.serviceConfig.agent.maxConcurrentAgentsByState).toEqual({ "7": 2 });
+  });
+
   it("ignores entries whose key normalizes to empty", () => {
     const eff = loadWithFrontMatter(
       ['agent:', '  max_concurrent_agents_by_state:', '    "   ": 3', "    active: 2"].join("\n"),

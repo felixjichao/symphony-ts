@@ -73,8 +73,10 @@ schema 异常不越过包边界，一律转换后经 `cause` 保留、`path` 携
   不展开）→ 相对路径按 `WORKFLOW.md` 所在目录解析 → normalize；resolved 后恒为绝对
   路径。默认 `<system-temp>/symphony_workspaces`。
 - `max_concurrent_agents_by_state` 的 key 经 domain `normalizeIssueState`（trim +
-  lowercase）归一化，与 scheduler 的 state 比较同源；归一化后 key 冲突按文档序
-  last-wins；归一化后为空串的 key 忽略。
+  lowercase）归一化，与 scheduler 的 state 比较同源；归一化后 key 冲突 last-wins，
+  "序"定义为 JS 对象键迭代序（与 YAML 文档序一致，整数样 key 如 `"7"` 除外——V8
+  将其升序前置，见 [Note](../../notes/accepted/architecture/2026-09-27-config-resolution-contract.md)）；
+  归一化后为空串的 key 忽略。
 
 ### 边缘语义（本包定死，M1.4+ 不得各自漂移）
 

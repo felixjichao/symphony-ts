@@ -43,9 +43,12 @@ matter（`WorkflowDefinition.config`）解析为 domain 已定型（M1.1 冻结�
    agent → codex 的文档序抛第一个，message 携带字段路径）；
    `max_concurrent_agents_by_state` 的非法条目（非数值 / 非整数 / 非正数）静默忽略。
    by-state key 经 domain `normalizeIssueState`（trim + lowercase）归一化（与 scheduler
-   的 state 比较同源，不另写一份）；归一化后冲突按文档序 last-wins；归一化后为空串
-   的 key 视为非法条目忽略；map 本身非 plain object → `invalid_config`（section 形状
-   仍是 typed 的，"忽略"只针对条目）。
+   的 state 比较同源，不另写一份）；归一化后冲突 last-wins——"序"**定义为 JS 对象键
+   迭代序**（loader 产出 plain object）：与 YAML 文档序一致，整数样 key（如 `"7"`）
+   除外，V8 将整数样键按升序前置，冲突对含整数样 key 时以迭代序为准（有测试锁定；
+   真实 provider state 名均为词语，无实际影响）。归一化后为空串的 key 视为非法条目
+   忽略；map 本身非 plain object → `invalid_config`（section 形状仍是 typed 的，
+   "忽略"只针对条目）。
 6. **数值严格度**：数值字段必须是真正的 YAML number 且为整数；并发 / 超时 / 间隔类
    一律正数（`0` 也报错，含 `read_timeout_ms` / `max_retry_backoff_ms`）。唯一例外
    `codex.stall_timeout_ms` 允许任意整数（`<= 0` = 禁用 stall 检测，§5.3.6 显式语义）。
@@ -88,6 +91,10 @@ matter（`WorkflowDefinition.config`）解析为 domain 已定型（M1.1 冻结�
   "are ignored"，与 `max_turns` 的 "fail validation" 是刻意对比；统一任一侧都违背原文。
 - **`workspace.root: ""` 按默认值处理（与显式 null 同策略）**：否——空串是"写了但
   写错"（如 env 拼接事故），静默落回默认目录会把 workspace 建到意外位置；报错更早暴露。
+- **整数样 by-state key（如 `"7"`）视为 invalid entry 忽略，以保严格 YAML 文档序**：
+  否——SPEC 的"忽略"只按 value 定义（非正整数），按 key 形状过滤是超出原文的收紧，
+  且纯数字 state 名理论上可能存在；把 last-wins 的"序"如实定义为 JS 对象键迭代序
+  并用测试锁定即可消除 M5 引用歧义，不改行为。
 
 ## Consequences
 
