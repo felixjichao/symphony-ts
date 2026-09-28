@@ -210,11 +210,20 @@ function normalizeApiUrl(value: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw invalid(`tracker.provider.api_url is not a valid URL (got ${describeValue(value)})`);
+    throw invalid(`tracker.provider.api_url is not a valid URL (got ${describeApiUrl(value)})`);
   }
   if (url.protocol !== "https:") {
     throw invalid(
-      `tracker.provider.api_url must use https://; a plaintext API endpoint would send the token over the wire (got ${describeValue(value)})`,
+      `tracker.provider.api_url must use https://; a plaintext API endpoint would send the token over the wire (got ${describeApiUrl(value)})`,
+    );
+  }
+  // userinfo 一律拒绝而不是脱敏保留：GitHub 的凭据属于 `token` → `Authorization`
+  // 头，base URL 里带 `user:pass@` 从来不是合法形态，而 resolved provider map 会进
+  // TrackerAdapterContext——留着它等于把一份凭据放到"日志脱敏要看的地方"（§11.2
+  // secret 面）。message 里只回显脱敏后的形态。
+  if (url.username !== "" || url.password !== "") {
+    throw invalid(
+      `tracker.provider.api_url must not embed credentials (got ${describeApiUrl(value)}); authenticate with tracker.provider.token`,
     );
   }
   return url.href.replace(/\/+$/, "");
@@ -228,7 +237,15 @@ function missingSecret(message: string): TrackerError {
   return new TrackerError("missing_tracker_secret", message);
 }
 
-/** 诊断用的值回显：secret 永远不会走到这里（调用方只在非 secret 键上使用）。 */
+/**
+ * `api_url` 的诊断回显：先剥掉 userinfo 段再交给 {@link describeValue}。
+ * 非法 URL 走不到 `new URL()`，所以脱敏必须在解析之前也成立。
+ */
+function describeApiUrl(value: string): string {
+  return describeValue(value.replace(/\/\/[^/@]*@/, "//<redacted>@"));
+}
+
+/** 诊断用的值回显：声明的 secret 永远不会走到这里（调用方只在非 secret 键上使用）。 */
 function describeValue(value: unknown): string {
   if (typeof value === "string") {
     return `"${value}"`;

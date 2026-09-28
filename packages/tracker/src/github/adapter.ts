@@ -110,10 +110,28 @@ export class GitHubTrackerAdapter implements TrackerAdapter {
     return issues;
   }
 
-  /** §11.1.2：MUST 失败而非静默省略——调用方把"缺席"读成"不再可见"。 */
+  /**
+   * §11.1.2：MUST 失败而非静默省略——调用方把"缺席"读成"不再可见"。
+   *
+   * 同时兑现 §11.1 对 refresh 结果的另两条不变量——"input IDs are treated as a
+   * set" 与 "each dispatch ID appears at most once"：入参先去重再交给 transport
+   * （transport 因此永远只看到集合，#20 不必各自处理重复 ID），产出按 `id` 保留
+   * 首次出现。这不是防御性冗余：重复 ID 若原样透传，orchestrator 会把它读成两条
+   * 同一 issue 的快照，而 `Issue.id` 是内部 map key 与 workspace 身份的来源（§4.2）。
+   */
   async fetchIssuesByIds(issueIds: readonly string[]): Promise<readonly Issue[]> {
-    const payloads = await this.transport.fetchPayloadsByIds(issueIds);
-    return payloads.map((payload) => normalizeGitHubIssue(payload, this.provider.repo));
+    const requested = [...new Set(issueIds)];
+    const payloads = await this.transport.fetchPayloadsByIds(requested);
+    const seen = new Set<string>();
+    const issues: Issue[] = [];
+    for (const payload of payloads) {
+      const issue = normalizeGitHubIssue(payload, this.provider.repo);
+      if (!seen.has(issue.id)) {
+        seen.add(issue.id);
+        issues.push(issue);
+      }
+    }
+    return issues;
   }
 }
 

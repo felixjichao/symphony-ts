@@ -433,7 +433,8 @@ describe("built-in github profile 经 config 端到端（SPEC §11.2 / §6.3）"
   });
 });
 
-describe("结构化契约的编译期锁定（两侧独立声明必须对接得上）", () => {  it("tracker 产出的 extension 可赋给 config 的契约类型，且反向亦成立", () => {
+describe("结构化契约的编译期锁定（两侧独立声明必须对接得上）", () => {
+  it("tracker 产出的 extension 可赋给 config 的契约类型，且反向亦成立", () => {
     const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
 
     // tracker → config：注入用的方向，漂移即编译失败。

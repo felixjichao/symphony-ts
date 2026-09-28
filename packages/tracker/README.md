@@ -167,7 +167,7 @@ profile 就认识 `github`；`@symphony/config` 一侧零改动。
 |---|---|---|---|
 | `repo` | 是 | — | `owner/repo`，字符集 `[A-Za-z0-9._-]`，恰好一个 `/`。决定读取哪个仓库，也进 `native_ref` |
 | `token` | 否 | 缺失时取 `GITHUB_TOKEN` | 见下方 secret 一节 |
-| `api_url` | 否 | `https://api.github.com` | **仅 HTTPS**；解析为 URL 后去掉全部尾斜杠，path 保留（GHES 写 `https://ghes.example.com/api/v3`） |
+| `api_url` | 否 | `https://api.github.com` | **仅 HTTPS**；解析为 URL 后去掉全部尾斜杠，path 保留（GHES 写 `https://ghes.example.com/api/v3`）。**拒绝** URL 里携带 userinfo（`https://user:pass@…`）——鉴权只有 `token` 一条路；任何回显该值的诊断文案先把 userinfo 换成 `<redacted>` |
 
 ### Secret：`token` / `GITHUB_TOKEN`
 
@@ -224,6 +224,11 @@ profile 就认识 `github`；`@symphony/config` 一侧零改动。
 `fetchIssuesByStates` 省略单条畸形记录（SHOULD log：`onMalformedRecord` 回调，缺省静默），
 `fetchIssuesByIds` 直接失败（省略对刷新调用是有意义的）。
 
+`fetchIssuesByIds` 同时兑现 §11.1 对 refresh 结果的另外两条不变量：入参**按集合处理**
+（去重之后才交给 transport），产出**每个 dispatch ID 至多一次**（按 `id` 保留首次出现）。
+放在 adapter 而不是等 transport：`Issue.id` 是 orchestrator 的 map key 与 workspace 身份
+来源（§4.2），这条不变量不该依赖某个 transport 实现的自觉。
+
 ### provider-native tools
 
 M2.2 **不提供**（§11.5 / §17.3，归后续里程碑）。`TrackerAdapterContext.env` 已为该构造期需要预留。
@@ -236,7 +241,7 @@ exception）；`category` 是唯一判别面，`message` 是 human-readable 诊�
 | 抛出点 | category | message 形态 |
 |---|---|---|
 | `kind` 未注册 / 为空 | `unsupported_tracker_kind` / `invalid_tracker_config` | 由 registry 产出，列出 supported kinds |
-| `repo` / `api_url` 形状或取值非法、`active_states` / `terminal_states` 非 GitHub-native、未知 provider 键 | `invalid_tracker_config` | `tracker.provider.<key> …` / `tracker.<key> entry …`（引用键名与非法值，绝不引用 token 内容） |
+| `repo` / `api_url` 形状或取值非法（含 `api_url` 携带 userinfo）、`active_states` / `terminal_states` 非 GitHub-native、未知 provider 键 | `invalid_tracker_config` | `tracker.provider.<key> …` / `tracker.<key> entry …`（引用键名与非法值，绝不引用 token 内容；回显 `api_url` 前把 userinfo 换成 `<redacted>`） |
 | token 三处皆不可得、显式 `$VAR` 未设置 | `missing_tracker_secret` | 引用键名 / 变量名 |
 | 任何一次工单读取（M2.2 现状） | `tracker_request` | `GitHub tracker transport is not implemented yet …` |
 | 单条 payload 的 required 字段无法产出 | `tracker_response` | `Malformed GitHub issue payload: <reason>`，`retryable: false` |

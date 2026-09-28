@@ -103,6 +103,39 @@ describe("GitHubTrackerAdapter — ID-refresh（§11.1.2）", () => {
     const issues = await build([GOOD]).fetchIssuesByIds(["12", "999"]);
     expect(issues.map((issue) => issue.id)).toEqual(["12"]);
   });
+
+  it("入参按集合处理：transport 只看到去重后的 ID（§11.1 \"treated as a set\"）", async () => {
+    const seen: string[][] = [];
+    const adapter = createGitHubAdapterProfile({
+      transport: {
+        fetchPayloadsByStates: async () => [],
+        fetchPayloadsByIds: async (issueIds) => {
+          seen.push([...issueIds]);
+          return [GOOD];
+        },
+      },
+    }).createAdapter({
+      kind: "github",
+      provider: PROVIDER,
+      requiredLabels: [],
+      activeStates: ["open"],
+      terminalStates: ["closed"],
+      env: {},
+    });
+
+    await adapter.fetchIssuesByIds(["12", "12", "8"]);
+    expect(seen).toEqual([["12", "8"]]);
+  });
+
+  it("每个 dispatch ID 至多出现一次：重复 payload 折叠成首次那条", async () => {
+    const issues = await build([
+      { ...GOOD, updated_at: "2026-09-28T06:02:35Z" },
+      { ...GOOD, title: "later", updated_at: "2026-09-01T00:00:00Z" },
+    ]).fetchIssuesByIds(["12"]);
+
+    expect(issues.map((issue) => issue.id)).toEqual(["12"]);
+    expect(issues[0]?.title).toBe("t");
+  });
 });
 
 describe("GitHubTrackerAdapter — repo 只用于 native_ref", () => {

@@ -194,6 +194,22 @@ describe("resolveProviderConfig — api_url", () => {
     );
   });
 
+  it("嵌入凭据的 api_url 直接失败——auth 只走 token", () => {
+    expect(errorOf(() => resolveProvider({ repo: "a/b", api_url: "https://user:pass@ghes.example.com" })).category).toBe(
+      "invalid_tracker_config",
+    );
+    expect(errorOf(() => resolveProvider({ repo: "a/b", api_url: "https://user@ghes.example.com" })).category).toBe(
+      "invalid_tracker_config",
+    );
+  });
+
+  it("api_url 的诊断回显脱敏 userinfo，不泄漏凭据", () => {
+    const error = errorOf(() => resolveProvider({ repo: "a/b", api_url: "http://user:hunter2@ghes.example.com" }));
+    expect(error.message).toContain("//<redacted>@ghes.example.com");
+    expect(error.message).not.toContain("hunter2");
+    expect(error.message).not.toContain("user:");
+  });
+
   for (const api_url of ["http://ghes.example.com", "ssh://ghes.example.com", "api.github.com", "https://", "", "42"]) {
     it(`只接受可用的 HTTPS URL：拒绝 ${JSON.stringify(api_url)}`, () => {
       expect(errorOf(() => resolveProvider({ repo: "a/b", api_url })).category).toBe(
