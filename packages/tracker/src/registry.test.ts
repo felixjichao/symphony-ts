@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Issue, TrackerConfig } from "@symphony/domain";
 
-import { TrackerError } from "./index";
+import { TrackerError, githubAdapterProfile } from "./index";
 import type { TrackerAdapterContext, TrackerAdapterProfile, TrackerEnv } from "./index";
 import { createTrackerAdapterRegistry, TrackerAdapterRegistry } from "./index";
 
@@ -147,9 +147,17 @@ describe("TrackerAdapterRegistry — 注册与选择（§11.2）", () => {
   it("createTrackerAdapterRegistry = built-in 注册点 + 调用方追加", () => {
     const registry = createTrackerAdapterRegistry([bareProfile("extra")]);
     expect(registry.lookup("extra")).toBeDefined();
-    // M2.1 尚无 built-in：#19 往 BUILT_IN_TRACKER_ADAPTER_PROFILES 加 github 后
-    // 这里会多出该 kind，而 config 一行都不用改（验收 4）。
-    expect(registry.supportedKinds).toEqual(["extra"]);
+    // M2.2（#19）把 github 注册进 BUILT_IN_TRACKER_ADAPTER_PROFILES：调用方追加
+    // 自己的 kind 即可共存，config 一行都不用改（验收 4）。
+    expect(registry.supportedKinds).toEqual(["extra", "github"]);
+    expect(registry.lookup("github")).toBe(githubAdapterProfile);
+  });
+
+  it("built-in github 不可被调用方的同名 profile 覆盖", () => {
+    // 重复 kind 一律拒绝——两个 profile 争一个 kind 意味着配置语义不确定。
+    expect(() => createTrackerAdapterRegistry([githubLikeProfile()])).toThrowError(
+      /Duplicate tracker adapter registration for kind "github"/,
+    );
   });
 });
 

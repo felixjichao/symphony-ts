@@ -139,18 +139,18 @@ function fakeProviderProfile(kind: string): TrackerAdapterProfile & {
   };
 }
 
-const VALID_TRACKER = ["tracker:", "  kind: github", "  provider:", "    repo: acme/widget", "    token: inline-token"];
+const VALID_TRACKER = ["tracker:", "  kind: acme", "  provider:", "    repo: acme/widget", "    token: inline-token"];
 
 describe("验收 1：registry 里注册的 adapter 被 config validation 调用", () => {
   it("合法 tracker 配置经 loadEffectiveWorkflow 通过，profile 看到的是 resolved config", () => {
-    const profile = fakeProviderProfile("github");
+    const profile = fakeProviderProfile("acme");
     const registry = createTrackerAdapterRegistry([profile]);
     writeWorkflow(VALID_TRACKER);
     const env = { FAKE_TOKEN: "env-token" };
 
     const eff = loadEffectiveWorkflow({ cwd: dir, env, trackerExtension: registry.createConfigExtension() });
 
-    expect(eff.serviceConfig.tracker.kind).toBe("github");
+    expect(eff.serviceConfig.tracker.kind).toBe("acme");
     // adapter-owned 键经 core 原样保留（core 不校验 provider，§5.3.1）。
     expect(eff.serviceConfig.tracker.provider).toEqual({ repo: "acme/widget", token: "inline-token" });
     // preflight 只校验，不构造 adapter；构造由 create() 负责。
@@ -158,7 +158,7 @@ describe("验收 1：registry 里注册的 adapter 被 config validation 调用"
   });
 
   it("preflight 通过后 create() 直接产出可用 kernel，返回 normalized Issue", async () => {
-    const profile = fakeProviderProfile("github");
+    const profile = fakeProviderProfile("acme");
     const registry = createTrackerAdapterRegistry([profile]);
     writeWorkflow(VALID_TRACKER);
     const { serviceConfig } = loadEffectiveWorkflow({
@@ -173,13 +173,13 @@ describe("验收 1：registry 里注册的 adapter 被 config validation 调用"
     expect(profile.built[0]?.activeStates).toEqual(["Needs Triage", "Open"]);
     expect(serviceConfig.tracker.activeStates).toBeNull();
     await expect(kernel.fetchIssuesByStates(["In Progress"])).resolves.toEqual([
-      normalizedIssue("github", "In Progress"),
+      normalizedIssue("acme", "In Progress"),
     ]);
-    await expect(kernel.fetchIssuesByIds(["42"])).resolves.toEqual([normalizedIssue("github", "42")]);
+    await expect(kernel.fetchIssuesByIds(["42"])).resolves.toEqual([normalizedIssue("acme", "42")]);
   });
 
   it("kernel 的 §11.1 空输入守卫在整条链路上仍然成立（零 provider 请求）", async () => {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
     writeWorkflow(VALID_TRACKER);
     const { serviceConfig } = loadEffectiveWorkflow({
       cwd: dir,
@@ -198,7 +198,7 @@ describe("验收 1：registry 里注册的 adapter 被 config validation 调用"
 describe("验收 2 / 3：稳定错误面覆盖两条 §17.1 tracker config 行", () => {
   /** 走完整 config 入口，返回抛出的 code。 */
   function failureCodeOf(frontMatter: readonly string[], env: Record<string, string | undefined>): string {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
     writeWorkflow(frontMatter);
     try {
       loadEffectiveWorkflow({ cwd: dir, env, trackerExtension: registry.createConfigExtension() });
@@ -224,17 +224,17 @@ describe("验收 2 / 3：稳定错误面覆盖两条 §17.1 tracker config 行",
   });
 
   it("provider-owned 键非法 → invalid_tracker_config（§17.1 第二行，由 selected adapter 判定）", () => {
-    expect(failureCodeOf(["tracker:", "  kind: github", "  provider:", "    repo: 7"], { FAKE_TOKEN: "t" })).toBe(
+    expect(failureCodeOf(["tracker:", "  kind: acme", "  provider:", "    repo: 7"], { FAKE_TOKEN: "t" })).toBe(
       "invalid_tracker_config",
     );
   });
 
   it("secret 两处都取不到 → missing_tracker_secret；env fallback 生效时通过", () => {
     // repo 合法、provider 无 token、env 里也没有 → 只剩 secret 一条失败原因。
-    const repoOnly = ["tracker:", "  kind: github", "  provider:", "    repo: acme/widget"];
+    const repoOnly = ["tracker:", "  kind: acme", "  provider:", "    repo: acme/widget"];
     expect(failureCodeOf(repoOnly, {})).toBe("missing_tracker_secret");
 
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
     writeWorkflow(repoOnly);
     expect(() =>
       loadEffectiveWorkflow({ cwd: dir, env: { FAKE_TOKEN: "from-env" }, trackerExtension: registry.createConfigExtension() }),
@@ -250,15 +250,15 @@ describe("验收 2 / 3：稳定错误面覆盖两条 §17.1 tracker config 行",
     ).toBe("invalid_tracker_config");
 
     // core 从不因 provider 里的 unknown key 报错（§5.3.1：保留、由 adapter 决定）。
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
     writeWorkflow([...VALID_TRACKER, "    future_provider_key: 42"]);
     const eff = loadEffectiveWorkflow({ cwd: dir, env: {}, trackerExtension: registry.createConfigExtension() });
     expect(eff.serviceConfig.tracker.provider["future_provider_key"]).toBe(42);
   });
 
   it("错误对象的 path 是真实 workflow 文件，message 保留 adapter 文案", () => {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
-    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    repo: acme/widget"]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
+    writeWorkflow(["tracker:", "  kind: acme", "  provider:", "    repo: acme/widget"]);
 
     try {
       loadEffectiveWorkflow({ cwd: dir, env: {}, trackerExtension: registry.createConfigExtension() });
@@ -274,19 +274,20 @@ describe("验收 2 / 3：稳定错误面覆盖两条 §17.1 tracker config 行",
 });
 
 describe("验收 4：新增 provider 不需要改 @symphony/config", () => {
-  it("同一份 config 代码先后注册 github 与 linear，选择完全由 registry 决定", () => {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github"), fakeProviderProfile("linear")]);
+  it("同一份 config 代码先后注册 acme 与 linear，选择完全由 registry 决定", () => {
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme"), fakeProviderProfile("linear")]);
 
     writeWorkflow(["tracker:", "  kind: linear", "  provider:", "    repo: acme/other", "    token: t"]);
     const linear = loadEffectiveWorkflow({ cwd: dir, env: {}, trackerExtension: registry.createConfigExtension() });
     expect(linear.serviceConfig.tracker.kind).toBe("linear");
 
-    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    repo: acme/widget", "    token: t2"]);
-    const github = loadEffectiveWorkflow({ cwd: dir, env: {}, trackerExtension: registry.createConfigExtension() });
-    expect(github.serviceConfig.tracker.kind).toBe("github");
+    writeWorkflow(["tracker:", "  kind: acme", "  provider:", "    repo: acme/widget", "    token: t2"]);
+    const acme = loadEffectiveWorkflow({ cwd: dir, env: {}, trackerExtension: registry.createConfigExtension() });
+    expect(acme.serviceConfig.tracker.kind).toBe("acme");
 
-    // 只有被选中的 profile 被要求解释自己的配置。
-    expect(registry.supportedKinds).toEqual(["github", "linear"]);
+    // 只有被选中的 profile 被要求解释自己的配置；built-in 的 github 与调用方追加的
+    // 两个 kind 共存，config 一侧零改动。
+    expect(registry.supportedKinds).toEqual(["acme", "github", "linear"]);
   });
 
   it("不注入扩展点时，config 对任何 kind 都无感（core 里没有 provider 分支）", () => {
@@ -299,7 +300,7 @@ describe("验收 4：新增 provider 不需要改 @symphony/config", () => {
 
 describe("§6.2 继承：无效 tracker 配置的 reload 保留 last-known-good", () => {
   it("invalid reload → error 事件 + 旧 effective config；修好后 → reloaded", () => {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
     const extension = registry.createConfigExtension();
     writeWorkflow(VALID_TRACKER);
     const events: WorkflowReloadEvent[] = [];
@@ -317,7 +318,7 @@ describe("§6.2 继承：无效 tracker 配置的 reload 保留 last-known-good"
     });
 
     // repo 被删 → selected adapter 判定非法；last-known-good 不被覆盖。
-    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    token: inline-token"]);
+    writeWorkflow(["tracker:", "  kind: acme", "  provider:", "    token: inline-token"]);
     watcher.reload();
     expect(watcher.current().serviceConfig.tracker.provider).toEqual({
       repo: "acme/widget",
@@ -349,9 +350,91 @@ describe("§6.2 继承：无效 tracker 配置的 reload 保留 last-known-good"
   });
 });
 
-describe("结构化契约的编译期锁定（两侧独立声明必须对接得上）", () => {
-  it("tracker 产出的 extension 可赋给 config 的契约类型，且反向亦成立", () => {
-    const registry = createTrackerAdapterRegistry([fakeProviderProfile("github")]);
+/**
+ * M2.2（NEST-55）：built-in `github` profile 走完整 config 链路。
+ *
+ * 与上面各节的分工是刻意的——那些用 fake profile 证明**机制**（注册即可被校验），
+ * 这里证明**注册真的发生了**：`createTrackerAdapterRegistry()` 不追加任何 profile
+ * 就认识 `github`，且 `@symphony/config` 一侧零改动。
+ */
+describe("built-in github profile 经 config 端到端（SPEC §11.2 / §6.3）", () => {
+  function resolve(frontMatter: readonly string[], env: Record<string, string | undefined>) {
+    writeWorkflow(frontMatter);
+    return loadEffectiveWorkflow({
+      cwd: dir,
+      env,
+      trackerExtension: createTrackerAdapterRegistry().createConfigExtension(),
+    });
+  }
+
+  const REPO_ONLY = ["tracker:", "  kind: github", "  provider:", "    repo: acme/widget"];
+
+  it("kind: github 无需调用方注册即被支持", () => {
+    expect(createTrackerAdapterRegistry().supportedKinds).toEqual(["github"]);
+    expect(resolve(REPO_ONLY, { GITHUB_TOKEN: "ghp_env" }).serviceConfig.tracker.kind).toBe(
+      "github",
+    );
+  });
+
+  it("provider 的 $VAR 由 adapter 解释；resolved config 原样保留字面量（§6.1）", () => {
+    const eff = resolve(
+      ["tracker:", "  kind: github", "  provider:", "    repo: acme/widget", "    token: $GITHUB_TOKEN"],
+      { GITHUB_TOKEN: "ghp_env" },
+    );
+    expect(eff.serviceConfig.tracker.provider).toEqual({
+      repo: "acme/widget",
+      token: "$GITHUB_TOKEN",
+    });
+  });
+
+  it("token 两处都取不到 → missing_tracker_secret 进 config 错误面", () => {
+    writeWorkflow(REPO_ONLY);
+    try {
+      loadEffectiveWorkflow({
+        cwd: dir,
+        env: {},
+        trackerExtension: createTrackerAdapterRegistry().createConfigExtension(),
+      });
+      throw new Error("unreachable: preflight must reject");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SymphonyConfigError);
+      expect((error as SymphonyConfigError).code).toBe("missing_tracker_secret");
+    }
+  });
+
+  it("别家 provider 的 active_states 在 config preflight 即被拒", () => {
+    writeWorkflow([...REPO_ONLY, "  active_states:", "    - In Progress"]);
+    expect(() =>
+      loadEffectiveWorkflow({
+        cwd: dir,
+        env: { GITHUB_TOKEN: "ghp_env" },
+        trackerExtension: createTrackerAdapterRegistry().createConfigExtension(),
+      }),
+    ).toThrowError(/not a GitHub Issues state/);
+  });
+
+  it("preflight 通过后 create() 的 kernel 只等到 #20 的 transport", async () => {
+    const env = { GITHUB_TOKEN: "ghp_env" };
+    const { serviceConfig } = resolve(REPO_ONLY, env);
+    const kernel = createTrackerAdapterRegistry().create(serviceConfig.tracker, env);
+
+    expect(kernel.kind).toBe("github");
+    // §11.1 的空输入 MUST 仍然先于 transport 生效：不发任何请求。
+    await expect(kernel.fetchIssuesByStates([])).resolves.toEqual([]);
+    await expect(kernel.fetchIssuesByIds([])).resolves.toEqual([]);
+
+    try {
+      await kernel.fetchIssuesByStates(["open"]);
+      throw new Error("unreachable: M2.2 has no REST transport");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TrackerError);
+      expect((error as TrackerError).category).toBe("tracker_request");
+    }
+  });
+});
+
+describe("结构化契约的编译期锁定（两侧独立声明必须对接得上）", () => {  it("tracker 产出的 extension 可赋给 config 的契约类型，且反向亦成立", () => {
+    const registry = createTrackerAdapterRegistry([fakeProviderProfile("acme")]);
 
     // tracker → config：注入用的方向，漂移即编译失败。
     const asConfigSide: ConfigSideExtension = registry.createConfigExtension();
@@ -360,7 +443,7 @@ describe("结构化契约的编译期锁定（两侧独立声明必须对接得�
     expect(asTrackerSide).toBe(asConfigSide);
 
     const tracker: TrackerConfig = {
-      kind: "github",
+      kind: "acme",
       provider: { repo: "acme/widget", token: "t" },
       requiredLabels: [],
       activeStates: null,

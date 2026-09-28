@@ -1,6 +1,6 @@
 # AGENTS.md — Standing Orders
 
-symphony-ts：按官方 [OpenAI Symphony](https://github.com/openai/symphony) `SPEC.md` 实现的 TypeScript 版本——长运行 orchestrator 从 issue tracker 读取工作、建立 per-issue workspace、运行 coding agent，并负责 retry / reconciliation / observability。唯一产品规范来源是固定 baseline 的官方 SPEC（见 [docs/upstream.md](docs/upstream.md)）；当前 **M0.6（架构重校准）与 M1（Domain + Workflow + Config）已完成，M2（Tracker Adapter）进行中（M2.1 kernel / registry / config 接线已完成，built-in provider 未开始）**。本文件只放 standing orders；详细内容一律看文末"文档导航"。
+symphony-ts：按官方 [OpenAI Symphony](https://github.com/openai/symphony) `SPEC.md` 实现的 TypeScript 版本——长运行 orchestrator 从 issue tracker 读取工作、建立 per-issue workspace、运行 coding agent，并负责 retry / reconciliation / observability。唯一产品规范来源是固定 baseline 的官方 SPEC（见 [docs/upstream.md](docs/upstream.md)）；当前 **M0.6（架构重校准）与 M1（Domain + Workflow + Config）已完成，M2（Tracker Adapter）进行中（M2.1 kernel / registry / config 接线与 M2.2 built-in `github` profile + 归一化已完成，GitHub REST transport 未开始）**。本文件只放 standing orders；详细内容一律看文末"文档导航"。
 
 ## Command Matrix
 
