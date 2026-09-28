@@ -6,7 +6,7 @@ SPEC **§5 Workflow Specification (Repository Contract)** 与 **§6 Configuratio
 
 **新增 / 修改 WORKFLOW front matter 字段的唯一落点在本包。**
 
-## Public API（M1.2 + M1.3 + M1.4）
+## Public API（M1.2 + M1.3 + M1.4 + M2.1）
 
 公共出口是 `src/index.ts`（唯一 API 面）。
 
@@ -108,7 +108,53 @@ schema 异常不越过包边界，一律转换后经 `cause` 保留、`path` 携
 - M1.4 追加：`template_parse_error`（模板不可解析；仅 fail 当次 attempt）、
   `template_render_error`（模板可解析但求值失败——未知变量 / 未注册 filter）；
   `path` 为 workflow 文件绝对路径，裸模板调用时为哨兵 `"<inline>"`。
+- M2.1 追加（tracker preflight，仅在注入了扩展点时产生）：
+  `unsupported_tracker_kind`（`tracker.kind` 不在当前注册表里）、
+  `invalid_tracker_config`（selected adapter 判定配置非法：`kind` 未配置即 `""`
+  哨兵、`provider` 键缺失或非法、active / terminal states 非法）、
+  `missing_tracker_secret`（adapter-owned secret 在 provider 键与 adapter-local env
+  两处都取不到）。三个码的名字与 SPEC §11.4 的推荐 category 一字不差。
+  **`invalid_config` 与 `invalid_tracker_config` 不合并**：前者是 core §5.3 / §6 的
+  typed shape 校验，后者是 adapter-owned 语义校验——合并会让 §17.1 "validated through
+  the selected adapter" 失去可追溯性。
 - 消费方须容忍未知码并按 `code` 精确分支。
+
+### tracker 配置校验扩展点（M2.1，§6.3 / §17.1）
+
+M1.3 把 `tracker.kind` 的 supported-adapter 校验推迟到"需要注册表的时候"。该扩展点
+现在落地：本包**只定义契约**，实现在 `@symphony/tracker`（`registry.createConfigExtension()`）。
+
+```ts
+import { loadEffectiveWorkflow } from "@symphony/config";
+import { createTrackerAdapterRegistry } from "@symphony/tracker"; // 由组合根 import
+
+const registry = createTrackerAdapterRegistry([githubProfile]);
+const eff = loadEffectiveWorkflow({
+  cwd: "/repo",
+  env: process.env,
+  trackerExtension: registry.createConfigExtension(),
+});
+```
+
+- 注入点：`resolveServiceConfig(raw, { workflowDir, env?, home?, sourcePath?, trackerExtension? })`、
+  `loadEffectiveWorkflow({ path?, cwd?, env?, home?, trackerExtension? })`、
+  `watchWorkflow`（经 `WatchWorkflowOptions` 继承同一选项）。
+- **不注入 = M1 行为逐字不变**：core resolution 不依赖任何 adapter 注册表；裸
+  `WORKFLOW.md` 仍得到 §6.4 全量默认值，任意未知 `kind` 与任意 `provider` 键原样通过。
+- **时机是 post-resolution**：core typed 校验全部成功之后，才把 resolved `tracker`
+  与本次 resolution 的 `env` 交给扩展点。adapter 拿不到半 resolved 的配置，core 也不
+  借 adapter 之手校验自己的字段。
+- 失败用**返回值**传递（`validateTrackerConfig` 返回 failure 或 `undefined`，不得抛）：
+  本包因此无需 `instanceof` tracker 的类，也就无需 import tracker；扩展抛出的异常按
+  内部缺陷向上传播，不会被误报成一次配置失败。
+- 热重载自动继承：无效 tracker 配置的 reload 走既有 §6.2 语义——保留 last-known-good
+  + `onEvent({ kind: "error" })`，`error.code` 即三个 tracker 码之一；配置修好后自愈。
+- **扩展点只有读权限**：它收到的 `tracker` 就是产出的 `ServiceConfig.tracker`
+  （同一对象）。adapter-owned 的 provider / states 默认值**不回写** `ServiceConfig`
+  （M1.1 冻结形状），effective 值由 tracker 侧的 profile 解析后喂给 adapter。
+- 契约与"为什么两侧各自声明同形类型"的完整理由见
+  [Agent Note](../../notes/accepted/architecture/2026-09-28-tracker-adapter-config-extension.md)；
+  跨包端到端接线的验收在 `packages/tracker/src/config-integration.test.ts`。
 
 ### resolution 管道（§6.1）
 
@@ -118,14 +164,17 @@ schema 异常不越过包边界，一律转换后经 `cause` 保留、`path` 携
   YAML 显式值永远胜出。
 - **核心层唯一做 env / path expansion 的字段是 `workspace.root`**（§17.1 "$VAR for
   path values"）。`codex.command` 原样保留（不做 `~` / `$VAR` / URI / shell 改写）；
-  `tracker.provider` 内容原样保留（`$VAR` / secret / 键校验归所选 adapter，M2）。
+  `tracker.provider` 内容原样保留——`$VAR` / secret / 键校验归所选 adapter，经
+  M2.1 的 `trackerExtension` 在 preflight 阶段执行（core 不预校验 provider 内容）。
 - 无效值 → `invalid_config`（fail-fast，按 tracker → polling → workspace → hooks →
   agent → codex 顺序抛第一个），不 crash、不静默修正；**唯一例外**：
   `agent.max_concurrent_agents_by_state` 的非法条目（非数值 / 非整数 / 非正数）**静默
   忽略**（§5.3.5 原文 "are ignored"——与 `max_turns` 的 fail-validation 是 SPEC 刻意
   的双策略，不得统一）。
 - `tracker.kind` 缺失 → `""`（哨兵）：resolution 不强制 present——"kind present &
-  supported" 是 dispatch preflight（§6.3）检查项，supported-adapter 校验需注册表（M2）。
+  supported" 是 dispatch preflight（§6.3）检查项。M2.1 起该 preflight 由注入的
+  `trackerExtension` 承担，空串在那里报 `invalid_tracker_config`；不注入时保持 M1
+  语义（裸 `WORKFLOW.md` 合法）。
 - pass-through 三字段（`codex.approval_policy` / `thread_sandbox` /
   `turn_sandbox_policy`）只校验 string 类型、不手维枚举（§5.3.6 SHOULD）；缺失 → `null`
   （implementation-defined 默认）。`tracker.active_states` / `terminal_states` 同理：
@@ -196,13 +245,17 @@ SPEC 未逐字规定的边缘情形，本包择一并固化（决策记录见
   绕过 `renderPrompt` 自行模板化；
 - 新的配置来源 / 覆盖层：走本包的 resolution 管道，其他包不得自行解析配置；
 - 配置消费方（tracker / workspace / orchestrator…）只接受本包产出的 typed config，不接触原始文件；
-- tracker adapter（M2）：从 `tracker.provider` 取 adapter-owned 原始 map 自行校验键与
-  `$VAR` / secret 解析；core 不预校验 provider 内容。
+- tracker adapter 的配置校验：实现 `TrackerConfigExtension`（结构化契约，见上节的
+  M2.1 扩展点），由组合根注入 `trackerExtension`；`@symphony/config` **不 import**
+  `@symphony/tracker`，core 也不预校验 provider 内容。新增 front matter 字段仍走本包
+  的 schema 与 resolution 管道，不得借扩展点夹带 core 校验。
 
 ## Known limitations
 
-- `tracker.kind` 只做 string 类型校验：supported-adapter 校验需要 adapter 注册表
-  （§6.3 / §11，M2）；`tracker.provider` 内容不校验（adapter-owned）。
+- `tracker.kind` 的 supported-adapter 校验与 `tracker.provider` 的键校验**只在注入了
+  `trackerExtension` 时发生**（M2.1）：本包不认识任何 provider，也不持有 adapter 注册表，
+  因此默认（不注入）行为仍是"kind 只做 string 类型校验、provider 内容不校验"。
+  provider-native tools 与工单写回不在本包（§11.5）。
 - `workspace.root` 只做词法规范化（`path.resolve`），不做 symlink 解析（realpath）或
   目录创建 / containment（§9，M3）。
 - watcher 绑定创建时的 workflow 路径：运行期切换 `WORKFLOW.md` 路径需新建实例

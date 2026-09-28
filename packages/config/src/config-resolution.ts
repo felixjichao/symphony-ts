@@ -38,6 +38,7 @@ import {
 } from "@symphony/domain";
 
 import { SymphonyConfigError } from "./errors";
+import type { TrackerConfigExtension } from "./tracker-extension";
 import {
   describeValueType,
   isPlainMap,
@@ -58,6 +59,20 @@ export interface ResolveServiceConfigOptions {
   readonly home?: string;
   /** 诊断用：workflow 文件绝对路径，写入错误对象的 `path`；缺省用 `workflowDir`。 */
   readonly sourcePath?: string;
+  /**
+   * tracker 配置校验扩展点（M2.1，§6.3 / §11.4）：由组合根注入
+   * `@symphony/tracker` 注册表产出的 {@link TrackerConfigExtension}，在 core
+   * resolution **之后**跑 selected-adapter 的 preflight 校验。
+   *
+   * 缺席 = M1 行为逐字不变（core resolution 不依赖任何 adapter 注册表，
+   * 裸 `WORKFLOW.md` 仍得到全量默认值）。注入后失败抛
+   * `SymphonyConfigError`，code ∈ `unsupported_tracker_kind` /
+   * `invalid_tracker_config` / `missing_tracker_secret`。
+   *
+   * 本包不 import `@symphony/tracker`：契约是结构化类型，见
+   * `./tracker-extension.ts`。
+   */
+  readonly trackerExtension?: TrackerConfigExtension;
 }
 
 /** {@link loadEffectiveWorkflow} 的可选注入点。 */
@@ -70,6 +85,8 @@ export interface LoadEffectiveWorkflowOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** 语义同 {@link ResolveServiceConfigOptions.home}。 */
   readonly home?: string;
+  /** 语义同 {@link ResolveServiceConfigOptions.trackerExtension}（M2.1）。 */
+  readonly trackerExtension?: TrackerConfigExtension;
 }
 
 /** {@link loadEffectiveWorkflow} 的结果：原始 definition + resolved typed config。 */
@@ -89,7 +106,9 @@ export interface EffectiveWorkflow {
  * `workspace.root` 的解析基准。
  *
  * 错误面 = loader 三码（§5.1–§5.3）+ resolution 两码（`invalid_config` /
- * `missing_env_reference`），统一 {@link SymphonyConfigError}。
+ * `missing_env_reference`）+ 注入扩展点后的 tracker preflight 三码
+ * （`unsupported_tracker_kind` / `invalid_tracker_config` /
+ * `missing_tracker_secret`），统一 {@link SymphonyConfigError}。
  *
  * {@link loadWorkflow} 的 JSDoc 与包 README 中的边缘语义在此同样生效。
  */
@@ -102,6 +121,7 @@ export function loadEffectiveWorkflow(
     workflowDir: dirname(workflowPath),
     ...(options.env !== undefined ? { env: options.env } : {}),
     ...(options.home !== undefined ? { home: options.home } : {}),
+    ...(options.trackerExtension !== undefined ? { trackerExtension: options.trackerExtension } : {}),
     sourcePath: workflowPath,
   });
   return { definition, serviceConfig, workflowPath };
@@ -113,8 +133,13 @@ export function loadEffectiveWorkflow(
  * 无 IO、不读 `process.cwd()`；env / home / workflowDir 全部显式注入。
  * M1.4 热重载可直接复用（reload = 重新 load + resolve，失败保留 last-known-good）。
  *
- * 校验 fail-fast：按 tracker → polling → workspace → hooks → agent → codex 的
- * 字段顺序抛出第一个 `invalid_config`（message 携带字段路径）。
+ * 校验 fail-fast：core typed 校验按 tracker → polling → workspace → hooks →
+ * agent → codex 的字段顺序抛出第一个 `invalid_config`（message 携带字段路径）。
+ *
+ * 注入了 `trackerExtension` 时，core resolution **全部成功之后**再跑一次
+ * selected-adapter preflight（§6.3）；失败抛同一 {@link SymphonyConfigError}，
+ * code 为三个 tracker 码之一。顺序是刻意的：core 不借注册表之手校验自己的字段，
+ * adapter 也拿不到半 resolved 的配置。
  */
 export function resolveServiceConfig(
   raw: WorkflowDefinition["config"],
@@ -130,7 +155,8 @@ export function resolveServiceConfig(
   const trackerSection = readSection(raw, "tracker", ctx);
   const tracker: TrackerConfig = {
     // 缺失 → ""（哨兵）：kind 是 dispatch preflight（§6.3）校验项，resolution
-    // 不强制 present；"supported adapter" 校验需注册表（M2）。见 Agent Note。
+    // 不强制 present。"supported adapter" 校验由 M2.1 的 trackerExtension 在
+    // resolution 之后负责（空串在那里报 invalid_tracker_config）。见 Agent Note。
     kind: readString(trackerSection, "kind", "tracker.kind", ctx) ?? "",
     provider: readProvider(trackerSection, "tracker.provider", ctx),
     requiredLabels: readStringList(trackerSection, "required_labels", "tracker.required_labels", ctx) ?? [],
@@ -200,7 +226,20 @@ export function resolveServiceConfig(
     stallTimeoutMs: readInt(codexSection, "stall_timeout_ms", "codex.stall_timeout_ms", 300_000, ctx),
   };
 
-  return { tracker, polling, workspace, hooks, agent, codex };
+  const serviceConfig: ServiceConfig = { tracker, polling, workspace, hooks, agent, codex };
+
+  // §6.3 tracker preflight：core 校验已全绿，才轮到 selected adapter 看自己的
+  // 配置。扩展点契约要求以返回值表达失败（不抛），因此这里无需 try/catch——
+  // 扩展自身抛出的异常是缺陷，按 §6.2 crash-resistance 的既有边界向上传播。
+  const failure = options.trackerExtension?.validateTrackerConfig({ tracker, env: ctx.env });
+  if (failure !== undefined) {
+    throw new SymphonyConfigError(failure.category, failure.message, {
+      path: ctx.errorPath,
+      ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+    });
+  }
+
+  return serviceConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +365,8 @@ function readInt(
 /**
  * `tracker.provider`：缺失 / `null` → `{}`；present 必须是 plain map，内容
  * **原样保留**——不做 `$VAR` 解析、不校验键（endpoint / scope / credentials 的
- * schema 与 secret 解析归所选 adapter，§5.3.1 / §6.1，M2）。
+ * schema 与 secret 解析归所选 adapter：core 不预校验 provider 内容，adapter 经
+ * `trackerExtension` 在 preflight 阶段解释，§5.3.1 / §6.1 / §11.2）。
  */
 function readProvider(
   section: Record<string, unknown>,

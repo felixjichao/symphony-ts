@@ -26,11 +26,19 @@
  *   更新 effective config、invalid reload 保留 last-known-good 并经 `onEvent` 上报
  *   operator-visible error、handle 可显式 `close`）。
  *
+ * M2.1 落地（§6.3 / §11.4 tracker preflight 扩展点）：
+ *
+ * - {@link TrackerConfigExtension}：把 selected-adapter 的 tracker 配置校验注入
+ *   `resolveServiceConfig` / `loadEffectiveWorkflow` / `watchWorkflow` 的
+ *   `trackerExtension` 选项。本包**不 import `@symphony/tracker`**——契约是结构化
+ *   类型，由组合根把 tracker 注册表产出的 extension 传进来；不注入时 M1 行为逐字
+ *   不变。
+ *
  * 稳定错误契约（§5.5）：{@link SymphonyConfigError} + {@link ConfigErrorCode}，
  * 第三方 fs / YAML / liquidjs 异常一律转换后经 `cause` 保留。
  *
- * 尚未落地（后续里程碑）：`tracker.kind` supported-adapter 校验与 `provider` 键校验
- * （需 adapter 注册表，§6.3 / §11，M2）。进度见 docs/conformance.md。
+ * 尚未落地（后续里程碑）：provider-native tools 与工单写回（§11.5）、workspace
+ * lifecycle（§9，M3）。进度见 docs/conformance.md。
  */
 
 export { loadWorkflow } from "./workflow-loader";
@@ -48,6 +56,13 @@ export type { RenderPromptOptions } from "./prompt-rendering";
 
 export { watchWorkflow } from "./workflow-reload";
 export type { WatchWorkflowOptions, WorkflowReloadEvent, WorkflowWatchHandle } from "./workflow-reload";
+
+export type {
+  TrackerConfigExtension,
+  TrackerConfigExtensionFailure,
+  TrackerConfigValidationContext,
+  TrackerExtensionErrorCode,
+} from "./tracker-extension";
 
 export { SymphonyConfigError } from "./errors";
 export type { ConfigErrorCode } from "./errors";
