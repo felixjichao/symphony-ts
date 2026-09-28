@@ -32,9 +32,15 @@
  * - 不新增 generic 写操作 CRUD（comment / state / attachment）；ticket 变更由
  *   coding agent 经 provider-native tools 完成（§11.5）。
  *
- * 尚未落地：provider payload → Issue 的归一化与 §11.1 malformed-record 策略、
- * provider-native agent tools、以及 GitHub Issues（#19 / #20）。
- * 进度见 docs/conformance.md。
+ * 已落地的首个 built-in provider（M2.2 / #19）：`tracker.kind: github` 的 profile
+ * （{@link githubAdapterProfile}，provider 键 / secret / states 校验）与 payload →
+ * `Issue` 归一化（{@link normalizeGitHubIssue}），以及实现 `TrackerAdapter` 的
+ * {@link GitHubTrackerAdapter}（§11.1 的 malformed-record 两副面孔）。
+ *
+ * 尚未落地：GitHub REST transport / pagination / scope selection（#20，
+ * 即 {@link createUnconfiguredGitHubIssueTransport} 的替代实现）、其余 provider 的
+ * malformed-record 日志接线（§13，M6）、以及 provider-native agent tools
+ * （§11.5 / §17.3）。进度见 docs/conformance.md。
  */
 
 export type { TrackerAdapter, TrackerAdapterOperations } from "./adapter";
@@ -55,3 +61,21 @@ export type {
   TrackerConfigExtensionFailure,
   TrackerConfigValidationContext,
 } from "./registry";
+
+// --- GitHub Issues adapter（SPEC §11.2 / §11.3，M2.2 / #19）-------------------
+// provider knowledge 只活在 github/ 子目录 + 这一层出口；registry 与 config 都不
+// 认识 "github" 这个字符串（除注册点之外）。
+
+export {
+  createGitHubAdapterProfile,
+  githubAdapterProfile,
+  type GitHubAdapterProfileOptions,
+} from "./github/profile";
+export { GITHUB_PROVIDER_KEYS, GITHUB_TRACKER_KIND } from "./github/config";
+export { GitHubTrackerAdapter, createUnconfiguredGitHubIssueTransport } from "./github/adapter";
+export type {
+  GitHubIssueTransport,
+  GitHubMalformedRecord,
+  GitHubTrackerAdapterOptions,
+} from "./github/adapter";
+export { normalizeGitHubIssue } from "./github/normalize";

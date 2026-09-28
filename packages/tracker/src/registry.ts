@@ -21,6 +21,7 @@ import type { TrackerConfig } from "@symphony/domain";
 
 import { createTrackerReadKernel, type TrackerAdapter } from "./adapter";
 import { TrackerError, type TrackerConfigErrorCategory } from "./errors";
+import { githubAdapterProfile } from "./github/profile";
 import type { TrackerAdapterProfile, TrackerAdapterContext, TrackerEnv } from "./profile";
 
 /**
@@ -217,13 +218,18 @@ export class TrackerAdapterRegistry {
   }
 }
 
-/** 首个 built-in adapter 的**稳定注册点**（GitHub Issues 的具体 profile 归 #19）。 */
-export const BUILT_IN_TRACKER_ADAPTER_PROFILES: readonly TrackerAdapterProfile[] = [];
+/** 首个 built-in adapter 的**稳定注册点**（GitHub Issues profile 归 #19 / NEST-55）。 */
+export const BUILT_IN_TRACKER_ADAPTER_PROFILES: readonly TrackerAdapterProfile[] = [
+  githubAdapterProfile,
+];
 
 /**
  * 组合根入口：built-in profiles + 调用方追加的 profiles 建成一个 registry。
- * `apps/cli`（M6）与测试都从这里开始，#19 只需往
+ * `apps/cli`（M6）与测试都从这里开始，新增 provider 只需往
  * {@link BUILT_IN_TRACKER_ADAPTER_PROFILES} 里加 profile，不需要改 `@symphony/config`。
+ *
+ * 同 kind 的重复注册会被 {@link TrackerAdapterRegistry.register} 拒绝，所以调用方
+ * 要**追加**自己的 profile，而不是覆盖 built-in。
  */
 export function createTrackerAdapterRegistry(
   profiles: readonly TrackerAdapterProfile[] = [],
