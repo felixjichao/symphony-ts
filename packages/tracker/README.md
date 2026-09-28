@@ -6,8 +6,9 @@ SPEC **§11 Issue Tracker Integration Contract** 的 owner 包，对应 §3 的 
 
 M2.1 落地**内核与选择机制**；M2.2（#19）在其上注册首个 built-in provider：
 `tracker.kind: github` 的 profile、provider payload → `Issue` 归一化，以及 §11.1 的
-malformed-record 策略。GitHub REST transport / pagination / scope selection 仍归 #20，
-见 [GitHub Issues](#github-issues) 一节的最后一小节。
+malformed-record 策略；M2.3（#20）补上该 provider 的**真实 REST transport**——
+repository scope、分页、鉴权头与 §11.4 的 portable error mapping。行为细节见
+[GitHub Issues](#github-issues) 一节。
 
 公共出口是 `src/index.ts`（唯一 API 面，测试也经由它）。
 
@@ -117,9 +118,14 @@ const kernel = registry.create(serviceConfig.tracker, process.env);
 
 `github/` 子目录承载这个 provider 的全部知识：`config.ts`（provider 键、secret /
 `GITHUB_TOKEN`、`api_url`、states 校验）、`normalize.ts`（payload → `Issue` 纯函数）、
-`adapter.ts`（实现 `TrackerAdapter` + `GitHubIssueTransport` 注入端口）、`profile.ts`
-（把三者挂到 `TrackerAdapterProfile`）。registry 与 config 都不认识 `"github"`
+`adapter.ts`（实现 `TrackerAdapter` + `GitHubIssueTransport` 注入端口）、
+`transport.ts`（该端口的真实 REST 实现）、`profile.ts`
+（把四者挂到 `TrackerAdapterProfile`）。registry 与 config 都不认识 `"github"`
 这个字符串，除注册点那一行。规则细节见 [GitHub Issues](#github-issues)。
+
+未注入 `transport` 时，profile 在 `createAdapter` 内按已解析的 provider 配置构造真实
+REST transport；测试可用 `createGitHubAdapterProfile({ transport })` 注入假 transport
+（只验归一化 / malformed 策略），或用 `{ fetchImpl }` 把默认实现的 fetch 指向别处。
 
 ### 错误契约（§11.4）
 
@@ -153,8 +159,9 @@ cross-provider convention"）。
 
 ## GitHub Issues
 
-首个 built-in provider（SPEC §11.2 / §11.3，M2.2 / #19）。本节即 §11.2 要求的
-**compact profile**：`tracker.kind: github` 的全部配置与归一化语义以此处为准，代码只是它的实现。
+首个 built-in provider（SPEC §11.2 / §11.3，M2.2 / #19 + M2.3 / #20 的 REST transport）。
+本节即 §11.2 要求的**compact profile**：`tracker.kind: github` 的全部配置、读取与归一化
+语义以此处为准，代码只是它的实现。
 注册点是 `BUILT_IN_TRACKER_ADAPTER_PROFILES`，所以 `createTrackerAdapterRegistry()` 不追加任何
 profile 就认识 `github`；`@symphony/config` 一侧零改动。
 
@@ -243,16 +250,75 @@ exception）；`category` 是唯一判别面，`message` 是 human-readable 诊�
 | `kind` 未注册 / 为空 | `unsupported_tracker_kind` / `invalid_tracker_config` | 由 registry 产出，列出 supported kinds |
 | `repo` / `api_url` 形状或取值非法（含 `api_url` 携带 userinfo）、`active_states` / `terminal_states` 非 GitHub-native、未知 provider 键 | `invalid_tracker_config` | `tracker.provider.<key> …` / `tracker.<key> entry …`（引用键名与非法值，绝不引用 token 内容；回显 `api_url` 前把 userinfo 换成 `<redacted>`） |
 | token 三处皆不可得、显式 `$VAR` 未设置 | `missing_tracker_secret` | 引用键名 / 变量名 |
-| 任何一次工单读取（M2.2 现状） | `tracker_request` | `GitHub tracker transport is not implemented yet …` |
 | 单条 payload 的 required 字段无法产出 | `tracker_response` | `Malformed GitHub issue payload: <reason>`，`retryable: false` |
+| 读取期间的 transport / status / rate-limit / payload / 分页失败 | `tracker_request` / `tracker_status` / `tracker_rate_limited` / `tracker_response` / `tracker_pagination` | 见下一节的 transport 侧映射表 |
 
 ### scope selection / pagination / 请求上限
 
-**M2.2 未实现**（issue 的"非目标"：REST transport 归 #20）。provider 请求面收敛为单个注入
-端口 `GitHubIssueTransport`，默认实现 `createUnconfiguredGitHubIssueTransport()` 抛
-`tracker_request`。#20 只需替换该 transport：profile、归一化、adapter 与 config 接线都不改动。
-因此本节的"M2.2 能做什么"= 配置校验端到端可用 + 给定 payload 得到合法 `Issue`；
-`adapter.fetchIssuesByStates(...)` 在 #20 之前必然失败，这是设计好的边界，不是缺陷。
+M2.3（#20）已实现，落在 `github/transport.ts`；本节是 §11.2 要求的披露面。
+
+**endpoint 与 scope**
+
+| 调用 | endpoint |
+|---|---|
+| candidate read（`fetchIssuesByStates`） | `GET {api_url}/repos/{owner}/{repo}/issues` |
+| ID refresh（`fetchIssuesByIds`） | `GET {api_url}/repos/{owner}/{repo}/issues/{number}` |
+
+scope 恒为配置的 `owner/repo`（逐段 `encodeURIComponent`），`api_url` 的 path 前缀保留在
+`/repos` 之前，因此 GHES 写 `https://ghes.example.com/api/v3` 即打到
+`/api/v3/repos/…`。**不存在跨仓库读取**：`repo` 是单值必填，adapter 也不接受调用方传入
+别的 owner/repo。鉴权与内容协商头每次请求都带上：
+`Authorization: Bearer <token>`、`Accept: application/vnd.github+json`、
+`X-GitHub-Api-Version: 2022-11-28`、`User-Agent: symphony-ts/tracker`。
+
+**state mapping**：requested state 先按 §4.2 trim + lowercase，再映射到 GitHub 的
+`open` / `closed`。两者同时被请求 → 用 `state=all` 一次读取；只要一种 → `state=open`
+或 `state=closed`，并且**结果仍按 requested set 过滤**（provider 混进来的其他 state 不外溢）。
+映射不出任何 GitHub state（含空列表）→ 直接返回 `[]`，**一个请求都不发**。
+
+**排序与分页**：`sort=created&direction=asc`，`per_page=100`（本页大小时 GitHub 的
+上限，也是本 adapter 的请求上限；无单次调用的页数上限——分页读完为止）。分页沿
+Link header 的 `rel="next"` 走，**逐页拼接以保持 provider 返回顺序**；不按逗号 split
+header（分页 URL 的 query 本身可能含逗号）。没有 next 即结束。
+
+**原子性**：任一页的 transport / status / payload / 分页完整性失败，整个 operation 以
+该 category 抛出，**不返回部分成功列表**。ID refresh 同理串行逐条读取（并发只会把
+rate-limit 风险前移，重试策略归 orchestrator §8，不在本包）。
+
+**pagination 的安全边界**：`rel="next"` 的 URL 若与配置 `api_url` 不同 origin →
+`tracker_pagination`，且绝不向该 URL 发请求——provider 响应面不该把带 token 的请求
+引导到配置 scope 之外。
+
+**404 只有一种语义**：ID refresh 的 404 → omit（hidden / deleted / 已不在 scope，
+调用方读成"不再可见"，不构造 synthetic state）；candidate read 的 404 与其他
+unexpected status 一律 `tracker_status`，不吞掉。
+
+**dispatch ID**：必须是正整数的字符串形式；列表里混进坏 ID → **整个 call 在任何请求
+发出之前**以 `tracker_response` 失败（与 §11.1 "malformed requested record MUST fail"
+同源）。入参去重与结果按 `id` 折叠由 `GitHubTrackerAdapter` 负责，transport 因此恒常
+只看到集合。
+
+**PR 记录**：GitHub 的 issue 与 PR 共用编号序列，`/issues` 两个 endpoint 都会返回 PR。
+transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：candidate polling
+要连不可派发的一起返回，最终过滤属 scheduler）。
+
+**不做的事**：不实现 retry / backoff / 限流调度（§8 / §14 归 orchestrator），只提供
+`retryable` / `retryAfterMs` / `providerStatus` 供上层决策；没有请求超时（Node `fetch`
+的默认行为）；不写 GitHub 写 API。
+
+### public error form → category + message（transport 侧）
+
+| 触发 | category | 附加字段 |
+|---|---|---|
+| fetch 抛异常（DNS / 连接 / TLS） | `tracker_request` | `retryable: true`、`cause` |
+| 非成功 status（除 ID-refresh 的 404） | `tracker_status` | `providerStatus`、`providerDetail.message`（GitHub 错误信封，截 200 字符）、`retryable = status >= 500` |
+| 429，或 4xx + `x-ratelimit-remaining: 0` | `tracker_rate_limited` | `retryable: true`、`retryAfterMs`（`retry-after` 秒优先，否则 `x-ratelimit-reset` 推算并 clamp ≥ 0）、`providerStatus` |
+| 响应不是合法 JSON；列表顶层非数组；单条顶层非对象；坏 dispatch ID | `tracker_response` | `retryable: false`（JSON 失败另带 `cause`） |
+| Link header 读不懂；next 跨出配置 origin；next 不是合法 URL | `tracker_pagination` | — |
+| ID-refresh 的 404 | **omit**，不是错误 | — |
+
+`message` 引用 URL、status 与 GitHub 自己的 `message`，**永不**引用请求头，因此 token
+不会经错误面外泄（`src/transport.test.ts` 与 `src/github/profile.test.ts` 断言这一条）。
 
 ## Extension points
 
@@ -271,11 +337,12 @@ exception）；`category` 是唯一判别面，`message` 是 human-readable 诊�
 
 ## Known limitations
 
-- **GitHub REST transport 未实现**（#20）：`github` 的 profile / 归一化 / adapter 已就位，
-  但 M2.2 的默认 transport 在被真正读取工单时抛 `tracker_request`。也就是说
-  `kind: github` 的配置能通过 preflight 与 `registry.create()`，而
-  `fetchIssuesByStates` / `fetchIssuesByIds` 要到 #20 才有网络实现。provider 请求面是
-  `GitHubIssueTransport` 这一个注入端口，#20 不改 profile / 归一化 / 接线。
+- **transport 没有请求超时**：`github/transport.ts` 用 Node 内置 `fetch` 的默认行为，
+  不主动 abort 慢响应，也没有 per-operation 的时间预算。分页因此可能在一台无响应的
+  provider 上停留较久；超时与重试节奏一起归 M5 orchestrator（§8）。
+- **没有 provider 侧的 rate-limit 预算**：429 / `x-ratelimit-remaining: 0` 被如实映射成
+  `tracker_rate_limited` + `retryAfterMs`，但本包不排队、不降频、不缓存 ETag /
+  `If-None-Match`（§11.2 的 rate-limit handling 只到"错误面诚实"为止）。
 - **§11.1 malformed-record 的"SHOULD log"尚未接线**：省略逻辑已实现，回调注入点
   （`createGitHubAdapterProfile({ onMalformedRecord })`）已留出，但本包不 import
   `@symphony/observability`，默认静默省略；日志落点随 M6 的组合根装配。

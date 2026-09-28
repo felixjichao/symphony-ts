@@ -413,23 +413,16 @@ describe("built-in github profile 经 config 端到端（SPEC §11.2 / §6.3）"
     ).toThrowError(/not a GitHub Issues state/);
   });
 
-  it("preflight 通过后 create() 的 kernel 只等到 #20 的 transport", async () => {
+  it("preflight 通过后 create() 的 kernel 端到端可用，空输入先于 transport 生效", async () => {
     const env = { GITHUB_TOKEN: "ghp_env" };
     const { serviceConfig } = resolve(REPO_ONLY, env);
     const kernel = createTrackerAdapterRegistry().create(serviceConfig.tracker, env);
 
     expect(kernel.kind).toBe("github");
-    // §11.1 的空输入 MUST 仍然先于 transport 生效：不发任何请求。
+    // §11.1 的空输入 MUST 先于 transport 生效：不发任何请求（真实 transport
+    // 若被误触发，这里会向外网发请求，而不是快速返回空）。
     await expect(kernel.fetchIssuesByStates([])).resolves.toEqual([]);
     await expect(kernel.fetchIssuesByIds([])).resolves.toEqual([]);
-
-    try {
-      await kernel.fetchIssuesByStates(["open"]);
-      throw new Error("unreachable: M2.2 has no REST transport");
-    } catch (error) {
-      expect(error).toBeInstanceOf(TrackerError);
-      expect((error as TrackerError).category).toBe("tracker_request");
-    }
   });
 });
 
