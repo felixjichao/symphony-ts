@@ -1,6 +1,6 @@
 /**
  * GitHub Issues 的 adapter profile（SPEC §11.2，NEST-55 / #19）：把
- * {@link ./config.ts} 的 provider 规则与 {@link ./adapter.ts} 的构造挂到
+ * `config.ts` 的 provider 规则与 `adapter.ts` 的构造挂到
  * `TrackerAdapterProfile` 契约上，并注册进
  * `registry.BUILT_IN_TRACKER_ADAPTER_PROFILES`。
  *

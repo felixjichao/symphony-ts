@@ -4,7 +4,7 @@
  *
  * 本模块是 `tracker.kind: github` 唯一解释 `tracker.provider` 的地方：
  * `@symphony/config` 按 §5.3.1 原样保留 unknown keys、不做 `$VAR` 展开、不认识任何
- * provider，所以这些规则全部落在这里，由 {@link ./profile.ts} 的 profile 挂上
+ * provider，所以这些规则全部落在这里，由 `profile.ts` 的 GitHub profile 挂上
  * `TrackerAdapterProfile` 契约。
  *
  * 与 core 的 `expandEnvReferences` 刻意分开：§6.1 写明 provider 的 secret / env
@@ -55,7 +55,7 @@ export interface GitHubProviderConfig {
 
 /**
  * 校验 + 默认值回填 + secret / env fallback，返回可直接交给
- * {@link GitHubTrackerAdapter} 的配置。
+ * `GitHubTrackerAdapter` 的配置。
  *
  * 抛出的 category 只有两个：形状 / 取值非法 → `invalid_tracker_config`；
  * token 取不到 → `missing_tracker_secret`（§11.4 的配置阶段三个 category 中，
