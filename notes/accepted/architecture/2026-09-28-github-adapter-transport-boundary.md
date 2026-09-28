@@ -25,7 +25,10 @@ preflight（否则"注册 built-in provider 不需要动 config"这条 §17.1 / 
 端口 `GitHubIssueTransport`（两个方法，返回 `readonly unknown[]`——即未归一化的
 JSON），由 `createGitHubAdapterProfile({ transport })` 注入；built-in 注册的是
 `createUnconfiguredGitHubIssueTransport()`，它的两个方法抛
-`TrackerError("tracker_request")`。
+`TrackerError("tracker_request")`。（**M2.3 / #20 更新**：端口与本 Note 的三条附属裁定
+不变；built-in 的默认实现已换成按 context 构造的真实 REST transport，
+`createUnconfiguredGitHubIssueTransport` 删除。分页与 fetch 注入面的新裁定见
+[2026-09-28-github-rest-transport-pagination.md](2026-09-28-github-rest-transport-pagination.md)。）
 
 于是 M2.2 的可交付面是完整的：`registry.create(tracker, env)` 端到端可用，配置校验
 （provider 键、`token` 三态、`api_url`、states）真实发生，归一化与 malformed-record

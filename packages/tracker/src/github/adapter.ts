@@ -2,10 +2,8 @@
  * GitHub Issues adapter（SPEC §11.2 construction + §11.1 malformed-record 策略，
  * NEST-55 / #19）。
  *
- * M2.2 交付的是**归一化 + adapter 结构**，不含 REST transport：真正的 HTTP 请求、
- * scope selection、pagination、rate-limit 归 #20（issue 的"非目标"）。因此本文件把
- * provider 请求面抽成 {@link GitHubIssueTransport} 这一个注入端口，adapter 只负责
- * §11.1–§11.3 规定的两件事：
+ * adapter 只负责 §11.1–§11.3 规定的两件事；provider 请求面是注入端口
+ * {@link GitHubIssueTransport}，其 REST 实现见 `transport.ts`（NEST-56 / #20）：
  *
  * 1. 把 transport 返回的 payload 数组归一化为 §4.1.1 的 `Issue`；
  * 2. 按调用面决定 malformed 记录的去留——state-list SHOULD 省略并记日志，
@@ -25,9 +23,9 @@ import { GITHUB_TRACKER_KIND, type GitHubProviderConfig } from "./config";
  * provider 请求端口：返回 GitHub REST 的原始 issue payload（未归一化的 JSON）。
  *
  * `unknown` 是刻意的——transport 拿到的是 `JSON.parse` 的结果，编译期没有任何
- * 形状保证，全部字段合法性由 {@link normalizeGitHubIssue} 在运行时判定。#20 只需
- * 提供本接口的实现（`fetch` + pagination + error mapping），adapter / profile /
- * config 接线都不用改。
+ * 形状保证，全部字段合法性由 {@link normalizeGitHubIssue} 在运行时判定。REST
+ * 实现（`transport.ts`：fetch + pagination + §11.4 error mapping）与 adapter 之间
+ * 只隔这一个端口，两侧可各自独立演化。
  */
 export interface GitHubIssueTransport {
   /** 与 §11.1.1 同语义：处于这些 provider state 的 scope 内 issue payload。 */
@@ -54,7 +52,7 @@ export interface GitHubMalformedRecord {
 export interface GitHubTrackerAdapterOptions {
   /** 已解析、已校验的 provider 配置（`repo` 用于 `native_ref`）。 */
   readonly provider: GitHubProviderConfig;
-  /** provider 请求实现；M2.2 默认为 {@link createUnconfiguredGitHubIssueTransport}。 */
+  /** provider 请求实现（REST 实现见 `transport.ts`；测试可注入假 transport）。 */
   readonly transport: GitHubIssueTransport;
   /**
    * state-list 省略 malformed 记录时的回调（缺省 = 静默省略）。
@@ -115,7 +113,7 @@ export class GitHubTrackerAdapter implements TrackerAdapter {
    *
    * 同时兑现 §11.1 对 refresh 结果的另两条不变量——"input IDs are treated as a
    * set" 与 "each dispatch ID appears at most once"：入参先去重再交给 transport
-   * （transport 因此永远只看到集合，#20 不必各自处理重复 ID），产出按 `id` 保留
+   * （transport 因此永远只看到集合，实现不必各自处理重复 ID），产出按 `id` 保留
    * 首次出现。这不是防御性冗余：重复 ID 若原样透传，orchestrator 会把它读成两条
    * 同一 issue 的快照，而 `Issue.id` 是内部 map key 与 workspace 身份的来源（§4.2）。
    */
@@ -133,27 +131,6 @@ export class GitHubTrackerAdapter implements TrackerAdapter {
     }
     return issues;
   }
-}
-
-/**
- * M2.2 的默认 transport：REST transport 属 #20（issue"非目标"一节），此处不存在
- * 任何可用的网络实现。
- *
- * 抛 `tracker_request`（§11.4 "transport failure"）而不是 `tracker_response`：
- * 失败原因确实是"没有 transport"，与 payload 合法性无关。配置面（kind / provider
- * 校验、states 默认、`registry.create()`）在 M2.2 已端到端可用，只有真正读取工单
- * 才会走到这里——这是选择"adapter 先就位、transport 后注入"（#19 方案 B）的代价，
- * 也是它可被观察到的唯一位置。
- */
-export function createUnconfiguredGitHubIssueTransport(): GitHubIssueTransport {
-  const unavailable = async (): Promise<never> => {
-    throw new TrackerError(
-      "tracker_request",
-      'GitHub tracker transport is not implemented yet: kind "github" validates its configuration in M2.2, and the REST transport lands in #20',
-      { retryable: false },
-    );
-  };
-  return { fetchPayloadsByStates: unavailable, fetchPayloadsByIds: unavailable };
 }
 
 // ---------------------------------------------------------------------------

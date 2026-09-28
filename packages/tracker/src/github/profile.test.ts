@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { TrackerConfig } from "@symphony/domain";
 
 import { TrackerError, createGitHubAdapterProfile, githubAdapterProfile } from "../index";
-import type { TrackerAdapterContext, TrackerEnv } from "../index";
+import type { GitHubFetchImpl, TrackerAdapterContext, TrackerEnv } from "../index";
 
 const TOKEN = "ghp_S3cretValue";
 const ENV: TrackerEnv = { GITHUB_TOKEN: TOKEN, MY_PAT: "pat-from-env", EMPTY: "" };
@@ -264,11 +264,47 @@ describe("createAdapter — 从 effective context 构造", () => {
     expect(adapter.kind).toBe("github");
   });
 
-  it("未注入 transport 时读取失败为 tracker_request（REST 归 #20）", async () => {
-    const adapter = githubAdapterProfile.createAdapter(contextOf(resolveProvider({ repo: "a/b" })));
-    const error = await rejectionOf(() => adapter.fetchIssuesByStates(["open"]));
-    expect(error.category).toBe("tracker_request");
+  it("未注入 transport 时默认挂上真实 REST transport（不再是 M2.2 的 unconfigured 桩）", async () => {
+    // 这条测的是**接线**：默认 transport 会真实发请求、按 §11.2 组装鉴权头。
+    // HTTP 层的完整行为由 `transport.test.ts` 用真实本地 server 覆盖；这里用
+    // fetch 记录器，因为 profile 的 `api_url` 校验强制 HTTPS，而本地 stub server
+    // 是明文 HTTP——不该为了测试放宽那条安全不变量。
+    const requests: { url: string; headers: Record<string, string> }[] = [];
+    const recordingFetch: GitHubFetchImpl = async (input, init) => {
+      requests.push({ url: input, headers: init.headers });
+      const closed = input.includes("state=closed");
+      return {
+        status: closed ? 404 : 200,
+        ok: !closed,
+        headers: { get: () => null },
+        async json() {
+          return closed ? { message: "Not Found" } : [{ number: 3, title: "hello", state: "open" }];
+        },
+      };
+    };
+    const profile = createGitHubAdapterProfile({ fetchImpl: recordingFetch });
+    const adapter = profile.createAdapter(contextOf(resolveProvider({ repo: "acme/widget" })));
+
+    const issues = await adapter.fetchIssuesByStates(["open"]);
+    expect(issues.map((issue) => issue.identifier)).toEqual(["GH-3"]);
+    expect(requests[0]?.url).toBe(
+      "https://api.github.com/repos/acme/widget/issues?state=open&sort=created&direction=asc&per_page=100",
+    );
+    expect(requests[0]?.headers["Authorization"]).toBe(`Bearer ${TOKEN}`);
+    expect(requests[0]?.headers["Accept"]).toBe("application/vnd.github+json");
+
+    const error = await rejectionOf(() => adapter.fetchIssuesByStates(["closed"]));
+    expect(error.category).toBe("tracker_status");
     expect(error.message).not.toContain(TOKEN);
+  });
+
+  it("显式注入的 transport 优先于默认 REST 实现（#20 的注入面不变）", async () => {
+    const adapter = createGitHubAdapterProfile({
+      transport: fakeTransport([{ number: 5, title: "t", state: "open" }]),
+    }).createAdapter(contextOf(resolveProvider({ repo: "a/b" })));
+    await expect(adapter.fetchIssuesByStates(["open"])).resolves.toEqual([
+      expect.objectContaining({ identifier: "GH-5" }),
+    ]);
   });
 
   it("context.provider 未经解析（缺 repo）→ invalid_tracker_config，不产出半构造 adapter", () => {

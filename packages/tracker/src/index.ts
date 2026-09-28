@@ -32,15 +32,15 @@
  * - 不新增 generic 写操作 CRUD（comment / state / attachment）；ticket 变更由
  *   coding agent 经 provider-native tools 完成（§11.5）。
  *
- * 已落地的首个 built-in provider（M2.2 / #19）：`tracker.kind: github` 的 profile
- * （{@link githubAdapterProfile}，provider 键 / secret / states 校验）与 payload →
- * `Issue` 归一化（{@link normalizeGitHubIssue}），以及实现 `TrackerAdapter` 的
- * {@link GitHubTrackerAdapter}（§11.1 的 malformed-record 两副面孔）。
+ * 已落地的 GitHub provider（M2.2 / #19 + M2.3 / #20）：`tracker.kind: github` 的
+ * profile（{@link githubAdapterProfile}，provider 键 / secret / states 校验）、
+ * payload → `Issue` 归一化（{@link normalizeGitHubIssue}）、实现 `TrackerAdapter`
+ * 的 {@link GitHubTrackerAdapter}（§11.1 的 malformed-record 两副面孔），以及
+ * 真实 REST transport（{@link createGitHubIssueTransport}：repository scope、
+ * 分页、§11.4 的 request / status / rate-limit / response / pagination 映射）。
  *
- * 尚未落地：GitHub REST transport / pagination / scope selection（#20，
- * 即 {@link createUnconfiguredGitHubIssueTransport} 的替代实现）、其余 provider 的
- * malformed-record 日志接线（§13，M6）、以及 provider-native agent tools
- * （§11.5 / §17.3）。进度见 docs/conformance.md。
+ * 尚未落地：其余 provider 的 malformed-record 日志接线（§13，M6）、以及
+ * provider-native agent tools（§11.5 / §17.3）。进度见 docs/conformance.md。
  */
 
 export type { TrackerAdapter, TrackerAdapterOperations } from "./adapter";
@@ -72,10 +72,12 @@ export {
   type GitHubAdapterProfileOptions,
 } from "./github/profile";
 export { GITHUB_PROVIDER_KEYS, GITHUB_TRACKER_KIND } from "./github/config";
-export { GitHubTrackerAdapter, createUnconfiguredGitHubIssueTransport } from "./github/adapter";
+export { GitHubTrackerAdapter } from "./github/adapter";
 export type {
   GitHubIssueTransport,
   GitHubMalformedRecord,
   GitHubTrackerAdapterOptions,
 } from "./github/adapter";
+export { createGitHubIssueTransport } from "./github/transport";
+export type { GitHubFetchImpl, GitHubFetchResponse, GitHubIssueTransportOptions } from "./github/transport";
 export { normalizeGitHubIssue } from "./github/normalize";

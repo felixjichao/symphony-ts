@@ -10,12 +10,13 @@
  * priority / timestamp / `dispatchable` / malformed-record / optional-field 归一化、
  * provider-native tools 现状、以及 public error form → category + message 的映射。
  *
- * scope selection / pagination / 请求上限**本批次只声明边界、不声明行为**：REST
- * transport 归 #20，见 {@link createUnconfiguredGitHubIssueTransport}。
+ * scope selection / pagination / 请求上限由 `transport.ts` 的 REST transport 落实
+ * （NEST-56 / #20）：未显式注入 transport 时，`createAdapter` 按已解析的 provider
+ * 配置构造真实实现。
  */
 import type { TrackerConfig } from "@symphony/domain";
 
-import { GitHubTrackerAdapter, createUnconfiguredGitHubIssueTransport } from "./adapter";
+import { GitHubTrackerAdapter } from "./adapter";
 import type { GitHubIssueTransport, GitHubMalformedRecord } from "./adapter";
 import {
   GITHUB_ACTIVE_STATE,
@@ -27,16 +28,24 @@ import {
   toGitHubProviderConfig,
   validateGitHubStates,
 } from "./config";
+import { createGitHubIssueTransport } from "./transport";
+import type { GitHubFetchImpl } from "./transport";
 import type { TrackerAdapterContext, TrackerAdapterProfile, TrackerEnv } from "../profile";
 
 /** {@link createGitHubAdapterProfile} 的入参。 */
 export interface GitHubAdapterProfileOptions {
   /**
-   * provider 请求实现。缺省为
-   * {@link createUnconfiguredGitHubIssueTransport}：M2.2 只交付配置 + 归一化，
-   * REST transport 归 #20。
+   * provider 请求实现。缺省为按 context 配置构造的 REST transport
+   * （`createGitHubIssueTransport`）；测试可注入假 transport 以覆盖
+   * 归一化 / malformed-record 面。
    */
   readonly transport?: GitHubIssueTransport;
+
+  /**
+   * REST transport 的 fetch 覆盖点（仅测试用：把默认 transport 指到本地 HTTP
+   * server）。生产缺席，缺席即 `globalThis.fetch`。
+   */
+  readonly fetchImpl?: GitHubFetchImpl;
 
   /**
    * state-list 省略 malformed 记录的回调（§11.1 "SHOULD log that omission"）。
@@ -49,14 +58,14 @@ export interface GitHubAdapterProfileOptions {
 /**
  * 构造 `tracker.kind: github` 的 profile。
  *
- * 做成工厂而非冻结常量，唯一原因是 transport 注入点：#20 落地 REST 实现后
- * `createGitHubAdapterProfile({ transport })` 即可接入，adapter / profile / 配置
- * 校验三层代码不用改。注册进 built-in 的是无参调用（见 `registry.ts`）。
+ * 做成工厂而非冻结常量，原因是 transport 注入点：transport 依赖已解析的 provider
+ * 配置（`repo` / `token` / `api_url`），这些直到 `createAdapter(context)` 才确定，
+ * 所以默认 transport 在 context 处按配置构造；测试仍可通过 `{ transport }` 注入
+ * 假实现、通过 `{ fetchImpl }` 把默认实现指到本地 server。
  */
 export function createGitHubAdapterProfile(
   options: GitHubAdapterProfileOptions = {},
 ): TrackerAdapterProfile {
-  const transport = options.transport ?? createUnconfiguredGitHubIssueTransport();
   return {
     kind: GITHUB_TRACKER_KIND,
     documentation: "packages/tracker/README.md#github-issues",
@@ -78,8 +87,15 @@ export function createGitHubAdapterProfile(
     },
 
     createAdapter(context: TrackerAdapterContext) {
+      const provider = toGitHubProviderConfig(context.provider);
+      const transport =
+        options.transport ??
+        createGitHubIssueTransport(
+          provider,
+          options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl },
+        );
       return new GitHubTrackerAdapter({
-        provider: toGitHubProviderConfig(context.provider),
+        provider,
         transport,
         onMalformedRecord: options.onMalformedRecord,
       });
@@ -87,5 +103,5 @@ export function createGitHubAdapterProfile(
   };
 }
 
-/** built-in 注册用的单例（无 transport，即 M2.2 的配置 + 归一化面）。 */
+/** built-in 注册用的单例（默认走 `transport.ts` 的 REST transport）。 */
 export const githubAdapterProfile: TrackerAdapterProfile = createGitHubAdapterProfile();
