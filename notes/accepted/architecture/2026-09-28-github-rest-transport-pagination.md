@@ -16,7 +16,10 @@ Status: accepted
 3. **requested state 与 provider 返回之间的过滤责任**：`state=all` 会带回两种 state，
    单一 state 的查询也可能混进别的记录，而 malformed 判定明确属 adapter；
 4. **怎么在测试里跑真实 HTTP**：`api_url` 的校验强制 HTTPS（M2.2 定的安全不变量：
-   明文端点会把 token 放到线上），而本地 stub server 起的是明文 HTTP。
+   明文端点会把 token 放到线上），而本地 stub server 起的是明文 HTTP；
+5. **一次限流响应长什么样才算限流**：§11.4 只写了"429 / rate-limit response"，而
+   GitHub 实际有两种形状——primary limit 带 `x-ratelimit-remaining: 0`（403 或 429），
+   secondary limit 带 `Retry-After` 且**不保证**置 remaining 为 0（常常是 403）。
 
 约束不变：本包不 import orchestrator / observability，不做 retry / backoff，
 不引入新的运行时依赖（Node >= 20 的内置 `fetch` 够用）。
@@ -24,7 +27,7 @@ Status: accepted
 ## Decision
 
 `packages/tracker/src/github/transport.ts` 提供 `createGitHubIssueTransport(config, { fetchImpl })`，
-四条裁定：
+六条裁定：
 
 - **默认 transport 在 `createAdapter` 内按 context 构造**，不是 profile 级、也不是
   模块级。`profile.ts` 里 `options.transport ?? createGitHubIssueTransport(provider)`
@@ -39,12 +42,21 @@ Status: accepted
   请求引导到任意 host；而"读不懂的 next"如果降级成"到此为止"，调用方拿到的就是
   一个看起来成功、其实缺尾的候选列表——那正是 §11.1 原子性要防的事。
   解析按 `<…>; rel="…"` 配对匹配，不按逗号 split（分页 URL 的 query 可以含逗号）。
-- **transport 不做 malformed 判定，state 过滤只用于收窄 state**：
-  `state=open|closed` 时按 requested set 过滤，但 `state` 不是字符串的记录一律放行
-  ——把"这条记录根本没有可用 state"翻译成 transport 的丢弃，会让 state-list 的
-  "省略并 SHOULD log"与 ID-refresh 的"MUST fail"这两副面孔在 transport 层就丢失。
+- **transport 不做 malformed 判定，requested-set 过滤无条件生效**：`state` 是字符串但
+  不在请求集内 → 丢弃；`state` 不是字符串的记录一律放行——把"这条记录根本没有可用
+  state"翻译成 transport 的丢弃，会让 state-list 的"省略并 SHOULD log"与 ID-refresh 的
+  "MUST fail"这两副面孔在 transport 层就丢失。过滤对**两条请求分支同样执行**，
+  `state=all` 也不例外："结果 ⊆ 请求集"是调用方读到的不变量，不该取决于这次请求
+  用了哪个 `state` 值（生产上 `state=all` 只在请求集 == GitHub 值域时发出，因此
+  过滤是 no-op，但 no-op 也要由代码成立，而不是由"当前恰好没有第三种 state"成立）。
   同一条理由决定了 PR 记录原样返回（`dispatchable` 属 normalize），以及 ID-refresh
   的 404 是唯一走 omission 的 status（列表调用的 404 仍是 `tracker_status`）。
+- **限流判定按 GitHub 的两种形状一起认**：`status == 429`、`x-ratelimit-remaining: 0`、
+  以及 `status == 403 + Retry-After` 都归 `tracker_rate_limited`（`retryable: true`），
+  其余非成功 status 才走 `tracker_status`。secondary limit 常是 403 且不带 remaining=0，
+  若只认后两种，上层拿到的是 `retryable: false` 的 `tracker_status`——把"过一会儿再试"
+  读成"这条永久失败"。等待时长 `retryAfterMs` 优先取 `Retry-After`（秒数或
+  RFC 9110 允许的 HTTP-date 都做差成毫秒），缺席时用 `x-ratelimit-reset` 推算。
 - **ID refresh 串行，且 dispatch ID 在进入请求循环之前整批校验**：坏 ID 让整个 call
   在零请求的状态下 `tracker_response` 失败。串行是因为 refresh 的量级是 active runs，
   并发只会把 rate-limit 风险前移，而重试节奏不归本包。
@@ -69,6 +81,20 @@ Status: accepted
   失败更危险，orchestrator 无法区分"provider 真的只有这些"与"我们没读完"。
 - **让 transport 自己判 malformed / 直接返回 `Issue[]`**：被否（沿用 #19 的裁定），
   这里只是把它贯彻到 state 过滤与 PR 记录两处。
+- **`state=all` 分支原样透传、只在单一 state 时过滤**（首版实现即如此，NEST-56 审查
+  提出后改为本 Note 采用的"无条件过滤"）：被否。它在生产上与最终方案没有可观察差异
+  （GitHub 只有 open / closed 两个值，`state=all` 只在请求集 == 值域时发出），但把
+  "结果 ⊆ 请求集"变成了一条依赖请求形状 + provider 值域不再扩张的巧合；一行循环
+  就能让不变量自证，没必要留着这个隐含前提。顺带也让实施报告与代码一致（报告原本
+  就按"两条分支都过滤"写的）。
+- **403 一律归 `tracker_status`（权限 / 鉴权失败，`retryable: false`）**：被否。GitHub
+  的 secondary rate limit 就是 403，且不保证带 `x-ratelimit-remaining: 0`；按 status
+  分类会把"稍后重试"贴上"永久失败"的语义。判定改为看限流线索（`Retry-After` /
+  remaining=0 / 429），真正的权限失败（无 `Retry-After` 的 403）仍是
+  `tracker_status`，`transport.test.ts` 两种各测一条。
+- **`retry-after` 只按整数秒解析**：被否（RFC 9110 允许 HTTP-date，前置代理与某些
+  GHES 版本会发日期）。现在两种都解成等待时长；解析不出时继续回落
+  `x-ratelimit-reset`，两者都读不出则不带 `retryAfterMs`（不猜）。
 - **ID refresh 并发化（`Promise.all` / 限流并发）**：被否。GitHub 的 secondary limit
   对突发并发很敏感，refresh 条数本来就小；而且并发让"哪一条失败"的诊断变复杂，
   换来的延迟收益不属于本包职责（§8 归 orchestrator）。

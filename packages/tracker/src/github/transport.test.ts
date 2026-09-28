@@ -140,12 +140,19 @@ describe("fetchPayloadsByStates — endpoint / auth / scope（§11.2 / §17.3）
     expect(server.requests[0]?.url).toContain("/repos/acme.dev/my.widget/issues?state=open");
   });
 
-  it("同时请求 open+closed → state=all，结果原样返回", async () => {
-    const items = [issue(1, "open"), issue(2, "closed")];
+  it("同时请求 open+closed → state=all，且结果仍 ⊆ requested state set", async () => {
+    const noState = { number: 3, title: "t3" };
+    const items = [issue(1, "open"), issue(2, "closed"), issue(4, "merged"), noState];
     const { transport, server } = await withFixture(
       routing([["/repos/acme/widget/issues", { status: 200, body: JSON.stringify(items) }]]),
     );
-    await expect(transport.fetchPayloadsByStates(["open", "closed"])).resolves.toEqual(items);
+    // state=all 只在请求集 == GitHub 值域时发出，所以过滤在真实响应上是 no-op；
+    // 这里断言的是"结果 ⊆ 请求集"这条不变量**不依赖请求怎么发**。
+    await expect(transport.fetchPayloadsByStates(["open", "closed"])).resolves.toEqual([
+      issue(1, "open"),
+      issue(2, "closed"),
+      noState,
+    ]);
     expect(server.requests[0]?.url).toContain("state=all");
   });
 
@@ -448,6 +455,50 @@ describe("§11.4 portable error mapping", () => {
     expect(error.retryAfterMs).toBeGreaterThan(58_000);
     expect(error.retryAfterMs!).toBeLessThanOrEqual(60_000);
     expect(error.providerStatus).toBe(403);
+  });
+
+  it("403 + Retry-After（secondary limit 的常见形状，不带 x-ratelimit-remaining）→ tracker_rate_limited", async () => {
+    const { transport } = await withFixture(() => ({
+      status: 403,
+      body: JSON.stringify({ message: "You have exceeded a secondary rate limit" }),
+      headers: { "retry-after": "120", "x-ratelimit-remaining": "42" },
+    }));
+    const error = await rejectionOf(() => transport.fetchPayloadsByStates(["open"]));
+    expect(error.category).toBe("tracker_rate_limited");
+    expect(error.retryable).toBe(true);
+    expect(error.retryAfterMs).toBe(120_000);
+    expect(error.providerStatus).toBe(403);
+  });
+
+  it("Retry-After 写成 HTTP-date（RFC 9110 允许）也能解出等待时长", async () => {
+    const at = new Date(Date.now() + 90_000).toUTCString();
+    const { transport } = await withFixture(() => ({
+      status: 429,
+      body: JSON.stringify({ message: "Too Many Requests" }),
+      headers: { "retry-after": at },
+    }));
+    const error = await rejectionOf(() => transport.fetchPayloadsByStates(["open"]));
+    expect(error.category).toBe("tracker_rate_limited");
+    expect(error.retryAfterMs!).toBeGreaterThan(60_000);
+    expect(error.retryAfterMs!).toBeLessThanOrEqual(90_000);
+  });
+
+  it("Retry-After 读不懂时回落 x-ratelimit-reset，两者都读不出则不带 retryAfterMs", async () => {
+    const unparseable = await withFixture(() => ({
+      status: 429,
+      body: "{}",
+      headers: { "retry-after": "someday", "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 30) },
+    }));
+    expect((await rejectionOf(() => unparseable.transport.fetchPayloadsByStates(["open"]))).retryAfterMs).toBeGreaterThan(0);
+
+    const unreadable = await withFixture(() => ({
+      status: 429,
+      body: "{}",
+      headers: { "retry-after": "someday" },
+    }));
+    expect(
+      (await rejectionOf(() => unreadable.transport.fetchPayloadsByStates(["open"]))).retryAfterMs,
+    ).toBeUndefined();
   });
 
   it("成功响应不受限流头影响（rate-limit 分支只覆盖非成功 status）", async () => {

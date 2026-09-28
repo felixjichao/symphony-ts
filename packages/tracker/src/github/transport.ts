@@ -97,20 +97,17 @@ export function createGitHubIssueTransport(
     const first = `${issueListUrl}?${query.toString()}`;
 
     const payloads: unknown[] = [];
+    const requested = new Set(states);
     let next: string | null = first;
     while (next !== null) {
       const page = await fetchJsonArray(next);
-      if (singleState === undefined) {
-        payloads.push(...page.items);
-      } else {
-        // requested state set 过滤：GitHub 的 `state` 参数在列表 endpoint 上并非
-        // 严格过滤（closed 的记录可能以 PR 形态混入），单一 state 的查询因此
-        // 在本地再收窄一次。缺 state 的记录留给 adapter 判 malformed。
-        const requested = new Set(states);
-        for (const payload of page.items) {
-          if (matchesRequestedState(payload, requested)) {
-            payloads.push(payload);
-          }
+      // 结果 ⊆ requested state set 是无条件不变量，两条分支都过一遍：GitHub 的
+      // `state` 参数在列表 endpoint 上并非严格过滤（单一 state 的查询里 closed
+      // 可能混进 PR 形态的记录），而 `state=all` 下"请求集 == 值域"只是当前恰好
+      // 成立，不该让"要不要过滤"取决于那次请求怎么发。
+      for (const payload of page.items) {
+        if (matchesRequestedState(payload, requested)) {
+          payloads.push(payload);
         }
       }
       // 任一中间页失败已在 fetchJsonArray 抛出 → 整个 operation 失败，
@@ -210,12 +207,12 @@ export function createGitHubIssueTransport(
     }
   }
 
-  /** 非成功响应用 §11.4 的 category 抛出（429 / 限流 → rate limited，其余 → status）。 */
+  /** 非成功响应用 §11.4 的 category 抛出（限流 → rate limited，其余 → status）。 */
   async function ensureSuccess(response: GitHubFetchResponse, url: string): Promise<void> {
     if (response.ok) {
       return;
     }
-    if (response.status === 429 || rateLimitExhausted(response)) {
+    if (isRateLimitResponse(response)) {
       throw rateLimited(response, url);
     }
     throw await statusError(response, url);
@@ -334,9 +331,18 @@ function resolveNextUrl(raw: string, configuredOrigin: string): string {
   return next.toString();
 }
 
-/** GitHub 的 secondary rate limit 也可能以 403 + Retry-After 出现。 */
-function rateLimitExhausted(response: GitHubFetchResponse): boolean {
-  return response.headers.get("x-ratelimit-remaining") === "0";
+/**
+ * §11.4 "429 / GitHub rate-limit response" 的判定面。GitHub 有两种限流形状：
+ * primary limit 带 `x-ratelimit-remaining: 0`（status 403 或 429），secondary
+ * limit 带 `Retry-After` 且**不保证**置 remaining 为 0（常常是 403）。两者都必须
+ * 落进 `tracker_rate_limited`，否则调用方拿到 `retryable: false` 的
+ * `tracker_status`，把"过一会儿再试"误读成"这条永久失败"。
+ */
+function isRateLimitResponse(response: GitHubFetchResponse): boolean {
+  if (response.status === 429 || response.headers.get("x-ratelimit-remaining") === "0") {
+    return true;
+  }
+  return response.status === 403 && response.headers.get("retry-after") !== null;
 }
 
 function rateLimited(response: GitHubFetchResponse, url: string): TrackerError {
@@ -355,13 +361,23 @@ function rateLimited(response: GitHubFetchResponse, url: string): TrackerError {
   );
 }
 
-/** `retry-after`（秒）优先；缺席时用 `x-ratelimit-reset` 的绝对 epoch 秒推算。 */
+/** `retry-after`（秒或 HTTP-date）优先；缺席时用 `x-ratelimit-reset` 的绝对 epoch 秒推算。 */
 function retryAfter(response: GitHubFetchResponse): number | null {
-  const retryAfterHeader = response.headers.get("retry-after");
-  if (retryAfterHeader !== null) {
-    const seconds = Number(retryAfterHeader);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return Math.round(seconds * 1000);
+  const header = response.headers.get("retry-after");
+  if (header !== null) {
+    const value = header.trim();
+    if (value !== "") {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds)) {
+        // 负值按"现在就可以重试"处理，不落到推算分支。
+        return Math.max(0, Math.round(seconds * 1000));
+      }
+      // RFC 9110 允许 `Retry-After` 写成 HTTP-date。GitHub 发的是秒数，但前置代理
+      // / GHES 版本可能发日期，这里同样解成等待时长（绝对时刻做差）。
+      const at = Date.parse(value);
+      if (!Number.isNaN(at)) {
+        return Math.max(0, Math.ceil(at - Date.now()));
+      }
     }
   }
   const reset = response.headers.get("x-ratelimit-reset");

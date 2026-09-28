@@ -273,8 +273,10 @@ scope 恒为配置的 `owner/repo`（逐段 `encodeURIComponent`），`api_url` 
 
 **state mapping**：requested state 先按 §4.2 trim + lowercase，再映射到 GitHub 的
 `open` / `closed`。两者同时被请求 → 用 `state=all` 一次读取；只要一种 → `state=open`
-或 `state=closed`，并且**结果仍按 requested set 过滤**（provider 混进来的其他 state 不外溢）。
-映射不出任何 GitHub state（含空列表）→ 直接返回 `[]`，**一个请求都不发**。
+或 `state=closed`。无论请求怎么发，**结果都按 requested set 过滤**（GitHub 的 `state`
+参数在列表 endpoint 上不是严格过滤；而"结果 ⊆ 请求集"这条不变量不该取决于一次请求
+用了哪个 `state` 值）。映射不出任何 GitHub state（含空列表）→ 直接返回 `[]`，
+**一个请求都不发**。
 
 **排序与分页**：`sort=created&direction=asc`，`per_page=100`（本页大小时 GitHub 的
 上限，也是本 adapter 的请求上限；无单次调用的页数上限——分页读完为止）。分页沿
@@ -311,14 +313,14 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
 | 触发 | category | 附加字段 |
 |---|---|---|
 | fetch 抛异常（DNS / 连接 / TLS） | `tracker_request` | `retryable: true`、`cause` |
-| 非成功 status（除 ID-refresh 的 404） | `tracker_status` | `providerStatus`、`providerDetail.message`（GitHub 错误信封，截 200 字符）、`retryable = status >= 500` |
-| 429，或 4xx + `x-ratelimit-remaining: 0` | `tracker_rate_limited` | `retryable: true`、`retryAfterMs`（`retry-after` 秒优先，否则 `x-ratelimit-reset` 推算并 clamp ≥ 0）、`providerStatus` |
+| 429；403 + `Retry-After`（GitHub secondary limit 的常见形状）；或 4xx + `x-ratelimit-remaining: 0` | `tracker_rate_limited` | `retryable: true`、`retryAfterMs`（`retry-after` 的秒数或 HTTP-date 优先，否则 `x-ratelimit-reset` 推算，clamp ≥ 0）、`providerStatus` |
+| 其余非成功 status（401 / 403 无限流头 / 404 于 candidate read / 5xx） | `tracker_status` | `providerStatus`、`providerDetail.message`（GitHub 错误信封，截 200 字符）、`retryable = status >= 500` |
 | 响应不是合法 JSON；列表顶层非数组；单条顶层非对象；坏 dispatch ID | `tracker_response` | `retryable: false`（JSON 失败另带 `cause`） |
 | Link header 读不懂；next 跨出配置 origin；next 不是合法 URL | `tracker_pagination` | — |
 | ID-refresh 的 404 | **omit**，不是错误 | — |
 
 `message` 引用 URL、status 与 GitHub 自己的 `message`，**永不**引用请求头，因此 token
-不会经错误面外泄（`src/transport.test.ts` 与 `src/github/profile.test.ts` 断言这一条）。
+不会经错误面外泄（`src/github/transport.test.ts` 与 `src/github/profile.test.ts` 断言这一条）。
 
 ## Extension points
 
@@ -340,9 +342,10 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
 - **transport 没有请求超时**：`github/transport.ts` 用 Node 内置 `fetch` 的默认行为，
   不主动 abort 慢响应，也没有 per-operation 的时间预算。分页因此可能在一台无响应的
   provider 上停留较久；超时与重试节奏一起归 M5 orchestrator（§8）。
-- **没有 provider 侧的 rate-limit 预算**：429 / `x-ratelimit-remaining: 0` 被如实映射成
-  `tracker_rate_limited` + `retryAfterMs`，但本包不排队、不降频、不缓存 ETag /
-  `If-None-Match`（§11.2 的 rate-limit handling 只到"错误面诚实"为止）。
+- **没有 provider 侧的 rate-limit 预算**：429、403 + `Retry-After`（secondary limit）与
+  `x-ratelimit-remaining: 0` 都被如实映射成 `tracker_rate_limited` + `retryAfterMs`，但本包
+  不排队、不降频、不缓存 ETag / `If-None-Match`（§11.2 的 rate-limit handling 只到"错误面
+  诚实"为止）。
 - **§11.1 malformed-record 的"SHOULD log"尚未接线**：省略逻辑已实现，回调注入点
   （`createGitHubAdapterProfile({ onMalformedRecord })`）已留出，但本包不 import
   `@symphony/observability`，默认静默省略；日志落点随 M6 的组合根装配。
