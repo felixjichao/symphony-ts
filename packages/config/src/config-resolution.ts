@@ -38,7 +38,7 @@ import {
 } from "@symphony/domain";
 
 import { SymphonyConfigError } from "./errors";
-import type { TrackerConfigExtension } from "./tracker-extension";
+import type { TrackerConfigExtension, TrackerConfigExtensionFailure } from "./tracker-extension";
 import {
   describeValueType,
   isPlainMap,
@@ -101,8 +101,9 @@ export interface EffectiveWorkflow {
 
 /**
  * 文件级组合入口：发现并加载 `WORKFLOW.md`，再把原始 config 解析为 typed
- * {@link ServiceConfig}（§6.1 管道）。workflow 路径解析与 {@link loadWorkflow}
- * 共用同一 helper（{@link resolveWorkflowPath}）；`WORKFLOW.md` 所在目录即相对
+ * {@link ServiceConfig}（§6.1 管道）。workflow 路径解析与
+ * `loadWorkflow`（`workflow-loader.ts`）共用同一 helper
+ * （{@link resolveWorkflowPath}）；`WORKFLOW.md` 所在目录即相对
  * `workspace.root` 的解析基准。
  *
  * 错误面 = loader 三码（§5.1–§5.3）+ resolution 两码（`invalid_config` /
@@ -110,7 +111,8 @@ export interface EffectiveWorkflow {
  * （`unsupported_tracker_kind` / `invalid_tracker_config` /
  * `missing_tracker_secret`），统一 {@link SymphonyConfigError}。
  *
- * {@link loadWorkflow} 的 JSDoc 与包 README 中的边缘语义在此同样生效。
+ * {@link loadWorkflowFromFile}（loader 侧）的 JSDoc 与包 README 中的边缘语义在此
+ * 同样生效。
  */
 export function loadEffectiveWorkflow(
   options: LoadEffectiveWorkflowOptions = {},
@@ -229,9 +231,22 @@ export function resolveServiceConfig(
   const serviceConfig: ServiceConfig = { tracker, polling, workspace, hooks, agent, codex };
 
   // §6.3 tracker preflight：core 校验已全绿，才轮到 selected adapter 看自己的
-  // 配置。扩展点契约要求以返回值表达失败（不抛），因此这里无需 try/catch——
-  // 扩展自身抛出的异常是缺陷，按 §6.2 crash-resistance 的既有边界向上传播。
-  const failure = options.trackerExtension?.validateTrackerConfig({ tracker, env: ctx.env });
+  // 配置。契约要求扩展以**返回值**表达失败，但它由调用方注入（#19 的 adapter 代码），
+  // 属于系统边界：抛出的异常一律在这里收敛成 typed error，否则 §6.2 的
+  // crash-resistance 会被一次 WORKFLOW.md 编辑击穿——非 SymphonyConfigError 沿
+  // `reloadNow` 逃出定时器，成为杀进程的 uncaughtException。
+  // message 明确写"扩展自身抛出"：缺陷 ≠ 一次配置失败，诊断靠 message + `cause`。
+  let failure: TrackerConfigExtensionFailure | undefined;
+  try {
+    failure = options.trackerExtension?.validateTrackerConfig({ tracker, env: ctx.env });
+  } catch (error) {
+    throw new SymphonyConfigError(
+      "invalid_tracker_config",
+      `Tracker config validation extension threw \`${describeThrownValue(error)}\` instead of returning a failure ` +
+        "(extension defect, not an invalid configuration value)",
+      { path: ctx.errorPath, cause: error },
+    );
+  }
   if (failure !== undefined) {
     throw new SymphonyConfigError(failure.category, failure.message, {
       path: ctx.errorPath,
@@ -261,6 +276,14 @@ function invalidConfig(field: string, detail: string, ctx: ResolutionContext): n
     `Invalid value for \`${field}\`: ${detail}`,
     { path: ctx.errorPath },
   );
+}
+
+/**
+ * 扩展抛出的值在 message 里的稳定描述：Error 取 `name`（如 `TypeError`），其余取
+ * 值类型。抛出物本身始终经 `cause` 保留，这里只保证 message 可判别。
+ */
+function describeThrownValue(error: unknown): string {
+  return error instanceof Error ? error.name : describeValueType(error);
 }
 
 /**

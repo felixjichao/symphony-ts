@@ -42,10 +42,17 @@ provider knowledge？**
 3. **preflight 是 post-resolution 阶段**：core typed 校验（tracker → polling → …
    → codex）全部成功之后，才把 resolved `tracker` 与本次 resolution 的 `env` 交给
    扩展点。adapter 拿不到半 resolved 的配置，core 也不借 adapter 之手校验自己的字段。
-4. **失败用返回值传递，不用异常**：`validateTrackerConfig` 返回
-   `TrackerConfigExtensionFailure | undefined`。config 于是无需 `instanceof` 一个
-   tracker 的类（那会要求 import），也不会把 adapter 的内部缺陷误报成一次配置失败
-   （扩展抛出的异常按缺陷向上传播，有测试锁定）。
+4. **失败用返回值传递，不用异常；抛出物在注入边界被收敛**：`validateTrackerConfig`
+   返回 `TrackerConfigExtensionFailure | undefined`。config 于是无需 `instanceof` 一个
+   tracker 的类（那会要求 import），也不会把 adapter 的内部缺陷误报成一次配置失败的
+   **category**。但"缺陷就让它向上抛"这个初版决定在代码审查中被证伪：扩展由调用方注入
+   （#19 的 adapter 代码），属于系统边界，非 `SymphonyConfigError` 会沿
+   `resolveServiceConfig` → `reloadNow` 的 `!(error instanceof SymphonyConfigError)`
+   分支重新抛出，逃出 `setInterval` 回调成为 uncaughtException —— 一次 `WORKFLOW.md`
+   编辑即可终止长运行服务，违反 §6.2 "Invalid reloads MUST NOT crash the service"。
+   现在的裁定：`resolveServiceConfig` 把扩展抛出物一律收敛为
+   `SymphonyConfigError("invalid_tracker_config", …, { cause })`，message 写明
+   "extension defect"。缺陷与真实配置失败仍靠 message + `cause` 区分（有测试锁定两面）。
 5. **三个配置阶段 category 名进入 `ConfigErrorCode`**（而非"单码 + message 区分"）：
    `unsupported_tracker_kind` / `invalid_tracker_config` / `missing_tracker_secret`
    与 §11.4 一字不差，仍抛单一 `SymphonyConfigError`，`code` 即稳定判别式，`path`
@@ -107,6 +114,18 @@ provider knowledge？**
   列出支持面，诊断已足够。
 - **registry 用模块级全局单例**（`registerAdapter()` 到处调用）：否——profile 集合会变成
   import 顺序的函数，测试之间互相污染，apps/cli 也失去"显式装配"这一 §18 要求。
+- **扩展抛出物处理**（审查 blocker 的三个候选）：
+  - *原样向上抛*（本 Note 初版决定）：否——§6.2 是 MUST，"extension 是内部缺陷"不构成
+    让定时器回调崩溃的理由；且 `reloadNow` 对非 typed error 的重抛是**既有**契约
+    （loader/resolver 的自有代码确实不该被吞掉），把外部注入的代码塞进那条通道等于用
+    内部信任级别对待边界输入。
+  - *catch 后只记日志、继续用旧 config*：否——静默吞掉缺陷会让 #19 的 adapter bug
+    表现为"配置没生效"，比崩溃更难查；而且 §6.2 要求 operator-visible error，日志不在
+    config 的错误面里。
+  - *catch 后转 `SymphonyConfigError`*（采用）：启动期仍是 typed fail-fast（§6.3），
+    reload 期自动走既有 last-known-good + `error` 事件路径，零新增机制。代价是缺陷与真实
+    配置失败共用 `invalid_tracker_config`，靠 message + `cause` 区分——可接受，因为
+    `cause` 保留原抛出物、诊断链没断。
 
 ## Consequences
 
@@ -117,8 +136,10 @@ provider knowledge？**
   `GITHUB_TOKEN` 之类的 secret/env fallback、active/terminal 默认值全部写在 profile 里，
   并按 §11.2 在 `packages/tracker/README.md` 发布 compact profile（8 项齐全）。
 - §11.1 的 malformed-record 策略（state-list 可省略单条畸形记录并记日志、ID-refresh
-  MUST fail）与 §11.3 的 payload 归一化尚未落地：它们要求真实的 provider payload，
-  归 #19 / #20，conformance 的 §11 行保持 `in-progress`。
+  MUST fail）与 provider-side scope / pagination、§11.3 的 payload 归一化尚未落地：
+  它们要求真实的 provider payload，归 #19 / #20。conformance 已为此单列
+  `planned M2（#19 / #20）` 行，§11.1 的 `implemented` 行只覆盖调用面（两个
+  operation 的接口 + 空输入 MUST + normalized `Issue` 形状），#19 不要把 §11.1 当作已收口。
 - 两侧形状各自声明是**长期代价**：任何一方改字段名/值域，
   `packages/tracker/src/config-integration.test.ts` 的双向赋值断言会编译失败——这是
   刻意的摩擦，不要靠 `as unknown as` 绕过。若将来出现第三个消费方（例如 M5 想在
@@ -126,5 +147,7 @@ provider knowledge？**
 - `trackerExtension` 是 config 唯一的"外部校验注入"通道：不得再加第二个 hook
   （如 `pollingExtension`）而不先写 Note；workspace / agent 的同类需求应复用本模式并
   记录为何不需要共享类型。
-- 扩展点必须"以返回值表达失败"：任何把 tracker 校验改成抛异常的实现都会破坏 §6.2
-  crash-resistance（watcher 会因非 `SymphonyConfigError` 崩溃）。
+- 扩展点**仍须以返回值表达失败**：抛出物虽然被 config 接住、不再击穿 §6.2
+  crash-resistance，但会一律落到 `invalid_tracker_config`，丢掉
+  `unsupported_tracker_kind` / `missing_tracker_secret` 的判别精度。返回值是唯一的
+  "稳定 category"通道；抛出通道只用于报告缺陷。

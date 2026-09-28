@@ -17,7 +17,7 @@
  * `tracker_response` / `tracker_pagination` / `tracker_rate_limited` 只在**读取
  * 期间**（§11.1 两个 operation）出现；配置阶段的三个 category
  * （{@link TrackerConfigErrorCategory}）同时是 config preflight 的错误面，由
- * {@link TrackerConfigRegistry.validate} 产出的 {@link TrackerConfigRejection}
+ * `TrackerAdapterRegistry.validate` 产出的 `TrackerConfigExtensionFailure`
  * 交 config 转换为 `SymphonyConfigError`（契约见
  * `notes/accepted/architecture/2026-09-28-tracker-adapter-config-extension.md`）。
  */
@@ -51,8 +51,8 @@ export type TrackerErrorCode =
 
 /**
  * §11.4 中属于**配置阶段**的 category 子集：只有这三个能作为 config preflight
- * 的失败原因跨包出现（{@link TrackerConfigValidationFailure}），其余五个只在
- * §11.1 读取期间产生。
+ * 的失败原因跨包出现（`TrackerConfigExtensionFailure.category`，见 `registry.ts`），
+ * 其余五个只在 §11.1 读取期间产生。
  */
 export type TrackerConfigErrorCategory = Extract<
   TrackerErrorCode,

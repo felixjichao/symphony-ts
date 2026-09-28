@@ -401,7 +401,7 @@ describe("createConfigExtension — 交给 @symphony/config 的结构化契约",
     ).toBeUndefined();
   });
 
-  it("失败时给出 category + message，不抛异常、不泄漏 TrackerError 实例", () => {
+  it("失败时给出 category + message：控制面是数据，TrackerError 只挂在 cause 上作诊断", () => {
     const extension = new TrackerAdapterRegistry([githubLikeProfile()]).createConfigExtension();
     const failure = extension.validateTrackerConfig({
       tracker: trackerConfig({ kind: "github", provider: { repo: "a/b" } }),
@@ -411,8 +411,8 @@ describe("createConfigExtension — 交给 @symphony/config 的结构化契约",
     expect(failure).toEqual({
       category: "missing_tracker_secret",
       message: expect.stringContaining("github_token"),
+      cause: expect.any(TrackerError),
     });
-    expect("cause" in (failure as object)).toBe(false);
   });
 
   it("unsupported kind 在扩展面上也是 unsupported_tracker_kind", () => {

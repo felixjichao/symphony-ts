@@ -53,9 +53,12 @@ const snapshots = await adapter.fetchIssuesByIds(["opaque-dispatch-id"]);
 - 可选方法缺席即"无该能力"：`resolveProviderConfig` 缺省 ⇒ `tracker.provider` 原样
   透传；`tracker.active_states === null` ⇒ 取 profile 默认（§5.3.1 / §6.4）。
 - **约定**：`validateConfig` / `resolveProviderConfig` / `createAdapter` 以抛出
-  `TrackerError` 表达失败（§11.4 允许 language-native exception form）。抛出**非**
-  `TrackerError` 的异常由 registry 归一化为 `invalid_tracker_config` 并经 `cause`
-  保留——profile 不必各自兜底。
+  `TrackerError` 表达失败（§11.4 允许 language-native exception form）。registry 的
+  `validate()` 把失败转成结构化 `TrackerConfigExtensionFailure`：`category` 是唯一
+  判别面，**三条路径都**经 `cause` 挂上原抛出物（配置 category 的 `TrackerError`
+  也带上，否则 `retryable` / `providerStatus` / `providerDetail` 这类诊断面在 config
+  侧就丢了）；抛出**非** `TrackerError` 的异常一律归一化为 `invalid_tracker_config`
+  ——profile 不必各自兜底。
 
 ### Registry / factory（§11.2 / §6.3）
 

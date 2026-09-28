@@ -71,7 +71,7 @@ const NO_ISSUES: readonly Issue[] = Object.freeze([]);
  * "空输入 → 空结果且零 provider 请求"（§11.1 两处 MUST、§17.1 两条验收）。
  *
  * 该不变量属 provider 无关的内核语义，因此由各 adapter **重复实现一遍**是错误
- * 归属——{@link TrackerAdapterRegistry.create}（`registry.ts`）恒经本函数包装，
+ * 归属——`TrackerAdapterRegistry.create`（`registry.ts`）恒经本函数包装，
  * adapter 只需假定拿到的是非空输入。
  *
  * 除此以外不加策略：分页、重试、cadence、required-label 过滤、并发上限都归

@@ -111,7 +111,9 @@ export class TrackerAdapterRegistry {
    *
    * 不抛异常：失败以 {@link TrackerConfigExtensionFailure} 返回（config 侧转成
    * `SymphonyConfigError`），通过返回 `undefined`。这样 config 不需要
-   * `instanceof` 一个来自 tracker 的类（那会要求 import tracker）。
+   * `instanceof` 一个来自 tracker 的类（那会要求 import tracker）。判别式只有
+   * `category`；`cause` 携带原 {@link TrackerError}，纯诊断（config 原样透传，
+   * 不读取其字段）。
    */
   validate(tracker: TrackerConfig, env: TrackerEnv): TrackerConfigExtensionFailure | undefined {
     try {
@@ -236,11 +238,14 @@ export function createTrackerAdapterRegistry(
 /**
  * §11.4 的稳定映射：配置阶段只允许 3 个 category。profile 若抛出运行时 category
  * （说明该检查放错了位置）或非 `TrackerError`（adapter 缺陷），一律收敛为
- * `invalid_tracker_config` 并经 `cause` 保留原异常——config 的错误面因此始终可判别。
+ * `invalid_tracker_config`。三条路径**都**带 `cause`：最常见的那条（配置 category
+ * 的 `TrackerError`）虽然 category / message 已来自原对象，但原异常连同
+ * `retryable` / `providerStatus` / `providerDetail` 这些诊断面只有 `cause` 上才
+ * 有——config 侧（`config-resolution.ts`）已支持透传，不该在这里把链断掉。
  */
 function toExtensionFailure(error: unknown, kind: string): TrackerConfigExtensionFailure {
   if (error instanceof TrackerError && isConfigCategory(error.category)) {
-    return { category: error.category, message: error.message };
+    return { category: error.category, message: error.message, cause: error };
   }
   // 其余情况一律 invalid_tracker_config（见 toTrackerError 的两个分支）。
   const wrapped = toTrackerError(error, kind, "validating the tracker config");

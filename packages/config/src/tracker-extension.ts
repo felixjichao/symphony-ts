@@ -66,8 +66,14 @@ export interface TrackerConfigExtensionFailure {
  * `LoadEffectiveWorkflowOptions.trackerExtension` 的扩展点。
  *
  * 契约：`validateTrackerConfig` **不得抛异常**来表达配置非法——失败只能经返回值
- * 传递（抛出的异常会被视为内部缺陷并向上传播，破坏 §6.2 的 crash-resistance）。
- * 通过则返回 `undefined`。
+ * 传递，通过则返回 `undefined`。返回值的 `category` 是唯一进入 config 错误面的通道。
+ *
+ * 抛出的异常是**扩展自身的缺陷**，config 不信任这个注入边界：在
+ * `resolveServiceConfig` 里一律收敛为 `SymphonyConfigError`
+ * （`code = "invalid_tracker_config"`，message 写明"extension defect"，原抛出物经
+ * `cause` 保留）。这样 §6.2 的 crash-resistance 不被击穿（非 typed error 会沿
+ * `reloadNow` 逃出定时器、成为终止长运行服务的 uncaughtException），代价是缺陷与
+ * 真实配置失败共用一个 code——区分靠 message + `cause`，不靠抛出与否。
  */
 export interface TrackerConfigExtension {
   readonly validateTrackerConfig: (

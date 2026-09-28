@@ -144,9 +144,12 @@ const eff = loadEffectiveWorkflow({
 - **时机是 post-resolution**：core typed 校验全部成功之后，才把 resolved `tracker`
   与本次 resolution 的 `env` 交给扩展点。adapter 拿不到半 resolved 的配置，core 也不
   借 adapter 之手校验自己的字段。
-- 失败用**返回值**传递（`validateTrackerConfig` 返回 failure 或 `undefined`，不得抛）：
-  本包因此无需 `instanceof` tracker 的类，也就无需 import tracker；扩展抛出的异常按
-  内部缺陷向上传播，不会被误报成一次配置失败。
+- 失败用**返回值**传递（`validateTrackerConfig` 返回 failure 或 `undefined`）：本包因此
+  无需 `instanceof` tracker 的类，也就无需 import tracker。扩展**抛异常**属于违反契约的
+  缺陷，注入边界一律收敛为 `invalid_tracker_config` 并把抛出物挂在 `cause`、message 写明
+  `extension defect`——不能让非 typed error 沿 `reloadNow` 逃出定时器（§6.2 "Invalid
+  reloads MUST NOT crash the service"）。代价：缺陷与真实配置失败共用一个 `code`，靠
+  message + `cause` 区分；profile 仍应以返回值给出精确 category。
 - 热重载自动继承：无效 tracker 配置的 reload 走既有 §6.2 语义——保留 last-known-good
   + `onEvent({ kind: "error" })`，`error.code` 即三个 tracker 码之一；配置修好后自愈。
 - **扩展点只有读权限**：它收到的 `tracker` 就是产出的 `ServiceConfig.tracker`

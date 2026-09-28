@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, afterEach, beforeEach, expect, it } from "vitest";
+import { describe, afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { TrackerConfig } from "@symphony/domain";
 
@@ -198,15 +198,41 @@ describe("注入扩展点：preflight 的错误面（§11.4 category → ConfigE
     expect(error.cause).toBe(cause);
   });
 
-  it("扩展抛异常（违反契约）不被吞掉——它不是一次配置失败", () => {
+  it("扩展抛异常（违反契约）在注入边界收敛为 typed error：缺陷靠 message + cause 判别", () => {
     writeWorkflow(["tracker:", "  kind: linear"].join("\n"));
+    const bug = new TypeError("extension bug");
     const throwing: TrackerConfigExtension = {
       validateTrackerConfig: () => {
-        throw new TypeError("extension bug");
+        throw bug;
       },
     };
 
-    expect(() => loadEffectiveWorkflow({ cwd: dir, trackerExtension: throwing })).toThrowError(TypeError);
+    const error = captureConfigError(() =>
+      loadEffectiveWorkflow({ cwd: dir, trackerExtension: throwing }),
+    );
+
+    expect(error.code).toBe("invalid_tracker_config");
+    // 与"一次真实配置失败"可区分：message 写明扩展自身抛出，原抛出物完整保留。
+    expect(error.message).toContain("extension defect");
+    expect(error.message).toContain("TypeError");
+    expect(error.cause).toBe(bug);
+  });
+
+  it("扩展抛出的非 Error 值也走同一边界，cause 原样保留", () => {
+    writeWorkflow(["tracker:", "  kind: linear"].join("\n"));
+    const throwing: TrackerConfigExtension = {
+      validateTrackerConfig: () => {
+        throw "plain string bug";
+      },
+    };
+
+    const error = captureConfigError(() =>
+      loadEffectiveWorkflow({ cwd: dir, trackerExtension: throwing }),
+    );
+
+    expect(error.code).toBe("invalid_tracker_config");
+    expect(error.message).toContain("string");
+    expect(error.cause).toBe("plain string bug");
   });
 });
 
@@ -249,6 +275,50 @@ describe("热重载自动继承扩展点（WatchWorkflowOptions §6.2 语义）"
 
     expect(watcher.current().serviceConfig.tracker.provider).toEqual({ repo: "acme/widget", page_size: 100 });
     expect(events.map((event) => event.kind)).toEqual(["error", "reloaded"]);
+  });
+
+  it("扩展在定时器 reload 中抛异常：不崩服务，typed error 事件 + last-known-good，之后自愈", async () => {
+    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    repo: acme/widget"].join("\n"));
+    // 扩展缺陷（而不是配置失败）：reload 路径上抛出，必须被注入边界接住。
+    let throwing = false;
+    const bug = new TypeError("extension bug");
+    const extension: TrackerConfigExtension = {
+      validateTrackerConfig: () => {
+        if (throwing) {
+          throw bug;
+        }
+        return undefined;
+      },
+    };
+    const events: WorkflowReloadEvent[] = [];
+
+    watcher = watchWorkflow({
+      cwd: dir,
+      intervalMs: 10,
+      trackerExtension: extension,
+      onEvent: (event) => events.push(event),
+    });
+    expect(watcher.current().serviceConfig.tracker.provider).toEqual({ repo: "acme/widget" });
+
+    throwing = true;
+    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    repo: acme/other"].join("\n"));
+    await vi.waitFor(() => expect(events.length).toBe(1));
+
+    if (events[0]?.kind !== "error") {
+      throw new Error("unreachable");
+    }
+    expect(events[0].error.code).toBe("invalid_tracker_config");
+    expect(events[0].error.cause).toBe(bug);
+    // 服务仍在运行：缺陷那次 reload 既不生效也不终止进程。
+    expect(watcher.current().serviceConfig.tracker.provider).toEqual({ repo: "acme/widget" });
+
+    // 反证崩溃已消除：缺陷修好后同一个 watcher 正常应用新配置。
+    throwing = false;
+    writeWorkflow(["tracker:", "  kind: github", "  provider:", "    repo: acme/other", "    page_size: 50"].join("\n"));
+    await vi.waitFor(() => expect(events.length).toBe(2));
+
+    expect(events[1]?.kind).toBe("reloaded");
+    expect(watcher.current().serviceConfig.tracker.provider).toEqual({ repo: "acme/other", page_size: 50 });
   });
 
   it("初始加载即无效 → fail-fast throw，不产生半初始化 handle", () => {
