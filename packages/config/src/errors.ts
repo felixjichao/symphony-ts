@@ -6,8 +6,9 @@
  * 判别式是 {@link SymphonyConfigError.code}，取值来自 {@link ConfigErrorCode}。
  * M1.2（§5.1–§5.3）落地发现 / 解析三码，M1.3（§6 typed config 校验）追加
  * `invalid_config` / `missing_env_reference`，M1.4（§5.4 严格模板渲染）追加
- * `template_parse_error` / `template_render_error`；消费方应容忍未知码并按 `code`
- * 精确分支。
+ * `template_parse_error` / `template_render_error`，M2.1（§6.3 / §11.4 tracker
+ * preflight）追加 `unsupported_tracker_kind` / `invalid_tracker_config` /
+ * `missing_tracker_secret`；消费方应容忍未知码并按 `code` 精确分支。
  */
 
 /**
@@ -32,6 +33,18 @@
  *   注：`liquidjs` 在 `parse()` 阶段即解析 filter 名，本包把"未注册 filter"归类为
  *   本码（而非 `template_parse_error`）以对齐 §5.5 的错误分类（见 prompt-rendering
  *   Agent Note）。
+ * - `unsupported_tracker_kind`：`tracker.kind` 不是当前注册表支持的 adapter
+ *   （§6.3 / §17.1，M2.1）。仅在注入了 tracker 配置扩展点时产生（见
+ *   `tracker-extension.ts`）。
+ * - `invalid_tracker_config`：selected adapter 判定 tracker 配置非法——`kind`
+ *   未配置（`""` 哨兵）、`provider` 键缺失或取值非法、active / terminal states
+ *   非法（§11.4，M2.1）。与 `invalid_config` 的分工：后者是 **core** §5.3 / §6
+ *   typed shape 校验，前者是 **adapter-owned** 语义校验；两者不得合并，否则
+ *   §17.1 "validated through the selected adapter" 的可追溯性就没了。
+ * - `missing_tracker_secret`：adapter-owned secret（provider 键或 adapter-local
+ *   环境变量名）未提供或为空（§11.4 / §5.3.1，M2.1）。
+ *
+ * 后三个码的**名字**与 SPEC §11.4 的推荐 category 一字不差，不造第二套词汇。
  *
  * 模板两码携带 `path` 为 workflow 文件绝对路径；对无文件上下文的裸模板调用，
  * `path` 为哨兵值 `"<inline>"`。
@@ -43,7 +56,10 @@ export type ConfigErrorCode =
   | "invalid_config"
   | "missing_env_reference"
   | "template_parse_error"
-  | "template_render_error";
+  | "template_render_error"
+  | "unsupported_tracker_kind"
+  | "invalid_tracker_config"
+  | "missing_tracker_secret";
 
 /**
  * config 包的统一 typed error。除标准 `Error` 字段外携带：

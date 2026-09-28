@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-09-28-tracker-adapter-config-extension.md](accepted/architecture/2026-09-28-tracker-adapter-config-extension.md) — tracker adapter 注册表与 `@symphony/config` 的跨包扩展点契约：契约归 config / 实现归 tracker 的结构化对接、失败以返回值而非异常表达、三个 tracker 错误码进 `ConfigErrorCode`、profile 默认不回写 `ServiceConfig`，M2.1（SPEC §6.3 / §11.1 / §11.2 / §11.4 / §17.1）
 - [accepted/architecture/2026-09-27-prompt-rendering-contract.md](accepted/architecture/2026-09-27-prompt-rendering-contract.md) — 严格 prompt 渲染契约：snake_case 变量面、`attempt` 恒在场、空正文默认 prompt、ISO 时间戳、错误归类与 `<inline>` 哨兵，M1.4（SPEC §5.4 / §12.2）
 - [accepted/architecture/2026-09-27-workflow-reload-contract.md](accepted/architecture/2026-09-27-workflow-reload-contract.md) — 热重载契约：轮询 + stamp 检测、last-known-good 不变量、valid / invalid reload 与事件面、`reload()` 防御性再校验，M1.4（SPEC §6.2 / §6.3）
 - [accepted/tooling/2026-09-27-config-liquidjs-dependency.md](accepted/tooling/2026-09-27-config-liquidjs-dependency.md) — `@symphony/config` 引入 `liquidjs` 作为第二个运行时依赖的选型与严格模式行为（M1.4）
