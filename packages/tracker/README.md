@@ -127,6 +127,12 @@ const kernel = registry.create(serviceConfig.tracker, process.env);
 REST transport；测试可用 `createGitHubAdapterProfile({ transport })` 注入假 transport
 （只验归一化 / malformed 策略），或用 `{ fetchImpl }` 把默认实现的 fetch 指向别处。
 
+`{ fetchImpl }` 的第二个用途是把**默认** transport 指向本地 GitHub REST stub，同时让
+`api_url` 保持配置的 https 端点：`src/github-rest-integration.test.ts` 因此能一条链路
+验到底（`WORKFLOW.md` → config preflight → registry → adapter → REST → normalized
+`Issue`），而 HTTPS-only 那条安全不变量不因测试装配而松动（只替换 URL 的 origin，
+`Link` 分页的 origin 守卫照常生效）。
+
 ### 错误契约（§11.4）
 
 `TrackerError` + `TrackerErrorCode`：8 个推荐 category **一字不差**采用——
@@ -351,6 +357,11 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
   `@symphony/observability`，默认静默省略；日志落点随 M6 的组合根装配。
 - **provider-native agent tools 未落地**（§11.5 / §17.3）：`TrackerAdapterContext.env`
   已为构造期需要预留，但 tools 的名字、schema、授权边界与结果/错误行为尚未定义。
+- **没有真实 GitHub 的 smoke（§17.8 Real Integration Profile）**：本包的验收全部在
+  Core Conformance 层，凭据无关、可在默认 CI 复跑；端到端那条用本地 REST stub 顶替
+  provider（`src/github-rest-integration.test.ts`）。opt-in 的真实仓库只读 smoke 尚未
+  实现，将来加入时缺席只能 skip、不得记为 Core Conformance passed，也不得对生产仓库
+  做写操作。
 - **只有 GitHub 一个 provider**：§11.3 的通用归一化规则目前只有单一实现作为对照，
   "跨 provider 抽象是否漏了什么"要等第二个 adapter（Linear / Jira）才能证伪。
 - 本包不拥有 polling cadence / claim / retry / required-label 过滤 / 并发上限（§8、§14
