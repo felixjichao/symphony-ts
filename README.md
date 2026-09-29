@@ -59,8 +59,8 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 |---|---|---|
 | M0 / M0.5 | 工程基建：monorepo、strict TS、测试、`npm run gate`、AGENTS / docs / notes | ✅ 已完成 |
 | M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建 workspace 边界、删除协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
-| M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | 未开始 |
-| M2 | Issue Tracker Adapter：provider 接口与归一化（§11） | 未开始 |
+| M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | ✅ 已完成 |
+| M2 | Issue Tracker Adapter：provider 无关 read kernel / registry、built-in `github` profile + 归一化 + REST transport 与端到端 conformance 收口（§11，验收 §17.3） | ✅ 已完成 |
 | M3 | Workspace Manager：目录 provisioning、containment、lifecycle hooks（§9） | 未开始 |
 | M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 未开始 |
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | 未开始 |
