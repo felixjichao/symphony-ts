@@ -227,9 +227,9 @@ async function rejectionOf(run: () => Promise<unknown>): Promise<TrackerError> {
   throw new Error("unreachable: expected the tracker read to fail");
 }
 
-function configErrorOf(run: () => unknown): SymphonyConfigError {
+async function configErrorOf(run: () => unknown): Promise<SymphonyConfigError> {
   try {
-    run();
+    await run();
   } catch (error) {
     expect(error).toBeInstanceOf(SymphonyConfigError);
     return error as SymphonyConfigError;
@@ -318,16 +318,24 @@ describe("端到端 candidate fetch：WORKFLOW.md → registry → adapter → R
     ]);
   });
 
-  it("非法 GitHub state 在 config preflight 即失败，且一次请求都不发", () => {
-    const error = configErrorOf(() => {
-      writeWorkflow(
-        trackerFrontMatter(DEFAULT_PROVIDER, ["  active_states:", "    - In Progress"]),
-      );
-      loadWorkflow({});
+  it("非法 GitHub state 在 config preflight 即失败，且一次请求都不发", async () => {
+    writeWorkflow(
+      trackerFrontMatter(DEFAULT_PROVIDER, ["  active_states:", "    - In Progress"]),
+    );
+    const server = await startFixture(() => json([]));
+
+    // 沿 kernelFrom 的同一条链走到 create() 与 fetch：坏 config 必须在 loadWorkflow
+    // 就抛出，stub 因此一次请求也收不到——否则"零请求"只是未被检验的断言。
+    const error = await configErrorOf(async () => {
+      const { serviceConfig } = loadWorkflow({});
+      const kernel = fixtureRegistry(server, {}).create(serviceConfig.tracker, {});
+      await kernel.fetchIssuesByStates(["open"]);
     });
+
     expect(error.code).toBe("invalid_tracker_config");
     expect(error.message).toContain("not a GitHub Issues state");
     expect(error.path).toBe(workflowPath);
+    expect(server.requests).toEqual([]);
   });
 });
 
@@ -336,10 +344,10 @@ describe("端到端 candidate fetch：WORKFLOW.md → registry → adapter → R
 // ---------------------------------------------------------------------------
 
 describe("§17.1 的 tracker config 两行：端到端 preflight（§6.3 / §11.2）", () => {
-  it("未注册的 kind 在 preflight 失败，message 披露 built-in 支持的 kinds", () => {
+  it("未注册的 kind 在 preflight 失败，message 披露 built-in 支持的 kinds", async () => {
     expect(createTrackerAdapterRegistry().supportedKinds).toEqual(["github"]);
 
-    const error = configErrorOf(() => {
+    const error = await configErrorOf(() => {
       // built-in 注册表只认识 github：linear 是 issue 里点名的"未注册 provider"。
       writeWorkflow(["tracker:", "  kind: linear", "  provider:", `    repo: ${REPO}`, "    token: t"]);
       loadWorkflow({ GITHUB_TOKEN: "ghp_env" });
@@ -366,8 +374,8 @@ describe("§17.1 的 tracker config 两行：端到端 preflight（§6.3 / §11.
     expect(fromFallback.server.requests[0]?.headers["authorization"]).toBe("Bearer ghp_fallback");
   });
 
-  it("两处都取不到 token → preflight missing_tracker_secret，message 不回显任何凭据", () => {
-    const error = configErrorOf(() => {
+  it("两处都取不到 token → preflight missing_tracker_secret，message 不回显任何凭据", async () => {
+    const error = await configErrorOf(() => {
       writeWorkflow(trackerFrontMatter([`    repo: ${REPO}`]));
       loadWorkflow({ GITHUB_TOKEN: "" });
     });
@@ -377,7 +385,7 @@ describe("§17.1 的 tracker config 两行：端到端 preflight（§6.3 / §11.
 
   it("明文 api_url 在 preflight 失败：端到端路径不为了本地 stub 放宽 HTTPS-only", async () => {
     const server = await startFixture(() => json([]));
-    const error = configErrorOf(() => {
+    const error = await configErrorOf(() => {
       writeWorkflow(
         trackerFrontMatter([`    repo: ${REPO}`, `    token: ${TOKEN}`, `    api_url: ${server.baseUrl}`]),
       );
