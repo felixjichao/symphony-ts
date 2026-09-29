@@ -12,7 +12,7 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
 ```text
 @symphony/workspace → @symphony/domain
 ```
-`@symphony/domain` 提供 `Workspace`、`WorkspaceConfig`、`HooksConfig` 契约以及权威 `deriveWorkspaceKey` 实现；`@symphony/config` 仅作为 devDependency（如需集成测试），不出现在运行期 `dependencies` 中。
+`@symphony/domain` 提供 `Workspace`、`WorkspaceConfig`、`HooksConfig` 契约以及权威 `deriveWorkspaceKey` 实现；本包不依赖 `@symphony/config`。
 
 ## Public API
 
@@ -39,7 +39,7 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
 
 ### 错误契约（SPEC §9 / §17.2）
 
-对外统一抛出类型化 {@link WorkspaceError}，主要判别契约为 `error.code`（{@link WorkspaceErrorCode}），不把 Node fs 原始异常暴露为主要判别式，底层异常经 `error.cause` 保留：
+对外统一抛出类型化 `WorkspaceError`，主要判别契约为 `error.code`（`WorkspaceErrorCode`），不把 Node fs 原始异常暴露为主要判别式，底层异常经 `error.cause` 保留：
 
 | 错误码（`code`） | 触发时机 |
 |---|---|

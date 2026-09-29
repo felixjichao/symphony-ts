@@ -45,7 +45,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 ```
 domain              ← 共享领域契约，不依赖任何包
 config / tracker    → domain
-workspace           → domain + config
+workspace           → domain
 agent               → domain + config + workspace
 orchestrator        → domain + config + tracker + workspace + agent
 observability       → domain（以及只读 runtime snapshot 契约）

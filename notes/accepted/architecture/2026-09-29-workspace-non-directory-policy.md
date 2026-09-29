@@ -13,7 +13,7 @@ symphony-ts 针对已有非目录对象明确选择 **Fail Safely（安全失败
 
 1. **绝对不自动删除**：绝不隐式调用 `rm`、`unlink` 或递归删除已存在的未知文件、符号链接、FIFO 或设备节点；
 2. **绝对不自动替换**：绝不对已有非目录文件进行覆盖写入或强行替换为目录；
-3. **抛出稳定类型化错误**：抛出 {@link WorkspaceError}，其判别式 `code` 恒为 `"existing_non_directory"`，并携带发生冲突的 `path`、`workspaceKey` 与 `identifier` 诊断上下文；
+3. **抛出稳定类型化错误**：抛出 `WorkspaceError`，其判别式 `code` 恒为 `"existing_non_directory"`，并携带发生冲突的 `path`、`workspaceKey` 与 `identifier` 诊断上下文；
 4. **并发与 EEXIST 重检不变量**：在文件系统存在竞态（`mkdir` 捕获 `EEXIST`）时，必须通过 `lstat` 重新核验实际对象类型；仅当确认为目录时方可复用（`createdNow = false`），若为非目录对象一律拒绝，绝不仅凭异常捕获假定目标已是合法目录。
 
 ## Alternatives considered

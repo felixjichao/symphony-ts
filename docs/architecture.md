@@ -27,13 +27,13 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/domain` | —（共享契约） | §4 | Issue、WorkflowDefinition、ServiceConfig、Workspace、RunAttempt、LiveSession、RetryEntry、OrchestratorRuntimeState 等类型与纯逻辑的唯一权威 | 无 |
 | `packages/config` | Workflow Loader + Config Layer | §5、§6 | `WORKFLOW.md` 发现 / 解析、front matter schema、typed 校验、env / path resolution、模板渲染、热重载回退 | domain |
 | `packages/tracker` | Issue Tracker Adapter | §11 | provider 无关的读取接口、认证、payload → Issue 归一化 | domain（`config` 仅为 devDependency，见下） |
-| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain（`config` 仅为 devDependency，见下） |
+| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain |
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | config, tracker, workspace, agent, orchestrator, observability |
 
-依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前例外：`packages/tracker` 与 `packages/workspace` 以 devDependency 引用 `@symphony/config`（仅测试使用），运行期方向仍为 `tracker → domain` 与 `workspace → domain`。两条硬约束：
+依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前唯一例外：`packages/tracker` 以 devDependency 引用 `@symphony/config`（仅 `src/config-integration.test.ts` 使用），用来证明扩展点两侧的结构化契约真的对得上——`@symphony/config` 侧不引用 tracker，运行期方向仍是 `tracker → domain`。两条硬约束：
 
 1. **tracker 永不 import orchestrator**——轮询节奏 / claim / 调度属 coordination 层；
 2. **agent runner 不拥有 scheduler / retry policy**——coordination 只由 orchestrator 拥有。

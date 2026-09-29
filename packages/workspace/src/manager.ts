@@ -156,7 +156,10 @@ export class WorkspaceManager {
    */
   async createWorkspace(identifier: string): Promise<Workspace> {
     const workspaceKey = this.deriveWorkspaceKey(identifier);
-    const workspacePath = this.resolveWorkspacePath(identifier);
+    const workspacePath = this.resolveWorkspacePathFromKey(
+      workspaceKey,
+      identifier,
+    );
 
     // 1. 先行探测目标路径现状（使用 lstat 不穿透顶级符号链接）
     let existingStat: import("node:fs").Stats | null = null;
