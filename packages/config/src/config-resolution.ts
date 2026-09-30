@@ -29,6 +29,7 @@ import {
   normalizeIssueState,
   type AgentConfig,
   type CodexConfig,
+  type CodexPassThroughValue,
   type HooksConfig,
   type PollingConfig,
   type ServiceConfig,
@@ -412,7 +413,7 @@ function readPassThroughValue(
   key: string,
   field: string,
   ctx: ResolutionContext,
-): string | Readonly<Record<string, unknown>> | undefined {
+): CodexPassThroughValue | undefined {
   const value: unknown = section[key];
   if (value === undefined || value === null) {
     return undefined;
@@ -461,11 +462,14 @@ function assertJsonSafeValue(
       invalidConfig(path, "a cyclic reference (YAML anchor alias)", ctx);
     }
     const branch: readonly unknown[] = [...ancestors, value];
-    const entries: readonly (readonly [string, unknown])[] = Array.isArray(value)
-      ? value.map((item: unknown, index: number) => [`${path}[${index}]`, item] as const)
-      : Object.entries(value).map(([key, entry]) => [`${path}.${key}`, entry] as const);
-    for (const [entryPath, entry] of entries) {
-      assertJsonSafeValue(entry, entryPath, ctx, branch);
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        assertJsonSafeValue(value[i], `${path}[${i}]`, ctx, branch);
+      }
+      return;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      assertJsonSafeValue(entry, `${path}.${key}`, ctx, branch);
     }
     return;
   }

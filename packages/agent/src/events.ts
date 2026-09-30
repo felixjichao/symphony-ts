@@ -35,6 +35,22 @@ export const AGENT_EVENT_NAMES = [
 ] as const satisfies readonly CodexEventName[];
 
 /**
+ * 契约保证存在的事件名联合类型（{@link AGENT_EVENT_NAMES} 的成员）。
+ *
+ * 消费方若需要对已知事件集做严格分支，可使用此类型或 {@link isAgentEventName} guard。
+ * 注意运行时事件名仍是开放的（{@link CodexEventName}），未知事件名必须被容忍。
+ */
+export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
+
+/**
+ * 判断一个任意字符串是否为契约保证存在的已知事件名（类型收窄至 {@link AgentEventName}）。
+ * 避免消费方在 strict 模式下直接调用 `AGENT_EVENT_NAMES.includes(str)` 触发 TS2345。
+ */
+export function isAgentEventName(name: string): name is AgentEventName {
+  return (AGENT_EVENT_NAMES as readonly string[]).includes(name);
+}
+
+/**
  * 一个 turn 的 token 用量快照（SPEC §10.4 "OPTIONAL `usage` map (token counts)"）。
  *
  * 口径与 §13.5 / §4.1.6 一致：M4 只**抽取并转发**快照，delta 入账与 totals 聚合归

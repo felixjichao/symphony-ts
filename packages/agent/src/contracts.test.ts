@@ -22,8 +22,10 @@ import {
   AgentError,
   AGENT_ERROR_CODES,
   AGENT_EVENT_NAMES,
+  isAgentEventName,
   type AgentErrorCode,
   type AgentEvent,
+  type AgentEventName,
   type ContinuationDecision,
   type ContinuationDecider,
   type TurnCompletedContext,
@@ -165,6 +167,19 @@ describe("AgentEvent — SPEC §10.4 稳定事件面", () => {
     expect(AGENT_EVENT_NAMES).not.toContain(future.event);
     expect(future.event).toBeTypeOf("string");
   });
+
+  it("isAgentEventName 正确收窄已知事件名，未知事件返回 false", () => {
+    expect(isAgentEventName("session_started")).toBe(true);
+    expect(isAgentEventName("turn_completed")).toBe(true);
+    expect(isAgentEventName("malformed")).toBe(true);
+    expect(isAgentEventName("unknown_future_event")).toBe(false);
+
+    const eventName: string = "turn_completed";
+    if (isAgentEventName(eventName)) {
+      const known: AgentEventName = eventName;
+      expect(known).toBe("turn_completed");
+    }
+  });
 });
 
 describe("Continuation decision — §10.2 / §10.3 注入契约", () => {
@@ -216,10 +231,11 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
   const srcDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(srcDir, "..", "..", "..");
 
-  /** 包内运行期源码（排除 `*.test.ts`）。 */
+  /** 包内运行期源码（递归扫描，排除 `*.test.ts`）。 */
   function runtimeSources(pkg: "agent" | "config" | "domain"): { file: string; label: string }[] {
     const dir = path.join(repoRoot, "packages", pkg, "src");
-    return readdirSync(dir)
+    return (readdirSync(dir, { recursive: true }) as string[])
+      .map(String)
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
       .map((name) => ({ file: path.join(dir, name), label: `${pkg}/src/${name}` }));
   }

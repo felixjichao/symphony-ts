@@ -29,8 +29,8 @@
 export { AgentError, AGENT_ERROR_CODES } from "./errors";
 export type { AgentErrorCode, AgentErrorDetails } from "./errors";
 
-export { AGENT_EVENT_NAMES } from "./events";
-export type { AgentEvent, AgentTokenUsage } from "./events";
+export { AGENT_EVENT_NAMES, isAgentEventName } from "./events";
+export type { AgentEvent, AgentEventName, AgentTokenUsage } from "./events";
 
 export type {
   ContinuationDecider,

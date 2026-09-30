@@ -670,6 +670,32 @@ describe("resolveServiceConfig — Codex pass-through JSON shapes (SPEC §5.3.6 
       note: "$NOT_SET_ANYWAY",
     });
   });
+
+  it("rejects an array with holes (sparse array) gracefully via indexed iteration", () => {
+    // 构造带洞的稀疏数组：[1, <empty>, 3]
+    // eslint-disable-next-line no-sparse-arrays
+    const sparseList = [1, , 3];
+    let err: unknown;
+    try {
+      resolveServiceConfig(
+        {
+          codex: {
+            turn_sandbox_policy: {
+              type: "workspaceWrite",
+              writableRoots: sparseList,
+            },
+          },
+        },
+        { workflowDir: dir },
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SymphonyConfigError);
+    expect((err as SymphonyConfigError).message).toMatch(
+      /codex\.turn_sandbox_policy\.writableRoots\[1\].*undefined/,
+    );
+  });
 });
 
 describe("loadEffectiveWorkflow — composition & error surface (SPEC §5.5 / §6.1)", () => {
