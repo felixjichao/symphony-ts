@@ -1,6 +1,6 @@
 # 架构
 
-> 本文描述 symphony-ts 的**当前真实状态**（M1：`@symphony/domain` 的 §4 契约与 `@symphony/config` 的 `WORKFLOW.md` 加载 / 解析 / 校验 / 渲染 / 热重载已实现并有测试；M2：`@symphony/tracker` 的 provider 无关 read kernel + adapter 注册表与 config 校验接线（M2.1）、首个 built-in provider `github` 的 profile + payload 归一化（M2.2）、该 provider 的真实 REST transport（repository scope / 分页 / 鉴权头 / §11.4 的 portable error mapping，M2.3），以及把 `WORKFLOW.md → config preflight → registry → GitHub adapter → 本地 GitHub REST fixture` 整条链路当作验收对象的端到端集成测试与 §17.3 逐项收口（M2.4）——`kind: github` 现在能真正读取工单，且 M2 的 Core Conformance 在无外部 GitHub 凭据的 CI 里可稳定复跑）与里程碑规划。写作原则：不把 scaffold 写成已实现能力——未落地的组件只有包边界与占位 `src/index.ts`，凡标注 M3+ 的部分代码中尚不存在。
+> 本文描述 symphony-ts 的**当前真实状态**（M1：`@symphony/domain` 的 §4 契约与 `@symphony/config` 的 `WORKFLOW.md` 加载 / 解析 / 校验 / 渲染 / 热重载已实现并有测试；M2：`@symphony/tracker` 的 provider 无关 read kernel + adapter 注册表与 config 校验接线（M2.1）、首个 built-in provider `github` 的 profile + payload 归一化（M2.2）、该 provider 的真实 REST transport（repository scope / 分页 / 鉴权头 / §11.4 的 portable error mapping，M2.3），以及把 `WORKFLOW.md → config preflight → registry → GitHub adapter → 本地 GitHub REST fixture` 整条链路当作验收对象的端到端集成测试与 §17.3 逐项收口（M2.4）——`kind: github` 现在能真正读取工单，且 M2 的 Core Conformance 在无外部 GitHub 凭据的 CI 里可稳定复跑；M3：`@symphony/workspace` 的确定性 provisioning 与 existing non-directory 的 Fail Safely 策略（M3.1）、lexical + canonical 双层 containment 与 symlink escape 拒绝（M3.2）、四个 lifecycle hook 的执行层与 safe cleanup primitive（M3.3），以及把 `WORKFLOW.md → resolved ServiceConfig → WorkspaceManager → 真实 temp filesystem → 真实 shell hook` 整条链路当作验收对象的端到端集成测试与 §17.2 逐项收口（M3.4）——workspace 的 Core Conformance 同样不需要外部服务；§17.2 的 agent launch cwd 绑定项仍属 M4）与里程碑规划。写作原则：不把 scaffold 写成已实现能力——未落地的组件只有包边界与占位 `src/index.ts`，凡标注 M4+ 的部分代码中尚不存在。
 
 ## 产品模型
 
@@ -27,13 +27,13 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/domain` | —（共享契约） | §4 | Issue、WorkflowDefinition、ServiceConfig、Workspace、RunAttempt、LiveSession、RetryEntry、OrchestratorRuntimeState 等类型与纯逻辑的唯一权威 | 无 |
 | `packages/config` | Workflow Loader + Config Layer | §5、§6 | `WORKFLOW.md` 发现 / 解析、front matter schema、typed 校验、env / path resolution、模板渲染、热重载回退 | domain |
 | `packages/tracker` | Issue Tracker Adapter | §11 | provider 无关的读取接口、认证、payload → Issue 归一化 | domain（`config` 仅为 devDependency，见下） |
-| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain |
+| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain（`config` 仅为 devDependency，见下） |
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | config, tracker, workspace, agent, orchestrator, observability |
 
-依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前唯一例外：`packages/tracker` 以 devDependency 引用 `@symphony/config`（仅 `src/config-integration.test.ts` 使用），用来证明扩展点两侧的结构化契约真的对得上——`@symphony/config` 侧不引用 tracker，运行期方向仍是 `tracker → domain`。两条硬约束：
+依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前两条例外：`packages/tracker` 与 `packages/workspace` 各以 devDependency 引用 `@symphony/config`（各自仅 `src/config-integration.test.ts` 使用），用来证明扩展点或 typed 契约两侧真的对得上——`@symphony/config` 侧不引用它们，运行期方向仍是 `tracker → domain`、`workspace → domain`。两条硬约束：
 
 1. **tracker 永不 import orchestrator**——轮询节奏 / claim / 调度属 coordination 层；
 2. **agent runner 不拥有 scheduler / retry policy**——coordination 只由 orchestrator 拥有。
@@ -48,7 +48,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建边界、删除旧协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
 | M1 | Domain + Workflow + Config（§4、§5、§6，验收 §17.1） | ✅ 已完成（M1.5 集成与 conformance 收口） |
 | M2 | Issue Tracker Adapter（§11） | ✅ 已完成（M2.1：read kernel / profile / registry / 错误契约 + config 校验接线；M2.2：built-in `github` profile + payload 归一化；M2.3：`github` 的 REST transport / scope / pagination / error mapping；M2.4：`WORKFLOW.md → registry → adapter → 本地 REST fixture` 端到端集成与 §17.3 逐项收口。provider-native tools（§11.5）与 malformed 省略日志（§13）不属本里程碑，见 [packages/tracker/README.md](../packages/tracker/README.md) 的 Known limitations） |
-| M3 | Workspace Manager（§9） | 进行中（M3.1：provisioning 内核与确定性路径已落地；M3.2–M3.4 随后） |
+| M3 | Workspace Manager（§9） | ✅ 已完成（M3.1：provisioning 内核、确定性路径与 non-directory Fail Safely 策略；M3.2：lexical + canonical 双层 containment、symlink escape 拒绝与可复用 execution-boundary primitive；M3.3：四个 lifecycle hook 的执行层、fatal / best-effort 语义与 safe cleanup primitive；M3.4：`WORKFLOW.md → resolved ServiceConfig → workspace → 真实 temp filesystem → 真实 shell hook` 端到端集成与 §17.2 逐项收口。§17.2 的 "agent launch 以 per-issue workspace path 为 cwd 并拒绝 out-of-root 路径" 属 M4，OPTIONAL workspace population / synchronization 不实现，见 [packages/workspace/README.md](../packages/workspace/README.md) 的 Known limitations） |
 | M4 | Agent Runner（§10、§12） | 未开始 |
 | M5 | Orchestrator：状态机 / polling / scheduling / reconciliation / retry（§7、§8、§14、§16） | 未开始 |
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
