@@ -172,6 +172,7 @@ SPEC §17.2 允许当目标 workspace 路径已存在非目录对象时，“rep
 - M3.1 完成本地 workspace provisioning 内核与确定性路径算法；M3.2（#28）落地 lexical + canonical 双层 containment、symlink escape 拒绝与可复用校验入口；M3.3（#29）落地四个 lifecycle hook 的执行层与 safe cleanup primitive（`removeWorkspace`）；
 - validate 与后续动作（launch / delete）之间的 TOCTOU 窗口只能收窄不能根除（O_NOFOLLOW / openat 级原子手段不在范围）；消费方必须在破坏性动作前重新调用 `assertWorkspacePathSafe`——`removeWorkspace` 已内建「hook 前 + delete 前」双重校验，`after_create` 失败清理同样在 delete 前重验；
 - hook shell 为 POSIX `sh -lc` 语义：Linux / macOS 原生可用；Windows 无 `sh`（未经 Git Bash / WSL 提供）时属**文档化限制**（CI / gate 在 Linux），进程组终止（detached + 负 pid SIGKILL）亦为 POSIX 语义；
+- **hook 完成判定用 `close`（stdio 关闭）而非 `exit`（进程退出）**：脚本本身秒退（退出码 0）但留下持有继承 stdout/stderr 的后台进程（如未重定向的 `daemon &`）时，`close` 被后台进程拖住，直到 `timeout_ms` 到期 SIGKILL 进程组，结果为 `hook_timeout` 而非 success（对 `after_create` 还会触发半成品清理）。此语义确定、有界（≤ timeout_ms）且与「孙进程不留孤儿」一致；确需 daemonize 的 hook 应自行重定向 stdio（如 `daemon >/dev/null 2>&1 &`）以免拖住 `close`。M4 / M5 operator 诊断「秒退脚本为何报 timeout」时先看这里；
 - hook 输出截断上限（捕获 1 MiB / 流、事件摘录 8 KiB）为诊断用途的实现约定常量，非 SPEC 规定值；
 - symlink 相关测试依赖 host 能力：不支持创建 symlink 的平台（如受限 Windows）上相关用例显式 skip（测试报告中可见，不静默 pass）；`removeWorkspace` 的 filesystem 删除失败（`status: "failed"`）路径在 root 运行时难以稳定触发（CAP_DAC_OVERRIDE 绕过权限位），由代码审查覆盖而非运行时用例；
 - M4（before_run / after_run 的实际调度与 agent launch cwd 绑定）与 M5（removeWorkspace 的 sweep / reconciliation 触发）接线随后续里程碑落地；端到端 conformance 收口随 #30 落地。

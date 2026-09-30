@@ -50,7 +50,14 @@ M3.1 只在 `WorkspaceManagerOptions` 预留了一个 `hooks` 构造器字段与
    `HOOK_OUTPUT_EXCERPT_LIMIT`（8 KiB）摘录。上限为诊断用途的实现约定常量，非 SPEC 值。
 6. **timeout 终止整个进程组**：detached spawn（child 为进程组组长）+ 负 pid `SIGKILL`，
    确保脚本派生的孙进程一并终止、不留孤儿；SIGKILL 不可 trap，避免 SIGTERM 被忽略导致的
-   残留。finalize 时清理 timer、destroy stdio，不残留 handle。
+   残留。finalize 时清理 timer、destroy stdio，不残留 handle。完成判定用 **`close`（stdio
+   关闭）而非 `exit`（进程退出）**，以捕获脚本的全部输出；代价是「脚本秒退码 0 但后台进程
+   持有继承的 stdout/stderr」会把 `close` 拖到 timeout（结果 `timeout`，进程组被 SIGKILL）
+   ——确定、有界（≤ timeoutMs）、与不留孤儿一致，属文档化语义而非缺陷（PR #33 审查
+   Suggestion 1，README Known limitations 同步记载；确需 daemonize 的 hook 应自行重定向
+   stdio）。`child.stdout` / `child.stderr` 挂 no-op `error` 监听：管道读 EIO 类故障时
+   stream 级 'error' 若无监听会成为 uncaught exception 击穿长驻 orchestrator 进程，
+   降级为输出捕获中断、结果仍由进程级路径收敛（PR #33 审查 Suggestion 2）。
 7. **destructive 动作前一律复用 #28 containment 校验，双重校验收窄 TOCTOU**：
    - 每次 hook spawn 前重验（执行 shell = #28 不变量适用场景）；
    - `after_create` 失败的半成品清理、`removeWorkspace` 的 `before_remove` 之后与 `fs.rm`

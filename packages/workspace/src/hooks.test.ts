@@ -215,6 +215,37 @@ describe("workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.
       );
     });
 
+    it("完成判定用 close 而非 exit：脚本秒退码 0 但后台进程持有 stdio → 拖到 timeout（审查 Suggestion 1 语义锁定）", async () => {
+      const ws = await manager.createWorkspace("CLOSE-SEMANTICS-1");
+      // 脚本立即 exit 0，但后台 sleep 继承 stdout/stderr 管道 → close 被拖住，
+      // 直到 timeoutMs 到期 SIGKILL 进程组 → 结果为 timeout（文档化语义，非缺陷）。
+      const script = "sleep 3 &\nexit 0\n";
+      const { events, sink } = eventCollector();
+
+      await expectWorkspaceError(
+        manager.runBeforeRunHook(ws, {
+          hooks: hooks({ beforeRun: script, timeoutMs: 250 }),
+          onHookEvent: sink,
+        }),
+        "hook_timeout",
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.outcome).toBe("timeout");
+    });
+
+    it("close 语义的文档化解法：后台进程重定向 stdio 后不拖住 close → 秒退码 0 即 success", async () => {
+      const ws = await manager.createWorkspace("CLOSE-SEMANTICS-2");
+      // daemonize 的 hook 应自行重定向 stdio（README Known limitations 记载的解法）
+      const script = "sleep 3 >/dev/null 2>&1 &\nexit 0\n";
+
+      const started = Date.now();
+      await manager.runBeforeRunHook(ws, {
+        hooks: hooks({ beforeRun: script, timeoutMs: 5000 }),
+      });
+      // close 在脚本秒退后立即触发（远小于 timeout 与后台 sleep 的 3s）
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+
     it("输出捕获有硬上限：无界刷屏被截断，事件 outputTruncated=true 且摘录受界", async () => {
       const ws = await manager.createWorkspace("TRUNCATE-1");
       // 向 stderr 灌 ~2MB，远超捕获上限；随后非零退出触发事件

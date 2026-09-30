@@ -229,6 +229,14 @@ export function emitWorkspaceHookEvent(
  * - failed / timeout 经 `onEvent` 发 operator-visible 事件；
  * - 无论结果如何，清理 timer 与 stdio，不留 handle。
  *
+ * **完成判定用 `close`（stdio 关闭）而非 `exit`（进程退出）**（PR #33 审查 Suggestion 1）：
+ * 这样能读到脚本产生的全部输出。副作用是——脚本本身退出码 0、但留下**持有继承
+ * stdout/stderr 的后台进程**（如 `daemon &` 未重定向）时，`close` 会被后台进程拖住，
+ * 直到 `timeoutMs` 到期 SIGKILL 整个进程组，结果为 `timeout` 而非 `success`（对
+ * `after_create` 还会触发半成品清理）。此行为确定、有界（≤ timeoutMs）、与「孙进程不留
+ * 孤儿」一致，非缺陷；确需 daemonize 的 hook 应自行重定向 stdio（如 `daemon >/dev/null 2>&1 &`）
+ * 以免拖住 `close`。见 README Known limitations 与 workspace-hook-execution-contract Note。
+ *
  * 本函数**不做**路径安全校验：调用方必须在 spawn 前对 `cwd` 完成
  * `assertWorkspacePathSafe`（#28 不变量：执行 shell 前路径必须安全）。
  */
@@ -328,6 +336,16 @@ export function executeWorkspaceHook(
       stderr = next.value;
       truncated = truncated || next.truncated;
     });
+
+    // 防御性加固（PR #33 审查 Suggestion 2）：管道读发生 EIO 类故障时，stream 级
+    // 'error' 事件若无监听会成为 uncaught exception，击穿长驻 orchestrator 进程。
+    // 挂 no-op 监听把它降级为「输出捕获中断」——hook 结果仍由进程级 'error' /
+    // 'close' / timeout 路径收敛为 typed result，不改变任何失败语义。
+    const onStreamError = (): void => {
+      // no-op：见上方注释；不吞进程级错误（那由 child 'error'/'close' 承担）。
+    };
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
 
     child.on("error", (err: Error) => {
       // spawn failure（ENOENT: sh 缺失、EACCES 等）——无退出码。
