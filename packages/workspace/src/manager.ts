@@ -7,6 +7,14 @@ import {
   type WorkspaceConfig,
 } from "@symphony/domain";
 import { WorkspaceError } from "./errors";
+import {
+  isLexicallyContained,
+  isNodeError,
+  validateWorkspacePathSafety,
+  workspaceErrorFromValidation,
+  type WorkspacePathAssertOptions,
+  type WorkspacePathValidation,
+} from "./path-safety";
 
 /**
  * 构造 {@link WorkspaceManager} 所需的已解析运行时配置（SPEC §4.1.3 / §9）。
@@ -18,10 +26,6 @@ export interface WorkspaceManagerOptions {
   readonly workspace: WorkspaceConfig;
   /** 可选生命周期 hook 配置（SPEC §5.3.4，行为由 #29 落地）。 */
   readonly hooks?: HooksConfig | undefined;
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
 }
 
 /**
@@ -118,6 +122,11 @@ export class WorkspaceManager {
 
   /**
    * 从已有 workspaceKey 计算绝对 workspace 路径并执行基本安全校验（SPEC §9.1 / §9.5 Invariant 2）。
+   *
+   * 同步 lexical 层校验（`path.resolve` + segment containment），拒绝等于 root
+   * 或逃逸 root 的路径（`unsafe_path` + `unsafeReason` 细分）。filesystem 级
+   * canonical / symlink 校验见异步的 {@link WorkspaceManager.validateWorkspacePath}
+   * 与 {@link WorkspaceManager.assertWorkspacePathSafe}（#28）。
    */
   resolveWorkspacePathFromKey(workspaceKey: string, identifier?: string): string {
     if (typeof workspaceKey !== "string" || workspaceKey.length === 0) {
@@ -132,17 +141,85 @@ export class WorkspaceManager {
     }
 
     const resolved = path.resolve(this.root, workspaceKey);
-    const rootPrefix = this.root.endsWith(path.sep) ? this.root : this.root + path.sep;
 
-    if (resolved === this.root || !resolved.startsWith(rootPrefix)) {
+    if (resolved === this.root) {
       throw new WorkspaceError(
         "unsafe_path",
-        `Workspace path escapes or equals workspace root (SPEC §9.5): ${resolved}`,
-        { path: resolved, workspaceKey, identifier },
+        `Workspace path equals workspace root (SPEC §9.5): ${resolved}`,
+        {
+          path: resolved,
+          workspaceKey,
+          identifier,
+          unsafeReason: "workspace_equals_root",
+        },
+      );
+    }
+    if (!isLexicallyContained(this.root, resolved)) {
+      throw new WorkspaceError(
+        "unsafe_path",
+        `Workspace path escapes workspace root (SPEC §9.5): ${resolved}`,
+        {
+          path: resolved,
+          workspaceKey,
+          identifier,
+          unsafeReason: "workspace_outside_root",
+        },
       );
     }
 
     return resolved;
+  }
+
+  /**
+   * 对候选 workspace path 执行完整的 filesystem 级安全校验（SPEC §9.5 / #28）。
+   *
+   * 校验 #28 安全不变量：
+   *
+   * ```text
+   * absolute(workspace)
+   * && workspace !== root
+   * && lexicalContained(workspace, root)
+   * && canonicalContained(workspace, canonicalRoot)
+   * ```
+   *
+   * canonical containment 以每次调用实时解析的 `fs.realpath(root)` 为权威
+   * （root 自身含 symlink 时以 canonical root 判定；不缓存）；尚不存在的路径
+   * 按最近已存在 ancestor 的 realpath 推定落点，不因目标缺失而跳过校验。
+   *
+   * 不抛安全拒绝：返回 discriminated 结果（`safe: true` / 四类 `unsafeReason`
+   * （`UnsafePathReason`）/ `invalid_root`）。throwing 形态见
+   * {@link WorkspaceManager.assertWorkspacePathSafe}。
+   *
+   * @param workspacePath 候选绝对路径（如 {@link WorkspaceManager.resolveWorkspacePath} 的产物）
+   */
+  async validateWorkspacePath(workspacePath: string): Promise<WorkspacePathValidation> {
+    return validateWorkspacePathSafety(this.root, workspacePath);
+  }
+
+  /**
+   * {@link WorkspaceManager.validateWorkspacePath} 的 throwing 形态——
+   * execution-boundary safety primitive（#28）。
+   *
+   * 校验通过时 resolve；否则抛出类型化 {@link WorkspaceError}：
+   * - 四类路径安全拒绝：`code === "unsafe_path"` 且 `unsafeReason` 携带具体原因；
+   * - root 自身不可用（非目录对象 / dangling symlink）：`code === "invalid_root_path"`。
+   *
+   * **M4 / #29 复用契约**：agent launch 前（以 workspace path 为 subprocess cwd 前）
+   * 与任何 destructive cleanup（删除 workspace 目录）前 **必须** 重新调用本方法，
+   * 防止「创建后目录被替换成 symlink」一类 TOCTOU 绕过字符串路径校验。
+   *
+   * @param workspacePath 候选绝对路径
+   * @param options 可选诊断上下文（透传进 `WorkspaceError.workspaceKey` / `.identifier`）
+   */
+  async assertWorkspacePathSafe(
+    workspacePath: string,
+    options: WorkspacePathAssertOptions = {},
+  ): Promise<void> {
+    const validation = await this.validateWorkspacePath(workspacePath);
+    if (validation.safe) {
+      return;
+    }
+    throw workspaceErrorFromValidation(validation, options);
   }
 
   /**
@@ -152,7 +229,10 @@ export class WorkspaceManager {
    * 1. 缺失目录：创建并返回 `createdNow: true`；
    * 2. 已有目录：原样复用并返回 `createdNow: false`；
    * 3. 已有同名非目录对象（文件 / 符号链接 / 设备等）：fail safely，不删除、不替换，抛出 `existing_non_directory` 错误；
-   * 4. 文件系统竞态（EEXIST）：重新检查实际状态，确保最终返回的只有可用目录或明确失败。
+   * 4. 文件系统竞态（EEXIST）：重新检查实际状态，确保最终返回的只有可用目录或明确失败；
+   * 5. 复用与新建两条路径在执行前都通过 filesystem 级 safety gate（#28）：
+   *    canonical containment / symlink escape / root equality 校验失败时抛出
+   *    `unsafe_path`（含 `unsafeReason` 细分），绝不复用或创建出根外目录。
    */
   async createWorkspace(identifier: string): Promise<Workspace> {
     const workspaceKey = this.deriveWorkspaceKey(identifier);
@@ -182,6 +262,14 @@ export class WorkspaceManager {
       }
     }
 
+    // 2. filesystem 级 safety gate（SPEC §9.5 / #28）：复用或创建之前重新执行
+    //    canonical containment 校验（探测先行以保持 M3.1 的 invalid_root_path
+    //    错误面与 cause 不变；symlink escape 在此被拒绝，优先于对象类型分类）
+    await this.assertWorkspacePathSafe(workspacePath, {
+      workspaceKey,
+      identifier,
+    });
+
     if (existingStat !== null) {
       if (existingStat.isDirectory()) {
         return {
@@ -199,7 +287,7 @@ export class WorkspaceManager {
       );
     }
 
-    // 2. 目标路径不存在，执行目录创建
+    // 3. 目标路径不存在，执行目录创建
     try {
       const created = await fs.mkdir(workspacePath, { recursive: true });
 

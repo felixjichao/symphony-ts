@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-09-30-workspace-path-safety-contract.md](accepted/architecture/2026-09-30-workspace-path-safety-contract.md) — workspace path filesystem safety boundary 跨包契约（SPEC §9.5，M3.2 / #28）：lexical + canonical（每次实时 `realpath`、不缓存）双层 containment、尚不存在路径按最近已存在 ancestor 推定、dangling symlink fail-closed、`unsafe_path` 经 `unsafeReason` 子字段细分四类拒绝面（顶层错误码集合不变）、M4 launch 前与 #29 / M5 cleanup 前必须重验 `assertWorkspacePathSafe`
 - [accepted/architecture/2026-09-29-workspace-non-directory-policy.md](accepted/architecture/2026-09-29-workspace-non-directory-policy.md) — 已存在非目录对象的安全失败策略（SPEC §17.2，M3.1 / #27）：对已有常规文件、符号链接等非目录对象绝不自动删除或替换，抛出稳定类型化 `existing_non_directory` 错误，并在 EEXIST 竞态下重检可用目录不变量
 - [accepted/architecture/2026-09-28-github-rest-transport-pagination.md](accepted/architecture/2026-09-28-github-rest-transport-pagination.md) — GitHub REST transport（M2.3 / #20）：默认 transport 在 `createAdapter` 内按 context 构造并删除 M2.2 的 unconfigured 桩、`Link` 分页的 origin 守卫与"读不懂即失败"、state 过滤不判 malformed、ID refresh 串行 + 坏 ID 整批前置失败、`fetchImpl` 注入点而非放宽 HTTPS-only 校验
 - [accepted/architecture/2026-09-28-github-adapter-transport-boundary.md](accepted/architecture/2026-09-28-github-adapter-transport-boundary.md) — GitHub adapter 的 transport 注入边界（M2.2 / #19 方案 B）：`GitHubIssueTransport` 单端口、未配置 transport 抛 `tracker_request`、归一化失败用抛出而非 union、payload 保持 `unknown`、§11.1 "SHOULD log" 以 `onMalformedRecord` 注入点交付、显式 `$VAR` 不做二次 env 回落（其中"built-in 注册 unconfigured transport"已由 M2.3 取代，见上一条）
