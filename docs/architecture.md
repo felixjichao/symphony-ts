@@ -27,7 +27,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/domain` | —（共享契约） | §4 | Issue、WorkflowDefinition、ServiceConfig、Workspace、RunAttempt、LiveSession、RetryEntry、OrchestratorRuntimeState 等类型与纯逻辑的唯一权威 | 无 |
 | `packages/config` | Workflow Loader + Config Layer | §5、§6 | `WORKFLOW.md` 发现 / 解析、front matter schema、typed 校验、env / path resolution、模板渲染、热重载回退 | domain |
 | `packages/tracker` | Issue Tracker Adapter | §11 | provider 无关的读取接口、认证、payload → Issue 归一化 | domain（`config` 仅为 devDependency，见下） |
-| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain, config |
+| `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain |
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
@@ -48,7 +48,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建边界、删除旧协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
 | M1 | Domain + Workflow + Config（§4、§5、§6，验收 §17.1） | ✅ 已完成（M1.5 集成与 conformance 收口） |
 | M2 | Issue Tracker Adapter（§11） | ✅ 已完成（M2.1：read kernel / profile / registry / 错误契约 + config 校验接线；M2.2：built-in `github` profile + payload 归一化；M2.3：`github` 的 REST transport / scope / pagination / error mapping；M2.4：`WORKFLOW.md → registry → adapter → 本地 REST fixture` 端到端集成与 §17.3 逐项收口。provider-native tools（§11.5）与 malformed 省略日志（§13）不属本里程碑，见 [packages/tracker/README.md](../packages/tracker/README.md) 的 Known limitations） |
-| M3 | Workspace Manager（§9） | 未开始 |
+| M3 | Workspace Manager（§9） | 进行中（M3.1：provisioning 内核与确定性路径已落地；M3.2–M3.4 随后） |
 | M4 | Agent Runner（§10、§12） | 未开始 |
 | M5 | Orchestrator：状态机 / polling / scheduling / reconciliation / retry（§7、§8、§14、§16） | 未开始 |
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |

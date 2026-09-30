@@ -12,7 +12,6 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@symphony/config": "*",
     "@symphony/domain": "*"
   },
   "devDependencies": {

@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-09-29-workspace-non-directory-policy.md](accepted/architecture/2026-09-29-workspace-non-directory-policy.md) — 已存在非目录对象的安全失败策略（SPEC §17.2，M3.1 / #27）：对已有常规文件、符号链接等非目录对象绝不自动删除或替换，抛出稳定类型化 `existing_non_directory` 错误，并在 EEXIST 竞态下重检可用目录不变量
 - [accepted/architecture/2026-09-28-github-rest-transport-pagination.md](accepted/architecture/2026-09-28-github-rest-transport-pagination.md) — GitHub REST transport（M2.3 / #20）：默认 transport 在 `createAdapter` 内按 context 构造并删除 M2.2 的 unconfigured 桩、`Link` 分页的 origin 守卫与"读不懂即失败"、state 过滤不判 malformed、ID refresh 串行 + 坏 ID 整批前置失败、`fetchImpl` 注入点而非放宽 HTTPS-only 校验
 - [accepted/architecture/2026-09-28-github-adapter-transport-boundary.md](accepted/architecture/2026-09-28-github-adapter-transport-boundary.md) — GitHub adapter 的 transport 注入边界（M2.2 / #19 方案 B）：`GitHubIssueTransport` 单端口、未配置 transport 抛 `tracker_request`、归一化失败用抛出而非 union、payload 保持 `unknown`、§11.1 "SHOULD log" 以 `onMalformedRecord` 注入点交付、显式 `$VAR` 不做二次 env 回落（其中"built-in 注册 unconfigured transport"已由 M2.3 取代，见上一条）
 - [accepted/architecture/2026-09-28-tracker-adapter-config-extension.md](accepted/architecture/2026-09-28-tracker-adapter-config-extension.md) — tracker adapter 注册表与 `@symphony/config` 的跨包扩展点契约：契约归 config / 实现归 tracker 的结构化对接、失败以返回值而非异常表达、三个 tracker 错误码进 `ConfigErrorCode`、profile 默认不回写 `ServiceConfig`，M2.1（SPEC §6.3 / §11.1 / §11.2 / §11.4 / §17.1）
