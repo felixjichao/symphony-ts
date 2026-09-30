@@ -179,8 +179,18 @@ const eff = loadEffectiveWorkflow({
   `trackerExtension` 承担，空串在那里报 `invalid_tracker_config`；不注入时保持 M1
   语义（裸 `WORKFLOW.md` 合法）。
 - pass-through 三字段（`codex.approval_policy` / `thread_sandbox` /
-  `turn_sandbox_policy`）只校验 string 类型、不手维枚举（§5.3.6 SHOULD）；缺失 → `null`
-  （implementation-defined 默认）。`tracker.active_states` / `terminal_states` 同理：
+  `turn_sandbox_policy`）只校验**形状**、不手维枚举（§5.3.6 SHOULD）；缺失 → `null`
+  （implementation-defined 默认）。`approval_policy` 与 `turn_sandbox_policy` 接受
+  string **或** map/object（pinned Codex schema 的 `AskForApproval` granular 分支与
+  `SandboxPolicy` tagged object，M4.1 / #37），object 整棵子树原样保留并递归要求
+  JSON-safe（有限 number、无 `!!binary`、无 `undefined`、无 anchor 自引用循环），违规
+  → `invalid_config` 且 message 携带完整字段路径（如
+  `codex.turn_sandbox_policy.networkAccess`）；`thread_sandbox` 只要 string——pinned
+  `SandboxMode` 是纯 string union，形状类别没变就不投宽。校验的口径是"wire 无损"（本
+  包义务），不是"Codex 接受"（Codex 裁决）：枚举成员写错照样要到 runtime 才由 Codex 报。
+  为什么是"形状类别 + JSON-safety"而不是枚举快照，见
+  [Agent Note: Codex Protocol Baseline and Agent Contract Layers](../../notes/accepted/architecture/2026-09-30-codex-protocol-baseline-and-agent-contracts.md)。
+  `tracker.active_states` / `terminal_states` 同理：
   缺失 → `null`（adapter profile 默认），present 须 string 列表、元素原样保留。
 - 数值字段要求真正的 YAML number：整数必须；并发 / 超时 / 间隔类须为正数（`"20"`
   字符串、布尔、浮点一律 `invalid_config`，不做隐式 coerce）。唯一允许非正数的是

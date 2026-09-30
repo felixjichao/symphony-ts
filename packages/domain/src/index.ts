@@ -7,7 +7,8 @@
  * - Workflow：{@link WorkflowDefinition}（§4.1.2）
  * - Service Config typed view：{@link ServiceConfig} 及 {@link TrackerConfig} /
  *   {@link PollingConfig} / {@link WorkspaceConfig} / {@link HooksConfig} /
- *   {@link AgentConfig} / {@link CodexConfig}（§4.1.3，字段对应 §5.3 / §6.4）
+ *   {@link AgentConfig} / {@link CodexConfig}（§4.1.3，字段对应 §5.3 / §6.4）；
+ *   Codex-owned pass-through 值的 JSON-safe 形状是 {@link CodexPassThroughValue}（M4.1）
  * - Workspace：{@link Workspace} + {@link deriveWorkspaceKey}（§4.1.4 / §4.2）
  * - Run attempt：{@link RunAttempt} / {@link RunAttemptStatus} / {@link RUN_ATTEMPT_STATUSES}（§4.1.5 / §7.2）
  * - Live session：{@link LiveSession} / {@link CodexEventName} + {@link composeSessionId}（§4.1.6 / §4.2）
@@ -35,6 +36,7 @@ export type { WorkflowDefinition } from "./workflow";
 export type {
   AgentConfig,
   CodexConfig,
+  CodexPassThroughValue,
   HooksConfig,
   PollingConfig,
   ServiceConfig,

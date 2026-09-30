@@ -217,11 +217,16 @@ export function resolveServiceConfig(
     // 原样保留：不做 `~` / `$VAR` / URI / shell 改写（§6.1 + §17.1）；
     // 非空校验属 dispatch preflight（§6.3，M5）。
     command: readString(codexSection, "command", "codex.command", ctx) ?? "codex app-server",
-    // pass-through 三字段：只校验 string 类型，不手维枚举（§5.3.6 SHOULD）。
-    approvalPolicy: readString(codexSection, "approval_policy", "codex.approval_policy", ctx) ?? null,
+    // pass-through 三字段：只校验形状，不手维枚举（§5.3.6 SHOULD）。
+    // approval / turn sandbox 在 pinned Codex schema 里都有 object 分支，因此走
+    // {@link readPassThroughValue}；thread `SandboxMode` 在 pinned baseline 是纯
+    // string，继续走 {@link readString}（M4.1 / #37，见 Agent Note）。
+    approvalPolicy:
+      readPassThroughValue(codexSection, "approval_policy", "codex.approval_policy", ctx) ?? null,
     threadSandbox: readString(codexSection, "thread_sandbox", "codex.thread_sandbox", ctx) ?? null,
     turnSandboxPolicy:
-      readString(codexSection, "turn_sandbox_policy", "codex.turn_sandbox_policy", ctx) ?? null,
+      readPassThroughValue(codexSection, "turn_sandbox_policy", "codex.turn_sandbox_policy", ctx) ??
+      null,
     turnTimeoutMs: readPositiveInt(codexSection, "turn_timeout_ms", "codex.turn_timeout_ms", 3_600_000, ctx),
     readTimeoutMs: readPositiveInt(codexSection, "read_timeout_ms", "codex.read_timeout_ms", 5_000, ctx),
     // 唯一显式允许非正数的字段：`<= 0` = 禁用 stall 检测（§5.3.6）。
@@ -383,6 +388,110 @@ function readInt(
     invalidConfig(field, `expected an integer, got ${describeValueType(value)}`, ctx);
   }
   return value;
+}
+
+/**
+ * Codex-owned pass-through 字段（SPEC §5.3.6，M4.1 / #37）：`codex.approval_policy`
+ * 与 `codex.turn_sandbox_policy`。缺失 / 显式 `null` → `undefined`（调用方给 `null`，
+ * = implementation-defined 默认）。
+ *
+ * 只校验**形状**、不校验语义：
+ * - string → 原样保留（不展开 `$VAR`、不 trim、不对照枚举——兼容 pinned schema 的
+ *   string 分支与历史 string 配置）；
+ * - plain map → 整棵子树**原样保留**（pinned `AskForApproval` 的 `granular` object
+ *   分支与 `SandboxPolicy` 的 tagged object 都落在这里）；
+ * - 其余（number / boolean / list / `!!binary` 的 Buffer / 自定义 tag 的非 plain
+ *   object）→ `invalid_config`，message 携带字段路径。
+ *
+ * object 分支额外做**递归 JSON-safety** 检查（{@link assertJsonSafeValue}）：这是
+ * "无损 pass-through" 的前提，不是 Codex schema 校验——我们只看值能不能被
+ * `JSON.stringify` 忠实表达，不看键名与取值。
+ */
+function readPassThroughValue(
+  section: Record<string, unknown>,
+  key: string,
+  field: string,
+  ctx: ResolutionContext,
+): string | Readonly<Record<string, unknown>> | undefined {
+  const value: unknown = section[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!isPlainMap(value)) {
+    invalidConfig(field, `expected a string or a map/object, got ${describeValueType(value)}`, ctx);
+  }
+  assertJsonSafeValue(value, field, ctx);
+  return value;
+}
+
+/**
+ * 递归断言一个值树是 JSON-safe：string / number（有限）/ boolean / `null` / list /
+ * plain map。错误 message 携带**从字段根开始的完整路径**（如
+ * `codex.approval_policy.granular.list[0]`），让"哪个位置不是 JSON"可判别。
+ *
+ * 被拒的形态都来自 YAML 而不是 JSON：显式 `!!binary` → `Buffer`、`.inf` / `.nan` →
+ * 非有限 number、anchor alias → 自引用结构。它们被 `JSON.stringify` 后变成 `{type,data}`
+ * / `null` / 直接抛 TypeError，于是"配置里写的" ≠ "发给 Codex 的"——那是失真，不是
+ * pass-through。自引用还必须显式拒绝：不检查就会在这里无限递归。
+ *
+ * `undefined` 不出现在默认 YAML 解析结果里，但公共 resolver 也接受调用方自己构造的
+ * 对象；作为成员值它会静默丢弃兄弟键，一并拒绝。
+ */
+function assertJsonSafeValue(
+  value: unknown,
+  path: string,
+  ctx: ResolutionContext,
+  ancestors: readonly unknown[] = [],
+): void {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return;
+  }
+  if (Array.isArray(value) || isPlainMap(value)) {
+    // 只比对**当前分支**的祖先：兄弟间共享同一个对象（YAML anchor 复用）是合法的
+    // JSON 结构，重复序列化即可，不是循环。
+    if (ancestors.includes(value)) {
+      invalidConfig(path, "a cyclic reference (YAML anchor alias)", ctx);
+    }
+    const branch: readonly unknown[] = [...ancestors, value];
+    const entries: readonly (readonly [string, unknown])[] = Array.isArray(value)
+      ? value.map((item: unknown, index: number) => [`${path}[${index}]`, item] as const)
+      : Object.entries(value).map(([key, entry]) => [`${path}.${key}`, entry] as const);
+    for (const [entryPath, entry] of entries) {
+      assertJsonSafeValue(entry, entryPath, ctx, branch);
+    }
+    return;
+  }
+  invalidConfig(
+    path,
+    `expected a JSON-safe value (string / number / boolean / null / list / map), got ${describeJsonValueType(value)}`,
+    ctx,
+  );
+}
+
+/**
+ * JSON-safety 失败时的稳定类型描述：在 {@link describeValueType} 之上补齐几个
+ * "看着像合法值、其实会被 JSON 改写" 的形态，让 message 本身可判别。
+ */
+function describeJsonValueType(value: unknown): string {
+  if (typeof value === "number") {
+    return "a non-finite number (NaN / Infinity)";
+  }
+  if (value === undefined) {
+    return "nothing (undefined — a sibling key would be silently dropped)";
+  }
+  if (ArrayBuffer.isView(value)) {
+    // `!!binary` → Buffer / Uint8Array：序列化后变成 `{type, data}`，不是原值。
+    return "a binary blob";
+  }
+  return describeValueType(value);
 }
 
 /**

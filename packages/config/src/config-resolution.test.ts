@@ -11,6 +11,8 @@ import { join, resolve } from "node:path";
 
 import { describe, afterEach, beforeEach, expect, it } from "vitest";
 
+import type { CodexConfig } from "@symphony/domain";
+
 import {
   loadEffectiveWorkflow,
   resolveServiceConfig,
@@ -217,7 +219,7 @@ describe("resolveServiceConfig — typed validation (SPEC §5.3 / §6.1)", () =>
     expectInvalidConfig("tracker:\n  terminal_states: done", "tracker.terminal_states");
   });
 
-  it("rejects a non-string codex.approval_policy but passes any string through (no hand-maintained enum, §5.3.6)", () => {
+  it("rejects a number codex.approval_policy but passes any string through (no hand-maintained enum, §5.3.6)", () => {
     expectInvalidConfig("codex:\n  approval_policy: 42", "codex.approval_policy");
     const eff = loadWithFrontMatter(
       [
@@ -487,6 +489,185 @@ describe("resolveServiceConfig — pass-through & forward compatibility (SPEC §
       agent: { max_turn: 99 },
       future_extension: { enabled: true },
       x_custom: 42,
+    });
+  });
+});
+
+describe("resolveServiceConfig — Codex pass-through JSON shapes (SPEC §5.3.6 / M4.1 #37)", () => {
+  it("expresses the pinned AskForApproval granular object branch losslessly", () => {
+    // pinned schema（Codex rust-v0.159.2 / ff6aec96）的 object 分支：
+    // { "granular": { sandbox_approval, rules, skill_approval, request_permissions, mcp_elicitations } }
+    const granular = {
+      granular: {
+        sandbox_approval: true,
+        rules: false,
+        skill_approval: true,
+        request_permissions: false,
+        mcp_elicitations: false,
+      },
+    };
+    const eff = loadWithFrontMatter(
+      [
+        "codex:",
+        "  approval_policy:",
+        "    granular:",
+        "      sandbox_approval: true",
+        "      rules: false",
+        "      skill_approval: true",
+        "      request_permissions: false",
+        "      mcp_elicitations: false",
+      ].join("\n"),
+    );
+    expect(eff.serviceConfig.codex.approvalPolicy).toEqual(granular);
+    // 无损 = 交给 wire 的那一份与配置里的形状逐键同序（不排序、不改名、不丢字段）。
+    expect(JSON.stringify(eff.serviceConfig.codex.approvalPolicy)).toBe(JSON.stringify(granular));
+  });
+
+  it("expresses the pinned SandboxPolicy structured object branch losslessly", () => {
+    const sandboxPolicy = {
+      type: "workspaceWrite",
+      writableRoots: ["/srv/work/issue-1", "/tmp/extra"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: true,
+    };
+    const eff = loadWithFrontMatter(
+      [
+        "codex:",
+        "  turn_sandbox_policy:",
+        "    type: workspaceWrite",
+        "    writableRoots:",
+        "      - /srv/work/issue-1",
+        "      - /tmp/extra",
+        "    networkAccess: true",
+        "    excludeTmpdirEnvVar: false",
+        "    excludeSlashTmp: true",
+      ].join("\n"),
+    );
+    expect(eff.serviceConfig.codex.turnSandboxPolicy).toEqual(sandboxPolicy);
+    expect(JSON.stringify(eff.serviceConfig.codex.turnSandboxPolicy)).toBe(
+      JSON.stringify(sandboxPolicy),
+    );
+  });
+
+  it("accepts unknown keys and nested lists inside a pass-through object (forward compatibility, not a hand-maintained enum)", () => {
+    const eff = loadWithFrontMatter(
+      [
+        "codex:",
+        "  approval_policy:",
+        "    granular:",
+        "      sandbox_approval: true",
+        "    a_future_codex_flag: 3",
+        "    nested_list:",
+        "      - ok",
+        "      - null",
+      ].join("\n"),
+    );
+    expect(eff.serviceConfig.codex.approvalPolicy).toEqual({
+      granular: { sandbox_approval: true },
+      a_future_codex_flag: 3,
+      nested_list: ["ok", null],
+    });
+  });
+
+  it("types both object branches through the same resolved view (compile-level proof of losslessness)", () => {
+    const approval: CodexConfig["approvalPolicy"] = { granular: { rules: true } };
+    const turnPolicy: CodexConfig["turnSandboxPolicy"] = { type: "readOnly", networkAccess: false };
+    const thread: CodexConfig["threadSandbox"] = "workspace-write";
+    expect(approval).not.toBeNull();
+    expect(turnPolicy).not.toBeNull();
+    expect(thread).not.toBeNull();
+  });
+
+  it("keeps legacy string-only configurations resolving to the same strings (regression, 验收 #2)", () => {
+    const eff = loadWithFrontMatter(
+      [
+        "codex:",
+        '  approval_policy: "never"',
+        "  thread_sandbox: workspace-write",
+        "  turn_sandbox_policy: danger-full-access",
+      ].join("\n"),
+    );
+    expect(eff.serviceConfig.codex).toMatchObject({
+      approvalPolicy: "never",
+      threadSandbox: "workspace-write",
+      turnSandboxPolicy: "danger-full-access",
+    });
+    // string 分支与 M4.1 之前逐字节一致：仍是 string，不是被包成 object。
+    expect(typeof eff.serviceConfig.codex.approvalPolicy).toBe("string");
+    expect(typeof eff.serviceConfig.codex.turnSandboxPolicy).toBe("string");
+  });
+
+  it("treats absent / explicit null pass-through fields as unconfigured (null)", () => {
+    const eff = loadWithFrontMatter(
+      ["codex:", "  approval_policy:", "  thread_sandbox: null", "  turn_sandbox_policy:"].join("\n"),
+    );
+    expect(eff.serviceConfig.codex.approvalPolicy).toBeNull();
+    expect(eff.serviceConfig.codex.threadSandbox).toBeNull();
+    expect(eff.serviceConfig.codex.turnSandboxPolicy).toBeNull();
+  });
+
+  it("rejects illegal base types with a stable invalid_config on the field path", () => {
+    expectInvalidConfig("codex:\n  approval_policy: true", "codex.approval_policy");
+    expectInvalidConfig("codex:\n  approval_policy:\n    - never", "codex.approval_policy");
+    expectInvalidConfig("codex:\n  turn_sandbox_policy: 7", "codex.turn_sandbox_policy");
+    // thread `SandboxMode` 在 pinned baseline 是纯 string：object 分支不被接受。
+    const error = expectInvalidConfig(
+      ["codex:", "  thread_sandbox:", "    mode: workspace-write"].join("\n"),
+      "codex.thread_sandbox",
+    );
+    expect(error.message).toContain("expected a string");
+  });
+
+  it("reports the exact nested path when a pass-through value is not JSON-safe", () => {
+    // `!!binary` → Buffer：`JSON.stringify` 把它改写成 `{type,data}`，不是原值。
+    const binaryError = expectInvalidConfig(
+      ["codex:", "  turn_sandbox_policy:", "    type: readOnly", "    blob: !!binary aGk="].join("\n"),
+      "codex.turn_sandbox_policy.blob",
+    );
+    expect(binaryError.message).toContain("a binary blob");
+
+    // `.inf` / `.nan` 是合法 YAML number，但不是 JSON number。
+    const infinityError = expectInvalidConfig(
+      ["codex:", "  turn_sandbox_policy:", "    networkAccess: .inf"].join("\n"),
+      "codex.turn_sandbox_policy.networkAccess",
+    );
+    expect(infinityError.message).toContain("a non-finite number");
+
+    expectInvalidConfig(
+      ["codex:", "  approval_policy:", "    notes:", "      - !!binary aGk="].join("\n"),
+      "codex.approval_policy.notes[0]",
+    );
+  });
+
+  it("fails a self-referencing YAML anchor instead of recursing forever (crash-resistance, §6.2)", () => {
+    const error = expectInvalidConfig(
+      [
+        "codex:",
+        "  approval_policy: &policy",
+        "    granular:",
+        "      rules: true",
+        "    self: *policy",
+      ].join("\n"),
+      "codex.approval_policy.self",
+    );
+    expect(error.message).toContain("cyclic");
+  });
+
+  it("does not expand $VAR inside pass-through objects (env expansion stays workspace.root-only, §6.1)", () => {
+    const eff = loadWithFrontMatter(
+      [
+        "codex:",
+        "  approval_policy:",
+        "    granular:",
+        "      rules: true",
+        "    note: $NOT_SET_ANYWAY",
+      ].join("\n"),
+      { env: {} },
+    );
+    expect(eff.serviceConfig.codex.approvalPolicy).toEqual({
+      granular: { rules: true },
+      note: "$NOT_SET_ANYWAY",
     });
   });
 });

@@ -84,6 +84,25 @@ export interface AgentConfig {
   readonly maxConcurrentAgentsByState: Readonly<Record<string, number>>;
 }
 
+/**
+ * Codex-owned config 值的 **JSON-safe pass-through 形状**（SPEC §5.3.6 SHOULD：
+ * "treat them as pass-through Codex config values rather than relying on a
+ * hand-maintained enum"）。
+ *
+ * 存在的理由：pinned Codex schema 里这三个字段的合法值**不全是字符串**——
+ * `AskForApproval` 同时有 string 分支（如 `"never"`）与 object 分支
+ * （`{ "granular": { … } }`），`SandboxPolicy` 整体是带 `"type"` 判别式的 tagged
+ * object。只接受 string 的旧契约无法无损表达它们（M4.1 / #37）。
+ *
+ * 本类型只约束"是 string 还是 JSON object"这一层形状，**不复制** Codex 的枚举成员、
+ * 字段名或 tag 值：合法与否由 Codex 在 wire 边界判定，Symphony 不维护第二份 schema
+ * （见 `notes/accepted/architecture/2026-09-30-codex-protocol-baseline-and-agent-contracts.md`）。
+ * 对象分支的嵌套内容必须仍是 JSON-safe（string / number / boolean / null / list /
+ * plain map），校验动作归 `@symphony/config`（§6.1）——`unknown` 值经
+ * `JSON.stringify` 会静默丢字段，那不是 pass-through，是失真。
+ */
+export type CodexPassThroughValue = string | Readonly<Record<string, unknown>>;
+
 /** SPEC §5.3.6 `codex`。 */
 export interface CodexConfig {
   /**
@@ -94,13 +113,27 @@ export interface CodexConfig {
   readonly command: string;
   /**
    * `codex.approval_policy`：Codex `AskForApproval` **pass-through** 值（§5.3.6 建议
-   * 不在 SPEC 层手维护枚举）；`null` = implementation-defined 默认。
+   * 不在 SPEC 层手维护枚举）。形状为 {@link CodexPassThroughValue}：pinned schema 的
+   * string 分支（`"never"` 一类）或 object 分支（`granular` 一类 tagged object）。
+   * `null` = implementation-defined 默认。
    */
-  readonly approvalPolicy: string | null;
-  /** `codex.thread_sandbox`：Codex `SandboxMode` pass-through；`null` 同上。 */
+  readonly approvalPolicy: CodexPassThroughValue | null;
+  /**
+   * `codex.thread_sandbox`：thread `SandboxMode` **pass-through**（§5.3.6）。
+   * pinned baseline 的 `SandboxMode` 是**纯 string** 联合，因此本字段保持
+   * `string | null`——只接受字符串、不校验具体取值；`null` = implementation-defined 默认。
+   * 若上游把它改成 structured object，那是协议升级事件（升级规则见
+   * `docs/upstream.md` 的 Codex 协议基线一节），不得在类型里预留。
+   */
   readonly threadSandbox: string | null;
-  /** `codex.turn_sandbox_policy`：Codex `SandboxPolicy` pass-through；`null` 同上。 */
-  readonly turnSandboxPolicy: string | null;
+  /**
+   * `codex.turn_sandbox_policy`：turn `SandboxPolicy` **pass-through**（§5.3.6）。
+   * pinned baseline 的 `SandboxPolicy` 是 tagged object 联合，因此本字段必须是
+   * {@link CodexPassThroughValue}（object 分支无损保留，含 `writableRoots` 一类
+   * 数组字段）；string 分支保留是为了兼容历史上按字符串配置的 WORKFLOW。
+   * `null` = implementation-defined 默认。
+   */
+  readonly turnSandboxPolicy: CodexPassThroughValue | null;
   /** `codex.turn_timeout_ms`：默认 3600000（1 小时）。 */
   readonly turnTimeoutMs: number;
   /** `codex.read_timeout_ms`：默认 5000。 */

@@ -10,7 +10,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 规范来源与进度追踪：
 
-- 唯一产品规范是官方 `SPEC.md`，baseline 固定为 `be10a1b79df723d6d7612b5651c8522704dafb2e`——同步 / 升级规则见 [docs/upstream.md](docs/upstream.md)；
+- 唯一产品规范是官方 `SPEC.md`，baseline 固定为 `be10a1b79df723d6d7612b5651c8522704dafb2e`；coding agent 协议另有独立的 Codex app-server 基线（`rust-v0.159.2` / `ff6aec96948b70d94983af2641a6b67c94faeff5`）——两条版本轴、schema source paths 与各自的升级规则见 [docs/upstream.md](docs/upstream.md)；
 - 实现与 SPEC §17 / §18 验收项的映射见 [docs/conformance.md](docs/conformance.md)；
 - 参考实现与第三方 TypeScript 实现只用于设计对照，不构成规范。
 
@@ -46,7 +46,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | 文档 | 内容 |
 |---|---|
 | [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders：命令矩阵、扩展点表、TODO 分级 |
-| [docs/upstream.md](docs/upstream.md) | 上游 SPEC baseline（SHA、同步 / 升级规则） |
+| [docs/upstream.md](docs/upstream.md) | 两条上游 baseline：Symphony SPEC（SHA、同步 / 升级规则）与 Codex app-server 协议（tag / commit、schema source paths、升级落点） |
 | [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新） |
 | [docs/architecture.md](docs/architecture.md) | 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑 |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
@@ -62,7 +62,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | ✅ 已完成 |
 | M2 | Issue Tracker Adapter：provider 无关 read kernel / registry、built-in `github` profile + 归一化 + REST transport 与端到端 conformance 收口（§11，验收 §17.3） | ✅ 已完成 |
 | M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定留 M4） | ✅ 已完成 |
-| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 未开始 |
+| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 进行中（M4.1：Codex 协议基线 + config / agent 契约层已落地；launch / transport / prompt / 事件映射随 M4.2–M4.6） |
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | 未开始 |
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
