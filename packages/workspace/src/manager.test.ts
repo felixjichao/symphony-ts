@@ -32,22 +32,15 @@ describe("WorkspaceManager (SPEC §9.1–§9.2 / §17.2)", () => {
       });
       expect(manager.root).toBe(path.resolve(tmpRoot));
       expect(manager.workspaceConfig.root).toBe(tmpRoot);
-      expect(manager.hooksConfig).toBeUndefined();
     });
 
-    it("接受带有 hooks 配置的选项", () => {
-      const hooks = {
-        afterCreate: "echo created",
-        beforeRun: "echo before",
-        afterRun: null,
-        beforeRemove: null,
-        timeoutMs: 30000,
-      };
+    it("构造器不再持有 hooks 快照（#29：hooks 改为调用时传入当前 effective 值，避免 reload 后旧值缓存）", () => {
       const manager = new WorkspaceManager({
         workspace: { root: tmpRoot },
-        hooks,
       });
-      expect(manager.hooksConfig).toBe(hooks);
+      // M3.1 预留的 options.hooks / manager.hooksConfig 已移除——hooks 配置必须在
+      // 每次 lifecycle 调用时传入当前 effective HooksConfig（验收 2；见 README / Agent Note）。
+      expect("hooksConfig" in manager).toBe(false);
     });
 
     it("拒绝空配置、缺失 workspace 或非法 root", () => {
