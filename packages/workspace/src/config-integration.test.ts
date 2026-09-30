@@ -131,9 +131,21 @@ interface HookSpec {
   readonly timeoutMs?: number | undefined;
 }
 
+/**
+ * `hooks.timeout_ms` 在本文件里的两档取值，依据是"谁负责撞线、谁只负责兜底"：
+ *
+ * - {@link HOOK_TIMEOUT_OK_MS}（默认档）：给**必须成功**的 hook 兜底。这些脚本只是
+ *   `echo` / `pwd`，正常执行远小于该值；一旦脚本挂住就快速失败，而不是等 §5.3.4 的
+ *   60000 默认超时把整个用例拖到一分钟。它不承担"证明 timeout 语义"的职责。
+ * - {@link HOOK_TIMEOUT_DEADLINE_MS}（显式传入）：给**必须超时**的用例——配合 `sleep 5`
+ *   脚本（20x 裕量），确保走的是生产 timeout + 进程组 SIGKILL 路径，而不是巧合通过。
+ */
+const HOOK_TIMEOUT_OK_MS = 300;
+const HOOK_TIMEOUT_DEADLINE_MS = 250;
+
 /** 把 hook 规格渲染成 `hooks:` front matter（多行脚本用 YAML block scalar）。 */
 function hookLines(spec: HookSpec): string[] {
-  const lines = ["hooks:", `  timeout_ms: ${spec.timeoutMs ?? 300}`];
+  const lines = ["hooks:", `  timeout_ms: ${spec.timeoutMs ?? HOOK_TIMEOUT_OK_MS}`];
   const entries: readonly (readonly [key: string, body: readonly string[] | undefined])[] = [
     ["after_create", spec.afterCreate],
     ["before_run", spec.beforeRun],
@@ -470,7 +482,10 @@ describe("四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.
   it("`hooks.timeout_ms` 走生产 timeout / 进程组终止路径：after_create → hook_timeout", async () => {
     const eff = loadWorkflow([
       ...ROOT_LINES,
-      ...hookLines({ timeoutMs: 250, afterCreate: ["sleep 5", `touch ${seqPath}`] }),
+      ...hookLines({
+        timeoutMs: HOOK_TIMEOUT_DEADLINE_MS,
+        afterCreate: ["sleep 5", `touch ${seqPath}`],
+      }),
     ]);
     const manager = managerFrom(eff);
     const identifier = "NEST-64-timeout";
@@ -561,7 +576,7 @@ describe("四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.
     const eff = loadWorkflow([
       ...ROOT_LINES,
       ...hookLines({
-        timeoutMs: 250,
+        timeoutMs: HOOK_TIMEOUT_DEADLINE_MS,
         afterRun: ["sleep 5"],
         beforeRemove: [`echo before_remove >> ${seqPath}`, "exit 5"],
       }),
