@@ -45,7 +45,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M0 / M0.5 | 工程基建：monorepo、strict TS、测试、`npm run gate`、AGENTS / docs / notes | ✅ 已完成 |
-| M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建边界、删除旧协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 本次 |
+| M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建边界、删除旧协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 已完成 |
 | M1 | Domain + Workflow + Config（§4、§5、§6，验收 §17.1） | ✅ 已完成（M1.5 集成与 conformance 收口） |
 | M2 | Issue Tracker Adapter（§11） | ✅ 已完成（M2.1：read kernel / profile / registry / 错误契约 + config 校验接线；M2.2：built-in `github` profile + payload 归一化；M2.3：`github` 的 REST transport / scope / pagination / error mapping；M2.4：`WORKFLOW.md → registry → adapter → 本地 REST fixture` 端到端集成与 §17.3 逐项收口。provider-native tools（§11.5）与 malformed 省略日志（§13）不属本里程碑，见 [packages/tracker/README.md](../packages/tracker/README.md) 的 Known limitations） |
 | M3 | Workspace Manager（§9） | ✅ 已完成（M3.1：provisioning 内核、确定性路径与 non-directory Fail Safely 策略；M3.2：lexical + canonical 双层 containment、symlink escape 拒绝与可复用 execution-boundary primitive；M3.3：四个 lifecycle hook 的执行层、fatal / best-effort 语义与 safe cleanup primitive；M3.4：`WORKFLOW.md → resolved ServiceConfig → workspace → 真实 temp filesystem → 真实 shell hook` 端到端集成与 §17.2 逐项收口。§17.2 的 "agent launch 以 per-issue workspace path 为 cwd 并拒绝 out-of-root 路径" 属 M4，OPTIONAL workspace population / synchronization 不实现，见 [packages/workspace/README.md](../packages/workspace/README.md) 的 Known limitations） |

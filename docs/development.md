@@ -51,7 +51,9 @@ npm run build -w @symphony/domain
 - CI（`.github/workflows/ci.yml`）：PR 与 main push 上执行 `npm ci && npm run gate`——本地与 CI 使用同一个验收口径。
 - doc gate（`scripts/docs-check.mjs`，零依赖）：
   1. 仓库内所有 Markdown 的**相对链接必须指向存在的文件 / 目录**（外部 URL 与纯 anchor 跳过）；
-  2. **`AGENTS.md` ≤ 150 行**——standing orders 保持短小可导航，详细内容下沉到 `docs/` 与各包 README。
+  2. **`AGENTS.md` ≤ 150 行**——standing orders 保持短小可导航，详细内容下沉到 `docs/` 与各包 README；
+  3. 根 `README.md` 与 `docs/architecture.md` 的里程碑状态类别必须一致，且禁止 `✅ 本次` 这类会随时间失真的状态；
+  4. workspace 一旦已有 `src/**/*.test.ts`，其 `test` 脚本不得继续带 `--passWithNoTests`。
 - 移动 / 重命名 Markdown 文件或目录时，跑一次 `npm run docs:check` 再提交。
 
 ## TypeScript 布局约定
@@ -62,7 +64,7 @@ npm run build -w @symphony/domain
 - 跨包 import 一律用包名（`import type { Issue } from "@symphony/domain"`），不要写跨包相对路径。
 - 包间依赖在 `package.json` 里用语义 `*`（npm workspaces 自动链接本地包）；新增依赖边前先确认方向符合 [architecture.md](architecture.md) 的依赖表。
 - 不跨包复制类型定义；领域模型的唯一权威是 `@symphony/domain`。
-- M0.6 边界阶段各包 `test` 脚本带 `--passWithNoTests`；落地首个测试后可去掉该 flag。
+- 尚无测试的 scaffold workspace 可暂用 `--passWithNoTests`；一旦落地首个 `src/**/*.test.ts` 必须移除该 flag，`docs:check` 会阻止回退。
 
 ## 新增行为落点
 

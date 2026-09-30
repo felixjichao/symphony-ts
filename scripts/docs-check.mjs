@@ -1,10 +1,11 @@
 /**
  * docs-check — 轻量 doc gate（`npm run docs:check`，纳入 `npm run gate`）。
  *
- * 检查两件事，让"文档即架构契约"有 freshness protection：
+ * 检查四件事，让"文档即架构契约"有 freshness protection：
  * 1. 仓库内所有 Markdown 的相对链接必须指向存在的文件 / 目录；
- * 2. `AGENTS.md` 行数不超过预算（standing orders 必须保持短小可导航，
- *    详细内容下沉到 docs/ 与各包 README）。
+ * 2. `AGENTS.md` 行数不超过预算（standing orders 必须保持短小可导航）；
+ * 3. 根 README 与 architecture 的里程碑状态类别保持一致，且不使用"✅ 本次"；
+ * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`。
  *
  * 零依赖，Node >= 20 直接运行。
  */
@@ -86,6 +87,101 @@ async function checkAgentsBudget(errors) {
   return lines;
 }
 
+function milestoneStatusCategory(status) {
+  if (/已完成|✅/.test(status)) return "completed";
+  if (/进行中|in-progress/i.test(status)) return "in-progress";
+  if (/未开始|planned/i.test(status)) return "planned";
+  return "unknown";
+}
+
+async function readMilestoneStatuses(path) {
+  const content = await readFile(path, "utf8");
+  const lines = content.split(/\r?\n/);
+  const heading = lines.findIndex((line) => line.trim() === "## 里程碑");
+  if (heading < 0) {
+    return new Map();
+  }
+  const statuses = new Map();
+  for (const line of lines.slice(heading + 1)) {
+    if (line.startsWith("## ")) break;
+    const match = line.match(/^\|\s*(M[^|]+?)\s*\|[^|]*\|\s*(.*?)\s*\|$/);
+    if (match) {
+      statuses.set(match[1].trim(), match[2].trim());
+    }
+  }
+  return statuses;
+}
+
+async function checkMilestoneConsistency(errors) {
+  const readme = await readMilestoneStatuses(join(ROOT, "README.md"));
+  const architecture = await readMilestoneStatuses(join(ROOT, "docs", "architecture.md"));
+  for (const [milestone, readmeStatus] of readme) {
+    const architectureStatus = architecture.get(milestone);
+    if (!architectureStatus) {
+      errors.push(`docs/architecture.md 缺少里程碑状态：${milestone}`);
+      continue;
+    }
+    if (readmeStatus.includes("✅ 本次") || architectureStatus.includes("✅ 本次")) {
+      errors.push(`里程碑 ${milestone} 使用了时间性状态“✅ 本次”，请改为稳定状态`);
+    }
+    const readmeCategory = milestoneStatusCategory(readmeStatus);
+    const architectureCategory = milestoneStatusCategory(architectureStatus);
+    if (readmeCategory === "unknown" || architectureCategory === "unknown") {
+      errors.push(
+        `里程碑 ${milestone} 状态无法分类：README="${readmeStatus}"，architecture="${architectureStatus}"`,
+      );
+    } else if (readmeCategory !== architectureCategory) {
+      errors.push(
+        `里程碑 ${milestone} 状态漂移：README=${readmeCategory}，architecture=${architectureCategory}`,
+      );
+    }
+  }
+  for (const milestone of architecture.keys()) {
+    if (!readme.has(milestone)) {
+      errors.push(`README.md 缺少里程碑状态：${milestone}`);
+    }
+  }
+  return readme.size;
+}
+
+async function hasTestFile(dir) {
+  if (!(await exists(dir))) return false;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (await hasTestFile(path)) return true;
+    } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function checkPassWithNoTests(errors) {
+  let checked = 0;
+  for (const group of ["packages", "apps"]) {
+    const groupDir = join(ROOT, group);
+    if (!(await exists(groupDir))) continue;
+    for (const entry of await readdir(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const workspaceDir = join(groupDir, entry.name);
+      const packagePath = join(workspaceDir, "package.json");
+      if (!(await exists(packagePath)) || !(await hasTestFile(join(workspaceDir, "src")))) {
+        continue;
+      }
+      checked += 1;
+      const manifest = JSON.parse(await readFile(packagePath, "utf8"));
+      const testScript = manifest.scripts?.test;
+      if (typeof testScript === "string" && testScript.includes("--passWithNoTests")) {
+        errors.push(
+          `${relative(ROOT, packagePath)} 已有测试文件，但 test 脚本仍包含 --passWithNoTests`,
+        );
+      }
+    }
+  }
+  return checked;
+}
+
 const errors = [];
 let files = 0;
 let links = 0;
@@ -94,6 +190,8 @@ for await (const file of walkMarkdown(ROOT)) {
   links += await checkLinks(file, errors);
 }
 const agentsLines = await checkAgentsBudget(errors);
+const milestones = await checkMilestoneConsistency(errors);
+const testedWorkspaces = await checkPassWithNoTests(errors);
 
 if (errors.length > 0) {
   console.error(`docs-check 失败（${errors.length} 个问题）：`);
@@ -103,5 +201,5 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行。`,
+  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行；${milestones} 个里程碑状态一致；${testedWorkspaces} 个已有测试的 workspace 未使用 --passWithNoTests。`,
 );
