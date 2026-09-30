@@ -299,6 +299,52 @@ describe("workspace path safety boundary（SPEC §9.5 / §17.2，#28）", () => 
         expect(err.cause).toBeDefined();
       });
 
+      it("中间 ancestor 是 dangling symlink：fail-closed 为 workspace_path_unreadable（与目标级 dangling 对称，PR #32 审查）", async () => {
+        const danglingDir = path.join(root, "dangling-ancestor");
+        await fs.symlink(path.join(outside, "nowhere"), danglingDir, "dir");
+
+        const err = await expectRejected(
+          manager,
+          path.join(danglingDir, "KEY"),
+          "workspace_path_unreadable",
+        );
+        expect(err.cause).toBeDefined();
+
+        // 多级形态：dangling 之下还有不存在的中间层，上溯越过 absent 层后仍 fail-closed
+        await expectRejected(
+          manager,
+          path.join(danglingDir, "sub", "KEY"),
+          "workspace_path_unreadable",
+        );
+
+        // 重读世界：链接未被删除
+        expect((await fs.lstat(danglingDir)).isSymbolicLink()).toBe(true);
+      });
+
+      it("root 投影途中的 ancestor 是 dangling symlink：root 无法 canonicalize，workspace_path_unreadable", async () => {
+        const dangling = path.join(tmpRoot, "dangling-root-ancestor");
+        await fs.symlink(path.join(tmpRoot, "nowhere-2"), dangling, "dir");
+        const weirdRoot = path.join(dangling, "sub-root");
+        const weirdManager = createWorkspaceManager({
+          workspace: { root: weirdRoot },
+        });
+
+        const validation = await weirdManager.validateWorkspacePath(
+          path.join(weirdRoot, "KEY"),
+        );
+        expect(validation.safe).toBe(false);
+        if (!validation.safe) {
+          expect(validation.reason).toBe("workspace_path_unreadable");
+        }
+
+        const err = await expectAssertRejection(
+          weirdManager,
+          path.join(weirdRoot, "KEY"),
+          "workspace_path_unreadable",
+        );
+        expect(err.cause).toBeDefined();
+      });
+
       it("symlink 环（ELOOP）：workspace_path_unreadable 且保留 cause", async () => {
         const loopA = path.join(root, "LOOP-A");
         const loopB = path.join(root, "LOOP-B");

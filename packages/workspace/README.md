@@ -85,7 +85,7 @@ absolute(workspace)
 2. **canonical root 权威**：每次校验实时执行 `fs.realpath(root)`，**不缓存**——root 自身含 symlink 时以 canonical root 判定 containment，root 被替换后立即生效；
 3. **已存在路径**：`realpath(workspacePath)` 必须严格位于 canonical root 之下且不等于 canonical root；realpath 逃逸 → `workspace_symlink_escape`；
 4. **尚不存在路径**：向上找最近已存在 ancestor，对该 ancestor 做 realpath 后 join 剩余 segment 得到 predicted canonical path，要求其严格落在 canonical root 之下——不因目标尚不存在而跳过 safety validation；
-5. **dangling symlink fail-closed**：目标不存在的 symlink 无法 canonicalize，按 `workspace_path_unreadable` 拒绝，不自行解析多级 symlink 链预测落点；
+5. **dangling symlink fail-closed（对称语义）**：目标不存在的 symlink 无法 canonicalize，按 `workspace_path_unreadable` 拒绝，不自行解析多级 symlink 链预测落点；无论 dangling 出现在目标级还是上溯途中的已存在 ancestor，一律 fail-closed，不得被当作「不存在」越过投影。校验全程不逃逸非类型化异常：极端 I/O 故障同样收敛为 typed 结果 / `WorkspaceError`；
 6. **TOCTOU 重验入口**：validate 与后续动作（launch / delete）之间存在固有窗口，只能收窄不能根除。M4 在 agent launch 前、#29 / M5 在任何 destructive cleanup 前，**必须重新调用 `assertWorkspacePathSafe`**，防止「创建后目录被替换成 symlink」绕过字符串路径校验。
 
 决策记录（为何每次 realpath 不缓存、为何错误面用 `unsafeReason` 子字段而非新顶层错误码等）见 Agent Note：`notes/accepted/architecture/2026-09-30-workspace-path-safety-contract.md`。

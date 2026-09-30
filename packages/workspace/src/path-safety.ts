@@ -29,7 +29,8 @@ import { WorkspaceError, type UnsafePathReason } from "./errors";
  *   剩余 segment 得到 predicted canonical path，要求其严格位于 canonical root 之下
  *   ——不因目标尚不存在而跳过 safety validation；
  * - dangling symlink（目标不存在）无法 canonicalize：fail-closed，按
- *   `workspace_path_unreadable` 拒绝，不自行解析多级 symlink 链预测落点。
+ *   `workspace_path_unreadable` 拒绝，不自行解析多级 symlink 链预测落点；
+ *   无论 dangling 出现在目标级还是上溯途中的已存在 ancestor，语义对称。
  */
 
 export function isNodeError(err: unknown): err is NodeJS.ErrnoException {
@@ -169,6 +170,29 @@ async function canonicalizeDirectory(
 }
 
 /**
+ * `realpath` 报 ENOENT 时区分「对象确实不存在」与「对象存在但是无法解析的
+ * dangling symlink」。后者必须 fail-closed，不得当作不存在被 predicted 落点
+ * 越过投影（PR #32 审查 Suggestion 2：与目标级 dangling 判定对称）。
+ */
+async function probeMissingPathState(
+  target: string,
+): Promise<
+  | { readonly state: "absent" }
+  | { readonly state: "dangling" }
+  | { readonly state: "unreadable"; readonly cause: unknown }
+> {
+  try {
+    await fs.lstat(target);
+    return { state: "dangling" };
+  } catch (lstatErr: unknown) {
+    if (isNodeError(lstatErr) && lstatErr.code === "ENOENT") {
+      return { state: "absent" };
+    }
+    return { state: "unreadable", cause: lstatErr };
+  }
+}
+
+/**
  * 对尚不存在的 `target` 向上找最近已存在 ancestor，realpath 后 join 剩余 segment，
  * 得到 target 一旦创建时的 predicted canonical path。
  */
@@ -184,6 +208,22 @@ async function projectFromNearestExistingAncestor(
       realAncestor = await fs.realpath(ancestor);
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === "ENOENT") {
+        // 已存在的 dangling symlink ancestor 不得被当作「不存在」越过投影（#32 审查 Suggestion 2）
+        const probe = await probeMissingPathState(ancestor);
+        if (probe.state === "dangling") {
+          return {
+            kind: "unreadable",
+            message: `${label} has an unresolvable (dangling) symlink ancestor: ${target} (at ${ancestor})`,
+            cause: err,
+          };
+        }
+        if (probe.state === "unreadable") {
+          return {
+            kind: "unreadable",
+            message: `${label} cannot inspect ancestor ${ancestor}: ${probe.cause instanceof Error ? probe.cause.message : String(probe.cause)}`,
+            cause: probe.cause,
+          };
+        }
         const parent = path.dirname(ancestor);
         if (parent === ancestor) {
           // 理论上不可达（文件系统根恒存在）；防御性 fail-closed
@@ -211,13 +251,22 @@ async function projectFromNearestExistingAncestor(
       };
     }
 
-    const ancestorStat = await fs.stat(ancestor).catch((statErr: unknown) => {
+    let ancestorStat: import("node:fs").Stats | null;
+    try {
+      ancestorStat = await fs.stat(ancestor);
+    } catch (statErr: unknown) {
       if (isNodeError(statErr) && statErr.code === "ENOENT") {
         // 竞态：ancestor 在 realpath 与 stat 之间被移除；按不存在继续上溯
-        return null;
+        ancestorStat = null;
+      } else {
+        // 极端 I/O 故障（EIO / ESTALE 等）不得逃逸为非类型化异常（#32 审查 Suggestion 1）
+        return {
+          kind: "unreadable",
+          message: `${label} cannot inspect existing ancestor ${ancestor}: ${statErr instanceof Error ? statErr.message : String(statErr)}`,
+          cause: statErr,
+        };
       }
-      throw statErr;
-    });
+    }
     if (ancestorStat === null) {
       const parent = path.dirname(ancestor);
       if (parent === ancestor) {
@@ -375,6 +424,29 @@ export async function validateWorkspacePathSafety(
       realAncestor = await fs.realpath(ancestor);
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === "ENOENT") {
+        // 已存在的 dangling symlink ancestor 不得被当作「不存在」越过投影，
+        // 与 3a 目标级 dangling 判定对称 fail-closed（#32 审查 Suggestion 2）
+        const probe = await probeMissingPathState(ancestor);
+        if (probe.state === "dangling") {
+          return {
+            safe: false,
+            reason: "workspace_path_unreadable",
+            path: normalized,
+            canonicalRoot,
+            message: `Workspace path has an unresolvable (dangling) symlink ancestor at ${ancestor}: ${normalized} cannot be canonicalized`,
+            cause: err,
+          };
+        }
+        if (probe.state === "unreadable") {
+          return {
+            safe: false,
+            reason: "workspace_path_unreadable",
+            path: normalized,
+            canonicalRoot,
+            message: `Workspace path ancestor cannot be inspected at ${ancestor}: ${probe.cause instanceof Error ? probe.cause.message : String(probe.cause)}`,
+            cause: probe.cause,
+          };
+        }
         const parent = path.dirname(ancestor);
         if (parent === ancestor) {
           return {
