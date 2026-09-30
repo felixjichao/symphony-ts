@@ -24,6 +24,20 @@
  * - `unsafe_path` 错误经 {@link UnsafePathReason}（`error.unsafeReason`）细分为
  *   `workspace_equals_root` / `workspace_outside_root` / `workspace_symlink_escape` /
  *   `workspace_path_unreadable` 四类拒绝面。
+ *
+ * M3.3（#29）叠加 workspace lifecycle hooks 与 safe cleanup primitive（SPEC §5.3.4 /
+ * §9.4 / §15.4 / §8.6）：
+ * - `WorkspaceManager.createWorkspace(identifier, options?)` 集成 `after_create`
+ *   （仅 `createdNow = true` 执行；失败 best-effort 清理半成品并抛 typed fatal 错误）；
+ * - `WorkspaceManager.runBeforeRunHook(workspace, options)`（M4 每 attempt 前；
+ *   failure / timeout → 可判别 fatal 错误，本包不调度 retry）；
+ * - `WorkspaceManager.runAfterRunHook(workspace, options)`（M4 每 attempt 后；
+ *   best-effort，永不 throw，不覆盖原 attempt outcome）；
+ * - `WorkspaceManager.removeWorkspace(identifier, options?)`（M5 startup sweep /
+ *   reconciliation；`before_remove` best-effort + 双重 containment 校验 + 可判别结果）；
+ * - hook 执行层 `sh -lc`、cwd = workspace、effective `timeoutMs`（调用时传入、不缓存）、
+ *   进程组超时终止、输出捕获硬上限，operator-visible 事件经 {@link WorkspaceHookEventSink}
+ *   callback 暴露（workspace 包不依赖 observability）。
  */
 
 export { WorkspaceError } from "./errors";
@@ -34,10 +48,29 @@ export type {
 } from "./errors";
 
 export {
+  DEFAULT_HOOK_TIMEOUT_MS,
+  HOOK_OUTPUT_CAPTURE_LIMIT,
+  HOOK_OUTPUT_EXCERPT_LIMIT,
+} from "./hooks";
+export type {
+  WorkspaceHookEvent,
+  WorkspaceHookEventSink,
+  WorkspaceHookName,
+  WorkspaceHookOutcome,
+  WorkspaceHookResult,
+} from "./hooks";
+
+export {
   WorkspaceManager,
   createWorkspaceManager,
 } from "./manager";
-export type { WorkspaceManagerOptions } from "./manager";
+export type {
+  RemoveWorkspaceRefusalReason,
+  RemoveWorkspaceResult,
+  RunWorkspaceHookOptions,
+  WorkspaceLifecycleHookOptions,
+  WorkspaceManagerOptions,
+} from "./manager";
 
 export type {
   InvalidWorkspaceRootValidation,

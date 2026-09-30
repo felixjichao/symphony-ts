@@ -6,7 +6,13 @@ import {
   type Workspace,
   type WorkspaceConfig,
 } from "@symphony/domain";
-import { WorkspaceError } from "./errors";
+import { WorkspaceError, type UnsafePathReason } from "./errors";
+import {
+  emitWorkspaceHookEvent,
+  executeWorkspaceHook,
+  type WorkspaceHookEventSink,
+  type WorkspaceHookResult,
+} from "./hooks";
 import {
   isLexicallyContained,
   isNodeError,
@@ -20,12 +26,93 @@ import {
  * 构造 {@link WorkspaceManager} 所需的已解析运行时配置（SPEC §4.1.3 / §9）。
  *
  * 直接消费 `@symphony/domain` 中的领域类型契约，不依赖 `@symphony/config`。
+ *
+ * **注意（#29）**：hook 配置（`HooksConfig`）**不再**是构造器字段——它必须由调用方
+ * 在每次 lifecycle 调用时传入当前 effective 值（见 {@link WorkspaceLifecycleHookOptions}）。
+ * 构造器快照会违反 §5.3.4 / §6.2 的 reload 语义（config reload 后旧值仍被缓存），
+ * 故 M3.1 预留的 `options.hooks` / `manager.hooksConfig` 已移除（无既有消费方）。
  */
 export interface WorkspaceManagerOptions {
   /** Workspace 运行时配置（必须包含已解析的绝对路径 `root`）。 */
   readonly workspace: WorkspaceConfig;
-  /** 可选生命周期 hook 配置（SPEC §5.3.4，行为由 #29 落地）。 */
+}
+
+/**
+ * lifecycle 调用时传入的 hook 执行选项（SPEC §5.3.4 / §9.4，#29）。
+ *
+ * `hooks` 必须是**调用时的当前 effective** `HooksConfig`——本包不缓存、不持有旧快照，
+ * config reload 后的下一次调用即使用新值（验收 2）。缺席时不运行任何 hook。
+ */
+export interface WorkspaceLifecycleHookOptions {
+  /** 调用时的当前 effective hooks 配置（SPEC §5.3.4）；缺席 = 不运行 hook。 */
   readonly hooks?: HooksConfig | undefined;
+  /** operator-visible hook 事件回调（failed / timeout）；缺席时事件被丢弃。 */
+  readonly onHookEvent?: WorkspaceHookEventSink | undefined;
+}
+
+/**
+ * {@link WorkspaceManager.runBeforeRunHook} / {@link WorkspaceManager.runAfterRunHook}
+ * 的选项：在 {@link WorkspaceLifecycleHookOptions} 之上附带可进入事件 / 错误的
+ * issue identifier（M4 每 attempt 调用时可用）。
+ */
+export interface RunWorkspaceHookOptions extends WorkspaceLifecycleHookOptions {
+  /** 关联 issue identifier（可用时；进入 operator 事件与错误诊断上下文）。 */
+  readonly identifier?: string | undefined;
+}
+
+/**
+ * {@link WorkspaceManager.removeWorkspace} 拒绝删除时的可判别原因：
+ * 复用 #28 的四类 {@link UnsafePathReason}，外加非目录对象（Fail Safely，与 M3.1
+ * `existing_non_directory` 同源）与 root 自身不可用（`invalid_root`）。
+ */
+export type RemoveWorkspaceRefusalReason =
+  | UnsafePathReason
+  | "existing_non_directory"
+  | "invalid_root";
+
+/**
+ * {@link WorkspaceManager.removeWorkspace} 的可判别结果（M5 startup sweep §8.6 /
+ * reconciliation cleanup 在循环里逐项消费；调用方 **必须** 检查 `status`）。
+ *
+ * - `removed`：目录已存在且被成功删除；
+ * - `missing`：目录不存在——幂等成功，不运行 hook、不删除（§9 / 验收）；
+ * - `refused`：目标 unsafe / out-of-root / 非目录 / root 不可用——**未运行 hook、
+ *   未执行任何 destructive delete**（验收 7）；`reason` 为 typed 判别式；
+ * - `failed`：安全校验通过、`before_remove` 已 best-effort 运行，但 filesystem 删除
+ *   失败（EACCES / EROFS / EBUSY 等）——不吞，`message` + `cause` 透出。
+ */
+export type RemoveWorkspaceResult =
+  | { readonly status: "removed"; readonly path: string; readonly workspaceKey: string }
+  | { readonly status: "missing"; readonly path: string; readonly workspaceKey: string }
+  | {
+      readonly status: "refused";
+      readonly path: string;
+      readonly workspaceKey: string;
+      readonly reason: RemoveWorkspaceRefusalReason;
+      readonly message: string;
+    }
+  | {
+      readonly status: "failed";
+      readonly path: string;
+      readonly workspaceKey: string;
+      readonly message: string;
+      readonly cause?: unknown;
+    };
+
+/** 把 hook 执行结果映射为类型化 fatal 错误（after_create / before_run 复用）。 */
+function hookExecutionError(
+  result: WorkspaceHookResult,
+  workspacePath: string,
+  workspaceKey: string | undefined,
+  identifier: string | undefined,
+): WorkspaceError {
+  const code = result.outcome === "timeout" ? "hook_timeout" : "hook_execution_failed";
+  return new WorkspaceError(code, result.message, {
+    path: workspacePath,
+    ...(workspaceKey !== undefined ? { workspaceKey } : {}),
+    ...(identifier !== undefined ? { identifier } : {}),
+    ...(result.error !== undefined ? { cause: result.error } : {}),
+  });
 }
 
 /**
@@ -39,8 +126,6 @@ export class WorkspaceManager {
   readonly root: string;
   /** 原始 workspace 配置。 */
   readonly workspaceConfig: WorkspaceConfig;
-  /** 可选 hooks 配置。 */
-  readonly hooksConfig?: HooksConfig | undefined;
 
   constructor(options: WorkspaceManagerOptions) {
     if (
@@ -72,9 +157,6 @@ export class WorkspaceManager {
 
     this.root = path.resolve(rawRoot);
     this.workspaceConfig = options.workspace;
-    if (options.hooks !== undefined) {
-      this.hooksConfig = options.hooks;
-    }
   }
 
   /**
@@ -232,9 +314,21 @@ export class WorkspaceManager {
    * 4. 文件系统竞态（EEXIST）：重新检查实际状态，确保最终返回的只有可用目录或明确失败；
    * 5. 复用与新建两条路径在执行前都通过 filesystem 级 safety gate（#28）：
    *    canonical containment / symlink escape / root equality 校验失败时抛出
-   *    `unsafe_path`（含 `unsafeReason` 细分），绝不复用或创建出根外目录。
+   *    `unsafe_path`（含 `unsafeReason` 细分），绝不复用或创建出根外目录；
+   * 6. `after_create` hook（SPEC §5.3.4 / §9.2 step 5 / §9.4，#29）：**仅当
+   *    `createdNow = true` 且 `options.hooks.afterCreate` 已配置**时执行——复用目录
+   *    绝不运行、绝不打扰；success → provisioning 成功；non-zero / spawn failure /
+   *    timeout → provisioning 失败（抛 `hook_execution_failed` / `hook_timeout`），
+   *    并 best-effort 删除**本次新建**的半成品目录（删除前重过 containment 校验；
+   *    清理失败不掩盖原 hook 错误）。
+   *
+   * @param options 调用时传入的当前 effective hooks 配置与事件回调；缺席时行为与
+   *   M3.1 完全一致（不运行任何 hook，复用路径零变化）。
    */
-  async createWorkspace(identifier: string): Promise<Workspace> {
+  async createWorkspace(
+    identifier: string,
+    options: WorkspaceLifecycleHookOptions = {},
+  ): Promise<Workspace> {
     const workspaceKey = this.deriveWorkspaceKey(identifier);
     const workspacePath = this.resolveWorkspacePathFromKey(
       workspaceKey,
@@ -301,11 +395,14 @@ export class WorkspaceManager {
         );
       }
 
-      return {
-        path: workspacePath,
-        workspaceKey,
-        createdNow: created !== undefined,
-      };
+      const createdNow = created !== undefined;
+      const workspace: Workspace = { path: workspacePath, workspaceKey, createdNow };
+
+      // after_create 仅对本次新建目录执行；失败时 best-effort 清理半成品并抛 typed error。
+      if (createdNow) {
+        await this.runAfterCreateHook(workspace, identifier, options);
+      }
+      return workspace;
     } catch (err: unknown) {
       if (err instanceof WorkspaceError) {
         throw err;
@@ -359,10 +456,337 @@ export class WorkspaceManager {
   }
 
   /**
-   * 确保 workspace 目录就绪（{@link createWorkspace} 的别名语义）。
+   * 确保 workspace 目录就绪（{@link createWorkspace} 的别名语义，含 `after_create`）。
    */
-  async ensureWorkspace(identifier: string): Promise<Workspace> {
-    return this.createWorkspace(identifier);
+  async ensureWorkspace(
+    identifier: string,
+    options: WorkspaceLifecycleHookOptions = {},
+  ): Promise<Workspace> {
+    return this.createWorkspace(identifier, options);
+  }
+
+  /**
+   * 每个 attempt 前显式运行 `before_run`（SPEC §9.4 / §16.5，#29）。
+   *
+   * M4 Agent Runner 在 workspace 就绪后、启动 coding agent 前调用。语义：
+   * - `options.hooks.beforeRun` 未配置（null / 空白）或 `options.hooks` 缺席 → no-op 成功；
+   * - spawn 前对 workspace path 重过 #28 安全校验；unsafe → 抛 `unsafe_path`（fatal）；
+   * - 脚本 non-zero / spawn failure → 抛 `hook_execution_failed`；timeout → 抛 `hook_timeout`；
+   *   三者均为**可判别 fatal 错误**，供 M4 中止当前 attempt（验收 4）。
+   *
+   * 本方法**不调度 retry**——retry policy 归 M4 / M5（issue 设计边界）。
+   *
+   * @param workspace 目标 workspace（通常来自 {@link createWorkspace}）
+   * @param options 调用时传入的当前 effective hooks 配置、identifier 与事件回调
+   */
+  async runBeforeRunHook(
+    workspace: Workspace,
+    options: RunWorkspaceHookOptions,
+  ): Promise<void> {
+    const hooks = options.hooks;
+    if (hooks === undefined) {
+      return;
+    }
+    const script = hooks.beforeRun;
+    if (script === null || script.trim().length === 0) {
+      return;
+    }
+    const identifier = options.identifier;
+
+    // execution-boundary 重验（#28 不变量：执行 shell 前路径必须安全）；unsafe → fatal
+    await this.assertWorkspacePathSafe(workspace.path, {
+      workspaceKey: workspace.workspaceKey,
+      identifier,
+    });
+
+    const result = await executeWorkspaceHook({
+      hook: "before_run",
+      script,
+      cwd: workspace.path,
+      workspacePath: workspace.path,
+      workspaceKey: workspace.workspaceKey,
+      identifier,
+      timeoutMs: hooks.timeoutMs,
+      onEvent: options.onHookEvent,
+    });
+    if (result.outcome === "success") {
+      return;
+    }
+    throw hookExecutionError(
+      result,
+      workspace.path,
+      workspace.workspaceKey,
+      identifier,
+    );
+  }
+
+  /**
+   * 每个 attempt 结束后显式运行 `after_run`（SPEC §9.4 / §16.5，#29）。
+   *
+   * M4 Agent Runner 在 attempt 结束（成功 / 失败 / 超时 / 取消）后调用。语义：
+   * - **best-effort，永不 throw**：success / failure / timeout 都不得覆盖原 attempt
+   *   outcome（验收 5）；本方法只运行 hook 并对 failed / timeout 发 operator-visible
+   *   事件，最终总是正常返回；
+   * - `options.hooks.afterRun` 未配置或 `options.hooks` 缺席 → no-op；
+   * - spawn 前重过安全校验；unsafe → 发 `failed` 事件说明「skipped」并正常返回
+   *   （绝不在 unsafe 路径执行 shell）。
+   *
+   * @param workspace 目标 workspace
+   * @param options 调用时传入的当前 effective hooks 配置、identifier 与事件回调
+   */
+  async runAfterRunHook(
+    workspace: Workspace,
+    options: RunWorkspaceHookOptions,
+  ): Promise<void> {
+    const hooks = options.hooks;
+    if (hooks === undefined) {
+      return;
+    }
+    const script = hooks.afterRun;
+    if (script === null || script.trim().length === 0) {
+      return;
+    }
+    const identifier = options.identifier;
+
+    // best-effort：安全重验失败不 throw，只发事件并正常返回（不在 unsafe 路径执行 shell）
+    const validation = await this.validateWorkspacePath(workspace.path);
+    if (!validation.safe) {
+      emitWorkspaceHookEvent(options.onHookEvent, {
+        hook: "after_run",
+        workspacePath: workspace.path,
+        ...(identifier !== undefined ? { identifier } : {}),
+        workspaceKey: workspace.workspaceKey,
+        outcome: "failed",
+        message: `after_run skipped: workspace path failed safety re-verification: ${validation.message}`,
+      });
+      return;
+    }
+
+    // executeWorkspaceHook 对 failed / timeout 内部发事件；无论结果都正常返回。
+    await executeWorkspaceHook({
+      hook: "after_run",
+      script,
+      cwd: workspace.path,
+      workspacePath: workspace.path,
+      workspaceKey: workspace.workspaceKey,
+      identifier,
+      timeoutMs: hooks.timeoutMs,
+      onEvent: options.onHookEvent,
+    });
+  }
+
+  /**
+   * 删除指定 issue identifier 的 workspace 目录（SPEC §8.6 / §9 / §17.2，#29）。
+   *
+   * M5 Orchestrator 在 startup terminal sweep（§8.6）与 reconciliation cleanup 调用。
+   * 流程（全程不做调度 / retry / terminal-state 判断——那是 M5 的职责）：
+   *
+   * 1. derive workspaceKey + resolve path（同步 lexical containment）；
+   * 2. #28 canonical containment 校验：unsafe / out-of-root / root 不可用 →
+   *    `refused`（**不运行 hook、不执行任何 destructive delete**，验收 7）；
+   * 3. 目录不存在 → `missing`（幂等成功，不运行 hook）；
+   * 4. 存在但为非目录对象 → `refused`（Fail Safely，与 M3.1 同源，不删除）；
+   * 5. `before_remove`（best-effort）：failure / timeout → operator 事件，**cleanup 继续**（验收 6）；
+   * 6. destructive delete 前**再次** #28 校验（TOCTOU：hook 可能长时间运行并替换目录）；
+   *    仍 unsafe → `refused`（不删除）；
+   * 7. `fs.rm(recursive)`：成功 → `removed`；filesystem 失败 → `failed`（不吞，携带 `cause`）。
+   *
+   * 除非法 identifier（抛 `invalid_identifier`，与 {@link createWorkspace} 一致）外，
+   * 所有 operational / safety 结果经 {@link RemoveWorkspaceResult} 可判别返回——便于 M5
+   * 在 sweep 循环里逐项处理而不必 per-item try/catch。调用方 **必须** 检查 `status`。
+   *
+   * @param identifier 目标 issue identifier
+   * @param options 调用时传入的当前 effective hooks 配置与事件回调
+   */
+  async removeWorkspace(
+    identifier: string,
+    options: WorkspaceLifecycleHookOptions = {},
+  ): Promise<RemoveWorkspaceResult> {
+    const workspaceKey = this.deriveWorkspaceKey(identifier);
+
+    let workspacePath: string;
+    try {
+      workspacePath = this.resolveWorkspacePathFromKey(workspaceKey, identifier);
+    } catch (err: unknown) {
+      if (err instanceof WorkspaceError && err.code === "unsafe_path") {
+        return {
+          status: "refused",
+          path: err.path ?? path.resolve(this.root, workspaceKey),
+          workspaceKey,
+          reason: err.unsafeReason ?? "workspace_outside_root",
+          message: err.message,
+        };
+      }
+      throw err;
+    }
+
+    // 2. #28 containment 校验（任何 hook / destructive 动作之前）
+    const validation = await this.validateWorkspacePath(workspacePath);
+    if (!validation.safe) {
+      return {
+        status: "refused",
+        path: workspacePath,
+        workspaceKey,
+        reason: validation.reason,
+        message: validation.message,
+      };
+    }
+
+    // 3. 不存在 → 幂等成功（不运行 hook）
+    if (!validation.exists) {
+      return { status: "missing", path: workspacePath, workspaceKey };
+    }
+
+    // 4. 存在且安全：仅对目录执行删除；非目录对象 Fail Safely 拒绝
+    let stat: import("node:fs").Stats;
+    try {
+      stat = await fs.lstat(workspacePath);
+    } catch (err: unknown) {
+      if (isNodeError(err) && err.code === "ENOENT") {
+        // 竞态：校验后目录被移除 → 幂等成功
+        return { status: "missing", path: workspacePath, workspaceKey };
+      }
+      return {
+        status: "failed",
+        path: workspacePath,
+        workspaceKey,
+        message: `Failed to inspect workspace path before removal at ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`,
+        cause: err,
+      };
+    }
+    if (!stat.isDirectory()) {
+      return {
+        status: "refused",
+        path: workspacePath,
+        workspaceKey,
+        reason: "existing_non_directory",
+        message: `Existing non-directory path at workspace location; refusing to remove (Fail Safely): ${workspacePath}`,
+      };
+    }
+
+    // 5. before_remove（best-effort）：failure / timeout 发事件，cleanup 继续
+    const hooks = options.hooks;
+    if (hooks !== undefined) {
+      const beforeRemove = hooks.beforeRemove;
+      if (beforeRemove !== null && beforeRemove.trim().length > 0) {
+        await executeWorkspaceHook({
+          hook: "before_remove",
+          script: beforeRemove,
+          cwd: workspacePath,
+          workspacePath,
+          workspaceKey,
+          identifier,
+          timeoutMs: hooks.timeoutMs,
+          onEvent: options.onHookEvent,
+        });
+      }
+    }
+
+    // 6. TOCTOU 重验：before_remove 可能长时间运行并把目录替换成 symlink
+    const revalidation = await this.validateWorkspacePath(workspacePath);
+    if (!revalidation.safe) {
+      return {
+        status: "refused",
+        path: workspacePath,
+        workspaceKey,
+        reason: revalidation.reason,
+        message: `Safety re-verification failed before destructive removal (possible TOCTOU): ${revalidation.message}`,
+      };
+    }
+
+    // 7. destructive delete；filesystem 失败不吞
+    try {
+      await fs.rm(workspacePath, { recursive: true, force: true });
+    } catch (err: unknown) {
+      return {
+        status: "failed",
+        path: workspacePath,
+        workspaceKey,
+        message: `Failed to remove workspace directory at ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`,
+        cause: err,
+      };
+    }
+    return { status: "removed", path: workspacePath, workspaceKey };
+  }
+
+  /**
+   * `after_create`（SPEC §9.2 step 5 / §9.4，#29）：仅在 {@link createWorkspace}
+   * 判定 `createdNow = true` 后调用。success → 返回；non-zero / spawn failure /
+   * timeout → best-effort 删除**本次新建**的半成品目录后抛 typed fatal 错误。
+   * 复用目录绝不进入本方法（createWorkspace 只对新建路径调用）。
+   */
+  private async runAfterCreateHook(
+    workspace: Workspace,
+    identifier: string,
+    options: WorkspaceLifecycleHookOptions,
+  ): Promise<void> {
+    const hooks = options.hooks;
+    if (hooks === undefined) {
+      return;
+    }
+    const script = hooks.afterCreate;
+    if (script === null || script.trim().length === 0) {
+      return;
+    }
+
+    // execution-boundary 重验（#28 不变量：执行 shell 前路径必须安全）。
+    // 目录刚由本调用创建并已在 mkdir 前通过 gate；此处重验收窄「创建后被替换成
+    // symlink」的 TOCTOU 窗口。unsafe → best-effort 清理（其内部同样重验，unsafe
+    // 则跳过删除）后抛出。
+    try {
+      await this.assertWorkspacePathSafe(workspace.path, {
+        workspaceKey: workspace.workspaceKey,
+        identifier,
+      });
+    } catch (err: unknown) {
+      await this.bestEffortRemoveCreatedWorkspace(workspace, identifier);
+      throw err;
+    }
+
+    const result = await executeWorkspaceHook({
+      hook: "after_create",
+      script,
+      cwd: workspace.path,
+      workspacePath: workspace.path,
+      workspaceKey: workspace.workspaceKey,
+      identifier,
+      timeoutMs: hooks.timeoutMs,
+      onEvent: options.onHookEvent,
+    });
+    if (result.outcome === "success") {
+      return;
+    }
+
+    // fatal to provisioning：先 best-effort 清理本次新建的半成品目录，再抛 typed error。
+    // 清理失败不掩盖原 hook 错误（bestEffortRemove 内部吞掉自身异常）。
+    await this.bestEffortRemoveCreatedWorkspace(workspace, identifier);
+    throw hookExecutionError(
+      result,
+      workspace.path,
+      workspace.workspaceKey,
+      identifier,
+    );
+  }
+
+  /**
+   * best-effort 删除**本次新建**的 workspace 目录（`after_create` 失败后的半成品清理）。
+   *
+   * destructive delete 前重过 #28 安全校验：若目录已被替换成 symlink / 逃逸 root，
+   * 拒绝删除（绝不出根删除）。任何失败都被吞掉——不得掩盖触发清理的原始错误。
+   */
+  private async bestEffortRemoveCreatedWorkspace(
+    workspace: Workspace,
+    identifier: string,
+  ): Promise<void> {
+    try {
+      await this.assertWorkspacePathSafe(workspace.path, {
+        workspaceKey: workspace.workspaceKey,
+        identifier,
+      });
+      await fs.rm(workspace.path, { recursive: true, force: true });
+    } catch {
+      // best-effort：清理失败不得掩盖原 hook / safety 错误，忽略。
+    }
   }
 }
 
