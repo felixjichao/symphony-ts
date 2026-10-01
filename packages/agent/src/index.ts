@@ -34,11 +34,20 @@ export type { AgentErrorCode, AgentErrorDetails } from "./errors";
 export { AGENT_EVENT_NAMES, isAgentEventName } from "./events";
 export type { AgentEvent, AgentEventName, AgentTokenUsage } from "./events";
 
+export {
+  DEFAULT_CONTINUATION_GUIDANCE,
+  DEFAULT_CONTINUATION_TIMEOUT_MS,
+  defaultContinuationDecider,
+  executeContinuationDecider,
+} from "./continuation";
 export type {
   ContinuationDecider,
   ContinuationDecision,
   TurnCompletedContext,
 } from "./continuation";
+
+export { runAgentAttempt } from "./agent-runner";
+export type { AgentAttemptOptions, AgentAttemptResult } from "./agent-runner";
 
 /**
  * Transport 契约面（M4.2 / #38，**方案 A：只 re-export 类型，不导出实现**）。

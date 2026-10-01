@@ -1,5 +1,5 @@
 /**
- * Continuation decision 契约（SPEC **§10.2 / §10.3 continuation** 与 §12.3，M4.1 / #37）。
+ * Continuation decision 契约（SPEC **§10.2 / §10.3 continuation** 与 §12.3，M4.1 / M4.5）。
  *
  * 存在的理由是一条**依赖方向**约束（AGENTS.md 两条硬约束之一：agent runner 不拥有
  * coordination）：官方参考实现里"每个 turn 完成后 refresh tracker、再决定是否继续"
@@ -7,12 +7,10 @@
  * `packages/agent` 不得 import `@symphony/tracker`，所以那份策略以**注入点**的形式
  * 出现在这里：agent 包提供"同一个 live thread 上继续下一个 turn"的执行能力，M5 注入
  * 真正的 eligibility 判定。
- *
- * 本文件只有类型，没有任何 runner 行为——执行、`agent.max_turns` 强制、decider 异常
- * 处理随 M4.5 落地（SPEC §10.3 "SHOULD start another turn on the same live thread"）。
  */
-import type { Issue } from "@symphony/domain";
+import { composeSessionId, type Issue } from "@symphony/domain";
 
+import { AgentError } from "./errors";
 import type { AgentEvent } from "./events";
 
 /**
@@ -33,6 +31,8 @@ export interface TurnCompletedContext {
   readonly turnCount: number;
   /** 触发本次判定的 turn 结束事件（`turn_completed` / `turn_failed` / …，§10.4）。 */
   readonly event: AgentEvent;
+  /** 可选的 AbortSignal，供注入的异步 refresh 操作在超时或 attempt 中止时协作取消。 */
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
@@ -52,6 +52,164 @@ export type ContinuationDecision =
  *
  * 契约边界：实现方**不得**依赖 agent 包的任何内部状态来做决定，也不得在这里做
  * retry / backoff（§8.4 归 orchestrator）；runner 侧的承诺是"不无限等待"——
- * reject、超时或长时间挂起如何收敛成 attempt failure 由 M4.5 定义并测试。
+ * reject、超时或长时间挂起收敛为类型化 {@link AgentError}。
  */
 export type ContinuationDecider = (context: TurnCompletedContext) => Promise<ContinuationDecision>;
+
+/**
+ * SPEC §10.2 continuation turns 默认指导文本。
+ *
+ * 不得重新渲染并重发完整原始 prompt，防止无谓 token 膨胀与上下文重复。
+ */
+export const DEFAULT_CONTINUATION_GUIDANCE =
+  "Continue working on the same issue using the existing thread and workspace context. Do not restart from scratch or repeat completed work.";
+
+/** continuation decider 默认等待超时窗口（30 秒）。 */
+export const DEFAULT_CONTINUATION_TIMEOUT_MS = 30_000;
+
+/** 默认 continuation decider：单 turn 正常结束。 */
+export const defaultContinuationDecider: ContinuationDecider = async () => ({
+  kind: "stop",
+});
+
+/**
+ * 有界执行 {@link ContinuationDecider}，提供超时、取消 signal、决议校验与异常收敛。
+ */
+export async function executeContinuationDecider(
+  decider: ContinuationDecider,
+  context: Omit<TurnCompletedContext, "signal">,
+  timeoutMs: number = DEFAULT_CONTINUATION_TIMEOUT_MS,
+): Promise<ContinuationDecision> {
+  const effectiveTimeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : DEFAULT_CONTINUATION_TIMEOUT_MS;
+
+  const controller = new AbortController();
+  let settled = false;
+  let timer: NodeJS.Timeout | undefined;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      reject(
+        new AgentError(
+          "continuation_timeout",
+          `Continuation decider timed out after ${effectiveTimeout} ms`,
+          {
+            threadId: context.threadId,
+            turnId: context.turnId,
+            sessionId: composeSessionId(context.threadId, context.turnId),
+          },
+        ),
+      );
+    }, effectiveTimeout);
+  });
+
+  const fullContext: TurnCompletedContext = {
+    ...context,
+    signal: controller.signal,
+  };
+
+  try {
+    const decision = await Promise.race([
+      decider(fullContext).then(
+        (res) => {
+          if (settled) {
+            return null as unknown as ContinuationDecision;
+          }
+          return res;
+        },
+        (err) => {
+          if (settled) {
+            // 迟到的 reject 吞掉，避免触发 Node.js unhandled rejection
+            return null as unknown as ContinuationDecision;
+          }
+          throw err;
+        },
+      ),
+      timeoutPromise,
+    ]);
+
+    settled = true;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+
+    if (typeof decision !== "object" || decision === null || !("kind" in decision)) {
+      throw new AgentError(
+        "continuation_failed",
+        "Continuation decider returned an invalid decision object",
+        {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          sessionId: composeSessionId(context.threadId, context.turnId),
+        },
+      );
+    }
+
+    if (decision.kind === "stop") {
+      return { kind: "stop" };
+    }
+
+    if (decision.kind === "continue") {
+      if (
+        typeof decision.issue !== "object" ||
+        decision.issue === null ||
+        typeof decision.issue.id !== "string"
+      ) {
+        throw new AgentError(
+          "continuation_failed",
+          "Continuation decider returned continue decision without valid issue object",
+          {
+            threadId: context.threadId,
+            turnId: context.turnId,
+            sessionId: composeSessionId(context.threadId, context.turnId),
+          },
+        );
+      }
+      if (decision.issue.id !== context.issue.id) {
+        throw new AgentError(
+          "continuation_failed",
+          `Continuation decider returned issue with mismatched id (expected '${context.issue.id}', got '${decision.issue.id}')`,
+          {
+            threadId: context.threadId,
+            turnId: context.turnId,
+            sessionId: composeSessionId(context.threadId, context.turnId),
+          },
+        );
+      }
+      return decision;
+    }
+
+    throw new AgentError(
+      "continuation_failed",
+      `Continuation decider returned unknown decision kind: ${String((decision as { kind: unknown }).kind)}`,
+      {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        sessionId: composeSessionId(context.threadId, context.turnId),
+      },
+    );
+  } catch (error) {
+    settled = true;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    if (error instanceof AgentError) {
+      throw error;
+    }
+    throw new AgentError(
+      "continuation_failed",
+      `Continuation decider threw an error: ${error instanceof Error ? error.message : String(error)}`,
+      {
+        cause: error,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        sessionId: composeSessionId(context.threadId, context.turnId),
+      },
+    );
+  }
+}
