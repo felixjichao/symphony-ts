@@ -6,7 +6,7 @@ Status: accepted
 SPEC §10 把 coding-agent 集成切成三层（Agent Runner → Codex app-server client → JSON-RPC/NDJSON transport → `bash -lc <codex.command>`），但 §10 自己**不是**协议 schema（§10 "Protocol source of truth"：wire 形状归 Codex，orchestration 语义归 SPEC）。M4.1（#37）冻结了对外契约面（`AgentError` / `AgentEvent` / `ContinuationDecider`）之后，M4.2（#38）要落地最底下那层，约束彼此拉扯：
 
 - 这层必须**真的能起子进程并收发 NDJSON**，否则 §17.2 最后一项（"Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths"）与 §17.5 的 framing / read timeout / stderr 三条永远只是 planned；M3.2（#28）明确把 `assertWorkspacePathSafe` 定为「launch 前必须重验」的 execution-boundary primitive，并留下「M3 的 helper 测试不构成该验收项」的口径。
-- 但它一旦开始理解 `initialize` / `thread/start` / `turn/start` / approval，就把 pinned Codex schema 的词汇写进了本不该理解协议的层，M4.3 / M4.4 的 policy 与 M5 的事件映射会失去唯一的替换点；README 分层也会退化成一个万能模块。
+- 但它一旦开始理解 `initialize` / `thread/start` / `turn/start` / approval，就把 pinned Codex schema 的词汇写进了本不该理解协议的层，M4.3 / M4.4 的 policy 与事件映射会失去唯一的替换点；README 分层也会退化成一个万能模块。
 - §10.3 要求 stdio 传输下「协议流与诊断 stderr 分离」，§10.1 只 RECOMMEND "Max line size: 10 MB for safe buffering"——两者都要在**对端行为不可信**的前提下成立：对端可以发半行、一次发多行、发非 JSON、发一百万字节不换行、往 stderr 刷一整行合法 JSON-RPC response、忽略 SIGTERM、留孙进程。
 - 包外应该看到什么？M4.3 的 client 在同包内消费 transport；如果把 `launchTransport` 一起公共导出，orchestrator / apps/cli 就能绕过 session 生命周期与事件映射直接起子进程。
 
@@ -46,3 +46,4 @@ SPEC §10 把 coding-agent 集成切成三层（Agent Runner → Codex app-serve
 - 对端发起的 request 在 M4.2 只被**转发**，没有本地回信就悬挂到 `read_timeout_ms`——这是有意的：approval / user-input / tool 的裁决属 §10.5 documented policy（M4.4）。M4.4 必须显式处理每个已识别的 `ServerRequest` 形态，不得依赖 transport 兜底。
 - 有界行采取"丢弃到下一个换行后恢复"的策略：一条被丢弃的协议消息不会被部分解析、也不会被恢复，但对端如果持续发送永不换行的字节流，本层会静默循环报告 `oversized_line`。这是"不被单个坏消息打死"与"检测到对端异常"之间的取舍，不做 backpressure 或主动断连（那属 M4.5 的 attempt 失败策略）。
 - `stop()` 用进程组信号且等 `exit`/`close` 双路径；新增任何"再派生一个进程"的能力（如 provider-native tools、wrapper 脚本）都必须保持 detached + 进程组这条线，否则孤儿回归。
+- 本 Note 的审查暴露了一处**文档漂移**：`prompt 组装` 的目标子里程碑在 `docs/architecture.md`（M4.6）、`docs/conformance.md`（M4.3–M4.5 区间）与 `packages/agent/README.md`（M4.5）三处不一致，且这个分裂自主仓 M4.1 就已存在。裁决：**子里程碑分配的唯一权威是 `packages/agent/README.md` 的 Known limitations 那份**（M4.3 = initialize / thread / turn 生命周期，M4.4 = `ServerRequest` 的 approval / user-input 裁决与 `turn/*` → `AgentEvent` 映射，M4.5 = runner 组合与 prompt / hooks / continuation 执行，M4.6 = 跨包集成与 §17.2 / §17.5 conformance 收口），其余文档只引用同一份、不另立标号，也不用区间（"M4.3–M4.6"）来代替具体一档。区间式写法本身就是漂移的来源：读者会把"随 M4.3–M4.5 落地"读成"某项属 M4.3"。

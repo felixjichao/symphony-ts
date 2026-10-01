@@ -36,8 +36,8 @@ SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt
 | `approvalPolicy` | `AskForApproval` = string 分支 ∪ `{ "granular": { … } }` object 分支 | `thread/start.approvalPolicy` / `turn/start.approvalPolicy` |
 | `threadSandbox` | `SandboxMode` = 纯 string 联合 | `thread/start.sandbox` |
 | `turnSandboxPolicy` | `SandboxPolicy` = 以 `"type"` 判别的 tagged object（`workspaceWrite` 带 `writableRoots: string[]` 等） | `turn/start.sandboxPolicy` |
-| `command` | —（SPEC §5.3.6 / §10.1） | `bash -lc <codex.command>`，cwd = workspace path（M4.2） |
-| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | transport / orchestrator 侧计时（M4.2 / M5） |
+| `command` | —（SPEC §5.3.6 / §10.1） | `bash -lc <codex.command>`，cwd = workspace path（M4.2 已落地，见上面 transport / launch 一节） |
+| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | 读侧 `readTimeoutMs` 已由 M4.2 transport 落地（per-launch effective 值）；turn / stall 计时是 orchestrator 侧，属 M5 |
 
 形状证据只摘录这三条 type 表达式（完整 schema 一律回 pinned commit，本包不复制、不手维枚举）：
 
@@ -77,7 +77,7 @@ headless worker 的确定策略（SPEC §10.5 允许 "fail the run according to 
 
 两个模块，都**不理解 Codex 业务**：
 
-- `src/transport.ts` — `NdjsonTransport`：按 envelope 的四个判别位（`method` / `id` 在场与否）分类 request / response / notification / server→client request，`method` 全程是不透明字符串。四个不变量：协议 stdout 与诊断 stderr 物理隔离（§10.3）；单行累积有界，默认 `DEFAULT_MAX_PROTOCOL_LINE_BYTES` = 10 MiB（对齐 §10.1 的 RECOMMENDED 上限），超限行丢弃到下一个换行后**恢复成帧**、不中断流，且只报告一次带 256 字节摘录的 `TransportProtocolIssue`；一次调用只有一个了结算（response / `readTimeoutMs` / 进程退出三路，缺席 ≠ 空值）；listener 抛出的异常一律被隔离。子进程 `detached` 启动，`stop()` 是 SIGTERM → `shutdownTimeoutMs` 窗口 → SIGKILL **整个进程组**（与 `packages/workspace` 的 hook runner 同一约定，不留孤儿）。
+- `src/transport.ts` — `NdjsonTransport`：按 envelope 的四个判别位（`method` / `id` 在场与否）分类 request / response / notification / server→client request，`method` 全程是不透明字符串。四个不变量：协议 stdout 与诊断 stderr 物理隔离（§10.3）；单行累积有界，默认 `DEFAULT_MAX_PROTOCOL_LINE_BYTES` = 10 MiB（对齐 §10.1 的 RECOMMENDED 上限），超限行丢弃到下一个换行后**恢复成帧**、不中断流，且只报告一次带 256 字节摘录的 `TransportProtocolIssue`；一次调用只有一个了结算（response / `readTimeoutMs` 到期 / 进程退出三路竞争，单次门闩，超时与退出都删除 pending）；listener 抛出的异常一律被隔离。`readTimeoutMs` 是**本次 launch 的 effective 值**（构造时定值，逐请求计时），不是 per-request 覆盖。子进程 `detached` 启动，`stop()` 是 SIGTERM → `shutdownTimeoutMs` 窗口 → SIGKILL **整个进程组**（与 `packages/workspace` 的 hook runner 同一约定，不留孤儿）。
 - `src/process-launcher.ts` — `launchTransport()`：包内唯一 spawn 点。固定顺序是 非空 `command` 校验 → `path.resolve(workspacePath)` → 组装 child env → `await workspacePathSafety.assertWorkspacePathSafe(cwd)`（M3.2 的 execution-boundary primitive，以结构化接口 `WorkspacePathSafetyGate` 声明，`WorkspaceManager` 天然满足）→ **同一同步续体里** `spawn("bash", ["-lc", command], { cwd, env, detached: true })`。`command` 原样交给 shell，本层绝不 parse argv。
 
 错误面复用 M4.1 冻结的 `AgentError`，不新增码：`invalid_workspace_cwd`（保留 `WorkspaceError` 作为 `cause`）/ `launch_failed`（保留 spawn error 作为 `cause`）/ `response_timeout` / `response_error` / `port_exit` / `protocol_error`。
