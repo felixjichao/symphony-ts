@@ -50,7 +50,7 @@ Status: accepted
 ## Consequences
 
 正面：
-- SPEC §10.4 / §10.5 / §10.6 / §17.5 涉及的 headless server request 裁决、遥测提取与全部 12 种 runtime events 映射全部落地并通过 23 个专用验收用例（总计 92 个用例全部通过）。
+- SPEC §10.4 / §10.5 / §10.6 / §17.5 涉及的 headless server request 裁决、遥测提取与全部 12 种 runtime events 映射全部落地并通过 28 个专用验收用例（总计 97 个用例全部通过）。
 - `approvalPolicy === "never"` 与非 `never` 分支、人工输入即时失败、动态工具调用优雅降级与 early completion 缓冲完全收敛。
 - 零新增外部依赖，严格遵守 contracts 守卫。
 
