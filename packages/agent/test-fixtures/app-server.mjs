@@ -117,6 +117,32 @@ function sendServerRequest(type, threadId, turnId, onDone) {
         // missing turnId and itemId!
       };
       break;
+    case "invalid-legacy-command-params":
+      method = "execCommandApproval";
+      params = {
+        conversationId: threadId,
+        callId: "call-1",
+        command: 42,
+        cwd: false,
+      };
+      break;
+    case "invalid-legacy-file-params":
+      method = "applyPatchApproval";
+      params = {
+        conversationId: threadId,
+        callId: "call-1",
+        fileChanges: "not-an-object",
+      };
+      break;
+    case "invalid-permissions-params":
+      method = "item/permissions/requestApproval";
+      params = {
+        threadId,
+        turnId,
+        itemId: "item-perm-1",
+        permissions: "not-an-object",
+      };
+      break;
     case "legacy-command-approval":
       method = "execCommandApproval";
       params = {
@@ -585,12 +611,17 @@ rl.on("line", (line) => {
 function sendCompletedNotification(threadId, turnId) {
   const status = args["turn-status"] || "completed";
   const errorMessage = args["turn-error-message"];
-  notify("turn/completed", {
-    threadId,
+  const payload = {
     turn: {
       id: turnId,
       status,
       error: errorMessage ? { message: errorMessage } : null,
     },
-  });
+  };
+  if (args["null-thread-in-completed"]) {
+    payload.threadId = null;
+  } else if (!args["missing-thread-in-completed"]) {
+    payload.threadId = threadId;
+  }
+  notify("turn/completed", payload);
 }

@@ -484,11 +484,22 @@ class AppServerSessionImpl implements AppServerSession {
 
       case "execCommandApproval":
       case "applyPatchApproval": {
-        if (
-          paramsObj === null ||
-          typeof paramsObj.conversationId !== "string" ||
-          typeof paramsObj.callId !== "string"
-        ) {
+        const isLegacyCmd = method === "execCommandApproval";
+        const isValidLegacyParams =
+          paramsObj !== null &&
+          typeof paramsObj.conversationId === "string" &&
+          paramsObj.conversationId.length > 0 &&
+          typeof paramsObj.callId === "string" &&
+          paramsObj.callId.length > 0 &&
+          (isLegacyCmd
+            ? Array.isArray(paramsObj.command) &&
+              paramsObj.command.every((item) => typeof item === "string") &&
+              typeof paramsObj.cwd === "string"
+            : typeof paramsObj.fileChanges === "object" &&
+              paramsObj.fileChanges !== null &&
+              !Array.isArray(paramsObj.fileChanges));
+
+        if (!isValidLegacyParams) {
           this.transport.respondToServerRequest({
             id,
             error: { code: -32602, message: "Invalid legacy approval params" },
@@ -518,7 +529,7 @@ class AppServerSessionImpl implements AppServerSession {
           return;
         }
 
-        const legacyThreadId = paramsObj.conversationId;
+        const legacyThreadId = paramsObj.conversationId as string;
         const legacyTurnId = this.activeTurn?.turnId ?? undefined;
 
         if (isNever) {
@@ -620,26 +631,67 @@ class AppServerSessionImpl implements AppServerSession {
       }
 
       case "item/permissions/requestApproval": {
+        const isValidPermissionsParams =
+          paramsObj !== null &&
+          typeof paramsObj.threadId === "string" &&
+          paramsObj.threadId.length > 0 &&
+          typeof paramsObj.turnId === "string" &&
+          paramsObj.turnId.length > 0 &&
+          typeof paramsObj.itemId === "string" &&
+          paramsObj.itemId.length > 0 &&
+          typeof paramsObj.permissions === "object" &&
+          paramsObj.permissions !== null &&
+          !Array.isArray(paramsObj.permissions);
+
+        if (!isValidPermissionsParams) {
+          this.transport.respondToServerRequest({
+            id,
+            error: { code: -32602, message: "Invalid permissions approval params" },
+          });
+          this.emitEvent({
+            event: "malformed",
+            timestamp: Date.now(),
+            codexAppServerPid: this.codexAppServerPid,
+            threadId:
+              typeof paramsObj?.threadId === "string"
+                ? paramsObj.threadId
+                : (this.threadIdValue ?? undefined),
+            turnId:
+              typeof paramsObj?.turnId === "string"
+                ? paramsObj.turnId
+                : (this.activeTurn?.turnId ?? undefined),
+            protocolMethod: method,
+            summary: "Malformed permissions approval request params",
+          });
+          const error = new AgentError("protocol_error", `Malformed params for ${method}`, {
+            threadId:
+              typeof paramsObj?.threadId === "string"
+                ? paramsObj.threadId
+                : (this.threadIdValue ?? undefined),
+            turnId:
+              typeof paramsObj?.turnId === "string"
+                ? paramsObj.turnId
+                : (this.activeTurn?.turnId ?? undefined),
+            codexAppServerPid: this.codexAppServerPid ?? undefined,
+            protocolMethod: method,
+          });
+          this.failTurnWithFatalError(error, "Turn ended with error: protocol error");
+          return;
+        }
+
         this.transport.respondToServerRequest({
           id,
           error: { code: -32000, message: "Permission requests are not supported in headless mode" },
         });
-        const reqThreadId =
-          typeof paramsObj?.threadId === "string"
-            ? paramsObj.threadId
-            : (this.threadIdValue ?? undefined);
-        const reqTurnId =
-          typeof paramsObj?.turnId === "string"
-            ? paramsObj.turnId
-            : (this.activeTurn?.turnId ?? undefined);
+        const reqThreadId = paramsObj.threadId as string;
+        const reqTurnId = paramsObj.turnId as string;
         const error = new AgentError(
           "approval_required",
           "Permissions approval requested but not supported in headless mode",
           {
             threadId: reqThreadId,
             turnId: reqTurnId,
-            sessionId:
-              reqThreadId && reqTurnId ? composeSessionId(reqThreadId, reqTurnId) : undefined,
+            sessionId: composeSessionId(reqThreadId, reqTurnId),
             codexAppServerPid: this.codexAppServerPid ?? undefined,
             protocolMethod: method,
           },
@@ -969,9 +1021,33 @@ class AppServerSessionImpl implements AppServerSession {
       return;
     }
 
-    const incomingThreadId = typeof params.threadId === "string" ? params.threadId : null;
+    if (typeof params.threadId !== "string" || params.threadId.length === 0) {
+      this.emitEvent({
+        event: "malformed",
+        timestamp: Date.now(),
+        codexAppServerPid: this.codexAppServerPid,
+        threadId: this.threadIdValue ?? undefined,
+        turnId: turn.id,
+        protocolMethod: "turn/completed",
+        summary: "turn/completed payload missing valid threadId string",
+      });
+      const error = new AgentError(
+        "protocol_error",
+        "turn/completed payload missing valid threadId string",
+        {
+          threadId: this.threadIdValue ?? undefined,
+          turnId: this.activeTurn?.turnId ?? undefined,
+          codexAppServerPid: this.codexAppServerPid ?? undefined,
+          protocolMethod: "turn/completed",
+        },
+      );
+      this.failTurnWithFatalError(error, "Turn ended with error: protocol error");
+      return;
+    }
 
-    if (incomingThreadId !== null && incomingThreadId !== this.threadIdValue) {
+    const incomingThreadId = params.threadId;
+
+    if (incomingThreadId !== this.threadIdValue) {
       this.emitEvent({
         event: "other_message",
         timestamp: Date.now(),
@@ -1011,7 +1087,7 @@ class AppServerSessionImpl implements AppServerSession {
         return;
       }
       this.activeTurn.bufferedCompleted.push({
-        threadId: incomingThreadId ?? this.threadIdValue!,
+        threadId: incomingThreadId,
         turn,
       });
       return;
@@ -1139,19 +1215,7 @@ class AppServerSessionImpl implements AppServerSession {
         protocolMethod: "turn/completed",
       },
     );
-    this.settleActiveTurn(() => {
-      this.emitEvent({
-        event: "turn_ended_with_error",
-        timestamp: Date.now(),
-        codexAppServerPid: this.codexAppServerPid,
-        threadId: this.threadId,
-        turnId,
-        sessionId,
-        protocolMethod: "turn/completed",
-        summary: "Turn ended with invalid status",
-      });
-      reject(error);
-    });
+    this.failTurnWithFatalError(error, "Turn ended with invalid status");
   }
 
   private settleActiveTurn(action: () => void): void {

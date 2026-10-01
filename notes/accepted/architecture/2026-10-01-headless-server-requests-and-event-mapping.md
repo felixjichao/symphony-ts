@@ -35,17 +35,17 @@ Status: accepted
    - 保持严格协议/诊断隔离，listener 异常隔离不向外部冒泡。
 2. **`AppServerSession` 路由与事件发射**：
    - 集中路由 `handleServerRequest`：针对 v2/legacy approval、user-input、mcp-elicitation、permissions、tool-call 等方法分别进行响应。
-   - 映射规范定义的全部 12 种 `AgentEvent`（`session_started`, `turn_started`, `turn_completed`, `turn_failed`, `turn_cancelled`, `turn_ended_with_error`, `turn_input_required`, `approval_auto_approved`, `unsupported_tool_call`, `notification`, `malformed`, `other_message`）。
+   - 映射规范定义的全部 12 种 `AgentEvent`（`session_started`, `startup_failed`, `turn_completed`, `turn_failed`, `turn_cancelled`, `turn_ended_with_error`, `turn_input_required`, `approval_auto_approved`, `unsupported_tool_call`, `notification`, `malformed`, `other_message`）。
    - 保持对外公共契约不暴露任何 raw Codex JSON，保持对 domain / config / workspace 的严格依赖约束。
 3. **Turn 控制与早到时序解耦**：
    - `startTurn()` 直接返回 Promise 并异步发起 `turn/start` 请求，确保早于 `turn/start` 响应到达的 fatal request 能够立即触发 promise rejection，防止 Node.js unhandled rejection 与调用方挂起。
-   - 通过 `activeTurn.settled` 与有界暂存队列（最大 4 条）处理 early completed 时序，保证 `session_started` 始终在终态事件之前发射。
+   - 通过 `activeTurn.settled` 与有界暂存队列（最大 16 条）处理 early completed 时序，保证 `session_started` 始终在终态事件之前发射。
 
 ## Alternatives considered
 
-- **自动批准所有 server request**：考虑过是否直接全部回包 accept。但这会严重违背安全性与 headless 语义（例如 permissions 或未知危险操作），且 SPEC §10.5 明确要求非 `never` 策略及 user-input 必须立即以可判别错误失败。
+- **自动批准所有 server request**：考虑过是否直接全部回包 accept。但这会严重违背安全性与 headless 语义（例如 permissions 或未知危险操作）；在无人工交互的 headless 运行下，本项目采取明确策略：非 "never" 策略及 user-input / permissions 请求立即以可判别错误（approval_required / turn_input_required）失败并不挂起，确保执行确定性收敛。
 - **让 `item/tool/call` 也导致 turn 失败**：Codex 架构允许模型在动态工具调用失败后根据返回的错误提示自行尝试备选方案或给出结论。回包 `{ success: false }` 符合模型交互协议，且保持 session 与 turn 正常可用。
-- **在 `app-server-session` 内部累加 tokenUsage**：SPEC §10.5 明确指定 `total` 为绝对快照值。各 turn 和通知可能重复或异步，如果 Symphony 本地做累加会导致数值严重失真。因此严格保持快照语义。
+- **在 `app-server-session` 内部累加 tokenUsage**：上游 `thread/tokenUsage/updated` 提供的 `total` 字段为当前累计快照。各 turn 和通知可能重复或异步到达，如果 Symphony 本地额外做累加会导致数值严重失真。因此本项目决定只抽取 `total` 字段快照，严格保持快照语义。
 
 ## Consequences
 

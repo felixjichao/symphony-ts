@@ -243,11 +243,18 @@ describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §
       expect(agentError.protocolMethod).toBe("turn/completed");
     });
 
-    it("turn.status === 'inProgress'（非终态）时 reject 为 protocol_error", async () => {
+    it("turn.status === 'inProgress'（非终态）时 reject 为 protocol_error，且后续 startTurn 立即以 fatal protocol_error 拒绝并不发出新请求", async () => {
+      const inspected: WireInspectorItem[] = [];
+
       session = await startAppServerSession({
         command: appServerFixtureCommand(["--turn-status", "inProgress"]),
         workspacePath: fixture.workspacePath,
         workspacePathSafety: fixture.manager,
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
       });
 
       let caught: unknown = null;
@@ -261,6 +268,97 @@ describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §
       const agentError = caught as AgentError;
       expect(agentError.code).toBe("protocol_error");
       expect(agentError.message).toContain("invalid turn status: inProgress");
+
+      // 验证后续调用立即报错且没有发出新的 turn/start 请求
+      const initialTurnStarts = inspected.filter((i) => i.step === "turn/start").length;
+      expect(initialTurnStarts).toBe(1);
+
+      await expect(session.startTurn({ text: "continuation attempt" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("fatal error"),
+      });
+
+      const afterTurnStarts = inspected.filter((i) => i.step === "turn/start").length;
+      expect(afterTurnStarts).toBe(1);
+    });
+
+    it("turn/completed 缺失 threadId 或传 null 时 reject 为 protocol_error 并发射 malformed 事件", async () => {
+      const events: AgentEvent[] = [];
+
+      // 1. 缺失 threadId
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--missing-thread-in-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "missing threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed" &&
+            e.summary?.includes("missing valid threadId string"),
+        ),
+      ).toBe(true);
+
+      await session.stop();
+      session = null;
+      events.length = 0;
+
+      // 2. threadId 为 null
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--null-thread-in-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "null threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed" &&
+            e.summary?.includes("missing valid threadId string"),
+        ),
+      ).toBe(true);
+    });
+
+    it("early-completed 路径下缺失 threadId 时 reject 为 protocol_error 并发射 malformed 事件，不补造身份", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--early-completed",
+          "--missing-thread-in-completed",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "early missing threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed",
+        ),
+      ).toBe(true);
     });
 
     it("payload 形状非法（缺少 turn.id）时 reject 为 protocol_error", async () => {
@@ -760,6 +858,84 @@ describe("Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.
       expect(wireResp?.response?.id).toBe(101);
       expect(wireResp?.response?.result).toEqual({ decision: "accept" });
     });
+
+    it("畸形 legacy command approval (execCommandApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-legacy-command-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed legacy command" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for execCommandApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid legacy approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "execCommandApproval",
+        ),
+      ).toBe(true);
+    });
+
+    it("畸形 legacy file change approval (applyPatchApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-legacy-file-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed legacy file" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for applyPatchApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid legacy approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "applyPatchApproval",
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("验收 2: 非 never 审批请求拒绝并不 hang，稳定失败", () => {
@@ -892,6 +1068,45 @@ describe("Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.
       await waitFor(() => inspected.some((item) => item.step === "server_response"));
       const wireResp = inspected.find((item) => item.step === "server_response");
       expect(wireResp?.response?.error?.code).toBe(-32000);
+    });
+
+    it("畸形 item/permissions/requestApproval 参数回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-permissions-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed permissions" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for item/permissions/requestApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid permissions approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "item/permissions/requestApproval",
+        ),
+      ).toBe(true);
     });
   });
 
