@@ -69,3 +69,18 @@ export type {
   TransportServerRequest,
   TransportServerResponse,
 } from "./transport";
+
+export type { WorkspacePathSafetyGate } from "./process-launcher";
+
+/**
+ * Codex app-server live session 契约面与工厂（M4.3 / #39）。
+ */
+export {
+  DEFAULT_TURN_TIMEOUT_MS,
+  startAppServerSession,
+} from "./app-server-session";
+export type {
+  AppServerSession,
+  AppServerSessionOptions,
+  TurnCompletedOutcome,
+} from "./app-server-session";
