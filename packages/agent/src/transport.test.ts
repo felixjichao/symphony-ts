@@ -37,11 +37,21 @@ interface Collector {
   readonly stderrLines: string[];
   readonly issues: TransportProtocolIssue[];
   readonly serverRequests: TransportServerRequest[];
+  readonly otherMessages: unknown[];
+  activityCount: number;
   exit: TransportExitInfo | null;
 }
 
 function createCollector(): Collector {
-  return { notifications: [], stderrLines: [], issues: [], serverRequests: [], exit: null };
+  return {
+    notifications: [],
+    stderrLines: [],
+    issues: [],
+    serverRequests: [],
+    otherMessages: [],
+    activityCount: 0,
+    exit: null,
+  };
 }
 
 function listenerOf(collector: Collector) {
@@ -57,6 +67,12 @@ function listenerOf(collector: Collector) {
     },
     onServerRequest: (request: TransportServerRequest): void => {
       collector.serverRequests.push(request);
+    },
+    onOtherMessage: (message: unknown): void => {
+      collector.otherMessages.push(message);
+    },
+    onActivity: (): void => {
+      collector.activityCount += 1;
     },
     onExit: (info: TransportExitInfo): void => {
       collector.exit = info;
@@ -232,6 +248,56 @@ describe("§10.6 request id 关联与 pending request 生命周期", () => {
     // response_error 同样要结算并清理 pending。
     const next = await transport.sendRequest({ method: "test/echo", params: { after: true } });
     expect(resultObject(next.result).echo).toEqual({ after: true });
+  }, 15_000);
+
+  it("数字与字符串 ID 严格隔离：数字 ID response 不得误结算同值的字符串 ID request", async () => {
+    const { transport, collector } = await openFixture();
+
+    // 发起 request（transport 生成字符串 ID，例如 "1"）
+    const reqPromise = transport.sendRequest({
+      method: "test/raw",
+      params: {
+        // 先向 stdout 输出一个使用数字 id 1 的 response
+        chunks: [JSON.stringify({ jsonrpc: "2.0", id: 1, result: { forgedNumeric: true } }) + "\n"],
+        thenRespond: true, // 随后 fixture 会正常回复本请求（带着 string id "1"）
+      },
+    });
+
+    const response = await reqPromise;
+    expect(resultObject(response.result).rawChunks).toBe(1);
+
+    // 数字 id 的 response 被视作未知 response，走 onOtherMessage 与 protocol issue
+    await waitFor(() => collector.otherMessages.length > 0);
+    expect(collector.otherMessages[0]).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { forgedNumeric: true },
+    });
+  }, 15_000);
+
+  it("onActivity 仅在收到有效协议输入时触发，stderr 与 malformed 不触发", async () => {
+    const { transport, collector } = await openFixture();
+
+    const activityBefore = collector.activityCount;
+
+    // 1. 发送 stderr 消息：不触发 onActivity，只有正常 response 触发 1 次
+    await transport.sendRequest({
+      method: "test/stderr",
+      params: { lines: ["diagnostic message"] },
+    });
+    const activityAfterStderr = collector.activityCount;
+    expect(activityAfterStderr).toBe(activityBefore + 1);
+
+    // 2. 写入 malformed 消息：不触发 onActivity，只有 thenRespond 的 response 触发 1 次
+    await transport.sendRequest({
+      method: "test/raw",
+      params: {
+        chunks: ["{ this is not valid json }\n"],
+        thenRespond: true,
+      },
+    });
+    expect(collector.activityCount).toBe(activityAfterStderr + 1);
+    expect(collector.issues.some((i) => i.reason === "malformed_line")).toBe(true);
   }, 15_000);
 });
 

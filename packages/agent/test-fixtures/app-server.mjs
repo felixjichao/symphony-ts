@@ -1,5 +1,5 @@
-// M4.3 Codex app-server 测试 fixture：真实 NDJSON/JSON-RPC 子进程
-// （SPEC §10.2 / §10.3 / §10.6 / §17.5，#39）。
+// M4.3 / M4.4 Codex app-server 测试 fixture：真实 NDJSON/JSON-RPC 子进程
+// （SPEC §10.2 / §10.3 / §10.4 / §10.5 / §10.6 / §17.5，#39 / #40）。
 //
 // 模拟 pinned rust-v0.159.2 的 app-server 行为：
 // initialize -> initialized -> thread/start -> turn/start -> turn/completed。
@@ -19,6 +19,23 @@
 //   --unmatched-completed-first 发送不匹配的 turn/completed 再发匹配的
 //   --malformed-completed      发送畸形 turn/completed（缺少 turn.id）
 //   --delay-completed-ms <ms>  延迟发送 turn/completed 的毫秒数
+//
+// M4.4 新增场景：
+//   --server-request <type>    在 turn 期间向 client 发起 server request
+//                              (command-approval / file-approval / legacy-command-approval /
+//                               legacy-file-approval / user-input / mcp-elicitation /
+//                               permissions-approval / unsupported-tool / auth-refresh /
+//                               attestation / unknown-request / invalid-approval-params)
+//   --server-request-id-type <string|number> server request id 的类型（默认 string）
+//   --server-request-timing <before-start-response|during-turn> 发起时机（默认 during-turn）
+//   --early-completed          在回复 turn/start 之前先发送 turn/completed
+//   --interleaved-other-completed 发送异 thread/turn completion 夹入
+//   --send-usage               发送合法的 thread/tokenUsage/updated
+//   --send-invalid-usage       发送非法字段值的 thread/tokenUsage/updated
+//   --send-rate-limits         发送 account/rateLimits/updated
+//   --send-malformed-line      发送非 JSON 文本行
+//   --send-unknown-response    发送未知的 response id
+//   --multi-turn-tool          turn 1 触发 unsupported tool，client 回复后完成 turn 1；turn 2 正常完成
 
 import readline from "node:readline";
 import process from "node:process";
@@ -46,7 +63,11 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv.slice(2));
 
 function writeLine(value) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (typeof value === "string") {
+    process.stdout.write(`${value}\n`);
+  } else {
+    process.stdout.write(`${JSON.stringify(value)}\n`);
+  }
 }
 
 function respond(id, result) {
@@ -62,6 +83,124 @@ function notify(method, params) {
 }
 
 let turnCount = 0;
+const pendingServerRequests = new Map();
+
+function sendServerRequest(type, threadId, turnId, onDone) {
+  const reqId = args["server-request-id-type"] === "number" ? 101 : "srv-req-1";
+  let method = "";
+  let params = {};
+
+  switch (type) {
+    case "command-approval":
+      method = "item/commandExecution/requestApproval";
+      params = {
+        threadId,
+        turnId,
+        itemId: "item-cmd-1",
+        command: "rm -rf /",
+        cwd: process.cwd(),
+      };
+      break;
+    case "file-approval":
+      method = "item/fileChange/requestApproval";
+      params = {
+        threadId,
+        turnId,
+        itemId: "item-file-1",
+        reason: "Write file",
+      };
+      break;
+    case "invalid-approval-params":
+      method = "item/commandExecution/requestApproval";
+      params = {
+        threadId,
+        // missing turnId and itemId!
+      };
+      break;
+    case "legacy-command-approval":
+      method = "execCommandApproval";
+      params = {
+        conversationId: threadId,
+        callId: "call-1",
+        command: ["echo", "hi"],
+        cwd: process.cwd(),
+      };
+      break;
+    case "legacy-file-approval":
+      method = "applyPatchApproval";
+      params = {
+        conversationId: threadId,
+        callId: "call-1",
+        fileChanges: {},
+      };
+      break;
+    case "user-input":
+      method = "item/tool/requestUserInput";
+      params = {
+        threadId,
+        turnId,
+        itemId: "item-input-1",
+        questions: [{ question: "Do you confirm?" }],
+        isBlocking: true,
+      };
+      break;
+    case "mcp-elicitation":
+      method = "mcpServer/elicitation/request";
+      params = {
+        threadId,
+        turnId,
+        serverName: "test-mcp-server",
+        mode: "form",
+        message: "Please input api key",
+        requestedSchema: {},
+      };
+      break;
+    case "permissions-approval":
+      method = "item/permissions/requestApproval";
+      params = {
+        threadId,
+        turnId,
+        itemId: "item-perm-1",
+        permissions: {},
+      };
+      break;
+    case "unsupported-tool":
+      method = "item/tool/call";
+      params = {
+        threadId,
+        turnId,
+        callId: "call-tool-1",
+        tool: "custom_dynamic_tool",
+        arguments: { foo: "bar" },
+      };
+      break;
+    case "auth-refresh":
+      method = "account/chatgptAuthTokens/refresh";
+      params = {};
+      break;
+    case "attestation":
+      method = "attestation/generate";
+      params = {};
+      break;
+    case "unknown-request":
+      method = "custom/unknownServerRequest";
+      params = {};
+      break;
+    default:
+      method = type;
+      params = {};
+      break;
+  }
+
+  pendingServerRequests.set(reqId, {
+    method,
+    onResponse: (response) => {
+      onDone(response);
+    },
+  });
+
+  writeLine({ jsonrpc: "2.0", id: reqId, method, params });
+}
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -85,6 +224,20 @@ rl.on("line", (line) => {
       step: message.method,
       params: message.params,
     });
+    return;
+  }
+
+  // Client response to server request (has id, but no method)
+  if (message.id !== undefined && message.method === undefined) {
+    notify("test/wireInspector", {
+      step: "server_response",
+      response: message,
+    });
+    const pending = pendingServerRequests.get(message.id);
+    if (pending) {
+      pendingServerRequests.delete(message.id);
+      pending.onResponse(message);
+    }
     return;
   }
 
@@ -153,6 +306,56 @@ rl.on("line", (line) => {
         return;
       }
 
+      const delayMs = args["delay-completed-ms"]
+        ? Number.parseInt(args["delay-completed-ms"], 10)
+        : 20;
+
+      // 场景：在回复 turn/start 之前先发送 server request
+      if (
+        args["server-request"] &&
+        args["server-request-timing"] === "before-start-response"
+      ) {
+        sendServerRequest(args["server-request"], params.threadId, turnId, (response) => {
+          // 收到 client 对早到 server request 的回包
+          notify("test/wireInspector", {
+            step: "server_request_resolved_early",
+            response,
+          });
+          // 如果是 auto-approved，则继续发送 turn/start response 和完成通知
+          if (
+            response.result?.decision === "accept" ||
+            response.result?.decision === "approved"
+          ) {
+            respond(id, {
+              turn: {
+                id: turnId,
+                status: "inProgress",
+              },
+            });
+            setTimeout(() => {
+              sendCompletedNotification(params.threadId, turnId);
+            }, delayMs);
+          }
+          // 若不是 auto-approved（如 decline 或 error），client 应立即失败；此处不继续发 start 响应
+        });
+        return;
+      }
+
+      // 场景：early-completed（在 turn/start 响应之前先发送 turn/completed）
+      if (args["early-completed"]) {
+        sendCompletedNotification(params.threadId, turnId);
+        setTimeout(() => {
+          respond(id, {
+            turn: {
+              id: turnId,
+              status: "inProgress",
+            },
+          });
+        }, delayMs);
+        return;
+      }
+
+      // 正常先回复 turn/start
       respond(id, {
         turn: {
           id: turnId,
@@ -175,13 +378,83 @@ rl.on("line", (line) => {
         return;
       }
 
+      if (args["send-malformed-line"]) {
+        writeLine("{ not a valid json object");
+      }
+
+      if (args["send-unknown-response"]) {
+        writeLine({
+          jsonrpc: "2.0",
+          id: "unprompted-late-response-id-999",
+          result: { late: true },
+        });
+      }
+
+      if (args["send-usage"]) {
+        notify("thread/tokenUsage/updated", {
+          threadId: params.threadId,
+          turnId,
+          tokenUsage: {
+            total: {
+              inputTokens: 100,
+              outputTokens: 50,
+              totalTokens: 150,
+              cachedInputTokens: 10,
+              cacheWriteInputTokens: 0,
+              reasoningOutputTokens: 5,
+            },
+            last: {
+              inputTokens: 20,
+              outputTokens: 10,
+              totalTokens: 30,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              reasoningOutputTokens: 0,
+            },
+            modelContextWindow: 128000,
+          },
+        });
+      }
+
+      if (args["send-invalid-usage"]) {
+        notify("thread/tokenUsage/updated", {
+          threadId: params.threadId,
+          turnId,
+          tokenUsage: {
+            total: {
+              inputTokens: -1,
+              outputTokens: "invalid",
+              totalTokens: 150,
+            },
+            last: {
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+            },
+          },
+        });
+      }
+
+      if (args["send-rate-limits"]) {
+        notify("account/rateLimits/updated", {
+          rateLimits: {
+            limitId: "lim-1",
+            limitName: "standard",
+            normalModelSlug: "gpt-4",
+            primary: { usedPercent: 42, windowMinutes: 60 },
+            secondary: null,
+            credits: null,
+            individualLimit: null,
+            spendControlReached: false,
+            planType: "team",
+            rateLimitReachedType: null,
+          },
+        });
+      }
+
       if (args["silent-turn"]) {
         return;
       }
-
-      const delayMs = args["delay-completed-ms"]
-        ? Number.parseInt(args["delay-completed-ms"], 10)
-        : 20;
 
       if (args["periodic-notifications"]) {
         const count = Number.parseInt(args["periodic-notifications"], 10);
@@ -191,7 +464,13 @@ rl.on("line", (line) => {
           notify("thread/tokenUsage/updated", {
             threadId: params.threadId,
             turnId,
-            tokens: sent * 10,
+            tokenUsage: {
+              total: {
+                inputTokens: sent * 10,
+                outputTokens: sent * 5,
+                totalTokens: sent * 15,
+              },
+            },
           });
           if (sent >= count) {
             clearInterval(interval);
@@ -201,6 +480,24 @@ rl.on("line", (line) => {
           }
         }, 25);
         return;
+      }
+
+      if (args["interleaved-other-completed"]) {
+        // 先发送异 thread 或异 turn 的 completion
+        notify("turn/completed", {
+          threadId: "different-thread-id",
+          turn: {
+            id: turnId,
+            status: "completed",
+          },
+        });
+        notify("turn/completed", {
+          threadId: params.threadId,
+          turn: {
+            id: "different-turn-id",
+            status: "completed",
+          },
+        });
       }
 
       if (args["unmatched-completed-first"]) {
@@ -228,6 +525,48 @@ rl.on("line", (line) => {
             },
           });
         }, delayMs);
+        return;
+      }
+
+      // 场景：turn 期间发送 server request
+      if (
+        args["server-request"] &&
+        args["server-request-timing"] !== "before-start-response"
+      ) {
+        setTimeout(() => {
+          sendServerRequest(args["server-request"], params.threadId, turnId, (response) => {
+            notify("test/wireInspector", {
+              step: "server_request_resolved",
+              response,
+            });
+            // 只有当是 unsupported-tool 或者 approval 被 accept 时才发送 completion
+            if (args["server-request"] === "unsupported-tool") {
+              setTimeout(() => {
+                sendCompletedNotification(params.threadId, turnId);
+              }, delayMs);
+            } else if (
+              response.result?.decision === "accept" ||
+              response.result?.decision === "approved"
+            ) {
+              setTimeout(() => {
+                sendCompletedNotification(params.threadId, turnId);
+              }, delayMs);
+            }
+            // 拒绝 / error 分支不发送 completion
+          });
+        }, 10);
+        return;
+      }
+
+      // 场景：multi-turn-tool
+      if (args["multi-turn-tool"] && turnCount === 1) {
+        setTimeout(() => {
+          sendServerRequest("unsupported-tool", params.threadId, turnId, (_response) => {
+            setTimeout(() => {
+              sendCompletedNotification(params.threadId, turnId);
+            }, delayMs);
+          });
+        }, 10);
         return;
       }
 
