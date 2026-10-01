@@ -559,7 +559,7 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       expect(afterRunContent.trim()).toBe("after_run_executed");
     });
 
-    it("startup read timeout 抛出 read_timeout，执行 after_run，且子进程 PID 已终止", async () => {
+    it("startup read timeout 抛出 response_timeout，执行 after_run，且子进程 PID 已终止", async () => {
       const afterRunMarker = path.join(tempDir, "after-run-startup-timeout.marker");
       const startupPidFile = path.join(tempDir, "startup-timeout-child.pid");
       const { getConfig } = createConfig(
@@ -577,7 +577,7 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
             approvalPolicy: "never",
             threadSandbox: null,
             turnSandboxPolicy: null,
-            readTimeoutMs: 150, // 短 read timeout
+            readTimeoutMs: 1_200, // 足够让子进程启动并写入 PID，同时快速触发握手超时
             turnTimeoutMs: 5_000,
             stallTimeoutMs: 10_000,
           },
@@ -609,8 +609,21 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       const afterRunContent = await fs.readFile(afterRunMarker, "utf8");
       expect(afterRunContent.trim()).toBe("after_run_on_startup_timeout");
 
+      // 验证 PID 记录已产生，且进程在超时清理后已终止
+      expect(
+        await waitFor(async () => {
+          try {
+            await fs.stat(startupPidFile);
+            return true;
+          } catch {
+            return false;
+          }
+        }, 3_000),
+      ).toBe(true);
+
       const pidStr = (await fs.readFile(startupPidFile, "utf8")).trim();
       const pid = Number.parseInt(pidStr, 10);
+      expect(Number.isFinite(pid)).toBe(true);
       expect(await waitFor(() => !isProcessAlive(pid), 3_000)).toBe(true);
     });
   });
