@@ -102,6 +102,10 @@ export interface TransportListener {
   /** stderr 的一行（不含换行符）。 */
   onStderr?(line: string): void;
   onProtocolIssue?(issue: TransportProtocolIssue): void;
+  /** 对端发来的未知 response ID 或非请求/非通知消息。 */
+  onOtherMessage?(message: unknown): void;
+  /** 对端输出任意有效协议消息（server request / notification / 匹配的 response）时的活动信号。 */
+  onActivity?(): void;
   onExit?(info: TransportExitInfo): void;
 }
 
@@ -156,9 +160,9 @@ function resolvePositiveNumber(value: number | undefined, fallback: number): num
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/** wire `id` → pending map key（string 与 number 不互相碰撞：number 走 `String(n)`）。 */
+/** wire `id` → pending map key（string 与 number 不互相碰撞）。 */
 function pendingKey(id: RequestId): string {
-  return String(id);
+  return typeof id === "number" ? `n:${id}` : `s:${id}`;
 }
 
 function excerpt(text: string): string {
@@ -387,12 +391,13 @@ export class NdjsonTransport implements Transport {
       }
 
       let settled = false;
+      const key = pendingKey(id);
       const timer = setTimeout(() => {
         if (settled) {
           return;
         }
         settled = true;
-        this.pending.delete(id);
+        this.pending.delete(key);
         reject(
           new AgentError(
             "response_timeout",
@@ -417,7 +422,7 @@ export class NdjsonTransport implements Transport {
           reject(error);
         },
       };
-      this.pending.set(id, entry);
+      this.pending.set(key, entry);
 
       try {
         this.writeMessage(envelope);
@@ -427,7 +432,7 @@ export class NdjsonTransport implements Transport {
             ? error
             : new AgentError("protocol_error", `Failed to encode ${request.method}`, this.errorContext(request.method)),
         );
-        this.pending.delete(id);
+        this.pending.delete(key);
       }
     });
   }
@@ -539,6 +544,7 @@ export class NdjsonTransport implements Transport {
 
     if (hasMethod && hasId) {
       // 对端发起的 request：只转发语义，不裁决（approval / tool policy 归 M4.4）。
+      this.emitActivity();
       this.emitServerRequest({
         id: rawId as RequestId,
         method: method as string,
@@ -548,6 +554,7 @@ export class NdjsonTransport implements Transport {
     }
 
     if (hasMethod) {
+      this.emitActivity();
       this.emitNotification({
         method: method as string,
         ...(message["params"] !== undefined ? { params: message["params"] } : {}),
@@ -556,6 +563,7 @@ export class NdjsonTransport implements Transport {
     }
 
     if (!hasId) {
+      this.emitOtherMessage(message);
       this.emitProtocolIssue({
         reason: "malformed_line",
         message: "stdout message carries neither `method` nor `id` and was discarded",
@@ -564,6 +572,10 @@ export class NdjsonTransport implements Transport {
       return;
     }
 
+    const key = pendingKey(rawId as RequestId);
+    if (this.pending.has(key)) {
+      this.emitActivity();
+    }
     this.settlePendingResponse(rawId as RequestId, message);
   }
 
@@ -571,9 +583,10 @@ export class NdjsonTransport implements Transport {
     const key = pendingKey(rawId);
     const entry = this.pending.get(key);
     if (entry === undefined) {
+      this.emitOtherMessage(message);
       this.emitProtocolIssue({
         reason: "malformed_line",
-        message: `Response for unknown or already-settled request id ${key} was discarded`,
+        message: `Response for unknown or already-settled request id ${String(rawId)} was discarded`,
         excerpt: excerpt(JSON.stringify(message)),
       });
       return;
@@ -610,7 +623,7 @@ export class NdjsonTransport implements Transport {
     }
 
     this.pending.delete(key);
-    entry.resolve({ id: key, result });
+    entry.resolve({ id: entry.id, result });
   }
 
   private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
@@ -678,6 +691,22 @@ export class NdjsonTransport implements Transport {
   private emitProtocolIssue(issue: TransportProtocolIssue): void {
     try {
       this.listener.onProtocolIssue?.(issue);
+    } catch {
+      /* 隔离 */
+    }
+  }
+
+  private emitOtherMessage(message: unknown): void {
+    try {
+      this.listener.onOtherMessage?.(message);
+    } catch {
+      /* 隔离 */
+    }
+  }
+
+  private emitActivity(): void {
+    try {
+      this.listener.onActivity?.();
     } catch {
       /* 隔离 */
     }

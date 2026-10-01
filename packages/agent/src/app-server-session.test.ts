@@ -10,6 +10,7 @@ import {
 import {
   AgentError,
   startAppServerSession,
+  type AgentEvent,
   type AppServerSession,
   type TransportNotification,
 } from "./index";
@@ -19,6 +20,15 @@ interface WireInspectorItem {
   readonly received?: Record<string, unknown>;
   readonly cwd?: string;
   readonly params?: unknown;
+  readonly response?: {
+    readonly id?: unknown;
+    readonly result?: unknown;
+    readonly error?: {
+      readonly code?: number;
+      readonly message?: string;
+      readonly data?: unknown;
+    };
+  };
 }
 
 describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3)", () => {
@@ -233,11 +243,18 @@ describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §
       expect(agentError.protocolMethod).toBe("turn/completed");
     });
 
-    it("turn.status === 'inProgress'（非终态）时 reject 为 protocol_error", async () => {
+    it("turn.status === 'inProgress'（非终态）时 reject 为 protocol_error，且后续 startTurn 立即以 fatal protocol_error 拒绝并不发出新请求", async () => {
+      const inspected: WireInspectorItem[] = [];
+
       session = await startAppServerSession({
         command: appServerFixtureCommand(["--turn-status", "inProgress"]),
         workspacePath: fixture.workspacePath,
         workspacePathSafety: fixture.manager,
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
       });
 
       let caught: unknown = null;
@@ -251,6 +268,97 @@ describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §
       const agentError = caught as AgentError;
       expect(agentError.code).toBe("protocol_error");
       expect(agentError.message).toContain("invalid turn status: inProgress");
+
+      // 验证后续调用立即报错且没有发出新的 turn/start 请求
+      const initialTurnStarts = inspected.filter((i) => i.step === "turn/start").length;
+      expect(initialTurnStarts).toBe(1);
+
+      await expect(session.startTurn({ text: "continuation attempt" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("fatal error"),
+      });
+
+      const afterTurnStarts = inspected.filter((i) => i.step === "turn/start").length;
+      expect(afterTurnStarts).toBe(1);
+    });
+
+    it("turn/completed 缺失 threadId 或传 null 时 reject 为 protocol_error 并发射 malformed 事件", async () => {
+      const events: AgentEvent[] = [];
+
+      // 1. 缺失 threadId
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--missing-thread-in-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "missing threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed" &&
+            e.summary?.includes("missing valid threadId string"),
+        ),
+      ).toBe(true);
+
+      await session.stop();
+      session = null;
+      events.length = 0;
+
+      // 2. threadId 为 null
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--null-thread-in-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "null threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed" &&
+            e.summary?.includes("missing valid threadId string"),
+        ),
+      ).toBe(true);
+    });
+
+    it("early-completed 路径下缺失 threadId 时 reject 为 protocol_error 并发射 malformed 事件，不补造身份", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--early-completed",
+          "--missing-thread-in-completed",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await expect(session.startTurn({ text: "early missing threadId" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("missing valid threadId string"),
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "turn/completed",
+        ),
+      ).toBe(true);
     });
 
     it("payload 形状非法（缺少 turn.id）时 reject 为 protocol_error", async () => {
@@ -567,3 +675,822 @@ describe("Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §
     });
   });
 });
+
+describe("Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4)", () => {
+  let fixture: WorkspaceFixture;
+  let session: AppServerSession | null = null;
+
+  beforeEach(async () => {
+    fixture = await createWorkspaceFixture();
+  });
+
+  afterEach(async () => {
+    if (session !== null) {
+      try {
+        await session.stop();
+      } catch {
+        /* ignore */
+      }
+      session = null;
+    }
+    await fixture.dispose();
+  });
+
+  describe("验收 1: approval never 路径参数化与完成 turn", () => {
+    it("v2 command approval 在 never policy 下自动批准并完成 turn", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "execute command" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp).toBeDefined();
+      expect(wireResp?.response?.id).toBe("srv-req-1");
+      expect(wireResp?.response?.result).toEqual({ decision: "accept" });
+
+      const autoApproved = events.find((e) => e.event === "approval_auto_approved");
+      expect(autoApproved).toBeDefined();
+      expect(autoApproved?.protocolMethod).toBe("item/commandExecution/requestApproval");
+      expect(autoApproved?.threadId).toBe("thread-test-uuid-1");
+      expect(autoApproved?.turnId).toBe("turn-test-uuid-1");
+      expect(autoApproved?.sessionId).toBe(
+        composeSessionId("thread-test-uuid-1", "turn-test-uuid-1"),
+      );
+
+      const completed = events.find((e) => e.event === "turn_completed");
+      expect(completed).toBeDefined();
+    });
+
+    it("v2 file change approval 在 never policy 下自动批准并完成 turn", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "file-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "modify file" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({ decision: "accept" });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "approval_auto_approved" &&
+            e.protocolMethod === "item/fileChange/requestApproval",
+        ),
+      ).toBe(true);
+    });
+
+    it("legacy command approval (execCommandApproval) 在 never policy 下返回 approved", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "legacy-command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "legacy command" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({ decision: "approved" });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "approval_auto_approved" &&
+            e.protocolMethod === "execCommandApproval",
+        ),
+      ).toBe(true);
+    });
+
+    it("legacy file change approval (applyPatchApproval) 在 never policy 下返回 approved", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "legacy-file-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "legacy patch" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({ decision: "approved" });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "approval_auto_approved" &&
+            e.protocolMethod === "applyPatchApproval",
+        ),
+      ).toBe(true);
+    });
+
+    it("数字类型 request ID 原样回复，不被类型转换破坏", async () => {
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "command-approval",
+          "--server-request-id-type",
+          "number",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "numeric id approval" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.id).toBe(101);
+      expect(wireResp?.response?.result).toEqual({ decision: "accept" });
+    });
+
+    it("畸形 legacy command approval (execCommandApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-legacy-command-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed legacy command" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for execCommandApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid legacy approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "execCommandApproval",
+        ),
+      ).toBe(true);
+    });
+
+    it("畸形 legacy file change approval (applyPatchApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-legacy-file-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed legacy file" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for applyPatchApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid legacy approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "applyPatchApproval",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("验收 2: 非 never 审批请求拒绝并不 hang，稳定失败", () => {
+    it("string 策略 (on-request) 拒绝请求并以 approval_required 终结", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "on-request",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      let caught: unknown = null;
+      try {
+        await session.startTurn({ text: "command under on-request" });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(AgentError);
+      expect((caught as AgentError).code).toBe("approval_required");
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({ decision: "decline" });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "turn_ended_with_error" &&
+            e.protocolMethod === "item/commandExecution/requestApproval",
+        ),
+      ).toBe(true);
+
+      // 验证后续不能再开启新 turn
+      await expect(session.startTurn({ text: "turn after fatal" })).rejects.toThrow(
+        /Cannot start a new turn/,
+      );
+    });
+
+    it("object / null / 缺省 policy 绝不推断为 never", async () => {
+      // 1. object policy
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: { granular: { command: "never" } },
+      });
+      await expect(session.startTurn({ text: "object policy" })).rejects.toMatchObject({
+        code: "approval_required",
+      });
+      await session.stop();
+      session = null;
+
+      // 2. null policy
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: null,
+      });
+      await expect(session.startTurn({ text: "null policy" })).rejects.toMatchObject({
+        code: "approval_required",
+      });
+      await session.stop();
+      session = null;
+
+      // 3. 缺省 (undefined) policy
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+      });
+      await expect(session.startTurn({ text: "undefined policy" })).rejects.toMatchObject({
+        code: "approval_required",
+      });
+    });
+
+    it("legacy command approval 在非 never 下回复 abort 并报告 approval_required", async () => {
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "legacy-command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "on-request",
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "legacy abort" })).rejects.toMatchObject({
+        code: "approval_required",
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({ decision: "abort" });
+    });
+
+    it("item/permissions/requestApproval 即便在 never 下也不自动同意，返回 error 并失败", async () => {
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "permissions-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "permissions req" })).rejects.toMatchObject({
+        code: "approval_required",
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32000);
+    });
+
+    it("畸形 item/permissions/requestApproval 参数回包 -32602，发射 malformed 并以 protocol_error 失败", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "invalid-permissions-params",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "malformed permissions" })).rejects.toMatchObject({
+        code: "protocol_error",
+        message: expect.stringContaining("Malformed params for item/permissions/requestApproval"),
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+      expect(wireResp?.response?.error?.message).toBe("Invalid permissions approval params");
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "malformed" &&
+            e.protocolMethod === "item/permissions/requestApproval",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("验收 3: 人工输入请求不 hang，稳定失败", () => {
+    it("item/tool/requestUserInput 返回 error 并在本地失败为 turn_input_required", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "user-input"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      let caught: unknown = null;
+      try {
+        await session.startTurn({ text: "ask input" });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(AgentError);
+      expect((caught as AgentError).code).toBe("turn_input_required");
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32000);
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "turn_input_required" &&
+            e.protocolMethod === "item/tool/requestUserInput",
+        ),
+      ).toBe(true);
+    });
+
+    it("mcpServer/elicitation/request 返回 cancel 响应并在本地失败为 turn_input_required", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "mcp-elicitation"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "mcp form" })).rejects.toMatchObject({
+        code: "turn_input_required",
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({
+        action: "cancel",
+        content: null,
+        _meta: null,
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "turn_input_required" &&
+            e.protocolMethod === "mcpServer/elicitation/request",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("验收 4: unsupported dynamic tool call 返回 structured failure 并继续 session", () => {
+    it("item/tool/call 返回 success: false 与 contentItems，turn 顺利完成且后续 turn 可执行", async () => {
+      const events: AgentEvent[] = [];
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--multi-turn-tool"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      // Turn 1 收到 dynamic tool call
+      const outcome1 = await session.startTurn({ text: "run dynamic tool" });
+      expect(outcome1.turnId).toBe("turn-test-uuid-1");
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.result).toEqual({
+        success: false,
+        contentItems: [{ type: "inputText", text: "Unsupported tool" }],
+      });
+
+      expect(
+        events.some(
+          (e) =>
+            e.event === "unsupported_tool_call" &&
+            e.protocolMethod === "item/tool/call",
+        ),
+      ).toBe(true);
+
+      // 验证 turn 1 成功完成了
+      expect(events.some((e) => e.event === "turn_completed" && e.turnId === "turn-test-uuid-1")).toBe(
+        true,
+      );
+
+      // Turn 2 依然能正常执行并在同一个 session 上完成
+      const outcome2 = await session.startTurn({ text: "second normal turn" });
+      expect(outcome2.turnId).toBe("turn-test-uuid-2");
+      expect(events.some((e) => e.event === "turn_completed" && e.turnId === "turn-test-uuid-2")).toBe(
+        true,
+      );
+    });
+  });
+
+  describe("验收 5: usage 与 rate-limit 遥测提取", () => {
+    it("thread/tokenUsage/updated 提取 total 快照，不累加、不填零", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--send-usage"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await session.startTurn({ text: "run with usage" });
+
+      const usageEvent = events.find(
+        (e) => e.event === "notification" && e.protocolMethod === "thread/tokenUsage/updated",
+      );
+      expect(usageEvent).toBeDefined();
+      expect(usageEvent?.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+      });
+      // 验证未把 last 混入 total
+      expect(usageEvent?.usage?.inputTokens).not.toBe(20);
+    });
+
+    it("非法 usage 字段记录 malformed 事件，不填零且不破坏正常 turn", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--send-invalid-usage"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const outcome = await session.startTurn({ text: "run with bad usage" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const malformed = events.find(
+        (e) => e.event === "malformed" && e.protocolMethod === "thread/tokenUsage/updated",
+      );
+      expect(malformed).toBeDefined();
+
+      // turn 依然成功完成
+      expect(events.some((e) => e.event === "turn_completed")).toBe(true);
+    });
+
+    it("account/rateLimits/updated 提取 opaque 快照，account 级不强加 turn 身份", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--send-rate-limits"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      await session.startTurn({ text: "run with rate limits" });
+
+      const rateLimitEvent = events.find(
+        (e) => e.event === "notification" && e.protocolMethod === "account/rateLimits/updated",
+      );
+      expect(rateLimitEvent).toBeDefined();
+      expect(rateLimitEvent?.rateLimits).toBeDefined();
+      expect((rateLimitEvent?.rateLimits as Record<string, unknown>).limitId).toBe("lim-1");
+
+      // account 级限流不强加 turnId 与 sessionId
+      expect("turnId" in (rateLimitEvent ?? {})).toBe(false);
+      expect("sessionId" in (rateLimitEvent ?? {})).toBe(false);
+    });
+  });
+
+  describe("验收 6: malformed / notification / other-message 不污染正常关联", () => {
+    it("坏 JSON 行被记录为 malformed，协议恢复后 turn 仍正常完成", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--send-malformed-line"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const outcome = await session.startTurn({ text: "turn with bad json line" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      expect(events.some((e) => e.event === "malformed")).toBe(true);
+      expect(events.some((e) => e.event === "turn_completed")).toBe(true);
+    });
+
+    it("未知 response ID 报告为 other_message，不影响正常 pending 关联", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--send-unknown-response"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const outcome = await session.startTurn({ text: "turn with unexpected response" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      expect(events.some((e) => e.event === "other_message")).toBe(true);
+      expect(events.some((e) => e.event === "turn_completed")).toBe(true);
+    });
+
+    it("approval request 参数非法时返回 invalid-params (-32602) 并以 protocol_error 终结", async () => {
+      const inspected: WireInspectorItem[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "invalid-approval-params"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onNotification: (notification) => {
+          if (notification.method === "test/wireInspector") {
+            inspected.push(notification.params as WireInspectorItem);
+          }
+        },
+      });
+
+      await expect(session.startTurn({ text: "bad approval params" })).rejects.toMatchObject({
+        code: "protocol_error",
+      });
+
+      await waitFor(() => inspected.some((item) => item.step === "server_response"));
+      const wireResp = inspected.find((item) => item.step === "server_response");
+      expect(wireResp?.response?.error?.code).toBe(-32602);
+    });
+  });
+
+  describe("验收 7: 时序、早到请求与生命周期收敛", () => {
+    it("completion 早于 start response：有界暂存并在取得身份后先发 session_started 再发终态事件", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--early-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const outcome = await session.startTurn({ text: "early completed turn" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      const turnStartedIdx = events.findIndex(
+        (e) => e.event === "session_started" && e.turnId === "turn-test-uuid-1",
+      );
+      const turnCompletedIdx = events.findIndex(
+        (e) => e.event === "turn_completed" && e.turnId === "turn-test-uuid-1",
+      );
+
+      expect(turnStartedIdx).toBeGreaterThanOrEqual(0);
+      expect(turnCompletedIdx).toBeGreaterThan(turnStartedIdx);
+    });
+
+    it("异 thread / 异 turn completion 夹入不影响当前 turn 结算", async () => {
+      const events: AgentEvent[] = [];
+
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--interleaved-other-completed"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const outcome = await session.startTurn({ text: "interleaved completion" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+
+      // 异 thread / 异 turn 的 completion 发送了 other_message
+      expect(
+        events.some(
+          (e) =>
+            e.event === "other_message" &&
+            e.protocolMethod === "turn/completed",
+        ),
+      ).toBe(true);
+
+      // 当前匹配的 turn 仍正常 completed
+      expect(events.some((e) => e.event === "turn_completed" && e.turnId === "turn-test-uuid-1")).toBe(
+        true,
+      );
+    });
+
+    it("在等待 turn/start 响应期间发生 fatal request：外部 Promise 立即失败不挂起", async () => {
+      session = await startAppServerSession({
+        command: appServerFixtureCommand([
+          "--server-request",
+          "user-input",
+          "--server-request-timing",
+          "before-start-response",
+        ]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+      });
+
+      // startTurn 会在等待 turn/start response 期间收到 user-input，必须立即失败
+      await expect(session.startTurn({ text: "early fatal request" })).rejects.toMatchObject({
+        code: "turn_input_required",
+      });
+    });
+
+    it("listener 抛出异常不破坏 session 执行与回复", async () => {
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(["--server-request", "command-approval"]),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        approvalPolicy: "never",
+        onEvent: () => {
+          throw new Error("listener crashed");
+        },
+      });
+
+      const outcome = await session.startTurn({ text: "throwing listener" });
+      expect(outcome.turnId).toBe("turn-test-uuid-1");
+    });
+
+    it("thread 启动阶段只发射 session_started (不带 turnId)，启动失败发射 startup_failed", async () => {
+      const events: AgentEvent[] = [];
+
+      // 1. 成功启动
+      session = await startAppServerSession({
+        command: appServerFixtureCommand(),
+        workspacePath: fixture.workspacePath,
+        workspacePathSafety: fixture.manager,
+        onEvent: (event) => events.push(event),
+      });
+
+      const threadStarted = events.find(
+        (e) => e.event === "session_started" && e.threadId === "thread-test-uuid-1",
+      );
+      expect(threadStarted).toBeDefined();
+      expect("turnId" in (threadStarted ?? {})).toBe(false);
+      expect("sessionId" in (threadStarted ?? {})).toBe(false);
+
+      await session.stop();
+      session = null;
+      events.length = 0;
+
+      // 2. 失败启动
+      await expect(
+        startAppServerSession({
+          command: "node nonexistent-test-binary-12345.mjs",
+          workspacePath: fixture.workspacePath,
+          workspacePathSafety: fixture.manager,
+          onEvent: (event) => events.push(event),
+        }),
+      ).rejects.toThrow();
+
+      expect(events.some((e) => e.event === "startup_failed")).toBe(true);
+    });
+  });
+});
+

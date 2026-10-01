@@ -140,7 +140,8 @@ daemon 启动命令、并发 / 沙箱限制等由 `@symphony/config` 产出的 t
 
 ## Known limitations
 
-- **M4.4 尚未落地**：`ServerRequest` 的 approval / user-input 裁决（本包只提供 `respondToServerRequest` 管道，未应答的 server request 会一直悬挂到 `stop()`）与 `turn/*` → `AgentEvent` 映射属 M4.4；runner 组合与 prompt / hooks / continuation 执行属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
+- **M4.4 已落地**：`ServerRequest` 的 approval（v2 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 与 legacy `execCommandApproval`、`applyPatchApproval`）在 `approvalPolicy === "never"` 下自动同意（并产生 `approval_auto_approved` 事件），非 `never` 下拒绝并不 hang（稳定抛 `approval_required`）；人工输入与 elicitation 明确失败并报告 `turn_input_required`；unsupported dynamic tool call 返回 structured failure 且不终止 session；遥测抽取（`thread/tokenUsage/updated` total snapshot、`account/rateLimits/updated` 快照）与 12 种 `AgentEvent` 稳定发射。
+- **M4.5 尚未落地**：runner 组合与 prompt / hooks / continuation 执行与 `agent.max_turns` 强制属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
 - **bash 的 "command not found"（exit 127）不在本层判定**：`launchTransport` 只在 spawn 失败时报 `launch_failed`，shell 已起来但命令不存在属于协议 / 进程错误分类问题，留 M4.5 —— 因此 `codex_not_found` 目前还没有产生它的代码路径。
 - `readTimeoutMs` / `turnTimeoutMs` / `maxProtocolLineBytes` / `shutdownTimeoutMs` 目前**逐次传入**（`ServiceConfig.codex` 到这里的接线随 M4.5 组合根落地）；stall 检测不属本层。
 - 事件名表、`AgentEvent` 字段与 error code 是**本次冻结**的基线：M4.4 的映射若发现某个 §10.4 名字无法从 pinned protocol 状态里判定，按"协议优先"原则回来改这份契约，而不是在 adapter 里私加对外字段。
