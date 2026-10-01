@@ -17,6 +17,9 @@ import type { Transport } from "../src/transport";
 /** fixture 子进程脚本（与 harness 同目录）。 */
 export const FIXTURE_PATH = fileURLToPath(new URL("./echo-server.mjs", import.meta.url));
 
+/** M4.3 app-server fixture 子进程脚本（与 harness 同目录）。 */
+export const APP_SERVER_FIXTURE_PATH = fileURLToPath(new URL("./app-server.mjs", import.meta.url));
+
 /** shell 层引用一个路径：单引号包裹，内部单引号按 `'\''` 转义。 */
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -30,6 +33,21 @@ export function fixtureCommand(extraArgs: readonly string[] = []): string {
   return [
     shellQuote(process.execPath),
     shellQuote(FIXTURE_PATH),
+    "--cwd",
+    '"$(pwd)"',
+    "--bash",
+    '"$BASH_VERSION"',
+    ...extraArgs.map(shellQuote),
+  ].join(" ");
+}
+
+/**
+ * 构造 M4.3 app-server fixture 的 `codex.command` 字符串。
+ */
+export function appServerFixtureCommand(extraArgs: readonly string[] = []): string {
+  return [
+    shellQuote(process.execPath),
+    shellQuote(APP_SERVER_FIXTURE_PATH),
     "--cwd",
     '"$(pwd)"',
     "--bash",

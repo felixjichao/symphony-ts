@@ -4,7 +4,7 @@
 
 SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt Construction and Context Assembly** 的 owner 包，对应 §3 的 Agent Runner：组装注入 issue 上下文的 prompt、启动 coding agent 子进程（如 Codex app-server client）、把 live session 事件（token 消耗、turn 进度、PID）向上转发。**修改 Codex app-server 交互的唯一落点在本包。**
 
-当前状态：**M4.1（#37）已落地契约层**——pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约。**M4.2（#38）已落地 transport / launch 内核**——`bash -lc <codex.command>` 的真实子进程 launch、含 workspace cwd 校验的 launch 边界、JSON-RPC 2.0 over NDJSON 的 framing / request-id 关联 / read timeout / stderr 分流 / 有界关停（均为 Codex 业务无关，见下节）。**尚未落地**：initialize / thread / turn 生命周期、server request 的 approval 裁决、`turn/*` → `AgentEvent` 映射、prompt 组装（进度见 [docs/conformance.md](../../docs/conformance.md)）。
+当前状态：**M4.1（#37）已落地契约层**——pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约。**M4.2（#38）已落地 transport / launch 内核**——`bash -lc <codex.command>` 的真实子进程 launch、含 workspace cwd 校验的 launch 边界、JSON-RPC 2.0 over NDJSON 的 framing / request-id 关联 / read timeout / stderr 分流 / 有界关停。**M4.3（#39）已落地 Codex app-server live session 生命周期**——`initialize` → `initialized` → `thread/start` → `turn/start` → `turn/completed`，thread/turn/session 身份抽取、workspace cwd 绑定、policy 映射、turn silence timeout、基于 `turn.status` 的完成判定与多 turn 复用。**尚未落地**：server request 的 approval / user-input 裁决与 `turn/*` → `AgentEvent` 映射（M4.4）、prompt 组装与 continuation 执行（M4.5，进度见 [docs/conformance.md](../../docs/conformance.md)）。
 
 ## Codex 协议基线
 
@@ -37,7 +37,7 @@ SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt
 | `threadSandbox` | `SandboxMode` = 纯 string 联合 | `thread/start.sandbox` |
 | `turnSandboxPolicy` | `SandboxPolicy` = 以 `"type"` 判别的 tagged object（`workspaceWrite` 带 `writableRoots: string[]` 等） | `turn/start.sandboxPolicy` |
 | `command` | —（SPEC §5.3.6 / §10.1） | `bash -lc <codex.command>`，cwd = workspace path（M4.2 已落地，见上面 transport / launch 一节） |
-| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | 读侧 `readTimeoutMs` 已由 M4.2 transport 落地（per-launch effective 值）；turn / stall 计时是 orchestrator 侧，属 M5 |
+| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | 读侧 `readTimeoutMs` 已由 M4.2 transport 落地；turn silence 超时 `turnTimeoutMs` 已由 M4.3 session 落地；stall 计时是 orchestrator 侧，属 M5 |
 
 形状证据只摘录这三条 type 表达式（完整 schema 一律回 pinned commit，本包不复制、不手维枚举）：
 
@@ -86,7 +86,7 @@ env 面是**显式注入 `env` + 通用 `excludeEnvNames` 名单**（`excludeEnv
 
 验收用真实 fixture 子进程 `test-fixtures/echo-server.mjs`（由 `bash -lc` 启动，自行回报 `process.cwd()` / `argv` / `pid` / `$BASH_VERSION` / env），method 一律是虚构的 `test/*` —— **这个文件里出现真实 Codex method 就意味着分层被写穿了**。分层与备选见 [Agent Note](../../notes/accepted/architecture/2026-10-01-agent-transport-kernel-and-launch-boundary.md)。
 
-## Public API（M4.1 契约层 + M4.2 类型面）
+## Public API（M4.1 契约层 + M4.2 类型面 + M4.3 Session 面）
 
 唯一出口 `src/index.ts`。三个面都是 **Symphony-facing**：M5 / orchestrator / observability 只 import 它们，不需要（也不应该）解释 raw Codex JSON。
 
@@ -101,6 +101,12 @@ import {
   type ContinuationDecider,
   type ContinuationDecision,
   type TurnCompletedContext,
+  startAppServerSession,
+  DEFAULT_TURN_TIMEOUT_MS,
+  type AppServerSession,
+  type AppServerSessionOptions,
+  type TurnCompletedOutcome,
+  type WorkspacePathSafetyGate,
 } from "@symphony/agent";
 ```
 
@@ -134,9 +140,9 @@ daemon 启动命令、并发 / 沙箱限制等由 `@symphony/config` 产出的 t
 
 ## Known limitations
 
-- **M4.2 只有内核，没有 Codex 语义**：`NdjsonTransport` 只做 envelope 分类，`initialize` / `thread/start` / `turn/start` 的 payload 与生命周期属 M4.3；`ServerRequest` 的 approval / user-input 裁决（本包只提供 `respondToServerRequest` 管道，未应答的 server request 会一直悬挂到 `stop()`）与 `turn/*` → `AgentEvent` 映射属 M4.4；runner 组合与 prompt / hooks / continuation 执行属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
-- **bash 的 "command not found"（exit 127）不在 M4.2 判定**：`launchTransport` 只在 spawn 失败时报 `launch_failed`，shell 已起来但命令不存在属于协议 / 进程错误分类问题，留 M4.5 —— 因此 `codex_not_found` 目前还没有产生它的代码路径。
-- `readTimeoutMs` / `maxProtocolLineBytes` / `shutdownTimeoutMs` 目前**逐次 launch 传入**（`ServiceConfig.codex.read_timeout_ms` 到这里的接线随 M4.3 组合根落地）；turn 级超时与 stall 检测不属本层。
+- **M4.4 尚未落地**：`ServerRequest` 的 approval / user-input 裁决（本包只提供 `respondToServerRequest` 管道，未应答的 server request 会一直悬挂到 `stop()`）与 `turn/*` → `AgentEvent` 映射属 M4.4；runner 组合与 prompt / hooks / continuation 执行属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
+- **bash 的 "command not found"（exit 127）不在本层判定**：`launchTransport` 只在 spawn 失败时报 `launch_failed`，shell 已起来但命令不存在属于协议 / 进程错误分类问题，留 M4.5 —— 因此 `codex_not_found` 目前还没有产生它的代码路径。
+- `readTimeoutMs` / `turnTimeoutMs` / `maxProtocolLineBytes` / `shutdownTimeoutMs` 目前**逐次传入**（`ServiceConfig.codex` 到这里的接线随 M4.5 组合根落地）；stall 检测不属本层。
 - 事件名表、`AgentEvent` 字段与 error code 是**本次冻结**的基线：M4.4 的映射若发现某个 §10.4 名字无法从 pinned protocol 状态里判定，按"协议优先"原则回来改这份契约，而不是在 adapter 里私加对外字段。
 - 文档里的三条 Codex type 表达式是**证据摘录**，随基线升级需重新核对；不要在代码或类型里复制它们。
 - 边界约束：**不拥有 scheduler / retry policy / tracker eligibility**——coordination 属 `@symphony/orchestrator`。
