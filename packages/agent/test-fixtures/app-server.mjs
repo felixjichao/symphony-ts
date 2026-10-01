@@ -306,6 +306,20 @@ rl.on("line", (line) => {
 
   switch (method) {
     case "initialize": {
+      if (args["silent-init"]) {
+        return;
+      }
+      if (args["delay-init-ms"]) {
+        setTimeout(() => {
+          respond(id, {
+            userAgent: "codex-app-server/0.159.2 (test-fixture)",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "linux",
+          });
+        }, Number.parseInt(args["delay-init-ms"], 10) || 0);
+        return;
+      }
       if (args["invalid-init"]) {
         respond(id, {});
         return;

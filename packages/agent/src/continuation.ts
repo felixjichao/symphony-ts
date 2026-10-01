@@ -113,30 +113,40 @@ export async function executeContinuationDecider(
     signal: controller.signal,
   };
 
+  let deciderPromise: Promise<ContinuationDecision>;
   try {
-    const decision = await Promise.race([
-      decider(fullContext).then(
-        (res) => {
-          if (settled) {
-            return null as unknown as ContinuationDecision;
-          }
-          return res;
-        },
-        (err) => {
-          if (settled) {
-            // 迟到的 reject 吞掉，避免触发 Node.js unhandled rejection
-            return null as unknown as ContinuationDecision;
-          }
-          throw err;
-        },
-      ),
-      timeoutPromise,
-    ]);
+    deciderPromise = Promise.resolve(decider(fullContext));
+  } catch (syncErr) {
+    deciderPromise = Promise.reject(syncErr);
+  }
 
-    settled = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
+  const safeDeciderPromise = deciderPromise.then(
+    (res) => {
+      if (settled) {
+        return null as unknown as ContinuationDecision;
+      }
+      return res;
+    },
+    (err) => {
+      if (settled) {
+        // 迟到的 reject 吞掉，避免触发 Node.js unhandled rejection
+        return null as unknown as ContinuationDecision;
+      }
+      throw new AgentError(
+        "continuation_failed",
+        `Continuation decider threw an error: ${err instanceof Error ? err.message : String(err)}`,
+        {
+          cause: err,
+          threadId: context.threadId,
+          turnId: context.turnId,
+          sessionId: composeSessionId(context.threadId, context.turnId),
+        },
+      );
+    },
+  );
+
+  try {
+    const decision = await Promise.race([safeDeciderPromise, timeoutPromise]);
 
     if (typeof decision !== "object" || decision === null || !("kind" in decision)) {
       throw new AgentError(
@@ -193,23 +203,10 @@ export async function executeContinuationDecider(
         sessionId: composeSessionId(context.threadId, context.turnId),
       },
     );
-  } catch (error) {
+  } finally {
     settled = true;
     if (timer !== undefined) {
       clearTimeout(timer);
     }
-    if (error instanceof AgentError) {
-      throw error;
-    }
-    throw new AgentError(
-      "continuation_failed",
-      `Continuation decider threw an error: ${error instanceof Error ? error.message : String(error)}`,
-      {
-        cause: error,
-        threadId: context.threadId,
-        turnId: context.turnId,
-        sessionId: composeSessionId(context.threadId, context.turnId),
-      },
-    );
   }
 }

@@ -56,7 +56,7 @@ Status: accepted
 
 正面：
 - SPEC §10.7、§12、§16.5 规定的 Agent Runner 组装、prompt 渲染、continuation 机制与 turn 预算完全落地。
-- 交付并通过全套 14 个专用验收测试（`agent-runner.test.ts`），包内 111 个用例全绿。
+- 交付并通过全套 18 个专用验收测试（`agent-runner.test.ts`），包内 115 个用例全绿。
 - AST 级别断言持续守卫架构边界，保持 `agent → domain + config + workspace` 依赖方向。
 
 负面与后续承诺：

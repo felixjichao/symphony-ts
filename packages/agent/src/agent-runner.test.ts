@@ -30,10 +30,14 @@ import type {
 } from "@symphony/domain";
 import type { WorkspaceHookEvent } from "@symphony/workspace";
 
-import { runAgentAttempt } from "./agent-runner";
-import { DEFAULT_CONTINUATION_GUIDANCE, type ContinuationDecider } from "./continuation";
-import { AgentError } from "./errors";
-import type { AgentEvent } from "./events";
+import {
+  AgentError,
+  DEFAULT_CONTINUATION_GUIDANCE,
+  executeContinuationDecider,
+  runAgentAttempt,
+  type AgentEvent,
+  type ContinuationDecider,
+} from "./index";
 import { appServerFixtureCommand, isProcessAlive, waitFor } from "../test-fixtures/harness";
 
 describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive", () => {
@@ -275,10 +279,11 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       const afterCreateMarker = path.join(tempDir, "after-create.count");
       const afterRunMarker = path.join(tempDir, "after-run.count");
       const startupPidFile = path.join(tempDir, "child.pid");
+      const pidStatusFile = path.join(tempDir, "pid-status-during-after-run.txt");
 
       const { getConfig } = createConfig(["--record-startup", startupPidFile], {
         afterCreate: `echo "create" >> "${afterCreateMarker}"`,
-        afterRun: `echo "run" >> "${afterRunMarker}"`,
+        afterRun: `echo "run" >> "${afterRunMarker}"; PID=$(cat "${startupPidFile}"); if kill -0 "$PID" 2>/dev/null; then echo "ALIVE" > "${pidStatusFile}"; else echo "STOPPED" > "${pidStatusFile}"; fi`,
       });
 
       const issue = createIssue({ identifier: "SYM-REUSE" });
@@ -298,7 +303,10 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
 
       expect(result1.stopReason).toBe("decider_stop");
 
-      // 验证 PID 记录已产生，且进程已经退出
+      // 验证 PID 记录已产生，且在 after_run 执行时子进程就已经被 stop
+      const pidStatusDuringHook = (await fs.readFile(pidStatusFile, "utf8")).trim();
+      expect(pidStatusDuringHook).toBe("STOPPED");
+
       const pidStr = (await fs.readFile(startupPidFile, "utf8")).trim();
       const pid = Number.parseInt(pidStr, 10);
       expect(Number.isFinite(pid)).toBe(true);
@@ -334,6 +342,41 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       const runCount2 = (await fs.readFile(afterRunMarker, "utf8")).trim().split("\n").length;
       expect(createCount2).toBe(1);
       expect(runCount2).toBe(2);
+    });
+
+    it("正常 attempt 成功但在 after_run hook 失败（exit non-zero）时，结果仍正常返回且不被覆盖", async () => {
+      const hookEvents: WorkspaceHookEvent[] = [];
+      const startupPidFile = path.join(tempDir, "child-afterrun-fail.pid");
+      const { getConfig } = createConfig(["--record-startup", startupPidFile], {
+        afterRun: "exit 42",
+      });
+
+      const issue = createIssue();
+      const workflow: WorkflowDefinition = {
+        config: {},
+        promptTemplate: "Do {{ issue.identifier }}",
+      };
+
+      const result = await runAgentAttempt({
+        issue,
+        attempt: 1,
+        workflow,
+        workflowPath: path.join(tempDir, "WORKFLOW.md"),
+        getConfig,
+        onHookEvent: (evt) => hookEvents.push(evt),
+      });
+
+      // attempt 结果未被覆盖，正常返回
+      expect(result.stopReason).toBe("decider_stop");
+      expect(result.turnCount).toBe(1);
+
+      // after_run 的失败通过 onHookEvent 暴露
+      expect(hookEvents.some((e) => e.hook === "after_run" && e.outcome === "failed")).toBe(true);
+
+      // 子进程依然已退出
+      const pidStr = (await fs.readFile(startupPidFile, "utf8")).trim();
+      const pid = Number.parseInt(pidStr, 10);
+      expect(await waitFor(() => !isProcessAlive(pid), 3_000)).toBe(true);
     });
   });
 
@@ -413,16 +456,21 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       expect(hookEvents.some((e) => e.hook === "after_run" && e.outcome === "failed")).toBe(true);
     });
 
-    it("turn silence timeout 执行 after_run，抛出 turn_timeout", async () => {
+    it("turn silence timeout 执行 after_run，抛出 turn_timeout，且子进程 PID 已终止", async () => {
       const afterRunMarker = path.join(tempDir, "after-run.marker");
+      const startupPidFile = path.join(tempDir, "child-turn-timeout.pid");
       const { getConfig } = createConfig(
-        ["--silent-turn"],
+        ["--silent-turn", "--record-startup", startupPidFile],
         {
           afterRun: `echo "after_run_on_turn_timeout" > "${afterRunMarker}"`,
         },
         {
           codex: {
-            command: appServerFixtureCommand(["--silent-turn"]),
+            command: appServerFixtureCommand([
+              "--silent-turn",
+              "--record-startup",
+              startupPidFile,
+            ]),
             approvalPolicy: "never",
             threadSandbox: null,
             turnSandboxPolicy: null,
@@ -457,6 +505,113 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
 
       const afterRunContent = await fs.readFile(afterRunMarker, "utf8");
       expect(afterRunContent.trim()).toBe("after_run_on_turn_timeout");
+
+      // 验证失败后子进程完全退出
+      const pidStr = (await fs.readFile(startupPidFile, "utf8")).trim();
+      const pid = Number.parseInt(pidStr, 10);
+      expect(await waitFor(() => !isProcessAlive(pid), 3_000)).toBe(true);
+    });
+
+    it("before_run timeout 阻止子进程启动，抛出 hook_timeout，且 after_run 执行", async () => {
+      const startupMarker = path.join(tempDir, "child-never-started.marker");
+      const afterRunMarker = path.join(tempDir, "after-run-on-before-run-timeout.marker");
+      const { getConfig } = createConfig(
+        ["--record-startup", startupMarker],
+        {
+          beforeRun: "sleep 10",
+          afterRun: `echo "after_run_executed" > "${afterRunMarker}"`,
+          timeoutMs: 150,
+        },
+      );
+
+      const issue = createIssue();
+      const workflow: WorkflowDefinition = {
+        config: {},
+        promptTemplate: "Do {{ issue.identifier }}",
+      };
+
+      let thrownError: unknown;
+      try {
+        await runAgentAttempt({
+          issue,
+          attempt: 1,
+          workflow,
+          workflowPath: path.join(tempDir, "WORKFLOW.md"),
+          getConfig,
+        });
+      } catch (err) {
+        thrownError = err;
+      }
+
+      expect(thrownError).toBeDefined();
+      expect((thrownError as { code?: string }).code).toBe("hook_timeout");
+
+      let childStarted = false;
+      try {
+        await fs.stat(startupMarker);
+        childStarted = true;
+      } catch {
+        childStarted = false;
+      }
+      expect(childStarted).toBe(false);
+
+      const afterRunContent = await fs.readFile(afterRunMarker, "utf8");
+      expect(afterRunContent.trim()).toBe("after_run_executed");
+    });
+
+    it("startup read timeout 抛出 read_timeout，执行 after_run，且子进程 PID 已终止", async () => {
+      const afterRunMarker = path.join(tempDir, "after-run-startup-timeout.marker");
+      const startupPidFile = path.join(tempDir, "startup-timeout-child.pid");
+      const { getConfig } = createConfig(
+        ["--silent-init", "--record-startup", startupPidFile],
+        {
+          afterRun: `echo "after_run_on_startup_timeout" > "${afterRunMarker}"`,
+        },
+        {
+          codex: {
+            command: appServerFixtureCommand([
+              "--silent-init",
+              "--record-startup",
+              startupPidFile,
+            ]),
+            approvalPolicy: "never",
+            threadSandbox: null,
+            turnSandboxPolicy: null,
+            readTimeoutMs: 150, // 短 read timeout
+            turnTimeoutMs: 5_000,
+            stallTimeoutMs: 10_000,
+          },
+        },
+      );
+
+      const issue = createIssue();
+      const workflow: WorkflowDefinition = {
+        config: {},
+        promptTemplate: "Do {{ issue.identifier }}",
+      };
+
+      let thrownError: unknown;
+      try {
+        await runAgentAttempt({
+          issue,
+          attempt: 1,
+          workflow,
+          workflowPath: path.join(tempDir, "WORKFLOW.md"),
+          getConfig,
+        });
+      } catch (err) {
+        thrownError = err;
+      }
+
+      expect(thrownError).toBeInstanceOf(AgentError);
+      expect((thrownError as AgentError).code).toBe("response_timeout");
+
+      const afterRunContent = await fs.readFile(afterRunMarker, "utf8");
+      expect(afterRunContent.trim()).toBe("after_run_on_startup_timeout");
+
+      const pidStr = (await fs.readFile(startupPidFile, "utf8")).trim();
+      const pid = Number.parseInt(pidStr, 10);
+      expect(await waitFor(() => !isProcessAlive(pid), 3_000)).toBe(true);
     });
   });
 
@@ -723,19 +878,38 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       expect(lateSettled).toBe(true);
     });
 
-    it("换不同 state/labels 的同 ID 快照，agent 只服从 decision，不自行做状态过滤", async () => {
-      const { getConfig } = createConfig();
-      const issue = createIssue({ id: "same-id", state: "Open", labels: ["l1"] });
+    it("换不同 state/labels/dispatchable 的同 ID 快照，agent 照常发起续轮并将刷新快照透传到后续 context", async () => {
+      const transcriptFile = path.join(tempDir, "transcript.jsonl");
+      const { getConfig } = createConfig(["--record-transcript", transcriptFile]);
+      const issue = createIssue({
+        id: "same-id",
+        identifier: "NEST-SNAPSHOT",
+        state: "Open",
+        labels: ["initial"],
+        dispatchable: true,
+      });
       const workflow: WorkflowDefinition = {
         config: {},
-        promptTemplate: "State check",
+        promptTemplate: "Resolve {{ issue.identifier }}",
       };
 
-      // 无论快照变成 Closed、Archived 或任何非法 label，agent 都不做过滤
-      const decider: ContinuationDecider = async (_ctx) => {
-        return {
-          kind: "stop",
-        };
+      const observedContextIssues: Issue[] = [];
+      const decider: ContinuationDecider = async (ctx) => {
+        observedContextIssues.push(ctx.issue);
+        if (ctx.turnCount === 1) {
+          // 第 1 轮返回已变成 Closed / 缺失 label / dispatchable=false 的刷新快照
+          return {
+            kind: "continue",
+            issue: {
+              ...ctx.issue,
+              state: "Closed",
+              labels: ["arbitrary-unmatched-label"],
+              dispatchable: false,
+            },
+          };
+        }
+        // 第 2 轮 stop
+        return { kind: "stop" };
       };
 
       const result = await runAgentAttempt({
@@ -748,6 +922,90 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       });
 
       expect(result.stopReason).toBe("decider_stop");
+      expect(result.turnCount).toBe(2);
+
+      // 第 1 轮 context 看到原始 issue 快照
+      expect(observedContextIssues[0]?.state).toBe("Open");
+      expect(observedContextIssues[0]?.labels).toEqual(["initial"]);
+      expect(observedContextIssues[0]?.dispatchable).toBe(true);
+
+      // 第 2 轮 context 成功收到续轮返回的刷新快照，未被 agent runner 过滤或丢弃
+      expect(observedContextIssues[1]?.state).toBe("Closed");
+      expect(observedContextIssues[1]?.labels).toEqual(["arbitrary-unmatched-label"]);
+      expect(observedContextIssues[1]?.dispatchable).toBe(false);
+
+      // 核对 transcript：第 2 轮请求已发出，且携带标准续轮 guidance
+      const lines = (await fs.readFile(transcriptFile, "utf8")).trim().split("\n");
+      const msgs = lines.map(
+        (l) => JSON.parse(l) as { method?: string; params?: Record<string, unknown> },
+      );
+      const turnStarts = msgs.filter((m) => m.method === "turn/start");
+      expect(turnStarts).toHaveLength(2);
+      const input2 = (turnStarts[1]?.params?.input as Array<{ text: string }>)?.[0];
+      expect(input2?.text).toBe(DEFAULT_CONTINUATION_GUIDANCE);
+    });
+
+    it("外部 decider 抛出 AgentError 被统一包装为 continuation_failed 并保留 cause（公共 API probe 回归）", async () => {
+      const { getConfig } = createConfig();
+      const issue = createIssue();
+      const workflow: WorkflowDefinition = {
+        config: {},
+        promptTemplate: "Do {{ issue.identifier }}",
+      };
+
+      const injectedError = new AgentError("response_timeout", "tracker refresh HTTP timeout", {
+        protocolMethod: "issue/get",
+      });
+
+      let thrownError: unknown;
+      try {
+        await runAgentAttempt({
+          issue,
+          attempt: 1,
+          workflow,
+          workflowPath: path.join(tempDir, "WORKFLOW.md"),
+          getConfig,
+          continuationDecider: async () => {
+            throw injectedError;
+          },
+        });
+      } catch (err) {
+        thrownError = err;
+      }
+
+      // 验证收到的并非透传的 response_timeout，而是统一包装的 continuation_failed
+      expect(thrownError).toBeInstanceOf(AgentError);
+      const agentErr = thrownError as AgentError;
+      expect(agentErr.code).toBe("continuation_failed");
+      expect(agentErr.message).toContain("tracker refresh HTTP timeout");
+      expect(agentErr.cause).toBe(injectedError);
+
+      // 同时直接验证 executeContinuationDecider 公共出口
+      let helperError: unknown;
+      try {
+        await executeContinuationDecider(
+          async () => {
+            throw new AgentError("response_timeout", "refresh failed");
+          },
+          {
+            issue,
+            threadId: "thread-test",
+            turnId: "turn-test",
+            turnCount: 1,
+            event: {
+              event: "turn_completed",
+              timestamp: Date.now(),
+              codexAppServerPid: null,
+            },
+          },
+        );
+      } catch (err) {
+        helperError = err;
+      }
+      expect(helperError).toBeInstanceOf(AgentError);
+      expect((helperError as AgentError).code).toBe("continuation_failed");
+      expect((helperError as AgentError).cause).toBeInstanceOf(AgentError);
+      expect(((helperError as AgentError).cause as AgentError).code).toBe("response_timeout");
     });
   });
 });
