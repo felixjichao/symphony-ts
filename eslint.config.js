@@ -26,4 +26,17 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // 包内测试 fixture subprocess（不进 tsc，由 eslint 守住基本卫生）：Node ESM。
+    files: ["packages/*/test-fixtures/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        process: "readonly",
+        setTimeout: "readonly",
+        setInterval: "readonly",
+      },
+    },
+  },
 );

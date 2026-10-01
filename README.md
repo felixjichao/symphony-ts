@@ -61,8 +61,8 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建 workspace 边界、删除协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 已完成 |
 | M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | ✅ 已完成 |
 | M2 | Issue Tracker Adapter：provider 无关 read kernel / registry、built-in `github` profile + 归一化 + REST transport 与端到端 conformance 收口（§11，验收 §17.3） | ✅ 已完成 |
-| M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定留 M4） | ✅ 已完成 |
-| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 进行中（M4.1：Codex 协议基线 + config / agent 契约层已落地；launch / transport / prompt / 事件映射随 M4.2–M4.6） |
+| M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定随 M4.2 落地） | ✅ 已完成 |
+| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | 进行中（M4.1：Codex 协议基线 + config / agent 契约层；M4.2：Codex 业务无关的 transport / launch 内核（真实子进程 + workspace cwd 校验 + NDJSON framing / read timeout / stderr 隔离 / 有界关停）；`initialize` / `thread/*` / `turn/*`、prompt 组装、事件映射与 continuation 随 M4.3–M4.6） |
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | 未开始 |
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
