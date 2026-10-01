@@ -4,7 +4,7 @@
 
 SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt Construction and Context Assembly** 的 owner 包，对应 §3 的 Agent Runner：组装注入 issue 上下文的 prompt、启动 coding agent 子进程（如 Codex app-server client）、把 live session 事件（token 消耗、turn 进度、PID）向上转发。**修改 Codex app-server 交互的唯一落点在本包。**
 
-当前状态：**M4.1（#37）已落地契约层**——pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约。**尚未落地任何运行时行为**：没有子进程 launch、没有 transport、没有 session/turn 生命周期、没有 prompt 组装（进度见 [docs/conformance.md](../../docs/conformance.md)）。
+当前状态：**M4.1（#37）已落地契约层**——pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约。**M4.2（#38）已落地 transport / launch 内核**——`bash -lc <codex.command>` 的真实子进程 launch、含 workspace cwd 校验的 launch 边界、JSON-RPC 2.0 over NDJSON 的 framing / request-id 关联 / read timeout / stderr 分流 / 有界关停（均为 Codex 业务无关，见下节）。**尚未落地**：initialize / thread / turn 生命周期、server request 的 approval 裁决、`turn/*` → `AgentEvent` 映射、prompt 组装（进度见 [docs/conformance.md](../../docs/conformance.md)）。
 
 ## Codex 协议基线
 
@@ -36,8 +36,8 @@ SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt
 | `approvalPolicy` | `AskForApproval` = string 分支 ∪ `{ "granular": { … } }` object 分支 | `thread/start.approvalPolicy` / `turn/start.approvalPolicy` |
 | `threadSandbox` | `SandboxMode` = 纯 string 联合 | `thread/start.sandbox` |
 | `turnSandboxPolicy` | `SandboxPolicy` = 以 `"type"` 判别的 tagged object（`workspaceWrite` 带 `writableRoots: string[]` 等） | `turn/start.sandboxPolicy` |
-| `command` | —（SPEC §5.3.6 / §10.1） | `bash -lc <codex.command>`，cwd = workspace path（M4.2） |
-| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | transport / orchestrator 侧计时（M4.2 / M5） |
+| `command` | —（SPEC §5.3.6 / §10.1） | `bash -lc <codex.command>`，cwd = workspace path（M4.2 已落地，见上面 transport / launch 一节） |
+| `readTimeoutMs` / `turnTimeoutMs` / `stallTimeoutMs` | — | 读侧 `readTimeoutMs` 已由 M4.2 transport 落地（per-launch effective 值）；turn / stall 计时是 orchestrator 侧，属 M5 |
 
 形状证据只摘录这三条 type 表达式（完整 schema 一律回 pinned commit，本包不复制、不手维枚举）：
 
@@ -73,7 +73,20 @@ headless worker 的确定策略（SPEC §10.5 允许 "fail the run according to 
 - 未实现 / 未广告的 `item/tool/call` → 返回 protocol-valid structured failure **并继续 session**，不悬挂 request；
 - 任何路径都不得无限等待 operator；provider-native tracker tools 不属 M4（§11.5 → M6+）。
 
-## Public API（M4.1 契约层）
+## Transport 与 launch 内核（M4.2 / #38）
+
+两个模块，都**不理解 Codex 业务**：
+
+- `src/transport.ts` — `NdjsonTransport`：按 envelope 的四个判别位（`method` / `id` 在场与否）分类 request / response / notification / server→client request，`method` 全程是不透明字符串。四个不变量：协议 stdout 与诊断 stderr 物理隔离（§10.3）；单行累积有界，默认 `DEFAULT_MAX_PROTOCOL_LINE_BYTES` = 10 MiB（对齐 §10.1 的 RECOMMENDED 上限），超限行丢弃到下一个换行后**恢复成帧**、不中断流，且只报告一次带 256 字节摘录的 `TransportProtocolIssue`；一次调用只有一个了结算（response / `readTimeoutMs` 到期 / 进程退出三路竞争，单次门闩，超时与退出都删除 pending）；listener 抛出的异常一律被隔离。`readTimeoutMs` 是**本次 launch 的 effective 值**（构造时定值，逐请求计时），不是 per-request 覆盖。子进程 `detached` 启动，`stop()` 是 SIGTERM → `shutdownTimeoutMs` 窗口 → SIGKILL **整个进程组**（与 `packages/workspace` 的 hook runner 同一约定，不留孤儿）。
+- `src/process-launcher.ts` — `launchTransport()`：包内唯一 spawn 点。固定顺序是 非空 `command` 校验 → `path.resolve(workspacePath)` → 组装 child env → `await workspacePathSafety.assertWorkspacePathSafe(cwd)`（M3.2 的 execution-boundary primitive，以结构化接口 `WorkspacePathSafetyGate` 声明，`WorkspaceManager` 天然满足）→ **同一同步续体里** `spawn("bash", ["-lc", command], { cwd, env, detached: true })`。`command` 原样交给 shell，本层绝不 parse argv。
+
+错误面复用 M4.1 冻结的 `AgentError`，不新增码：`invalid_workspace_cwd`（保留 `WorkspaceError` 作为 `cause`）/ `launch_failed`（保留 spawn error 作为 `cause`）/ `response_timeout` / `response_error` / `port_exit` / `protocol_error`。
+
+env 面是**显式注入 `env` + 通用 `excludeEnvNames` 名单**（`excludeEnvNames` 只作用于继承自 `process.env` 的部分，显式 `env` 恒赢）：本包不知道任何 tracker provider 的 secret 变量名，哪些名字该从继承环境里剔除由调用方（组合根 / M5）决定。
+
+验收用真实 fixture 子进程 `test-fixtures/echo-server.mjs`（由 `bash -lc` 启动，自行回报 `process.cwd()` / `argv` / `pid` / `$BASH_VERSION` / env），method 一律是虚构的 `test/*` —— **这个文件里出现真实 Codex method 就意味着分层被写穿了**。分层与备选见 [Agent Note](../../notes/accepted/architecture/2026-10-01-agent-transport-kernel-and-launch-boundary.md)。
+
+## Public API（M4.1 契约层 + M4.2 类型面）
 
 唯一出口 `src/index.ts`。三个面都是 **Symphony-facing**：M5 / orchestrator / observability 只 import 它们，不需要（也不应该）解释 raw Codex JSON。
 
@@ -90,6 +103,8 @@ import {
   type TurnCompletedContext,
 } from "@symphony/agent";
 ```
+
+transport 面按**方案 A** 收敛：`src/index.ts` 只 re-export transport 的**类型与三个默认常量**（`Transport` / `TransportListener` / `TransportRequest` / `TransportResponse` / `TransportNotification` / `TransportServerRequest` / `TransportServerResponse` / `TransportProtocolIssue` / `TransportExitInfo` / `JsonRpcErrorPayload` / `RequestId` + `DEFAULT_*`），**不导出 `launchTransport` / `createNdjsonTransport`**。理由是分层：唯一消费者是同包的 M4.3 Codex client，包外（orchestrator / apps/cli）拿到「能直接起子进程」的入口就会绕过 prompt 组装、session 生命周期与事件映射。
 
 ### Error 契约（SPEC §10.6）
 
@@ -119,7 +134,9 @@ daemon 启动命令、并发 / 沙箱限制等由 `@symphony/config` 产出的 t
 
 ## Known limitations
 
-- **M4.1 只有契约，没有实现**：`bash -lc <codex.command>` 的 launch 与 JSON-RPC / NDJSON transport 属 M4.2；initialize / thread / turn 生命周期属 M4.3；server request 处理与 runtime event 映射（把上面那份 policy 真正跑起来）属 M4.4；runner 组合与 prompt / hooks / continuation 执行属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
+- **M4.2 只有内核，没有 Codex 语义**：`NdjsonTransport` 只做 envelope 分类，`initialize` / `thread/start` / `turn/start` 的 payload 与生命周期属 M4.3；`ServerRequest` 的 approval / user-input 裁决（本包只提供 `respondToServerRequest` 管道，未应答的 server request 会一直悬挂到 `stop()`）与 `turn/*` → `AgentEvent` 映射属 M4.4；runner 组合与 prompt / hooks / continuation 执行属 M4.5；跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
+- **bash 的 "command not found"（exit 127）不在 M4.2 判定**：`launchTransport` 只在 spawn 失败时报 `launch_failed`，shell 已起来但命令不存在属于协议 / 进程错误分类问题，留 M4.5 —— 因此 `codex_not_found` 目前还没有产生它的代码路径。
+- `readTimeoutMs` / `maxProtocolLineBytes` / `shutdownTimeoutMs` 目前**逐次 launch 传入**（`ServiceConfig.codex.read_timeout_ms` 到这里的接线随 M4.3 组合根落地）；turn 级超时与 stall 检测不属本层。
 - 事件名表、`AgentEvent` 字段与 error code 是**本次冻结**的基线：M4.4 的映射若发现某个 §10.4 名字无法从 pinned protocol 状态里判定，按"协议优先"原则回来改这份契约，而不是在 adapter 里私加对外字段。
 - 文档里的三条 Codex type 表达式是**证据摘录**，随基线升级需重新核对；不要在代码或类型里复制它们。
 - 边界约束：**不拥有 scheduler / retry policy / tracker eligibility**——coordination 属 `@symphony/orchestrator`。
