@@ -483,14 +483,15 @@ rl.on("line", (line) => {
       }
 
       if (args["send-usage"]) {
+        const turnMultiplier = turnCount || 1;
         notify("thread/tokenUsage/updated", {
           threadId: params.threadId,
           turnId,
           tokenUsage: {
             total: {
-              inputTokens: 100,
-              outputTokens: 50,
-              totalTokens: 150,
+              inputTokens: 100 * turnMultiplier,
+              outputTokens: 50 * turnMultiplier,
+              totalTokens: 150 * turnMultiplier,
               cachedInputTokens: 10,
               cacheWriteInputTokens: 0,
               reasoningOutputTokens: 5,
@@ -566,6 +567,10 @@ rl.on("line", (line) => {
           });
           if (sent >= count) {
             clearInterval(interval);
+            if (args["periodic-hang-after"]) {
+              // 停止发送通知后保持静默挂起，用于验证停止输出后的 silence timeout
+              return;
+            }
             setTimeout(() => {
               sendCompletedNotification(params.threadId, turnId);
             }, delayMs);

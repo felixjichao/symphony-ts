@@ -798,11 +798,12 @@ describe("Suite 7: Timeout、stderr 与 framing 隔离 (SPEC §10.3 / §10.6)", 
   });
 
   it("有效 periodic output 延长 silence 窗口；stderr 噪声不能延长且伪造 protocol 不进入解析器", async () => {
-    // 1. periodic output 保持活跃：turnTimeoutMs=200，但每 25ms 发一次 notification，总耗时 > 200ms 依然成功
+    // 1. periodic output 保持活跃：turnTimeoutMs=80ms，但每 25ms 发一次 notification（共 6 次），
+    // 持续活跃耗时 ~170ms（明确跨过 80ms 初始超时窗口），相邻间隔 25ms 保留充分余量（< 80ms），turn 正常完成
     const effPeriodic = writeAndLoadWorkflow(workflowDir, {
       codex: {
-        turnTimeoutMs: 250,
-        commandArgs: ["--periodic-notifications", "5"],
+        turnTimeoutMs: 80,
+        commandArgs: ["--periodic-notifications", "6", "--delay-completed-ms", "20"],
       },
     });
 
@@ -815,10 +816,28 @@ describe("Suite 7: Timeout、stderr 与 framing 隔离 (SPEC §10.3 / §10.6)", 
     });
     expect(res.stopReason).toBe("decider_stop");
 
-    // 2. stderr 刷屏无法延长 silence 窗口：turn 依然静默，超时发生
+    // 2. periodic output 停止后静默，silence timer 超时发生（证明输出停止后进入超时）
+    const effPeriodicHang = writeAndLoadWorkflow(workflowDir, {
+      codex: {
+        turnTimeoutMs: 80,
+        commandArgs: ["--periodic-notifications", "3", "--periodic-hang-after"],
+      },
+    });
+
+    await expect(
+      runAgentAttempt({
+        issue: createIssue(),
+        attempt: 1,
+        workflow: effPeriodicHang.definition,
+        workflowPath: effPeriodicHang.workflowPath,
+        getConfig: () => effPeriodicHang.serviceConfig,
+      }),
+    ).rejects.toSatisfy((err) => err instanceof AgentError && err.code === "turn_timeout");
+
+    // 3. stderr 刷屏无法延长 silence 窗口：turn 依然静默，超时发生
     const effStderrSpam = writeAndLoadWorkflow(workflowDir, {
       codex: {
-        turnTimeoutMs: 200,
+        turnTimeoutMs: 150,
         commandArgs: ["--stderr-spam", "--silent-turn"],
       },
     });
@@ -967,10 +986,45 @@ describe("Suite 9: Telemetry 映射与多轮 Continuation 循环 (SPEC §10.2 / 
     expect(res.stopReason).toBe("decider_stop");
     expect(res.issue.title).toBe("Refreshed by continuation");
 
-    // 验证遥测事件
-    const usageEvent = events.find((e) => e.usage !== undefined);
-    expect(usageEvent).toBeDefined();
-    expect(usageEvent?.usage?.totalTokens).toBe(150);
+    // 验证遥测事件：完整的 usage 快照与非累加断言（SPEC §10.4）
+    const usageEvents = events.filter(
+      (e) => e.event === "notification" && e.protocolMethod === "thread/tokenUsage/updated",
+    );
+    expect(usageEvents).toHaveLength(2);
+    // Turn 1 usage 快照提取
+    expect(usageEvents[0]?.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
+    // Turn 2 usage 快照提取：验证其为独立快照，未将 Turn 1 累加进来（300 而非 150 + 300 = 450）
+    expect(usageEvents[1]?.usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 100,
+      totalTokens: 300,
+    });
+    expect(usageEvents[1]?.usage?.totalTokens).not.toBe(150 + 300);
+
+    // 验证 rateLimits 事件：完整的 rateLimits 快照与 account 级身份断言
+    const rateLimitEvents = events.filter(
+      (e) => e.event === "notification" && e.protocolMethod === "account/rateLimits/updated",
+    );
+    expect(rateLimitEvents.length).toBeGreaterThanOrEqual(1);
+    expect(rateLimitEvents[0]?.rateLimits).toEqual({
+      limitId: "lim-1",
+      limitName: "standard",
+      normalModelSlug: "gpt-4",
+      primary: { usedPercent: 42, windowMinutes: 60 },
+      secondary: null,
+      credits: null,
+      individualLimit: null,
+      spendControlReached: false,
+      planType: "team",
+      rateLimitReachedType: null,
+    });
+    // account 级限流快照不包含 turnId 与 sessionId
+    expect("turnId" in (rateLimitEvents[0] ?? {})).toBe(false);
+    expect("sessionId" in (rateLimitEvents[0] ?? {})).toBe(false);
 
     // 验证 wire transcript：首轮使用渲染模板，后续轮使用 DEFAULT_CONTINUATION_GUIDANCE
     const lines = (await fs.readFile(transcriptFile, "utf8")).trim().split("\n");
