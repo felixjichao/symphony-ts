@@ -363,7 +363,7 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
   function assertNoContainmentOrLiquidReimplementation(
     fileOrLabel: string,
     sourceCode: string,
-    _options: { allowLauncherPathResolve?: boolean } = {},
+    options: { allowLauncherPathResolve?: boolean } = {},
   ): void {
     const sf = ts.createSourceFile(fileOrLabel, sourceCode, ts.ScriptTarget.Latest, true);
 
@@ -410,7 +410,7 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
         }
       }
 
-      // 3. 检查 PropertyAccess (例如 fs.realpath, path.relative 等)
+      // 3. 检查 PropertyAccess (例如 fs.realpath, path.relative, path.resolve 等)
       if (ts.isPropertyAccessExpression(node)) {
         const propName = node.name.text;
         if (propName === "realpath" || propName === "realpathSync") {
@@ -422,6 +422,17 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
           throw new Error(
             `${fileOrLabel} illegally calls or accesses path.relative containment primitive`,
           );
+        }
+        if (
+          propName === "resolve" &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "path"
+        ) {
+          if (!options.allowLauncherPathResolve) {
+            throw new Error(
+              `${fileOrLabel} illegally calls path.resolve. Path normalization is restricted to launcher/session.`,
+            );
+          }
         }
       }
 
@@ -506,6 +517,17 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
     expect(() =>
       assertNoContainmentOrLiquidReimplementation("mutated-runner-liquid.ts", mutatedLiquid),
     ).toThrow(/liquid/i);
+
+    // 反例 5：非 launcher / session 模块尝试调用 path.resolve
+    const mutatedRunnerPathResolve = `
+      import * as path from "node:path";
+      export function normalize(p: string) {
+        return path.resolve(p);
+      }
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-path-resolve.ts", mutatedRunnerPathResolve),
+    ).toThrow(/path\.resolve/i);
   });
 
   it("高层 runner、continuation 与 Symphony 契约面不出现 wire method 字面量，协议词汇仅收敛在 session adapter", () => {
