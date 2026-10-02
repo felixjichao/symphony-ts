@@ -96,13 +96,20 @@ export function runningCountForState(state: OrchestratorRuntimeState, stateName:
 /**
  * 某 state 的可用 slot（SPEC §8.3）：存在 normalized state override 时用 override，
  * 否则 fallback 全局上限；结果不为负。
+ *
+ * override 查找只认 **own property**：`maxConcurrentAgentsByState` 是普通对象，
+ * 若 state 归一化后恰为 `constructor` / `toString` 等 `Object.prototype` 键，直接
+ * 索引会取到继承值（非 number），把 limit 变成 `undefined` 语义之外的值并使结果
+ * 成为 `NaN`。缺失即 fallback 全局上限。
  */
 export function perStateAvailableSlots(
   state: OrchestratorRuntimeState,
   stateName: string,
   policy: DispatchPolicy,
 ): number {
-  const override = policy.maxConcurrentAgentsByState[normalizeIssueState(stateName)];
+  const normalized = normalizeIssueState(stateName);
+  const overrides = policy.maxConcurrentAgentsByState;
+  const override = Object.hasOwn(overrides, normalized) ? overrides[normalized] : undefined;
   const limit = override ?? state.maxConcurrentAgents;
   return Math.max(limit - runningCountForState(state, stateName), 0);
 }

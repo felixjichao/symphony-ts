@@ -183,6 +183,27 @@ describe("perStateAvailableSlots", () => {
     const policy = makePolicy({ maxConcurrentAgentsByState: { todo: 1 } });
     expect(perStateAvailableSlots(runtime, "Todo", policy)).toBe(0);
   });
+
+  it("only reads own override properties (prototype-key states stay at the global limit)", () => {
+    const runtime = makeRuntime(10);
+    const policy = makePolicy({ maxConcurrentAgentsByState: {} });
+    for (const stateName of [
+      "Constructor",
+      "toString",
+      "hasOwnProperty",
+      "valueOf",
+      "__proto__",
+    ]) {
+      expect(perStateAvailableSlots(runtime, stateName, policy)).toBe(10);
+      expect(Number.isNaN(perStateAvailableSlots(runtime, stateName, policy))).toBe(false);
+    }
+  });
+
+  it("still honors a real own override whose key matches a prototype member", () => {
+    const runtime = makeRuntime(10);
+    const policy = makePolicy({ maxConcurrentAgentsByState: { constructor: 2 } });
+    expect(perStateAvailableSlots(runtime, "Constructor", policy)).toBe(2);
+  });
 });
 
 describe("isDispatchEligible", () => {
@@ -243,6 +264,15 @@ describe("isDispatchEligible", () => {
     const runtime = makeRuntime();
     runtime.completed.add("issue-1");
     expect(isDispatchEligible(makeIssue(), runtime, makePolicy())).toBe(true);
+  });
+
+  it("dispatches a prototype-key state when no own override is configured (regression)", () => {
+    const runtime = makeRuntime(10);
+    const policy = makePolicy({ activeStates: ["Constructor"], maxConcurrentAgentsByState: {} });
+    const issue = makeIssue({ state: "Constructor" });
+
+    expect(perStateAvailableSlots(runtime, issue.state, policy)).toBe(10);
+    expect(isDispatchEligible(issue, runtime, policy)).toBe(true);
   });
 
   it("carries no side effects on state", () => {
