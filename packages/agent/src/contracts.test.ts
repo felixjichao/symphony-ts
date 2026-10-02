@@ -356,4 +356,260 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
     ]);
     expect(manifest.scripts?.test).not.toContain("--passWithNoTests");
   });
+
+  /**
+   * 校验源码 AST 是否违背架构边界（未重复实现 containment / Liquid / deriveWorkspaceKey）。
+   */
+  function assertNoContainmentOrLiquidReimplementation(
+    fileOrLabel: string,
+    sourceCode: string,
+    options: { allowLauncherPathResolve?: boolean } = {},
+  ): void {
+    const sf = ts.createSourceFile(fileOrLabel, sourceCode, ts.ScriptTarget.Latest, true);
+
+    const visit = (node: ts.Node): void => {
+      // 1. 检查 import / export 模块名
+      let moduleText: string | null = null;
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+        moduleText = node.moduleSpecifier.text;
+      } else if (
+        ts.isExportDeclaration(node) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        moduleText = node.moduleSpecifier.text;
+      } else if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+        node.arguments.length > 0 &&
+        node.arguments[0] !== undefined &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
+        moduleText = node.arguments[0].text;
+      }
+
+      if (moduleText !== null) {
+        if (/liquid/i.test(moduleText)) {
+          throw new Error(`${fileOrLabel} illegally imports liquid dependency: "${moduleText}"`);
+        }
+        if (/^(node:)?fs(\/promises)?$/.test(moduleText)) {
+          throw new Error(
+            `${fileOrLabel} illegally imports filesystem module "${moduleText}". Containment and filesystem access are owned by @symphony/workspace.`,
+          );
+        }
+      }
+
+      // 2. 检查标识符与方法定义
+      if (ts.isIdentifier(node)) {
+        if (node.text === "deriveWorkspaceKey") {
+          throw new Error(`${fileOrLabel} illegally references or defines "deriveWorkspaceKey"`);
+        }
+        if (node.text === "isLexicallyContained" || node.text === "isPathSafe") {
+          throw new Error(`${fileOrLabel} illegally references containment primitive "${node.text}"`);
+        }
+      }
+
+      // 3. 检查 PropertyAccess (例如 fs.realpath, path.relative, path.resolve 等)
+      if (ts.isPropertyAccessExpression(node)) {
+        const propName = node.name.text;
+        if (propName === "realpath" || propName === "realpathSync") {
+          throw new Error(
+            `${fileOrLabel} illegally calls or accesses realpath containment primitive "${propName}"`,
+          );
+        }
+        if (propName === "relative") {
+          throw new Error(
+            `${fileOrLabel} illegally calls or accesses path.relative containment primitive`,
+          );
+        }
+        if (
+          propName === "resolve" &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "path"
+        ) {
+          if (!options.allowLauncherPathResolve) {
+            throw new Error(
+              `${fileOrLabel} illegally calls path.resolve. Path normalization is restricted to launcher/session.`,
+            );
+          }
+        }
+      }
+
+      // 4. 检查 CallExpression
+      if (ts.isCallExpression(node)) {
+        const expr = node.expression;
+        if (
+          ts.isIdentifier(expr) &&
+          (expr.text === "realpath" || expr.text === "realpathSync" || expr.text === "relative")
+        ) {
+          throw new Error(`${fileOrLabel} illegally calls containment primitive "${expr.text}"`);
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sf);
+  }
+
+  it("runner 复用 config 的 renderPrompt 与 workspace 的 WorkspaceManager，不引入 Liquid 或 containment 算法副本", () => {
+    const agentSources = runtimeSources("agent");
+    for (const { file, label } of agentSources) {
+      const sourceCode = readFileSync(file, "utf8");
+      expect(() => {
+        assertNoContainmentOrLiquidReimplementation(label, sourceCode, {
+          allowLauncherPathResolve:
+            file.endsWith("process-launcher.ts") || file.endsWith("app-server-session.ts"),
+        });
+      }, `${label} should satisfy AST containment boundary`).not.toThrow();
+    }
+
+    const runnerFile = path.join(repoRoot, "packages", "agent", "src", "agent-runner.ts");
+    const runnerCode = readFileSync(runnerFile, "utf8");
+    expect(runnerCode).toMatch(/import\s*\{[^}]*\brenderPrompt\b[^}]*\}\s*from\s*"@symphony\/config"/);
+    expect(runnerCode).toMatch(/import\s*\{[^}]*\bWorkspaceManager\b[^}]*\}\s*from\s*"@symphony\/workspace"/);
+  });
+
+  it("containment 算法边界守卫能准确检出基于 realpath 与 path.relative 的重复实现（反例校验）", () => {
+    // 反例 1：隔离副本式 realpath + path.relative 自行实现 containment
+    const mutatedFsAndRelative = `
+      import * as fs from "node:fs/promises";
+      import * as path from "node:path";
+      export async function checkContainment(root: string, target: string): Promise<boolean> {
+        const canonicalRoot = await fs.realpath(root);
+        const canonicalTarget = await fs.realpath(target);
+        const rel = path.relative(canonicalRoot, canonicalTarget);
+        return !rel.startsWith("..");
+      }
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-fs-relative.ts", mutatedFsAndRelative),
+    ).toThrow(/filesystem module|realpath|relative/i);
+
+    // 反例 2：不调 fs 但自行调用 path.relative 计算 containment
+    const mutatedRelativeOnly = `
+      import * as path from "node:path";
+      export function isChildOf(root: string, child: string): boolean {
+        const rel = path.relative(root, child);
+        return !rel.startsWith("..");
+      }
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-relative.ts", mutatedRelativeOnly),
+    ).toThrow(/path\.relative/i);
+
+    // 反例 3：重复声明 deriveWorkspaceKey 算法副本
+    const mutatedKey = `
+      export function deriveWorkspaceKey(issueId: string): string {
+        return "ws-" + issueId;
+      }
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-key.ts", mutatedKey),
+    ).toThrow(/deriveWorkspaceKey/i);
+
+    // 反例 4：重新引入 liquid 依赖
+    const mutatedLiquid = `
+      import { Liquid } from "liquidjs";
+      export const engine = new Liquid();
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-liquid.ts", mutatedLiquid),
+    ).toThrow(/liquid/i);
+
+    // 反例 5：非 launcher / session 模块尝试调用 path.resolve
+    const mutatedRunnerPathResolve = `
+      import * as path from "node:path";
+      export function normalize(p: string) {
+        return path.resolve(p);
+      }
+    `;
+    expect(() =>
+      assertNoContainmentOrLiquidReimplementation("mutated-runner-path-resolve.ts", mutatedRunnerPathResolve),
+    ).toThrow(/path\.resolve/i);
+  });
+
+  it("高层 runner、continuation 与 Symphony 契约面不出现 wire method 字面量，协议词汇仅收敛在 session adapter", () => {
+    const highLevelFiles = [
+      "agent-runner.ts",
+      "continuation.ts",
+      "errors.ts",
+      "events.ts",
+      "transport.ts",
+    ].map((name) => path.join(repoRoot, "packages", "agent", "src", name));
+
+    const wireMethodLiterals = [
+      "initialize",
+      "thread/start",
+      "turn/start",
+      "turn/completed",
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval",
+      "item/tool/requestUserInput",
+      "item/tool/call",
+      "mcpServer/elicitation/request",
+      "item/permissions/requestApproval",
+    ];
+
+    for (const file of highLevelFiles) {
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      const stringLiterals: string[] = [];
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+          stringLiterals.push(node.text);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      const fileName = path.basename(file);
+      for (const literal of stringLiterals) {
+        for (const wireMethod of wireMethodLiterals) {
+          expect(literal, `${fileName} contains wire method "${wireMethod}"`).not.toBe(wireMethod);
+        }
+      }
+    }
+  });
+
+  it("spawn 唯一落在 process-launcher.ts，且 low-level launcher/transport 实现不从 index.ts 导出", () => {
+    for (const { file, label } of runtimeSources("agent")) {
+      const fileName = path.basename(file);
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      let importsChildProcessSpawn = false;
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          if (node.moduleSpecifier.text.includes("child_process")) {
+            if (node.importClause && !node.importClause.isTypeOnly) {
+              const namedBindings = node.importClause.namedBindings;
+              if (namedBindings && ts.isNamedImports(namedBindings)) {
+                for (const element of namedBindings.elements) {
+                  if (!element.isTypeOnly && (element.propertyName?.text ?? element.name.text) === "spawn") {
+                    importsChildProcessSpawn = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      if (fileName === "process-launcher.ts") {
+        expect(importsChildProcessSpawn, `${label} should import runtime spawn`).toBe(true);
+      } else {
+        expect(importsChildProcessSpawn, `${label} must not import runtime spawn`).toBe(false);
+      }
+    }
+
+    const indexFile = path.join(repoRoot, "packages", "agent", "src", "index.ts");
+    const indexCode = withoutComments(readFileSync(indexFile, "utf8"));
+    expect(indexCode).not.toContain("launchTransport");
+    expect(indexCode).not.toContain("createNdjsonTransport");
+  });
 });

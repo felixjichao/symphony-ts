@@ -5,10 +5,9 @@
  * 本文件是包的唯一公共 API 面。**M4.1（#37）落地契约层**：稳定错误面、稳定事件面、
  * continuation 判定契约，以及它们与 pinned Codex 协议之间的分层边界。**M4.2（#38）落地
  * 最底层的 transport kernel 与 launch 边界**（`transport.ts` / `process-launcher.ts`，
- * 按方案 A 只在这里 re-export 类型与默认常量）。initialize / thread / turn 生命周期、
- * server request 的 approval / user-input 裁决、`turn/*` → `AgentEvent` 映射、
- * prompt / hooks 组装都还没有实现（见 README 的 Known limitations 与
- * `docs/conformance.md`）。
+ * 按方案 A 只在这里 re-export 类型与默认常量）。**M4.3–M4.5（#39–#41）落地 session
+ * 生命周期、headless server requests 与 AgentEvent 映射、runner 编排与 continuation 循环**。
+ * **M4.6（#42）落地跨包端到端 Core Conformance 收口**。
  *
  * 分层（README 与 Agent Note 记录了为什么这样切）：
  *

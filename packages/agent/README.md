@@ -4,7 +4,7 @@
 
 SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt Construction and Context Assembly** 的 owner 包，对应 §3 的 Agent Runner：组装注入 issue 上下文的 prompt、启动 coding agent 子进程（如 Codex app-server client）、把 live session 事件（token 消耗、turn 进度、PID）向上转发。**修改 Codex app-server 交互的唯一落点在本包。**
 
-当前状态：**M4.1（#37）已落地契约层**——pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约。**M4.2（#38）已落地 transport / launch 内核**——`bash -lc <codex.command>` 的真实子进程 launch、含 workspace cwd 校验的 launch 边界、JSON-RPC 2.0 over NDJSON 的 framing / request-id 关联 / read timeout / stderr 分流 / 有界关停。**M4.3（#39）已落地 Codex app-server live session 生命周期**——`initialize` → `initialized` → `thread/start` → `turn/start` → `turn/completed`，thread/turn/session 身份抽取、workspace cwd 绑定、policy 映射、turn silence timeout、基于 `turn.status` 的完成判定与多 turn 复用。**M4.4（#40）已落地 headless server requests 处理与 runtime event 映射**——approval 自动同意与拒绝、人工输入即时失败、未支持动态工具调用优雅降级、遥测提取与 12 种 `AgentEvent` 映射。**M4.5（#41）已落地 Agent Runner 组合与 continuation 执行**——`runAgentAttempt()` 生命周期编排、prompt/hooks 组装、同 thread 多 turn continuation、`agent.max_turns` 硬上限与握手期 127 退出 `codex_not_found` 分类。**尚未落地**：跨包集成与 §17.5 conformance 收口（M4.6，进度见 [docs/conformance.md](../../docs/conformance.md)）。
+当前状态：**M4（Agent Runner）已完成**——M4.1（#37）落地契约层（pinned Codex 协议基线、稳定 `AgentError` / `AgentEvent` 面、continuation 判定契约）；M4.2（#38）落地 transport / launch 内核（`bash -lc <codex.command>` 真实子进程、含 workspace cwd 校验的 launch 边界、JSON-RPC 2.0 over NDJSON framing / request-id 关联 / read timeout / stderr 分流 / 有界关停）；M4.3（#39）落地 Codex app-server live session 生命周期（`initialize` → `initialized` → `thread/start` → `turn/start` → `turn/completed`、身份抽取、workspace cwd 绑定、turn silence timeout、多 turn 复用）；M4.4（#40）落地 headless server requests 处理与 runtime event 映射（approval 自动决策、人工输入即时失败、unsupported tool 优雅降级、遥测提取与 12 种 `AgentEvent` 映射）；M4.5（#41）落地 Agent Runner 组合与 continuation 执行（`runAgentAttempt()` 编排、prompt/hooks 组装、同 thread 多 turn continuation、`agent.max_turns` 预算、握手期 127 退出 `codex_not_found` 分类）；**M4.6（#42）落地跨包端到端 Core Conformance 收口**（`WORKFLOW.md → loadEffectiveWorkflow → WorkspaceManager → real temp fs + hooks → runAgentAttempt → fake app-server subprocess → JSON-RPC session/events` 完整真实流水线，以及 §17.2 / §17.5 / §10 / §12 验收收口，测试入口 `src/config-integration.test.ts`）。
 
 ## Codex 协议基线
 
@@ -147,9 +147,9 @@ daemon 启动命令、并发 / 沙箱限制等由 `@symphony/config` 产出的 t
 
 ## Known limitations
 
-- **M4.5 已落地**：Agent Runner 组合 `runAgentAttempt()`、prompt 渲染与前置校验、`before_run` fatal 阻断、同 thread 多 turn continuation、`DEFAULT_CONTINUATION_GUIDANCE` 固定指导文本、有界 decider 等待与 `agent.max_turns` 预算控制、握手期 exit 127 映射 `codex_not_found`，以及 `after_run` best-effort 永不覆盖原结果。
-- **M4.6 尚未落地**：跨包集成与 §17.2 / §17.5 conformance 收口属 M4.6。
+- **M4 已完成**：M4.1–M4.5 模块级能力与 M4.6 跨包端到端 Core Conformance 全部落地（`src/config-integration.test.ts`）。
 - stall 检测不属本层，属 M5。
+- 在线真实 Codex 验证（依赖外网与真实凭证）属 opt-in 的 Real Integration Profile，不影响默认 CI 的 Core Conformance 交付。
 - 事件名表、`AgentEvent` 字段与 error code 是**本次冻结**的基线：M4.4 的映射若发现某个 §10.4 名字无法从 pinned protocol 状态里判定，按"协议优先"原则回来改这份契约，而不是在 adapter 里私加对外字段。
 - 文档里的三条 Codex type 表达式是**证据摘录**，随基线升级需重新核对；不要在代码或类型里复制它们。
 - 边界约束：**不拥有 scheduler / retry policy / tracker eligibility**——coordination 属 `@symphony/orchestrator`。
