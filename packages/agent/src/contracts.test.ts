@@ -14,6 +14,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { composeSessionId, type Issue } from "@symphony/domain";
@@ -66,11 +67,13 @@ describe("AgentError — SPEC §10.6 稳定错误面", () => {
     for (const code of specRecommended) {
       expect(AGENT_ERROR_CODES, code).toContain(code);
     }
-    // implementation-defined 追加项（§10.5 headless policy + protocol 完整性）。
+    // implementation-defined 追加项（§10.5 headless policy + protocol 完整性 + continuation）。
     expect(AGENT_ERROR_CODES).toContain("approval_required");
     expect(AGENT_ERROR_CODES).toContain("protocol_error");
     expect(AGENT_ERROR_CODES).toContain("launch_failed");
-    expect(AGENT_ERROR_CODES).toHaveLength(12);
+    expect(AGENT_ERROR_CODES).toContain("continuation_failed");
+    expect(AGENT_ERROR_CODES).toContain("continuation_timeout");
+    expect(AGENT_ERROR_CODES).toHaveLength(14);
   });
 
   it("message 原样保留，code 是唯一判别式，Error 语义不变", () => {
@@ -287,14 +290,58 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
     }
   });
 
-  it("agent 运行期不 import tracker / orchestrator / observability，也不 import Codex SDK", () => {
+  it("agent 运行期不 import tracker / orchestrator / observability，也不 import Codex SDK（TypeScript AST 深度检查）", () => {
+    const agentPkgDir = path.join(repoRoot, "packages", "agent");
     for (const { file, label } of runtimeSources("agent")) {
-      const code = withoutComments(readFileSync(file, "utf8"));
-      expect(code, label).not.toMatch(
-        /from\s*["']@symphony\/(?:tracker|orchestrator|observability)["']/,
-      );
-      expect(code, label).not.toMatch(/from\s*["'][^"']*codex[^"']*["']/i);
-      expect(code, label).not.toMatch(/require\(\s*["'][^"']*codex/i);
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      const moduleSpecifiers: string[] = [];
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          moduleSpecifiers.push(node.moduleSpecifier.text);
+        } else if (
+          ts.isExportDeclaration(node) &&
+          node.moduleSpecifier &&
+          ts.isStringLiteral(node.moduleSpecifier)
+        ) {
+          moduleSpecifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isCallExpression(node)) {
+          if (
+            (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+              (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+            node.arguments.length > 0 &&
+            node.arguments[0] !== undefined &&
+            ts.isStringLiteral(node.arguments[0])
+          ) {
+            moduleSpecifiers.push(node.arguments[0].text);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      for (const specifier of moduleSpecifiers) {
+        expect(specifier, `${label} contains tracker dependency`).not.toMatch(
+          /^@symphony\/tracker(?:\/.*)?$/,
+        );
+        expect(specifier, `${label} contains orchestrator dependency`).not.toMatch(
+          /^@symphony\/orchestrator(?:\/.*)?$/,
+        );
+        expect(specifier, `${label} contains observability dependency`).not.toMatch(
+          /^@symphony\/observability(?:\/.*)?$/,
+        );
+        expect(specifier, `${label} contains codex sdk dependency`).not.toMatch(/codex/i);
+
+        // 检查相对路径是否越出 packages/agent
+        if (specifier.startsWith(".")) {
+          const resolvedTarget = path.resolve(path.dirname(file), specifier);
+          const rel = path.relative(agentPkgDir, resolvedTarget);
+          expect(rel.startsWith(".."), `${label} escapes agent package via ${specifier}`).toBe(
+            false,
+          );
+        }
+      }
     }
   });
 

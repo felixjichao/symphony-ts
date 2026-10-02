@@ -37,6 +37,7 @@
 //   --send-unknown-response    发送未知的 response id
 //   --multi-turn-tool          turn 1 触发 unsupported tool，client 回复后完成 turn 1；turn 2 正常完成
 
+import fs from "node:fs";
 import readline from "node:readline";
 import process from "node:process";
 import { clearInterval, setInterval, setTimeout } from "node:timers";
@@ -61,6 +62,32 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+
+if (args["exit-before-handshake"]) {
+  const code =
+    args["exit-before-handshake"] === true
+      ? 127
+      : Number.parseInt(args["exit-before-handshake"], 10) || 127;
+  process.exit(code);
+}
+
+if (args["record-startup"]) {
+  try {
+    fs.writeFileSync(args["record-startup"], `${process.pid}\n`, "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+if (args["record-exit"]) {
+  process.on("exit", () => {
+    try {
+      fs.writeFileSync(args["record-exit"], `${process.pid}\n`, "utf8");
+    } catch {
+      /* ignore */
+    }
+  });
+}
 
 function writeLine(value) {
   if (typeof value === "string") {
@@ -244,6 +271,14 @@ rl.on("line", (line) => {
     return;
   }
 
+  if (args["record-transcript"]) {
+    try {
+      fs.appendFileSync(args["record-transcript"], `${JSON.stringify(message)}\n`, "utf8");
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Client notification（如 initialized）
   if (message.id === undefined && message.method) {
     notify("test/wireInspector", {
@@ -271,6 +306,20 @@ rl.on("line", (line) => {
 
   switch (method) {
     case "initialize": {
+      if (args["silent-init"]) {
+        return;
+      }
+      if (args["delay-init-ms"]) {
+        setTimeout(() => {
+          respond(id, {
+            userAgent: "codex-app-server/0.159.2 (test-fixture)",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "linux",
+          });
+        }, Number.parseInt(args["delay-init-ms"], 10) || 0);
+        return;
+      }
       if (args["invalid-init"]) {
         respond(id, {});
         return;

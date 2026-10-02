@@ -52,7 +52,9 @@ export type AgentErrorCode =
   | "turn_input_required"
   | "approval_required"
   | "protocol_error"
-  | "launch_failed";
+  | "launch_failed"
+  | "continuation_failed"
+  | "continuation_timeout";
 
 /** {@link AGENT_ERROR_CODES} 是 {@link AgentErrorCode} 的稳定清单（顺序即文档顺序）。 */
 export const AGENT_ERROR_CODES = [
@@ -68,6 +70,8 @@ export const AGENT_ERROR_CODES = [
   "approval_required",
   "protocol_error",
   "launch_failed",
+  "continuation_failed",
+  "continuation_timeout",
 ] as const satisfies readonly AgentErrorCode[];
 
 /** {@link AgentError} 的可选附加信息（诊断用，均不参与 `code` 判别）。 */

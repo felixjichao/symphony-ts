@@ -1301,6 +1301,7 @@ export async function startAppServerSession(
 ): Promise<AppServerSession> {
   let session: AppServerSessionImpl | null = null;
   let transport: Transport | null = null;
+  const exitInfoHolder: { current: TransportExitInfo | null } = { current: null };
 
   const listener: TransportListener = {
     onNotification(notification: TransportNotification) {
@@ -1371,6 +1372,7 @@ export async function startAppServerSession(
       session?.handleActivity();
     },
     onExit(info: TransportExitInfo) {
+      exitInfoHolder.current = info;
       session?.handleExit(info);
     },
   };
@@ -1498,6 +1500,17 @@ export async function startAppServerSession(
     }
     if (transport !== null) {
       await transport.stop();
+    }
+    if (exitInfoHolder.current !== null && !exitInfoHolder.current.stopped && exitInfoHolder.current.exitCode === 127) {
+      throw new AgentError(
+        "codex_not_found",
+        `Coding agent command not found (subprocess exited with code 127 before completing handshake): ${options.command}`,
+        {
+          cause: error,
+          path: options.workspacePath,
+          codexAppServerPid: transport?.pid ?? undefined,
+        },
+      );
     }
     throw error;
   }
