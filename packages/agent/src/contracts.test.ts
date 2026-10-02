@@ -356,4 +356,118 @@ describe("结构边界：不复制 Codex generated schema、依赖方向不越�
     ]);
     expect(manifest.scripts?.test).not.toContain("--passWithNoTests");
   });
+
+  it("runner 复用 config 的 renderPrompt 与 workspace 的 WorkspaceManager，不引入 Liquid 或 containment 算法副本", () => {
+    const agentSources = runtimeSources("agent");
+    for (const { file, label } of agentSources) {
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      const imports: string[] = [];
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          imports.push(node.moduleSpecifier.text);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      for (const specifier of imports) {
+        expect(specifier, `${label} contains liquid dependency`).not.toMatch(/liquid/i);
+      }
+
+      if (!file.endsWith("process-launcher.ts")) {
+        const code = withoutComments(sourceCode);
+        expect(code, `${label} re-implements deriveWorkspaceKey`).not.toContain("deriveWorkspaceKey");
+      }
+    }
+
+    const runnerFile = path.join(repoRoot, "packages", "agent", "src", "agent-runner.ts");
+    const runnerCode = readFileSync(runnerFile, "utf8");
+    expect(runnerCode).toMatch(/import\s*\{[^}]*\brenderPrompt\b[^}]*\}\s*from\s*"@symphony\/config"/);
+    expect(runnerCode).toMatch(/import\s*\{[^}]*\bWorkspaceManager\b[^}]*\}\s*from\s*"@symphony\/workspace"/);
+  });
+
+  it("高层 runner、continuation 与 Symphony 契约面不出现 wire method 字面量，协议词汇仅收敛在 session adapter", () => {
+    const highLevelFiles = [
+      "agent-runner.ts",
+      "continuation.ts",
+      "errors.ts",
+      "events.ts",
+      "transport.ts",
+    ].map((name) => path.join(repoRoot, "packages", "agent", "src", name));
+
+    const wireMethodLiterals = [
+      "initialize",
+      "thread/start",
+      "turn/start",
+      "turn/completed",
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval",
+      "item/tool/requestUserInput",
+      "item/tool/call",
+      "mcpServer/elicitation/request",
+      "item/permissions/requestApproval",
+    ];
+
+    for (const file of highLevelFiles) {
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      const stringLiterals: string[] = [];
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+          stringLiterals.push(node.text);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      const fileName = path.basename(file);
+      for (const literal of stringLiterals) {
+        for (const wireMethod of wireMethodLiterals) {
+          expect(literal, `${fileName} contains wire method "${wireMethod}"`).not.toBe(wireMethod);
+        }
+      }
+    }
+  });
+
+  it("spawn 唯一落在 process-launcher.ts，且 low-level launcher/transport 实现不从 index.ts 导出", () => {
+    for (const { file, label } of runtimeSources("agent")) {
+      const fileName = path.basename(file);
+      const sourceCode = readFileSync(file, "utf8");
+      const sf = ts.createSourceFile(file, sourceCode, ts.ScriptTarget.Latest, true);
+      let importsChildProcessSpawn = false;
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          if (node.moduleSpecifier.text.includes("child_process")) {
+            if (node.importClause && !node.importClause.isTypeOnly) {
+              const namedBindings = node.importClause.namedBindings;
+              if (namedBindings && ts.isNamedImports(namedBindings)) {
+                for (const element of namedBindings.elements) {
+                  if (!element.isTypeOnly && (element.propertyName?.text ?? element.name.text) === "spawn") {
+                    importsChildProcessSpawn = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+
+      if (fileName === "process-launcher.ts") {
+        expect(importsChildProcessSpawn, `${label} should import runtime spawn`).toBe(true);
+      } else {
+        expect(importsChildProcessSpawn, `${label} must not import runtime spawn`).toBe(false);
+      }
+    }
+
+    const indexFile = path.join(repoRoot, "packages", "agent", "src", "index.ts");
+    const indexCode = withoutComments(readFileSync(indexFile, "utf8"));
+    expect(indexCode).not.toContain("launchTransport");
+    expect(indexCode).not.toContain("createNdjsonTransport");
+  });
 });

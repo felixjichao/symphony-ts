@@ -7,7 +7,7 @@
 | 层 | 范围 | 状态 |
 |---|---|---|
 | L1 单元测试（§17.1–§17.7，Core Conformance） | 每 workspace `src/*.test.ts`（vitest），纯逻辑优先：config 解析与默认值、路径净化、backoff 数学、模板渲染、dispatch 排序 | M1 起随各包落地 |
-| L2 组件集成（Core Conformance；随可选特性落地时适用 Extension Conformance） | 真实文件系统的 workspace provisioning / containment、fake tracker provider 的归一化读取、真实 `WORKFLOW.md` → registry → adapter → 本地 GitHub REST stub（`packages/tracker/src/github-rest-integration.test.ts`）、真实 `WORKFLOW.md` → resolved config → WorkspaceManager → temp filesystem → shell hook（`packages/workspace/src/config-integration.test.ts`）、真实 `bash -lc` coding-agent 子进程 → NDJSON transport（`packages/agent/src/transport.test.ts` + `src/process-launcher.test.ts`，fixture 见 `packages/agent/test-fixtures/`）、session 事件流 | M2 tracker + M3 workspace + M4.2 transport / launch 内核已落地；Agent Runner / session integration 随 M4.3–M4.6 |
+| L2 组件集成（Core Conformance；随可选特性落地时适用 Extension Conformance） | 真实文件系统的 workspace provisioning / containment、fake tracker provider 的归一化读取、真实 `WORKFLOW.md` → registry → adapter → 本地 GitHub REST stub（`packages/tracker/src/github-rest-integration.test.ts`）、真实 `WORKFLOW.md` → resolved config → WorkspaceManager → temp filesystem → shell hook（`packages/workspace/src/config-integration.test.ts`）、真实 `WORKFLOW.md` → loadEffectiveWorkflow → WorkspaceManager → real temp fs + hooks → runAgentAttempt → fake app-server subprocess → JSON-RPC session/events（`packages/agent/src/config-integration.test.ts`，fixture 见 `packages/agent/test-fixtures/`）、session 事件流 | M2 tracker + M3 workspace + M4 agent（含 M4.6 端到端 Core Conformance）已落地 |
 | L3 端到端（§17.8 Real Integration Profile / §18） | orchestrator 完整 loop：本地 fake tracker + stub coding agent，覆盖 claim → dispatch → retry → reconciliation | M5 落地 |
 | L4 recorded-session | 录制真实 provider / agent 会话回放 | M7 前后评估 |
 
@@ -45,6 +45,7 @@
 ```bash
 npm test                          # 全仓
 npm test -w @symphony/config      # 单 workspace
+npm test -w @symphony/agent -- src/config-integration.test.ts # M4 端到端 Core Conformance
 npm run gate                      # typecheck + test + lint + docs:check 一键门禁
 ```
 

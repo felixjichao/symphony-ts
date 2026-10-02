@@ -79,6 +79,23 @@ if (args["record-startup"]) {
   }
 }
 
+if (args["record-world"]) {
+  try {
+    fs.writeFileSync(
+      args["record-world"],
+      JSON.stringify({
+        pid: process.pid,
+        cwd: process.cwd(),
+        argv: process.argv.slice(2),
+        args,
+      }),
+      "utf8",
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 if (args["record-exit"]) {
   process.on("exit", () => {
     try {
