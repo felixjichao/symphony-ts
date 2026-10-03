@@ -86,6 +86,7 @@ export type {
   RetryOptions,
   RetryScheduler,
   RetryWorkspaceCleanup,
+  WorkspaceCleanupIssueContext,
   RetryWorkspaceCleanupResult,
 } from "./retry";
 
@@ -151,3 +152,5 @@ export type {
   OrchestratorLoopOptions,
   PollScheduler,
 } from "./loop";
+
+export type { OrchestratorEvent, RetryEventReason } from "./events";

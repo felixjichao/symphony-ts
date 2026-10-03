@@ -11,7 +11,8 @@ it("projection call graph stays synchronous with only domain imports and no I/O/
       expect(node.kind).not.toBe(ts.SyntaxKind.AsyncKeyword);
       if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
         if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-          expect(["@symphony/domain", "./snapshot"]).toContain(node.moduleSpecifier.text);
+          // Public index accumulates logger exports; snapshot implementation remains domain-only.
+          expect(name === "index.ts" ? ["@symphony/domain", "./snapshot", "./logger"] : ["@symphony/domain"]).toContain(node.moduleSpecifier.text);
         }
       }
       if (ts.isCallExpression(node)) {

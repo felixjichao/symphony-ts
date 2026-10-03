@@ -26,4 +26,21 @@ host 注入双时钟，monotonic 必须与 authority 同源。每次各采样一
 
 ## Known limitations
 
-同步入口没有获取层 timeout；timeout 留未来异步/远程获取层。structured logging 属于 M6.2，HTTP/dashboard 属于可选扩展。projection 不做 tracker/fs/network I/O、不 await、不参与调度。跨包决定见 [snapshot note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
+同步入口没有获取层 timeout；timeout 留未来异步/远程获取层。HTTP/dashboard 属于可选扩展。projection 不做 tracker/fs/network I/O、不 await、不参与调度。跨包决定见 [snapshot note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
+
+## Structured logging (§13.1 / §13.2)
+
+```ts
+import { createStructuredLogger } from "@symphony/observability";
+const logger = createStructuredLogger(); // default stderr, injectable sinks
+logger.registerSecrets([trackerToken]); // before potentially failing operations
+logger.emit({ scope: "issue", severity: "info", event: "dispatch_committed",
+  outcome: "started", issue_id: issue.id, issue_identifier: issue.identifier });
+logger.close();
+```
+
+`emit` never throws. Issue/session unions enforce required context; unknown manual retry identifier is null. Scalar whitelist fields render in fixed `key=value` order with JSON quoting and explicit nulls. No provider/protocol objects, Error/cause/stack, hook output or AgentEvent.summary enter default composition logs. Register raw/resolved tracker secret values and declared env values before candidate construction/validation, retaining previous secrets for running workers. Initial validation uses fixed reasons only.
+
+Redaction precedes escaped UTF-8 truncation: reason 128 bytes, message 896, error 1024, stderr 2048; core/context strings at most 4096 escaped bytes and never silently truncated. Overbudget raw text is omitted; invalid/oversized context yields fixed `logging_format_failed` with null identity keys. A throwing sink cannot prevent delivery to other sinks; one `logging_sink_failed` warning reaches remaining sinks, with no recursion. Default stderr also isolates asynchronous stream errors and drops subsequent lines while backpressured, resuming on drain without a private queue. `renderStructuredLogEvent` is the lower-level throwing renderer without registered secrets; use logger.emit for runtime output.
+
+§13.6 richer humanization is conditional/deferred. CLI helpers adapt runtime ports; production host/signal entrypoints remain M6.3–M6.5. See [logging note](../../notes/accepted/architecture/2026-10-03-structured-logging.md).

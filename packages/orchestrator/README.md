@@ -44,3 +44,9 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 ## M6.1 snapshot metadata
 
 `RetryScheduleRequest.issueUrl?: string | null` 最小透传到 retry；worker outcome 用最新 running issue URL，refresh 失败保留原值，slot/dispatch 失败重排用 refreshed URL（含显式 null）。不保存完整 Issue、不增加 metadata cache、不改变 M5 policy/timer ownership。snapshot 从当前 state 读取，monotonic clock 必须与 authority 同源；observability 仅作为 devDependency 用于 `src/observability-integration.test.ts`。见 [snapshot Note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
+
+## Read-only fact observers (M6.2)
+
+`OrchestratorAuthorityOptions.onEvent` consumes frozen scalar `OrchestratorEvent` facts for committed dispatch, accepted worker, retry scheduling, dispatch failure and applied reconciliation (stop versus retire_exited_lifecycle). Retry reasons distinguish worker failure, continuation, refresh failure, unavailable slots, dispatch failure and manual retry. All observer failures are isolated after actions commit; callbacks never drive policy or replace existing outcome/retry entrypoints. Existing terminal outcomes additionally expose optional captured sessionId/issueUrl; cleanup diagnostics now include successful removed/missing results. No observability runtime import or snapshot/state diff is used.
+
+Cleanup composition may implement optional `removeWorkspaceForIssue(WorkspaceCleanupIssueContext)` to receive authority-owned issue identity for before_remove diagnostics; legacy `removeWorkspace(identifier)` ports continue to work. The authority chooses one port per cleanup, without retry/fallback on a context-aware operation failure.

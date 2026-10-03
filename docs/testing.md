@@ -69,3 +69,9 @@ poll/retry scheduler 分离且可手动推进，不等待真实 backoff；retry 
 运行 `npm test -w @symphony/observability`：empty/session-null/session-established、双时钟各采样一次、稳定排序、monotonic delay、active/ended duration 不双计、absolute totals、双向深复制隔离、handles 白名单排除及同步 unavailable；`snapshot-boundaries.test.ts` 对生产入口/投影 AST 检查 import、async/await 和 I/O/timer 边界。
 
 运行 `npm test -w @symphony/orchestrator -- src/observability-integration.test.ts`：真实 authority 的 onEvent 经真实 applyAgentEvent，配受控 runner / 手动 clocks / timer ports，验证重复/回退/异 thread usage、多 turn、normal exit 与 shutdown 结算、观察失败不改变 claim/重派、retry URL outcome → refresh failure → slot/dispatch failure（含 null）。完整 `npm test -w @symphony/orchestrator` 同时继续回归 M5 真实 subprocess。根 `npm run typecheck` 与 `npm run gate` 为交付门禁。同步 projector 没有 timeout；不能以这些证据宣称 logging、HTTP 或整个 §17.6 完成。
+
+## M6.2 logging Core Conformance
+
+Four entrypoints: `npm test -w @symphony/observability` (snapshot + logger), `npm test -w @symphony/tracker -- src/github/adapter.test.ts`, `npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts`, and `npm test -w @symphony/cli -- src/logging.test.ts`. Tests observe actual committed state/timers and captured safe lines. CLI harness uses real temp WORKFLOW/config/registry/WorkspaceManager/authority/loop and fake app-server subprocess, including two turns, hook failure, fragmented stderr, 10MiB line overflow/recovery, sink/clock failures and filesystem reload rejection. Only external provider/process behavior and clocks/timers are fixtures. Existing M5 integration/shutdown and M6.1 snapshot suites run in the same `npm run gate`.
+
+Fixed lifecycle templates are the MVP; free AgentEvent summaries/hooks/protocol payloads are omitted. The harness verifies composition helpers, not the production executable, signal handlers or host effective-runtime reload commit (M6.3–M6.5). Richer §13.6 humanization is conditional/deferred.

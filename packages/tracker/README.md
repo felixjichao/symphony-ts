@@ -352,9 +352,10 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
   `x-ratelimit-remaining: 0` 都被如实映射成 `tracker_rate_limited` + `retryAfterMs`，但本包
   不排队、不降频、不缓存 ETag / `If-None-Match`（§11.2 的 rate-limit handling 只到"错误面
   诚实"为止）。
-- **§11.1 malformed-record 的"SHOULD log"尚未接线**：省略逻辑已实现，回调注入点
-  （`createGitHubAdapterProfile({ onMalformedRecord })`）已留出，但本包不 import
-  `@symphony/observability`，默认静默省略；日志落点随 M6 的组合根装配。
+- **§11.1 malformed-record 日志接线已由 M6.2 helpers 验证**：
+  `createGitHubAdapterProfile({ onMalformedRecord })` 接 CLI warning observer；callback
+  throw 被 adapter 隔离，坏一条仍返回好 candidates，ID-refresh 保持 MUST fail。
+  默认不装配 logger 的独立 adapter 仍静默省略；正式 CLI host 归 M6.3。
 - **provider-native agent tools 未落地**（§11.5 / §17.3）：`TrackerAdapterContext.env`
   已为构造期需要预留，但 tools 的名字、schema、授权边界与结果/错误行为尚未定义。
 - **没有真实 GitHub 的 smoke（§17.8 Real Integration Profile）**：本包的验收全部在

@@ -57,6 +57,8 @@ export interface WorkerTerminalOutcome {
   readonly error: string | null;
   /** worker 生命周期毫秒数（单调时钟差值）。 */
   readonly durationMs: number;
+  readonly issueUrl?: string | null;
+  readonly sessionId?: string | null;
   readonly stopReason: WorkerStopReason | null;
   /** 正常完成时的 attempt 产出；异常为 `null`。 */
   readonly result: AgentAttemptResult | null;

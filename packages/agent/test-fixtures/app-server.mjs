@@ -491,6 +491,20 @@ rl.on("line", (line) => {
         return;
       }
 
+      // M6.2: real diagnostic framing, logger budget, protocol-shaped omission and
+      // transport overflow recovery; does not affect protocol or completion policy.
+      if (args["logging-stderr"]) {
+        process.stderr.write("fragment secret-");
+        setTimeout(() => {
+          process.stderr.write("token diagnostic\n");
+          process.stderr.write("value " + "😀".repeat(3000) + "\n");
+          process.stderr.write('{"token":"secret-token"}\n');
+          process.stderr.write("x".repeat(10 * 1024 * 1024 + 1) + "\n", () => {
+            process.stderr.write("after overflow recovery\n");
+          });
+        }, 2);
+      }
+
       if (args["stderr-spam"]) {
         const interval = setInterval(() => {
           process.stderr.write("diagnostic stderr line\n");
