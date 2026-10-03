@@ -45,11 +45,13 @@ import {
 import {
   globalAvailableSlots,
   isDispatchEligible,
+  isActiveState,
   isRetryDispatchAllowed,
   isTerminalState,
   perStateAvailableSlots,
   type DispatchPolicy,
 } from "./eligibility";
+import type { OrchestratorEvent, RetryEventReason } from "./events";
 import { classifyError, classifySuccess } from "./outcome";
 import {
   decideReconciliationAction,
@@ -96,6 +98,7 @@ export interface RetryScheduleRequest {
   readonly error: string | null;
   /** 延迟口径：continuation 固定 1s；failure `min(10000 * 2^(attempt-1), cap)`。 */
   readonly kind: RetryDelayKind;
+  readonly reason?: RetryEventReason;
 }
 
 /** {@link OrchestratorAuthority} 构造参数。 */
@@ -119,6 +122,8 @@ export interface OrchestratorAuthorityOptions {
    * 时钟域）。
    */
   readonly monotonicNow?: (() => MonotonicTimestampMs) | undefined;
+  /** Isolated, read-only committed facts; never a scheduling input. */
+  readonly onEvent?: ((event: OrchestratorEvent) => void) | undefined;
   /**
    * worker 终态归约完成后的回调（外部观察 / 兼容接线点）。调用时 running 已删除、
    * success 已计入 `completed`，但 claim 尚未释放。
@@ -210,6 +215,7 @@ export class OrchestratorAuthority {
   private readonly resolveWorkspacePath: (issue: Issue) => string;
   private readonly now: () => UtcTimestampMs;
   private readonly monotonicNow: () => MonotonicTimestampMs;
+  private readonly onEvent: ((event: OrchestratorEvent) => void) | undefined;
   private readonly onOutcome: ((outcome: WorkerTerminalOutcome) => void) | undefined;
   private readonly cancelRetry: ((issueId: string) => void) | undefined;
   private readonly retry: RetryOptions | undefined;
@@ -273,6 +279,7 @@ export class OrchestratorAuthority {
     this.resolveWorkspacePath = options.resolveWorkspacePath;
     this.now = options.now ?? (() => Date.now());
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.onEvent = options.onEvent;
     this.onOutcome = options.onOutcome;
     this.cancelRetry = options.cancelRetry;
     this.retry = options.retry;
@@ -420,6 +427,7 @@ export class OrchestratorAuthority {
       const token = this.commitDispatch(issue, options.attempt ?? null);
       return { kind: "dispatched", issueId: issue.id, attemptToken: token };
     } catch (error) {
+      this.emitEvent(() => ({ event: "dispatch_failed", issueId: issue.id, issueIdentifier: issue.identifier, issueUrl: issue.url }));
       return {
         kind: "failed",
         issueId: issue.id,
@@ -499,6 +507,11 @@ export class OrchestratorAuthority {
     this.state.retryAttempts.set(request.issueId, entry);
     // RetryQueued 仍是 claimed（§7.1）：保留 / 补上 claim 以防重复派发。
     this.state.claimed.add(request.issueId);
+    this.emitEvent(() => ({
+      event: "retry_scheduled", issueId: request.issueId, issueIdentifier: request.identifier,
+      issueUrl: entry.issueUrl ?? null, attempt: request.attempt, retryInMs: delayMs,
+      retryKind: request.kind, reason: request.reason ?? "manual_retry",
+    }));
     return entry;
   }
 
@@ -582,6 +595,17 @@ export class OrchestratorAuthority {
   }): Promise<ReconciliationResult> {
     const { capturedEpoch, capturedGeneration, capturedTokens } = captured;
     const capturedIds = [...capturedTokens.keys()];
+    const identities = new Map(capturedIds.map((id) => {
+      const issue = this.active.get(id)?.entry.issue;
+      return [id, { identifier: issue?.identifier ?? null, url: issue?.url ?? null }];
+    }));
+    const applied = (issueId: string, issue: Issue | undefined, action: "stop" | "retire_exited_lifecycle"): void => {
+      const identity = issue ?? identities.get(issueId);
+      const reason = issue === undefined ? "missing" : isTerminalState(issue.state, this.policy)
+        ? "terminal" : isActiveState(issue.state, this.policy) ? "unroutable" : "inactive";
+      this.emitEvent(() => ({ event: "reconciliation_applied", issueId,
+        issueIdentifier: identity?.identifier ?? null, issueUrl: identity?.url ?? null, action, reason }));
+    };
     const stalledIssueIds: string[] = [];
 
     const stillOwns = (issueId: string): boolean =>
@@ -675,6 +699,7 @@ export class OrchestratorAuthority {
         // 自然退出建立的 retry 流程。
         if (issue === undefined) {
           this.retireExitedLifecycle(issueId);
+          applied(issueId, issue, "retire_exited_lifecycle");
           stoppedIssueIds.push(issueId);
           continue;
         }
@@ -683,6 +708,7 @@ export class OrchestratorAuthority {
           continue;
         }
         this.retireExitedLifecycle(issueId);
+        applied(issueId, issue, "retire_exited_lifecycle");
         stoppedIssueIds.push(issueId);
         if (decision === "stop_and_cleanup") {
           await this.cleanupTerminalWorkspace(issue);
@@ -694,6 +720,7 @@ export class OrchestratorAuthority {
       if (issue === undefined) {
         // missing → stop，不 cleanup（§8.5 Part B / §16.3）。
         await record.worker.stop({ kind: "reconciliation" });
+        applied(issueId, issue, "stop");
         stoppedIssueIds.push(issueId);
         continue;
       }
@@ -706,12 +733,14 @@ export class OrchestratorAuthority {
       }
       if (decision === "stop_and_cleanup") {
         await this.stopAndCleanupTerminal(issueId, issue);
+        applied(issueId, issue, "stop");
         stoppedIssueIds.push(issueId);
         cleanedIssueIds.push(issueId);
         continue;
       }
       // active 但 unroutable / 非 active 非 terminal → stop，不 cleanup。
       await record.worker.stop({ kind: "reconciliation" });
+      applied(issueId, issue, "stop");
       stoppedIssueIds.push(issueId);
     }
 
@@ -858,6 +887,7 @@ export class OrchestratorAuthority {
       return;
     }
 
+    this.emitEvent(() => ({ event: "worker_started", issueId: issue.id, issueIdentifier: issue.identifier, issueUrl: issue.url, attempt: attemptNumber }));
     const handling = runPromise.then(
       (result) => {
         this.completeAttempt(issue.id, token, { kind: "success", result });
@@ -923,6 +953,7 @@ export class OrchestratorAuthority {
     // 生命周期代数只在真正提交后递增：任何在途 reconciliation 捕获的旧代数自此失效。
     this.lifecycleGeneration.set(issue.id, (this.lifecycleGeneration.get(issue.id) ?? 0) + 1);
 
+    this.emitEvent(() => ({ event: "dispatch_committed", issueId: issue.id, issueIdentifier: issue.identifier, issueUrl: issue.url, attempt: attemptNumber }));
     // 启动 runner（同步返回 Promise；结果异步归约）。
     this.startWorker(issue, attemptNumber, token, worker, entry);
     return token;
@@ -968,6 +999,8 @@ export class OrchestratorAuthority {
       status: classification.status,
       error: classification.error,
       durationMs,
+      issueUrl: entry.issue.url,
+      sessionId: entry.session?.sessionId ?? null,
       stopReason,
       result: outcome.kind === "success" ? outcome.result : null,
       suppressRetry: classification.suppressRetry,
@@ -1005,6 +1038,7 @@ export class OrchestratorAuthority {
         issueUrl,
         attempt: 1,
         kind: "continuation",
+        reason: "continuation",
         error: null,
       });
       return;
@@ -1016,6 +1050,7 @@ export class OrchestratorAuthority {
         issueUrl,
         attempt: (terminal.attempt ?? 0) + 1,
         kind: "failure",
+        reason: "worker_failure",
         error: terminal.error ?? `worker exited: ${terminal.status}`,
       });
     }
@@ -1078,6 +1113,7 @@ export class OrchestratorAuthority {
         issueUrl: entry.issueUrl ?? null,
         attempt: entry.attempt + 1,
         kind: "failure",
+        reason: "tracker_refresh_failed",
         error: "retry refresh failed",
       });
       return;
@@ -1121,6 +1157,7 @@ export class OrchestratorAuthority {
         issueUrl: issue.url,
         attempt: entry.attempt + 1,
         kind: "failure",
+        reason: "no_available_slots",
         error: "no available orchestrator slots",
       });
       return;
@@ -1143,6 +1180,7 @@ export class OrchestratorAuthority {
         issueUrl: issue.url,
         attempt: entry.attempt + 1,
         kind: "failure",
+        reason: "dispatch_failed",
         error: `failed to dispatch retry: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
@@ -1246,6 +1284,7 @@ export class OrchestratorAuthority {
     try {
       const result = await this.trackCleanup(cleanup.removeWorkspace(identifier));
       if (result.status === "removed" || result.status === "missing") {
+        this.emitDiagnostic({ kind: "cleanup_completed", issueId, identifier, message: result.status, cleanupStatus: result.status });
         return result.status;
       }
       if (result.status === "refused") {
@@ -1275,6 +1314,10 @@ export class OrchestratorAuthority {
       });
       return "failed";
     }
+  }
+
+  private emitEvent(create: () => OrchestratorEvent): void {
+    try { this.onEvent?.(Object.freeze(create())); } catch { /* observation never changes scheduling */ }
   }
 
   private emitDiagnostic(diagnostic: RetryDiagnostic): void {

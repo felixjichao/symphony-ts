@@ -56,6 +56,7 @@ export interface RetryWorkspaceCleanup {
  */
 export interface RetryDiagnostic {
   readonly kind:
+    | "cleanup_completed"
     | "cleanup_refused"
     | "cleanup_failed"
     | "cleanup_error"
@@ -64,6 +65,7 @@ export interface RetryDiagnostic {
   readonly issueId: string | null;
   readonly identifier: string | null;
   readonly message: string;
+  readonly cleanupStatus?: "removed" | "missing";
 }
 
 /**

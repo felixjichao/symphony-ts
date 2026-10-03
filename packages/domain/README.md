@@ -51,3 +51,7 @@ M1.1 已落地的公共 API（唯一出口 `src/index.ts`；进度见 [docs/conf
 ## M6.1 observability contracts
 
 `ObservabilityRuntimeView` 排除 handles 并提供 readonly 输入；`ObservabilitySnapshot` / running / retry rows 与 `SnapshotClock` / `SnapshotResult` 是 §13.3 / §13.5 的公共共享类型。`RetryEntry.issueUrl?: string | null` 为兼容旧调用的展示 metadata，snapshot 将缺席值归一为 null。state 的 secondsRunning 仅保存 ended 累计，投影另加 active elapsed。见 [snapshot Note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
+
+## StructuredLogEvent (M6.2)
+
+SPEC §13.1/§13.2 service/issue/session discriminated union uses stable snake_case log keys. Issue scope requires issue_id + issue_identifier (explicit null for unknown manual retry identity); session scope adds actual string session_id. Only scalar whitelist context is modeled; there is no arbitrary payload map or Error object. Rendering/sinks belong to observability and composition belongs to CLI.

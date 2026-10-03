@@ -151,3 +151,5 @@ export type {
   OrchestratorLoopOptions,
   PollScheduler,
 } from "./loop";
+
+export type { OrchestratorEvent, RetryEventReason } from "./events";

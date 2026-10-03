@@ -98,11 +98,13 @@ export class GitHubTrackerAdapter implements TrackerAdapter {
         if (malformed === null) {
           throw error;
         }
-        this.onMalformedRecord?.({
-          operation: "fetchIssuesByStates",
-          reason: malformedMessage(malformed),
-          error: malformed,
-        });
+        try {
+          this.onMalformedRecord?.({
+            operation: "fetchIssuesByStates",
+            reason: malformedMessage(malformed),
+            error: malformed,
+          });
+        } catch { /* logging failures cannot turn omission into batch failure */ }
       }
     }
     return issues;

@@ -66,3 +66,4 @@ export type {
   ObservabilityRuntimeView, ObservabilitySnapshot, ObservabilityRunningRow,
   ObservabilityRetryRow, SnapshotClock, SnapshotTokens, SnapshotValue, SnapshotResult,
 } from "./observability";
+export type { StructuredLogEvent } from "./logging";

@@ -48,6 +48,12 @@ describe("GitHubTrackerAdapter — state-list（§11.1.1）", () => {
     expect(omitted[0]?.reason).toContain("`title`");
   });
 
+  it("throwing omission observer cannot fail candidate fetch; ID refresh still MUST fail", async () => {
+    const adapter = build([GOOD, BAD], () => { throw new Error("sink failed"); });
+    expect((await adapter.fetchIssuesByStates(["open"])).map((issue) => issue.identifier)).toEqual(["GH-12"]);
+    await expect(adapter.fetchIssuesByIds(["acme/widget#12"])).rejects.toBeInstanceOf(TrackerError);
+  });
+
   it("未接回调时静默省略，不让整次 poll 失败", async () => {
     await expect(build([BAD]).fetchIssuesByStates(["open"])).resolves.toEqual([]);
   });

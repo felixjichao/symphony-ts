@@ -76,6 +76,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [accepted/architecture/2026-09-26-align-with-upstream-spec.md](accepted/architecture/2026-09-26-align-with-upstream-spec.md) — 对齐官方 SPEC：固定 baseline、删除协议栈 scaffold、按 SPEC 主组件重建 workspace 边界（M0.6）
 - [accepted/tooling/2026-09-25-npm-workspaces.md](accepted/tooling/2026-09-25-npm-workspaces.md) — npm workspaces 为唯一 canonical 包管理
 
+- [accepted/architecture/2026-10-03-structured-logging.md](accepted/architecture/2026-10-03-structured-logging.md) — M6.2 structured logging、提交点事实事件、安全预算与 composition 接线边界（§13.1/§13.2/§17.6）
+
 ### Superseded（保留原文，不改写历史）
 
 - [superseded/architecture/2026-09-25-m0-scaffold.md](superseded/architecture/2026-09-25-m0-scaffold.md) — M0 脚手架：8-workspace 边界先行（被 align-with-upstream-spec 取代）

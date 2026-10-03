@@ -226,7 +226,7 @@ describe("terminal retry refresh 的真实 workspace 清理", () => {
     expect(await pathExists(workspace.path)).toBe(false);
     expect(h.state.claimed.has(issue.id)).toBe(false);
     expect(h.state.retryAttempts.has(issue.id)).toBe(false);
-    expect(h.diagnostics).toHaveLength(0);
+    expect(h.diagnostics).toEqual([expect.objectContaining({ kind: "cleanup_completed", cleanupStatus: "removed", issueId: issue.id, identifier: issue.identifier })]);
     // 根目录本身仍在（只删除该 issue 的 workspace）。
     expect(await pathExists(root)).toBe(true);
   });

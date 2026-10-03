@@ -163,7 +163,8 @@ describe("startup terminal cleanup — 验收 09", () => {
     expect(await pathExists(keep.path)).toBe(true);
     expect(await readFile(path.join(keep.path, "keep.txt"), "utf8")).toBe("still active");
     expect(await pathExists(root)).toBe(true);
-    expect(h.diagnostics).toHaveLength(0);
+    expect(h.diagnostics).toHaveLength(2);
+    expect(h.diagnostics.every((d) => d.kind === "cleanup_completed" && d.cleanupStatus === "removed")).toBe(true);
 
     // 重复执行：目录已不存在 → 幂等 missing，不再报错。
     const again = await h.authority.runStartupTerminalCleanup();
@@ -273,6 +274,6 @@ describe("startup terminal cleanup — 验收 10（安全边界不被绕过）",
     expect(await pathExists(throwing.path)).toBe(true);
     expect(await readFile(path.join(outside, "marker.txt"), "utf8")).toBe("keep");
     const kinds = h.diagnostics.map((diagnostic) => diagnostic.kind).sort();
-    expect(kinds).toEqual(["cleanup_error", "cleanup_failed", "cleanup_refused"]);
+    expect(kinds).toEqual(["cleanup_completed", "cleanup_error", "cleanup_failed", "cleanup_refused"]);
   });
 });
