@@ -19,7 +19,10 @@ M5.4（NEST-77 / #53）要在 `@symphony/orchestrator` 落地 active-run reconci
 
 3. **reconcile 顺序 = 先 stall 后 refresh**（SPEC §16.3）。Part A 不调用 tracker，因此后续 fetch 失败不撤销已执行的 stall 判定。Part B 在**剩余 running 为空时直接返回、零 tracker 请求**；fetch 前捕获每个 issue 的 attempt token，批量 `fetchIssuesByIds(runningIds)`，只处理本次请求的 ID；active+routable 更新 snapshot、terminal stop + cleanup、其余 stop 不 cleanup。
 
-4. **迟到结果按 token 丢弃，stop 分支接管旧生命周期**：refresh 期间若 issue 已被新 attempt 接管（active token 不匹配）则整条丢弃；若原 attempt 已自然退出（active 中不存在）且判定为 stop，则取消该旧生命周期的 retry timer / 在途 ownership 并释放 claim（terminal 仍清理 workspace）；判定为 active 更新时交给自然退出的 retry 流程。因 dispatch 提交段会清除同 issue retry entry，此处存在的 entry 必属本次捕获的旧生命周期，不会误伤后来者。
+4. **迟到结果同时按 reconciliation epoch 与 lifecycle generation 丢弃**：
+   - **reconciliation epoch**：每次 `reconcileRunningIssues()` 在同步捕获 running 集合时为每个 issue 分配递增 epoch，覆盖更早调用在该 issue 上的写入权。异步 refresh 返回后只有仍持有最新 epoch 的调用才允许更新 snapshot / stop / cleanup——重叠调用**不串行阻塞**，而是按**发起顺序**决胜，较晚发起的调用结果永不被较早调用的迟到结果回退（无论两者 fetch 完成顺序如何），迟到 inactive / terminal 也不会错误停止已恢复 active 的 issue。
+   - **lifecycle generation**：每次 `commitDispatch()`（首跑或 retry / continuation 重派）递增该 issue 的代数并跨 worker 退出 / retry 排队保留。refresh 结果返回后若代数已变，说明该 issue 已被更新的生命周期接管，整条丢弃。
+   - **因此**：仅凭"`active` 中无该 issue"**不足以**判断当前 retry 属于捕获的旧 attempt——旧 attempt 退出后其 continuation retry 可能已派发新 worker，新 worker 再次退出会留下**新生命周期**的 retry（attempt 更大）。generation 校验保证这种情况整条丢弃，不会误取消后来者的 retry / claim。只有 epoch 与 generation 都不变、且原 attempt 已自然退出、判定为 stop 时，才取消该旧生命周期的 retry 并释放 claim（terminal 仍清理 workspace）；判定为 active 更新时交给自然退出的 retry 流程。
 
 5. **cleanup 端口提升为 authority 顶层能力**：`OrchestratorAuthorityOptions.cleanupWorkspace` 优先，缺省回退 `RetryOptions.cleanupWorkspace`（保留 M5.3 接线兼容）；诊断同理（`onCleanupDiagnostic` → `retry.onDiagnostic`）。因此 reconciliation / startup sweep 的 cleanup 不再依赖是否启用 retry。
 
@@ -35,6 +38,8 @@ M5.4（NEST-77 / #53）要在 `@symphony/orchestrator` 落地 active-run reconci
 - **reconcile 先 refresh 再 stall**：SPEC §16.3 明确先 `reconcile_stalled_runs`；且 tracker 失败不应影响 stall 判定。否。
 - **只按 issueId 处理 refresh 结果，不捕获 attempt token**：新 attempt 已接管时旧结果会覆盖新生命周期（错误 stop / 错误快照）。改为 token 校验。否。
 - **原 attempt 已自然退出就直接跳过、不取消其 retry**：terminal 情况下会留下对 terminal issue 的 continuation retry（延迟清理，甚至在不启用 retry 时泄漏 workspace）。改为 stop 分支取消旧生命周期 retry 并释放 claim。否。
+- **仅凭"`active` 中无该 issue"判断 retry 归属**（首版实现的假设）：旧 attempt 的 continuation retry 可能已派发新 worker、新 worker 再退出并留下 attempt 更大的 retry，此时无 active 但 retry 属**新生命周期**，无条件取消会误伤（审查 blocker 1）。改为持久追踪 lifecycle generation 并回校验。否。
+- **串行化或合并重叠的 reconciliation 调用（后到调用等待前一个完成）**：会让一个慢 fetch 阻塞后续 tick，且把"哪次调用更新"绑定到完成顺序而非发起顺序。改为按发起顺序的 reconciliation epoch 决胜：不阻塞，但被覆盖的调用其迟到结果一律丢弃（审查 blocker 2）。否。
 - **继续让 `cleanupWorkspace` 只挂在 `RetryOptions` 下**：不启用 retry 时 reconciliation / startup 无 cleanup 端口，terminal workspace 会累积。改为顶层能力 + 旧接线回退。否。
 - **cleanup 前不建立屏障，只在 stop 返回后登记 cleanup promise**：stop 返回与登记之间新 dispatch 可能抢入并把文件写进随后被删的目录。改为屏障先于 stop 建立。否。
 - **后到的收尾直接覆盖 `cleanupInFlight` 的 promise**：前一个收尾结束时可能误删 map 中后一个 promise，提前解除互斥。改为按"最新屏障 + 串行排队"实现。否。
@@ -42,7 +47,7 @@ M5.4（NEST-77 / #53）要在 `@symphony/orchestrator` 落地 active-run reconci
 
 ## Consequences
 
-- M5.5 poll loop 只需按 tick 调用 `reconcileRunningIssues()`、启动时调用 `runStartupTerminalCleanup()`，并提供 `stallTimeoutMs` getter 与 effective `DispatchPolicy`；cleanup 端口与 retry 解耦。
-- 已发布公共面新增 `reconcileRunningIssues` / `runStartupTerminalCleanup` / 顶层 `cleanupWorkspace` / `onCleanupDiagnostic` / `stallTimeoutMs`，以及 `reconciliation.ts` 的纯函数与类型；`RetryDiagnostic.kind` 扩展为含 `cleanup_fetch_failed` / `cleanup_unavailable` 且 `issueId` 可为 `null`（startup 级诊断无单一 issue）。
-- 后续承诺：authority 仍是唯一 state 写入者；本包不得内联 destructive 删除、不得引入真实 sleep、不得把 stall 判定与 refresh 顺序倒置；cleanup 必须始终经注入端口。
+- M5.5 poll loop 只需按 tick 调用 `reconcileRunningIssues()`、启动时调用 `runStartupTerminalCleanup()`，并提供 `stallTimeoutMs` getter 与 effective `DispatchPolicy`；cleanup 端口与 retry 解耦，重叠调用由 authority 按发起顺序自行决胜，调用方无需外部加锁。
+- 已发布公共面新增 `reconcileRunningIssues` / `runStartupTerminalCleanup` / 顶层 `cleanupWorkspace` / `onCleanupDiagnostic` / `stallTimeoutMs`，以及 `reconciliation.ts` 的纯函数与类型；`RetryDiagnostic.kind` 扩展为含 `cleanup_fetch_failed` / `cleanup_unavailable` 且 `issueId` 可为 `null`（startup 级诊断无单一 issue）。内部新增 per-issue `reconcileEpoch` 与 `lifecycleGeneration`（不进入 domain 契约）。
+- 后续承诺：authority 仍是唯一 state 写入者；本包不得内联 destructive 删除、不得引入真实 sleep、不得把 stall 判定与 refresh 顺序倒置；cleanup 必须始终经注入端口；任何异步 refresh 结果在写入前都必须回校验 reconciliation epoch 与 lifecycle generation。
 - stall / reconciliation 仍是 in-memory only（§14.3）：进程重启后不恢复 worker 或 retry timer，靠 startup sweep + 重新轮询恢复。

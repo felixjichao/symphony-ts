@@ -223,8 +223,25 @@ export class OrchestratorAuthority {
    * 收尾真正结束后才能启动 worker。
    */
   private readonly cleanupInFlight = new Map<string, CleanupBarrier>();
+  /**
+   * 每个 issue 已派发的生命周期**代数**：每次 `commitDispatch()`（首跑或 retry / continuation
+   * 重派）递增，并跨 worker 退出 / retry 排队持续保留。reconciliation 在 fetch 前捕获
+   * 代数，结果返回后若发现代数已变，说明该 issue 已被更新的生命周期接管——即使新
+   * attempt 也已经退出并留下了自己的 retry，也必须整条丢弃旧结果，绝不能把后来
+   * 生命周期的 retry / claim 当作旧生命周期处理。
+   */
+  private readonly lifecycleGeneration = new Map<string, number>();
+  /**
+   * 每个 issue 最近的 reconciliation claim epoch：`reconcileRunningIssues()` 在**同步**
+   * 捕获 running 集合时为每个 issue 分配一个递增 epoch，覆盖更早调用在该 issue 上的
+   * 写入权。异步 refresh 返回后只有仍持有该 issue 最新 epoch 的调用才允许更新 snapshot /
+   * stop / cleanup——这样重叠调用按**发起顺序**决胜，较晚发起的调用结果永不被较早调用
+   * 的迟到结果回退（无论两者 fetch 完成顺序如何）。
+   */
+  private readonly reconcileEpoch = new Map<string, number>();
   private tokenCounter = 0;
   private retryTokenCounter = 0;
+  private reconcileEpochCounter = 0;
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.state = options.state;
@@ -401,21 +418,68 @@ export class OrchestratorAuthority {
    * - terminal → stop（`{ kind: "terminal" }`）+ 屏障内安全 cleanup；
    * - active 但 unroutable / 非 active 非 terminal / missing → stop（不 cleanup）。
    *
-   * 刷新期间 worker 可能自然退出或已被新 attempt 接管：token 不匹配即不把旧刷新结果
-   * 作用于新生命周期；原 attempt 已退出且判定为 stop 时，取消该旧生命周期的 retry 并
-   * 释放其 claim（duplicate outcome 不产生 duplicate retry）；terminal 仍在 cleanup。
+   * 刷新期间 worker 可能自然退出、被新 attempt 接管，或**同 issue 已被更新的生命周期
+   * 派发过新 worker 并再次退出**。因此每个 issue 的结果都要同时回校验两个值：
    *
-   * 本方法可能在同一次调用内 `await` 多个 worker 收尾，但所有 state 写入仍经本类串行
-   * transition；调用方（poll loop，M5.5）负责不与 dispatch 并发交错。
+   * - **reconciliation epoch**：本次调用是否仍是最晚发起、持有该 issue 写入权的调用；
+   * - **lifecycle generation**：本次捕获的 attempt 之后是否已有新的 `commitDispatch()`
+   *   （含 retry / continuation 重派）。
+   *
+   * 任一不满足即整条丢弃该 issue 的结果——即使当前已无 active worker、且存在一个 retry，
+   * 也不能把**后来生命周期**留下的 retry / claim 当作旧生命周期处理。只有两者都成立、
+   * 且原 attempt 已自然退出、判定为 stop 时，才取消该旧生命周期的 retry 并释放 claim
+   * （duplicate outcome 不产生 duplicate retry）；terminal 仍会 cleanup。
+   *
+   * 重叠调用**不串行阻塞**，而是按发起顺序决胜：较晚发起的调用在其 issue 上覆盖 epoch，
+   * 较早调用的迟到结果因 epoch 失效而被丢弃，因此迟到 snapshot 不会回退较新结果，迟到
+   * inactive / terminal 也不会错误 stop 已恢复 active 的 issue。所有 state 写入仍经本类
+   * 串行 transition，不产生重复 dispatch。
    */
   public async reconcileRunningIssues(): Promise<ReconciliationResult> {
+    // 同步捕获本轮 claim（任何 await 之前）：为当前每个 active issue 分配递增 epoch，
+    // 并记录其生命周期代数与 attempt token。后续所有写入都要回校验这些值。
+    const capturedEpoch = new Map<string, number>();
+    const capturedGeneration = new Map<string, number>();
+    const capturedTokens = new Map<string, string>();
+    for (const [issueId, record] of this.active.entries()) {
+      const epoch = ++this.reconcileEpochCounter;
+      this.reconcileEpoch.set(issueId, epoch);
+      capturedEpoch.set(issueId, epoch);
+      capturedGeneration.set(issueId, this.lifecycleGeneration.get(issueId) ?? 0);
+      capturedTokens.set(issueId, record.token);
+    }
+    return this.performReconciliation({ capturedEpoch, capturedGeneration, capturedTokens });
+  }
+
+  /**
+   * {@link reconcileRunningIssues} 的实际执行体；全部写入都经 `stillOwns()` 回校验，
+   * 以保证重叠调用与生命周期替换下只有最新结果生效。
+   */
+  private async performReconciliation(captured: {
+    readonly capturedEpoch: ReadonlyMap<string, number>;
+    readonly capturedGeneration: ReadonlyMap<string, number>;
+    readonly capturedTokens: ReadonlyMap<string, string>;
+  }): Promise<ReconciliationResult> {
+    const { capturedEpoch, capturedGeneration, capturedTokens } = captured;
+    const capturedIds = [...capturedTokens.keys()];
     const stalledIssueIds: string[] = [];
+
+    const stillOwns = (issueId: string): boolean =>
+      this.reconcileEpoch.get(issueId) === capturedEpoch.get(issueId) &&
+      (this.lifecycleGeneration.get(issueId) ?? 0) === capturedGeneration.get(issueId);
 
     // Part A: stall detection（不依赖 tracker；tracker 后续失败不撤销已执行的 stall）。
     const stallTimeoutMs = this.stallTimeoutMs();
     if (isStallDetectionEnabled(stallTimeoutMs)) {
       const nowUtc = this.now();
-      for (const [issueId, record] of [...this.active.entries()]) {
+      for (const issueId of capturedIds) {
+        if (!stillOwns(issueId)) {
+          continue; // 已被更晚的 reconciliation / 新生命周期接管。
+        }
+        const record = this.active.get(issueId);
+        if (record === undefined) {
+          continue;
+        }
         if (!isWorkerStalled(record.entry, record.telemetry, nowUtc, stallTimeoutMs)) {
           continue;
         }
@@ -425,18 +489,13 @@ export class OrchestratorAuthority {
       }
     }
 
-    // Part B: 对剩余 running 做一次批量 refresh。
-    const capturedTokens = new Map<string, string>();
-    for (const [issueId, record] of this.active.entries()) {
-      capturedTokens.set(issueId, record.token);
-    }
-    const scannedIssueIds = [...capturedTokens.keys()];
+    // Part B: 对未被本次 stall 处理的剩余 running 做一次批量 refresh。
+    const stalled = new Set(stalledIssueIds);
+    const scannedIssueIds = capturedIds.filter((issueId) => !stalled.has(issueId));
     const stoppedIssueIds: string[] = [];
     const cleanedIssueIds: string[] = [];
     const updatedIssueIds: string[] = [];
-    const result = (
-      refreshFailed: boolean,
-    ): ReconciliationResult => ({
+    const result = (refreshFailed: boolean): ReconciliationResult => ({
       scannedIssueIds,
       stalledIssueIds,
       stoppedIssueIds,
@@ -465,17 +524,23 @@ export class OrchestratorAuthority {
     }
 
     for (const issueId of scannedIssueIds) {
+      // 迟到结果回校验：被更晚调用覆盖或被新生命周期替换时整条丢弃。
+      if (!stillOwns(issueId)) {
+        continue;
+      }
+
       const record = this.active.get(issueId);
       if (record !== undefined && record.token !== capturedTokens.get(issueId)) {
-        // refresh 期间已被新 attempt 接管：旧结果不得作用于新生命周期。
+        // 防御性：代数一致时 token 必一致；不一致则不作用于该 entry。
         continue;
       }
 
       const issue = byId.get(issueId);
 
       if (record === undefined) {
-        // 捕获的 attempt 已在 refresh 期间自然退出。只有 stop 分支需要接管旧生命周期的
-        // retry / claim；active 快照交给自然退出建立的 retry 流程。
+        // 捕获的 attempt 已在 refresh 期间自然退出，且此后没有新 dispatch（generation
+        // 未变）。只有 stop 分支需要接管旧生命周期的 retry / claim；active 快照交给
+        // 自然退出建立的 retry 流程。
         if (issue === undefined) {
           this.retireExitedLifecycle(issueId);
           stoppedIssueIds.push(issueId);
@@ -722,6 +787,8 @@ export class OrchestratorAuthority {
       this.state.retryAttempts.delete(issue.id);
     }
     this.active.set(issue.id, { token, worker, entry, telemetry: createAgentTelemetryState() });
+    // 生命周期代数只在真正提交后递增：任何在途 reconciliation 捕获的旧代数自此失效。
+    this.lifecycleGeneration.set(issue.id, (this.lifecycleGeneration.get(issue.id) ?? 0) + 1);
 
     // 启动 runner（同步返回 Promise；结果异步归约）。
     this.startWorker(issue, attemptNumber, token, worker, entry);
@@ -949,10 +1016,12 @@ export class OrchestratorAuthority {
    * reconciliation 在 refresh 期间发现捕获的 attempt 已自然退出、且刷新结果要求 stop：
    * 取消该**旧生命周期**的 retry timer / 在途 ownership 并释放其 claim。
    *
-   * 仅在 `active` 中已无该 issue 时调用——即没有更新的 attempt 在跑。若退出后已经启动了
-   * 更新的 attempt，`reconcileRunningIssues` 会走 token 不匹配的 skip 分支，不会到这里。
-   * 因 dispatch 提交段会清除同 issue retry entry，此处存在的 entry 必属本次捕获的旧
-   * 生命周期，取消它是安全的，不会误伤后来者。terminal 分支随后仍会清理 workspace。
+   * **前置条件**：调用方已确认该 issue 的 lifecycle generation 自捕获以来未变
+   * （`stillOwns()`）。仅凭"`active` 中无该 issue"**不足以**说明当前的 retry 属于捕获的
+   * 旧 attempt——旧 attempt 退出后其 continuation retry 可能已经派发过新 worker，新
+   * worker 再次退出后留下的是**新生命周期**的 retry（attempt 更大）。generation 校验保证
+   * 这种情况被整条丢弃，不会误取消后来者的 retry / claim。terminal 分支随后仍会清理
+   * workspace（调用方继续持有 epoch + generation）。
    */
   private retireExitedLifecycle(issueId: string): void {
     this.cancelScheduledRetry(issueId);

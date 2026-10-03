@@ -629,4 +629,98 @@ describe("race / 重复 outcome — 验收 11", () => {
     expect(h.cleanupCalls).toEqual(["ABC-1"]);
     expect(h.state.retryAttempts.has(issue.id)).toBe(false);
   });
+
+  it("审查 blocker 1：refresh 期间新生命周期已派发并退出时，保留其 retry（不误取消后来者）", async () => {
+    const h = makeHarness();
+    const issue = makeIssue({ state: "Todo" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue); // 生命周期 A（generation 1）
+
+    const staleGate = deferred<readonly Issue[]>();
+    h.tracker.nextFetch = staleGate.promise;
+    const stale = h.authority.reconcileRunningIssues(); // 捕获 A
+    await flush();
+
+    // A 自然退出 → continuation retry（attempt 1）。
+    h.runner.last.resolve(h.runner.successResult(issue));
+    await h.authority.waitForIdle();
+    const continuation = h.state.retryAttempts.get(issue.id)!;
+    expect(continuation.attempt).toBe(1);
+
+    // continuation timer 到期 → refresh（active）→ 派发新生命周期 B（attempt 1）。
+    h.tracker.issues.set(issue.id, issue);
+    h.scheduler.fire(continuation.timerHandle);
+    await flush();
+    expect(h.runner.options).toHaveLength(2);
+    expect(h.state.running.has(issue.id)).toBe(true);
+
+    // B 失败 → 建立属于 B（generation 2）的 failure retry（attempt 2）。
+    h.runner.last.reject(new AgentError("port_exit", "B failed"));
+    await h.authority.waitForIdle();
+    expect(h.state.retryAttempts.get(issue.id)?.attempt).toBe(2);
+
+    // A 的迟到 terminal 结果返回：generation 已变，必须整条丢弃。
+    staleGate.resolve([makeIssue({ state: "Done" })]);
+    const result = await stale;
+
+    expect(result.stoppedIssueIds).toEqual([]);
+    expect(result.cleanedIssueIds).toEqual([]);
+    expect(h.cleanupCalls).toHaveLength(0);
+    // B 的 retry（attempt 2）与 claim 均保留，绝不能被当作 A 的旧生命周期取消。
+    expect(h.state.retryAttempts.get(issue.id)?.attempt).toBe(2);
+    expect(h.state.claimed.has(issue.id)).toBe(true);
+    expect(h.state.running.has(issue.id)).toBe(false);
+  });
+
+  it("审查 blocker 2：重叠 reconciliation 按发起顺序决胜，迟到旧快照不回退较新结果", async () => {
+    const h = makeHarness();
+    const issue = makeIssue({ state: "Todo", title: "older" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+
+    const r1Gate = deferred<readonly Issue[]>();
+    h.tracker.nextFetch = r1Gate.promise;
+    const r1 = h.authority.reconcileRunningIssues(); // epoch 1
+    await flush();
+
+    // R2 在 R1 挂起时发起并返回较新快照。
+    h.tracker.issues.set(issue.id, makeIssue({ state: "In Progress", title: "newer" }));
+    const r2 = h.authority.reconcileRunningIssues(); // epoch 2，覆盖 R1 的写入权
+    const r2Result = await r2;
+    expect(r2Result.updatedIssueIds).toEqual([issue.id]);
+    expect(runningEntry(h, issue.id).issue.title).toBe("newer");
+
+    // R1 迟到并返回更旧快照 → epoch 失效，整条丢弃。
+    r1Gate.resolve([makeIssue({ state: "Todo", title: "older" })]);
+    const r1Result = await r1;
+    expect(r1Result.updatedIssueIds).toEqual([]);
+    expect(runningEntry(h, issue.id).issue.title).toBe("newer");
+    expect(h.state.running.has(issue.id)).toBe(true);
+  });
+
+  it("审查 blocker 2：迟到 terminal 不停止已由较新结果确认 active 的 issue", async () => {
+    const h = makeHarness();
+    const issue = makeIssue({ state: "Todo" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+
+    const r1Gate = deferred<readonly Issue[]>();
+    h.tracker.nextFetch = r1Gate.promise;
+    const r1 = h.authority.reconcileRunningIssues();
+    await flush();
+
+    h.tracker.issues.set(issue.id, makeIssue({ state: "In Progress", title: "recovered" }));
+    await h.authority.reconcileRunningIssues(); // 较新调用确认 active
+    expect(h.state.running.has(issue.id)).toBe(true);
+
+    // 较早调用的迟到 terminal 结果不得 stop / cleanup。
+    r1Gate.resolve([makeIssue({ state: "Done" })]);
+    const r1Result = await r1;
+    expect(r1Result.stoppedIssueIds).toEqual([]);
+    expect(r1Result.cleanedIssueIds).toEqual([]);
+    expect(h.cleanupCalls).toHaveLength(0);
+    expect(h.state.running.has(issue.id)).toBe(true);
+    expect(h.authority.activeWorkerCount).toBe(1);
+    expect(runningEntry(h, issue.id).issue.title).toBe("recovered");
+  });
 });

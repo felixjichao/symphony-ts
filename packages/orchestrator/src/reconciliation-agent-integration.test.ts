@@ -87,6 +87,7 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
   let config: ServiceConfig;
   let manager: WorkspaceManager;
   let currentIssue: Issue;
+  let observedPid: number | null = null;
 
   const issue = (state: string): Issue => ({ ...currentIssue, state });
 
@@ -147,6 +148,7 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
   }
 
   beforeEach(async () => {
+    observedPid = null;
     tempDir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "symphony-m54-real-"));
     workspaceRoot = path.join(tempDir, "workspaces");
     await fs.mkdir(workspaceRoot, { recursive: true });
@@ -155,7 +157,8 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
     const hooks: HooksConfig = {
       afterCreate: null,
       beforeRun: null,
-      afterRun: null,
+      // 每个 attempt 收尾都写 marker（cwd = workspace），供 cleanup 时验证 after_run 已结束。
+      afterRun: "printf 'after-run' > after-run.marker",
       beforeRemove: null,
       timeoutMs: 5_000,
     };
@@ -211,10 +214,21 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("terminal 刷新：真实 subprocess 收尾后才删除 workspace", async () => {
-    const authority = makeAuthority({
-      cleanupWorkspace: { removeWorkspace: (identifier) => manager.removeWorkspace(identifier) },
-    });
+  it("terminal 刷新：真实 subprocess 与 after_run 收尾后才删除 workspace", async () => {
+    // cleanup 端口在**删除发生的时刻**观测世界：PID 必须已退出、after_run marker 必须已写入。
+    const observations: Array<{ pidAlive: boolean; afterRunMarker: boolean }> = [];
+    const cleanupProbe: RetryWorkspaceCleanup = {
+      removeWorkspace: async (identifier: string) => {
+        observations.push({
+          pidAlive: observedPid !== null && isAlive(observedPid),
+          afterRunMarker: await pathExists(
+            path.join(manager.resolveWorkspacePath(identifier), "after-run.marker"),
+          ),
+        });
+        return manager.removeWorkspace(identifier);
+      },
+    };
+    const authority = makeAuthority({ cleanupWorkspace: cleanupProbe });
 
     authority.dispatchIssue(currentIssue);
     const startupFile = path.join(tempDir, "startup-0.txt");
@@ -222,6 +236,7 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
     const pid = Number.parseInt((await fs.readFile(startupFile, "utf8")).trim(), 10);
     expect(Number.isInteger(pid) && pid > 0).toBe(true);
     expect(isAlive(pid)).toBe(true);
+    observedPid = pid;
     const workspacePath = manager.resolveWorkspacePath(currentIssue.identifier);
     expect(await pathExists(workspacePath)).toBe(true);
 
@@ -232,6 +247,8 @@ describe("reconciliation 真实链路：subprocess 停止 → outcome → cleanu
     expect(result.stoppedIssueIds).toEqual([currentIssue.id]);
     expect(result.cleanedIssueIds).toEqual([currentIssue.id]);
     expect(authority.activeWorkerCount).toBe(0);
+    // 删除发生时已满足次序：subprocess 已退出、after_run 已完成。
+    expect(observations).toEqual([{ pidAlive: false, afterRunMarker: true }]);
     // 真实收尾发生在删除之前：stop 返回时子进程已退出、目录已删除。
     expect(isAlive(pid)).toBe(false);
     expect(await pathExists(workspacePath)).toBe(false);
