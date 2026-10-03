@@ -37,7 +37,7 @@
 
 从用户 / 上游真正进入代码的入口测，不要在测试里复刻一份入口逻辑。
 
-- ✅ `apps/cli`：对 `main(parseArgs(argv))` 的真实入口链路断言行为（将来直接 spawn 进程）；不要在测试里重新实现一遍参数校验再测它。
+- ✅ `apps/cli`：对 `main(parseArgs(argv))` 的真实入口链路断言行为（M6.3 已通过 `src/bin.test.ts` 真实 spawn 进程运行）；不要在测试里重新实现一遍参数校验再测它。
 - ✅ config：从文件路径入口 `load(path)` 测起，而不是喂一个预构造好的对象再测校验器。
 - ❌ 只测内部 helper，绕过 `index.ts` 的公共出口——`src/index.ts` 是包的唯一 API 面，测试必须经过它。
 
@@ -75,3 +75,13 @@ poll/retry scheduler 分离且可手动推进，不等待真实 backoff；retry 
 Four entrypoints: `npm test -w @symphony/observability` (snapshot + logger), `npm test -w @symphony/tracker -- src/github/adapter.test.ts`, `npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts`, and `npm test -w @symphony/cli -- src/logging.test.ts`. Tests observe actual committed state/timers and captured safe lines. CLI harness uses real temp WORKFLOW/config/registry/WorkspaceManager/authority/loop and fake app-server subprocess, including two turns, hook failure, fragmented stderr, 10MiB line overflow/recovery, sink/clock failures and filesystem reload rejection. Only external provider/process behavior and clocks/timers are fixtures. Existing M5 integration/shutdown and M6.1 snapshot suites run in the same `npm run gate`.
 
 Fixed lifecycle templates are the MVP; free AgentEvent summaries/hooks/protocol payloads are omitted. The harness verifies composition helpers, not the production executable, signal handlers or host effective-runtime reload commit (M6.3–M6.5). Richer §13.6 humanization is conditional/deferred.
+
+## M6.3 CLI host and executable Core Conformance
+
+运行 `npm test -w @symphony/cli`：
+- `src/args.test.ts`：纯逻辑测试 `parseCliArgs`（positional workflow path、`--help` / `-h`、`--version` / `-v`）与 `resolveWorkflowPath`（显式路径 vs. 默认 `./WORKFLOW.md` 回退）；
+- `src/host.test.ts`：组件装配与生命周期测试，验证可直接在测试进程中构造 `createHost()`、内置 GitHub profile 默认装配与配置校验、缺失文件 / 非法配置 / 未支持 tracker 洁净失败并记录结构化日志、`start()` 启动与 `stop()` 优雅停机；
+- `src/bin.test.ts`：真实子进程集成测试，验证 `package.json` 的 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限）、显式与 CWD 默认 workflow 加载、缺失文件 / 非法配置退出码 1 且输出结构化错误、以及 `SIGINT` / `SIGTERM` 优雅停机并以 0 退出；
+- `src/logging.test.ts`：M6.2 logging helpers 回归。
+
+动态 reload（M6.4）、信号竞态与完整 exit-code matrix（M6.5）不在本阶段范围。

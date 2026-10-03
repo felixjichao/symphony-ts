@@ -49,7 +49,7 @@
 | §13.1 / §13.2 | 结构化日志、required context、安全预算与失败隔离 | `packages/observability` + CLI helpers | implemented（接线 helpers，生产 host 待 M6.3） | `npm test -w @symphony/observability`；`npm test -w @symphony/cli -- src/logging.test.ts`；`npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts` |
 | §13.6 | richer AgentEvent humanization（conditional） | `packages/observability` | deferred | MVP 固定 event/outcome/reason 与生命周期模板，不复制自由 summary |
 | §13 | status surface（可选 HTTP / dashboard） | `packages/observability` | planned M6 | — |
-| §17 / §18 | CLI lifecycle 与组件装配 | `apps/cli` | planned M6 | — |
+| §17.7 / §18.1 | CLI lifecycle 与组件装配（静态 initial effective runtime host + bin executable 契约） | `apps/cli` | implemented | Core Conformance — `npm test -w @symphony/cli`（`src/args.test.ts` 纯逻辑解析 argv 与 fallback；`src/host.test.ts` in-process `createHost` 构造/装配/start/stop/preflight 校验；`src/bin.test.ts` 真实子进程 `package.json` bin contract、显式/CWD 默认 WORKFLOW.md、缺失/错误配置洁净退出 1 与 SIGINT/SIGTERM 优雅停机；动态 reload 留 M6.4，exit-code matrix 留 M6.5） |
 | §15 | 安全与运维安全加固 | 跨包（orchestrator / workspace 主导） | planned M7 | — |
 | App. A | SSH worker 扩展（可选） | 待定 | planned M7（可选） | — |
 
@@ -122,7 +122,7 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 
 额外证据：`workflow-integration.test.ts` 验证 claimed/running duplicate guard、completed 非永久 gating、retry missing/inactive/unroutable release、tracker failure 恢复、startup cleanup、文件级 config re-apply（含 `file per-state override reload changes dispatch while global downshift preserves current workers`、`file reload changes the running worker continuation policy and subsequent stall getter`、startup unsupported tracker / empty command fail-fast）与 AgentEvent token/rate-limit 归约；`workflow-shutdown.test.ts` 覆盖真实 worker 的 candidate fetch / retry refresh / terminal cleanup / startup cleanup 在途 stop；`loop-config.test.ts` 补 per-state reload 与运行中 continuation 动态 policy；`loop-shutdown.test.ts` 补自然退出/迟到 callback 竞态；`retry-workspace.test.ts` / `startup-cleanup.test.ts` 补 unsafe cleanup refusal；`boundaries.test.ts` 守住 public API、反向 import 和 runtime dependency 方向。
 
-§18.1 本次 implemented 的 orchestration core：single-authority polling、continuation / exponential retry 与 configurable cap、terminal/non-active reconciliation、startup 与 active-transition workspace cleanup；动态 config/prompt re-apply 的 loop 接线亦有文件级证据。structured logs 与 operator-visible sink 已由 M6.2 helpers/真实接线测试实现；CLI host lifecycle 仍未实现，不宣称 §18.1 全表完成。M6 直接消费既有 loop/authority/AgentEvent 契约。长期接线 policy 见 [Agent Note](../notes/accepted/architecture/2026-10-03-orchestrator-core-conformance.md)。
+§18.1 本次 implemented 的 orchestration core：single-authority polling、continuation / exponential retry 与 configurable cap、terminal/non-active reconciliation、startup 与 active-transition workspace cleanup；动态 config/prompt re-apply 的 loop 接线亦有文件级证据。structured logs 与 operator-visible sink 已由 M6.2 helpers/真实接线测试实现；CLI host lifecycle 与 bin executable contract 已由 M6.3 闭环。动态 reload 留 M6.4，完整 exit-code matrix 留 M6.5。M6 直接消费既有 loop/authority/AgentEvent 契约。长期接线 policy 见 [Agent Note](../notes/accepted/architecture/2026-10-03-orchestrator-core-conformance.md)。
 
 ## §17.6 分项证据（M6.1 / M6.2）
 
@@ -141,6 +141,16 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | before_remove cleanup diagnostics | implemented helpers | CLI logging suite — real temp fs failure/timeout emits issue-bound hook warning, deletion continues, payload/secret omitted; throwing hook observer preserves removed result；event-boundaries — explicit cleanup identity port and legacy compatibility |
 | watcher reload and lifecycle log adapters | implemented helpers | CLI logging suite — temp filesystem invalid reload preserves watcher current, success means watcher acceptance, shutdown completion after loop stop; production runtime commit/signals belong to M6.3–M6.5 |
 | package dependency direction, observability never scheduler input | implemented | `npm test -w @symphony/orchestrator -- src/boundaries.test.ts`；`logger-boundaries.test.ts` + `snapshot-boundaries.test.ts` |
-| host/status surface 最终闭环 | planned M6.3–M6.5 | HTTP 为 optional extension，不由本任务完成 |
+| host/status surface 最终闭环 | host implemented（M6.3），status surface 待 M6+ | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP status surface 为 optional extension |
 
-上述闭环 snapshot/logging 能力与真实接线契约，不宣称生产 CLI host/status surface 或整个 §17.6 完成。
+上述闭环 snapshot/logging 能力与真实接线契约，不宣称生产 HTTP status surface 或整个 §17.6 完成。
+
+## §17.7 / §18.1 分项证据（M6.3 CLI host 与可执行契约）
+
+| 验收部分 | 状态 | 可复跑证据 |
+|---|---|---|
+| CLI argv 解析与 WORKFLOW.md 路径解析优先级（显式路径 vs. CWD 默认） | implemented | `npm test -w @symphony/cli -- src/args.test.ts`（positional 优先、`--help`/`--version`、缺省回退 `./WORKFLOW.md`） |
+| `createHost()` 进程内组件装配与生命周期控制（无需 `process.exit()` 即可测试） | implemented | `npm test -w @symphony/cli -- src/host.test.ts`（加载 effective workflow、built-in github profile 校验、secret 注册、manager/state/authority/loop 组合与 `start()`/`stop()` graceful lifecycle） |
+| `missing_workflow_file` / `unsupported_tracker_kind` / `invalid_config` 洁净失败 | implemented | `npm test -w @symphony/cli -- src/host.test.ts` 与 `src/bin.test.ts`（结构化日志输出 `config_validation failed`，exit code 1） |
+| `apps/cli/package.json` 真实 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限） | implemented | `npm test -w @symphony/cli -- src/bin.test.ts`（读取 package.json bin 配置、校验首行 `#!/usr/bin/env node` 与执行权限） |
+| 真实子进程执行与 SIGINT / SIGTERM 优雅关停 | implemented | `npm test -w @symphony/cli -- src/bin.test.ts`（真实 spawn 子进程，覆盖显式/默认 workflow 命中、退出码 1 负例、接收信号优雅关停以 0 退出） |
