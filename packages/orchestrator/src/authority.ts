@@ -410,7 +410,10 @@ export class OrchestratorAuthority {
    * 一次 failure retry（不手动排第二次）。
    *
    * Part B（refresh）：
-   * - 剩余 running 为空 → 立即返回，**零 tracker 请求**；
+   * - 在 Part A 完成后按**当前仍在 running** 的集合取“剩余”，任一 issue 只有仍持有写入权
+   *   （epoch + generation）且其 worker 仍在 `active` 时才参与本次 fetch；stall 收尾期间
+   *   自然退出的 worker 不参与；
+   * - 剩余为空 → 立即返回，**零 tracker 请求**；
    * - fetch 前捕获每个 issue 的 attempt token，`fetchIssuesByIds(runningIds)` 失败 → 保留
    *   worker（§14.2），下一 tick 重试；
    * - 只处理本次请求中的 ID（额外返回记录忽略）；
@@ -489,9 +492,21 @@ export class OrchestratorAuthority {
       }
     }
 
-    // Part B: 对未被本次 stall 处理的剩余 running 做一次批量 refresh。
+    // Part B: 只对 Part A 完成后**此刻仍在 running** 的剩余 issue 做一次批量 refresh。
+    // stall 收尾（`await record.worker.stop`）以及其他 await 期间自然退出 / 被新生命周期
+    // 替换的 worker **不参与本次 fetch**——它们的收尾由各自路径负责（自然退出已建立自己的
+    // retry），既满足 SPEC §16.3 “stall 后再读取 running IDs”，也保证剩余为空时零请求。
     const stalled = new Set(stalledIssueIds);
-    const scannedIssueIds = capturedIds.filter((issueId) => !stalled.has(issueId));
+    const scannedIssueIds = capturedIds.filter((issueId) => {
+      if (stalled.has(issueId)) {
+        return false;
+      }
+      if (!stillOwns(issueId)) {
+        return false;
+      }
+      const record = this.active.get(issueId);
+      return record !== undefined && record.token === capturedTokens.get(issueId);
+    });
     const stoppedIssueIds: string[] = [];
     const cleanedIssueIds: string[] = [];
     const updatedIssueIds: string[] = [];

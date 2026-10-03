@@ -17,7 +17,7 @@ M5.4（NEST-77 / #53）要在 `@symphony/orchestrator` 落地 active-run reconci
 
 2. **stall 使用同一 UTC 时钟域**：`max(nowUtc - (session.lastCodexTimestamp ?? telemetry.pendingLastTimestamp ?? attempt.startedAt), 0)`，负差值按 0；`stallTimeoutMs <= 0` 或非有限值整体禁用；仅 `elapsed > timeout` 触发（等于不触发）。身份未齐的暂存 `pendingLastTimestamp` 也推进活动时间，因此握手期事件不会漏算。单调时钟继续只用于运行时长与 retry `dueAtMs`，不改共享 domain 契约。
 
-3. **reconcile 顺序 = 先 stall 后 refresh**（SPEC §16.3）。Part A 不调用 tracker，因此后续 fetch 失败不撤销已执行的 stall 判定。Part B 在**剩余 running 为空时直接返回、零 tracker 请求**；fetch 前捕获每个 issue 的 attempt token，批量 `fetchIssuesByIds(runningIds)`，只处理本次请求的 ID；active+routable 更新 snapshot、terminal stop + cleanup、其余 stop 不 cleanup。
+3. **reconcile 顺序 = 先 stall 后 refresh**（SPEC §16.3）。Part A 不调用 tracker，因此后续 fetch 失败不撤销已执行的 stall 判定。Part B **在 Part A 完成后、按当前仍在 running 的集合取剩余**（stall 收尾 / 其他 await 期间自然退出或被替换的 worker 不参与本次 fetch，也不进入请求集），**剩余为空时直接返回、零 tracker 请求**；fetch 前捕获每个 issue 的 attempt token，批量 `fetchIssuesByIds(runningIds)`，只处理本次请求的 ID；active+routable 更新 snapshot、terminal stop + cleanup、其余 stop 不 cleanup。只有真正参与本次 fetch 的生命周期才参与后续退出竞态处理。
 
 4. **迟到结果同时按 reconciliation epoch 与 lifecycle generation 丢弃**：
    - **reconciliation epoch**：每次 `reconcileRunningIssues()` 在同步捕获 running 集合时为每个 issue 分配递增 epoch，覆盖更早调用在该 issue 上的写入权。异步 refresh 返回后只有仍持有最新 epoch 的调用才允许更新 snapshot / stop / cleanup——重叠调用**不串行阻塞**，而是按**发起顺序**决胜，较晚发起的调用结果永不被较早调用的迟到结果回退（无论两者 fetch 完成顺序如何），迟到 inactive / terminal 也不会错误停止已恢复 active 的 issue。
@@ -40,6 +40,7 @@ M5.4（NEST-77 / #53）要在 `@symphony/orchestrator` 落地 active-run reconci
 - **原 attempt 已自然退出就直接跳过、不取消其 retry**：terminal 情况下会留下对 terminal issue 的 continuation retry（延迟清理，甚至在不启用 retry 时泄漏 workspace）。改为 stop 分支取消旧生命周期 retry 并释放 claim。否。
 - **仅凭"`active` 中无该 issue"判断 retry 归属**（首版实现的假设）：旧 attempt 的 continuation retry 可能已派发新 worker、新 worker 再退出并留下 attempt 更大的 retry，此时无 active 但 retry 属**新生命周期**，无条件取消会误伤（审查 blocker 1）。改为持久追踪 lifecycle generation 并回校验。否。
 - **串行化或合并重叠的 reconciliation 调用（后到调用等待前一个完成）**：会让一个慢 fetch 阻塞后续 tick，且把"哪次调用更新"绑定到完成顺序而非发起顺序。改为按发起顺序的 reconciliation epoch 决胜：不阻塞，但被覆盖的调用其迟到结果一律丢弃（审查 blocker 2）。否。
+- **Part B 直接复用 stall 之前捕获的 running 集合**：stall 收尾是异步 await，期间其他 worker 可能自然退出并建立自己的 retry；把它计入请求集既违反 SPEC §16.3"stall 后再读取 running IDs"，也会在 refresh 省略该 ID 时误取消其刚建立的 retry（审查 blocker 3）。改为 Part A 完成后按当前 active/running + token/generation/epoch 过滤请求集。否。
 - **继续让 `cleanupWorkspace` 只挂在 `RetryOptions` 下**：不启用 retry 时 reconciliation / startup 无 cleanup 端口，terminal workspace 会累积。改为顶层能力 + 旧接线回退。否。
 - **cleanup 前不建立屏障，只在 stop 返回后登记 cleanup promise**：stop 返回与登记之间新 dispatch 可能抢入并把文件写进随后被删的目录。改为屏障先于 stop 建立。否。
 - **后到的收尾直接覆盖 `cleanupInFlight` 的 promise**：前一个收尾结束时可能误删 map 中后一个 promise，提前解除互斥。改为按"最新屏障 + 串行排队"实现。否。

@@ -79,10 +79,12 @@ async function flush(): Promise<void> {
 
 class FakeRunner {
   public readonly options: AgentAttemptOptions[] = [];
+  public readonly signals: Array<AbortSignal | undefined> = [];
   private readonly deferreds: Deferred<AgentAttemptResult>[] = [];
 
   public readonly run: AgentAttemptRunner = (options) => {
     this.options.push(options);
+    this.signals.push(options.signal);
     const d = deferred<AgentAttemptResult>();
     this.deferreds.push(d);
     // 收到取消信号即像真实 runner 一样收尾失败（底层 port_exit），authority 依
@@ -103,6 +105,14 @@ class FakeRunner {
     const d = this.deferreds.at(-1);
     if (d === undefined) {
       throw new Error("runner has not been invoked");
+    }
+    return d;
+  }
+
+  public at(index: number): Deferred<AgentAttemptResult> {
+    const d = this.deferreds[index];
+    if (d === undefined) {
+      throw new Error(`runner attempt ${index} has not been invoked`);
     }
     return d;
   }
@@ -722,5 +732,35 @@ describe("race / 重复 outcome — 验收 11", () => {
     expect(h.state.running.has(issue.id)).toBe(true);
     expect(h.authority.activeWorkerCount).toBe(1);
     expect(runningEntry(h, issue.id).issue.title).toBe("recovered");
+  });
+
+  it("审查 blocker 3：stall 收尾期间其他 worker 自然退出时，Part B 不再请求已退出者", async () => {
+    const h = makeHarness();
+    const issueA = makeIssue({ id: "issue-a", identifier: "ABC-A", state: "Todo" });
+    const issueB = makeIssue({ id: "issue-b", identifier: "ABC-B", state: "Todo" });
+
+    h.setUtc(1_000_000);
+    h.authority.dispatchIssue(issueA);
+    h.setUtc(1_100_000);
+    h.authority.dispatchIssue(issueB);
+    h.setStall(10_000); // A elapsed 100s → stall；B elapsed 0 → 不 stall
+
+    // A 被 stall abort 的那一刻，让 B 自然成功退出（B 建立 continuation retry）。
+    const bDeferred = h.runner.at(1);
+    h.runner.signals[0]?.addEventListener("abort", () => {
+      bDeferred.resolve(h.runner.successResult(issueB));
+    });
+
+    const result = await h.authority.reconcileRunningIssues();
+
+    expect(result.stalledIssueIds).toEqual([issueA.id]);
+    // Part B 开始时 running 已空 → 零 tracker 请求，绝不请求已自然退出的 B。
+    expect(result.scannedIssueIds).toEqual([]);
+    expect(h.tracker.calls).toHaveLength(0);
+    // A 的 stall failure retry 与 B 的 continuation retry 均保留，claim 都在。
+    expect(h.state.retryAttempts.get(issueA.id)?.attempt).toBe(1);
+    expect(h.state.retryAttempts.get(issueB.id)?.attempt).toBe(1);
+    expect(h.state.claimed.has(issueA.id)).toBe(true);
+    expect(h.state.claimed.has(issueB.id)).toBe(true);
   });
 });
