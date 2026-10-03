@@ -8,7 +8,8 @@
 |---|---|---|
 | L1 单元测试（§17.1–§17.7，Core Conformance） | 每 workspace `src/*.test.ts`（vitest），纯逻辑优先：config 解析与默认值、路径净化、backoff 数学、模板渲染、dispatch 排序 | M1 起随各包落地 |
 | L2 组件集成（Core Conformance；随可选特性落地时适用 Extension Conformance） | 真实文件系统的 workspace provisioning / containment、fake tracker provider 的归一化读取、真实 `WORKFLOW.md` → registry → adapter → 本地 GitHub REST stub（`packages/tracker/src/github-rest-integration.test.ts`）、真实 `WORKFLOW.md` → resolved config → WorkspaceManager → temp filesystem → shell hook（`packages/workspace/src/config-integration.test.ts`）、真实 `WORKFLOW.md` → loadEffectiveWorkflow → WorkspaceManager → real temp fs + hooks → runAgentAttempt → fake app-server subprocess → JSON-RPC session/events（`packages/agent/src/config-integration.test.ts`，fixture 见 `packages/agent/test-fixtures/`）、session 事件流 | M2 tracker + M3 workspace + M4 agent（含 M4.6 端到端 Core Conformance）已落地 |
-| L3 端到端（§17.8 Real Integration Profile / §18） | orchestrator 完整 loop：本地 fake tracker + stub coding agent，覆盖 claim → dispatch → retry → reconciliation | M5 落地 |
+| L3 完整 loop（§17.4 / §18.1 orchestration core，Core Conformance） | 真实 WORKFLOW + registry / 本地 tracker adapter + WorkspaceManager / temp filesystem + runAgentAttempt / bash fake app-server，覆盖 claim → dispatch → events → outcome → retry → refresh → reconciliation / cleanup / stop | M5 已落地（`packages/orchestrator/src/workflow-integration.test.ts`、`workflow-shutdown.test.ts`） |
+| 外部真实集成（§17.8 / §18.3 Real Integration Profile） | 外部 GitHub / 真 Codex，需要显式凭据与独立测试 scope | 可选；不作为本地 fixture 测试通过的含义 |
 | L4 recorded-session | 录制真实 provider / agent 会话回放 | M7 前后评估 |
 
 验收口径：`npm run gate`（typecheck + test + lint + docs:check）全绿是合并的最低要求；涉及 workspace / tracker / orchestrator 行为的 PR，必须附带"重读世界"式断言（见下），不接受只验证内部状态被调用过。
@@ -50,3 +51,15 @@ npm run gate                      # typecheck + test + lint + docs:check 一键�
 ```
 
 测试文件与被测文件同目录（`src/foo.ts` ↔ `src/foo.test.ts`）；每包 `npm test` 即 `vitest run`。
+
+## M5 完整 loop 与配置接线
+
+运行 `npm test -w @symphony/orchestrator -- src/workflow-integration.test.ts src/workflow-shutdown.test.ts src/boundaries.test.ts`。测试从 `OrchestratorLoop.start()` 进入，使用 `loadEffectiveWorkflow` + registry extension 校验真实文件；每次成功 preflight 同时提交 config、adapter 和调度 policy，失败保留 last-known-good 并跳过 dispatch。retry cap、stall、attempt options 与 cleanup hooks 都读同一个 effective store。文件 reload 测试实际验证 global/per-state limit、active/terminal states、labels、prompt、cap、stall 与运行中 continuation policy；startup preflight 另验证 unsupported tracker 与 empty command。测试装配位于 `src/workflow.test-helpers.ts`，不是 CLI 或生产宿主。
+
+### Fixture tracker
+
+测试专用 `fixture` profile 无 provider keys、secret、环境 fallback 或网络请求。scope 为该 harness 的内存 Issue 集合，无分页和请求上限；输入已经是完整归一化 Issue，opaque ID / nativeRef / priority / timestamps / dispatchable 原样返回，labels 由 fixture 使用规范小写。state-list 按状态筛选，ID refresh 返回匹配快照（missing 省略）；故障由测试显式注入。无 provider-native tools，不模拟 provider payload 的 normalization/error mapping（那些由 tracker 包 suite 验证）。注册表与空输入 read kernel 使用 tracker 的真实 public API。
+
+poll/retry scheduler 分离且可手动推进，不等待真实 backoff；retry due 用单调 clock，stall 将注入 UTC clock 对齐真实 AgentEvent 时间。短有界等待只用于进程/文件/异步收尾观测。断言 PID/cwd、目录 marker、after_run 与删除次序，finally/afterEach 先 stop 再删除临时目录。关停 barrier 覆盖 candidate fetch、retry refresh、startup cleanup 与 terminal cleanup 在途；既有 `loop-shutdown.test.ts` 补齐迟到回调与自然退出竞态。
+
+新增 integration suite 在交付前连续复跑；`npm run gate` 是完整门禁。外部 provider、真实 Codex 与 CLI 尚未验证，不能从本地 fixture 通过推导生产就绪。

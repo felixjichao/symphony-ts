@@ -46,8 +46,8 @@
  * tick 但服务存活）、startup fail-fast 与 immediate first tick，以及幂等 stop。
  * {@link OrchestratorAuthority.applyEffectiveSchedulingConfig} 提供 live config
  * 原子 apply，{@link OrchestratorAuthority.shutdown} 提供全局关停（使在途 retry
- * ownership 失效、停止 workers、不遗留 timer）。跨包端到端 conformance 收口
- * （M5.6）随后落地。
+ * ownership 失效、停止 workers、不遗留 timer）。M5.6 以真实 WORKFLOW、tracker registry、本地 fixture、
+ * temp filesystem 与 fake app-server subprocess 收口 §17.4 Core Conformance。
  */
 
 export { createInitialCodexTotals, createOrchestratorRuntimeState } from "./runtime-state";

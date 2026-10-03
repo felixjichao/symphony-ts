@@ -63,7 +63,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | M2 | Issue Tracker Adapter：provider 无关 read kernel / registry、built-in `github` profile + 归一化 + REST transport 与端到端 conformance 收口（§11，验收 §17.3） | ✅ 已完成 |
 | M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定随 M4.2 落地） | ✅ 已完成 |
 | M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | ✅ 已完成（M4.1–M4.5 各层实现，以及 WORKFLOW.md → config → workspace → runner → fake app-server 端到端 Core Conformance 与 §17.2 / §17.5 / §10 / §12 收口） |
-| M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | 未开始 |
+| M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | ✅ 已完成（M5.1–M5.6；§17.4 非 conditional 条目已收口） |
 | M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 未开始 |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
