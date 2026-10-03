@@ -11,10 +11,15 @@
  * retry / backoff 纯数学 helper。不 fetch tracker、不 spawn worker、不调用
  * workspace cleanup、不解释 agent / Codex 协议。
  *
+ * M5.2 落地 **dispatch + worker lifecycle**：{@link OrchestratorAuthority} 是单一
+ * 写入者，`dispatchIssue()` 在 `claimed` + `running` 双检查后原子提交，经
+ * {@link WorkerControl} 驱动 `runAgentAttempt()`，并把稳定 AgentEvent 归约进
+ * `LiveSession` / `codex_totals` / rate limits，最后用统一 outcome 入口做终态分类。
+ *
  * 边界约束（根 `AGENTS.md`）：本包是唯一的 coordination 层 —— tracker /
  * workspace / agent 不得反向持有调度或 retry 策略。orchestration state mutation
- * 只经本包 API；M5.1 只提供只读纯函数与 state 初始化，dispatch / retry 队列 /
- * reconciliation 的写路径随后续 M5 子任务落地（进度见 docs/conformance.md）。
+ * 只经本包 API；retry 队列 / reconciliation / poll loop 的写路径随后续 M5 子任务
+ * 落地（进度见 docs/conformance.md）。
  */
 
 export { createInitialCodexTotals, createOrchestratorRuntimeState } from "./runtime-state";
@@ -42,3 +47,33 @@ export {
   continuationRetryDelayMs,
   failureRetryDelayMs,
 } from "./backoff";
+
+// --- M5.2：dispatch + worker lifecycle（SPEC §7.3 / §7.4、§16.4 / §16.5）---
+
+export { WorkerControl } from "./worker";
+export type {
+  WorkerHandle,
+  WorkerStopReason,
+  WorkerStopReasonKind,
+  WorkerTerminalOutcome,
+} from "./worker";
+
+export { applyAgentEvent } from "./agent-events";
+
+export { classifyError, classifyStop, classifySuccess } from "./outcome";
+export type { TerminalClassification } from "./outcome";
+
+export { createTrackerRefreshContinuationDecider } from "./continuation-policy";
+export type {
+  TrackerRefreshContinuationOptions,
+  TrackerRefreshSource,
+} from "./continuation-policy";
+
+export { OrchestratorAuthority } from "./authority";
+export type {
+  AgentAttemptRunner,
+  AttemptContext,
+  AttemptOptionsFactory,
+  DispatchResult,
+  OrchestratorAuthorityOptions,
+} from "./authority";

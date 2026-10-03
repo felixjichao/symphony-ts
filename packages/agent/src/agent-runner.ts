@@ -17,6 +17,7 @@
 import { renderPrompt } from "@symphony/config";
 import type {
   Issue,
+  RunAttemptStatus,
   ServiceConfig,
   WorkflowDefinition,
   Workspace,
@@ -55,6 +56,18 @@ export interface AgentAttemptOptions {
   readonly workflowPath: string;
   /** 获取当前 effective ServiceConfig 的 getter（支持 hook 动态获取）。 */
   readonly getConfig: () => ServiceConfig;
+  /**
+   * attempt 级外部取消信号（M5.2 / #51）。abort 后：不再启动新 turn、终止进行中的
+   * session，并把本次 attempt 以取消错误收敛。取消在 launch 前 / 握手中 / turn 等待
+   * / continuation 等待 / finally 收尾各阶段均生效。
+   */
+  readonly signal?: AbortSignal | undefined;
+  /**
+   * 稳定的生命周期阶段回调（M5.2 / #51）：取值是 `@symphony/domain` 的
+   * {@link RunAttemptStatus} 中非终态阶段，供 orchestrator 更新 `RunAttempt.status`。
+   * 只上报执行事实，不携带调度状态；回调异常被隔离。
+   */
+  readonly onPhase?: ((phase: RunAttemptStatus) => void) | undefined;
   /** 注入的 continuation 判定函数；缺省使用 {@link defaultContinuationDecider}（单 turn stop）。 */
   readonly continuationDecider?: ContinuationDecider | undefined;
   /** continuation decider 等待超时毫秒数；缺省 30_000 ms。 */
@@ -97,12 +110,30 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
   const workspaceConfig = initialConfig.workspace;
   const codexConfig = initialConfig.codex;
   const maxTurns = initialConfig.agent.maxTurns;
+  const signal = options.signal;
+
+  const reportPhase = (phase: RunAttemptStatus): void => {
+    try {
+      options.onPhase?.(phase);
+    } catch {
+      /* 外部 sink 异常隔离 */
+    }
+  };
+  const throwIfCancelled = (): void => {
+    if (signal?.aborted) {
+      throw new AgentError("turn_cancelled", "Agent attempt was cancelled by the attempt AbortSignal");
+    }
+  };
 
   const workspaceManager = new WorkspaceManager({
     workspace: workspaceConfig,
   });
 
+  // 0. 启动前取消检查：不创建 workspace、不 spawn。
+  throwIfCancelled();
+
   // 1. 创建或复用 workspace；失败时直接抛出，不执行 after_run（新建时的半成品清理已由 manager 处理）
+  reportPhase("preparing_workspace");
   const workspace = await workspaceManager.createWorkspace(options.issue.identifier, {
     hooks: options.getConfig().hooks,
     onHookEvent: options.onHookEvent,
@@ -117,22 +148,43 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
   let currentIssue = options.issue;
   const turnCompletedHolder: { event: AgentEvent | null } = { event: null };
 
+  // attempt 级取消：无论取消发生在哪个阶段，都尽快终止已建立的 session，
+  // 使进行中的 sendRequest / turn / launch 以 typed 错误收敛。
+  const onAbort = (): void => {
+    const active = session;
+    if (active !== null) {
+      void active.stop().catch(() => {
+        /* stop 幂等；异常不改变取消语义 */
+      });
+    }
+  };
+  if (signal !== undefined) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
   try {
+    throwIfCancelled();
+
     // 2. before_run hook：失败（non-zero / timeout）直接抛 fatal 并阻止 launch
+    reportPhase("preparing_workspace");
     await workspaceManager.runBeforeRunHook(workspace, {
       hooks: options.getConfig().hooks,
       identifier: options.issue.identifier,
       onHookEvent: options.onHookEvent,
     });
+    throwIfCancelled();
 
     // 3. 严格 prompt 模板渲染：失败直接阻止 launch
+    reportPhase("building_prompt");
     const firstPrompt = renderPrompt(options.workflow.promptTemplate, {
       issue: options.issue,
       attempt: options.attempt,
       workflowPath: options.workflowPath,
     });
+    throwIfCancelled();
 
     // 4. 启动 Codex live session
+    reportPhase("launching_agent_process");
     session = await startAppServerSession({
       command: codexConfig.command,
       workspacePath: workspace.path,
@@ -145,6 +197,7 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
       approvalPolicy: codexConfig.approvalPolicy,
       threadSandbox: codexConfig.threadSandbox,
       turnSandboxPolicy: codexConfig.turnSandboxPolicy,
+      ...(signal !== undefined ? { signal } : {}),
       onEvent: (event) => {
         if (event.event === "turn_completed") {
           turnCompletedHolder.event = event;
@@ -159,17 +212,22 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
     });
 
     threadId = session.threadId;
+    throwIfCancelled();
 
     // 5. turn 循环
     const decider = options.continuationDecider ?? defaultContinuationDecider;
     const timeoutMs = options.continuationTimeoutMs ?? DEFAULT_CONTINUATION_TIMEOUT_MS;
 
+    reportPhase("initializing_session");
     while (true) {
+      throwIfCancelled();
       turnCount += 1;
+      reportPhase("streaming_turn");
       const promptText = turnCount === 1 ? firstPrompt : DEFAULT_CONTINUATION_GUIDANCE;
 
       const outcome = await session.startTurn({ text: promptText });
       lastTurn = outcome;
+      throwIfCancelled();
 
       const lastEvt = turnCompletedHolder.event;
       const completedEvent: AgentEvent =
@@ -197,6 +255,7 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
           event: completedEvent,
         },
         timeoutMs,
+        signal,
       );
 
       if (decision.kind === "stop") {
@@ -214,6 +273,7 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
   } catch (error) {
     primaryError = error;
   } finally {
+    reportPhase("finishing");
     // 6. 收尾：先 await session.stop()，再执行 after_run
     try {
       if (session !== null) {
@@ -242,6 +302,9 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
       } catch {
         /* best-effort：永不覆盖原 attempt outcome */
       }
+    }
+    if (signal !== undefined) {
+      signal.removeEventListener("abort", onAbort);
     }
   }
 
