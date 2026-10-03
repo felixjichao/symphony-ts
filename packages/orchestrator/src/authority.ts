@@ -1,7 +1,8 @@
 /**
- * Orchestrator runtime authority：dispatch、worker lifecycle、outcome 归约，以及
- * retry 队列 / timer 所有权（SPEC §7.3 / §7.4、§8.4、§14.2、§16.4 / §16.5 / §16.6、
- * §17.4）。
+ * Orchestrator runtime authority：dispatch、worker lifecycle、outcome 归约，
+ * retry 队列 / timer 所有权，以及 active-run reconciliation / stall / terminal
+ * cleanup（SPEC §7.3 / §7.4、§8.4 / §8.5 / §8.6、§14.2 / §14.3、§16.3 / §16.4 /
+ * §16.5 / §16.6、§17.4）。
  *
  * 单一写入者：所有状态变更经本类串行化为显式 transition。worker 只通过带 attempt
  * token 的回调（事件 / 阶段 / outcome）回报，永不直接修改 state；tracker / workspace /
@@ -11,10 +12,10 @@
  * 边界（根 `AGENTS.md`）：
  * - 本类**不接触** Codex `ChildProcess`，也**不解析** raw Codex JSON；
  * - 取消经 `WorkerControl.signal` 传给 `runAgentAttempt()`；
- * - terminal refresh 的破坏性清理只经注入的 `cleanupWorkspace` 端口（workspace 包），
- *   本类不做删除 fallback；
- * - reconciliation / stall（M5.4）、poll loop / reload（M5.5）不在此实现，但本类提供
- *   它们需要的 `stopWorker` / `getWorker` / `cancelScheduledRetry` 控制契约。
+ * - terminal refresh / reconciliation / startup sweep 的破坏性清理只经注入的
+ *   `cleanupWorkspace` 端口（workspace 包），本类不做删除 fallback；
+ * - poll loop / reload（M5.5）不在此实现，但本类提供它们需要的
+ *   `reconcileRunningIssues` / `runStartupTerminalCleanup` / `stopWorker` 控制契约。
  */
 import type {
   AgentAttemptOptions,
@@ -48,6 +49,13 @@ import {
   type DispatchPolicy,
 } from "./eligibility";
 import { classifyError, classifySuccess } from "./outcome";
+import {
+  decideReconciliationAction,
+  isStallDetectionEnabled,
+  isWorkerStalled,
+  type ReconciliationResult,
+  type StartupCleanupResult,
+} from "./reconciliation";
 import {
   createRetryScheduler,
   type RetryDelayKind,
@@ -123,6 +131,25 @@ export interface OrchestratorAuthorityOptions {
    * `retryKind` 建立 entry / timer，timer 到期执行 §16.6 `on_retry_timer` 刷新与重派。
    */
   readonly retry?: RetryOptions | undefined;
+  /**
+   * 当前 effective `codex.stall_timeout_ms`（M5.4，getter）。每次 reconciliation 读取
+   * 现值；`<= 0` / 非有限值禁用整个 stall 检测（§8.5 Part A / §6.2 reload 语义）。
+   * 缺省视为禁用。
+   */
+  readonly stallTimeoutMs?: (() => number) | undefined;
+  /**
+   * terminal workspace 安全清理端口（M5.4）。从 `RetryOptions` 提升为 authority 顶层
+   * 能力：reconciliation、retry refresh 与 startup terminal sweep 共用同一个端口，
+   * 因此 **cleanup 不再依赖是否启用 retry**。未提供时回退 `retry.cleanupWorkspace`
+   * （向后兼容 M5.3 接线）；两者都缺省时 cleanup 为 no-op 且 startup sweep 报
+   * `unavailable`。
+   */
+  readonly cleanupWorkspace?: RetryWorkspaceCleanup | undefined;
+  /**
+   * cleanup / startup 诊断出口（M5.4）。未提供时回退 `retry.onDiagnostic`（向后兼容）。
+   * 异常被隔离，不破坏 authority 状态权威。
+   */
+  readonly onCleanupDiagnostic?: ((diagnostic: RetryDiagnostic) => void) | undefined;
 }
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
@@ -140,6 +167,18 @@ interface ActiveWorkerRecord {
   readonly worker: WorkerControl;
   readonly entry: RunningEntry;
   readonly telemetry: AgentTelemetryState;
+}
+
+/**
+ * 同 issue 收尾互斥屏障：覆盖从"请求 stop"到"workspace 删除完成"的整个异步窗口。
+ *
+ * `promise` 供同 issue 的后续 refresh / launch 等待；`release()` 在收尾结束（含异常）
+ * 后解除。晚到的收尾会**串行排队**在既有屏障之后，而不是覆盖前一个 promise 并提前
+ * 解除互斥。
+ */
+interface CleanupBarrier {
+  readonly promise: Promise<void>;
+  readonly release: () => void;
 }
 
 interface DispatchOptions {
@@ -167,6 +206,9 @@ export class OrchestratorAuthority {
   private readonly cancelRetry: ((issueId: string) => void) | undefined;
   private readonly retry: RetryOptions | undefined;
   private readonly scheduler: RetryScheduler | undefined;
+  private readonly stallTimeoutMs: () => number;
+  private readonly cleanupPort: RetryWorkspaceCleanup | undefined;
+  private readonly cleanupDiagnostic: ((diagnostic: RetryDiagnostic) => void) | undefined;
 
   private readonly active = new Map<string, ActiveWorkerRecord>();
   /**
@@ -175,11 +217,12 @@ export class OrchestratorAuthority {
    */
   private readonly retryOwners = new Map<string, string>();
   /**
-   * 每个 issue 进行中的 terminal workspace cleanup。用于把 cleanup 与后续同 issue 的
-   * refresh / launch **串行化**：ownership token 只能保护内存状态，无法撤销已经发生
-   * 的目录删除，因此新 retry / 新 dispatch 必须等旧 cleanup 真正结束后才能启动 worker。
+   * 每个 issue 进行中的 terminal 收尾屏障。用于把 cleanup（以及从 stop 开始的整个
+   * 收尾窗口）与后续同 issue 的 refresh / launch **串行化**：ownership token 只能
+   * 保护内存状态，无法撤销已经发生的目录删除，因此新 retry / 新 dispatch 必须等旧
+   * 收尾真正结束后才能启动 worker。
    */
-  private readonly cleanupInFlight = new Map<string, Promise<void>>();
+  private readonly cleanupInFlight = new Map<string, CleanupBarrier>();
   private tokenCounter = 0;
   private retryTokenCounter = 0;
 
@@ -198,6 +241,9 @@ export class OrchestratorAuthority {
     this.scheduler = options.retry !== undefined
       ? (options.retry.scheduler ?? createRetryScheduler())
       : undefined;
+    this.stallTimeoutMs = options.stallTimeoutMs ?? (() => 0);
+    this.cleanupPort = options.cleanupWorkspace ?? options.retry?.cleanupWorkspace;
+    this.cleanupDiagnostic = options.onCleanupDiagnostic ?? options.retry?.onDiagnostic;
   }
 
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
@@ -333,6 +379,227 @@ export class OrchestratorAuthority {
       this.state.retryAttempts.delete(issueId);
     }
     this.retryOwners.delete(issueId);
+  }
+
+  /**
+   * 每个 tick 的 active-run reconciliation（SPEC §7.3 "Poll Tick" / "Reconciliation
+   * State Refresh" / "Stall Timeout"、§8.5、§14.2、§16.3、§17.4）。
+   *
+   * 顺序严格按 SPEC：**先 stall 检测，再对剩余 running 做一次批量 refresh**。
+   *
+   * Part A（stall）：`stallTimeoutMs <= 0` 时整个跳过；否则用 UTC 墙上时钟计算
+   * `max(now - (lastCodexTimestamp ?? pendingTimestamp ?? startedAt), 0)`，仅**严格大于**
+   * 阈值才以 `{ kind: "stall" }` 停止 worker；终态经既有 outcome 归约为 `stalled` 并建立
+   * 一次 failure retry（不手动排第二次）。
+   *
+   * Part B（refresh）：
+   * - 剩余 running 为空 → 立即返回，**零 tracker 请求**；
+   * - fetch 前捕获每个 issue 的 attempt token，`fetchIssuesByIds(runningIds)` 失败 → 保留
+   *   worker（§14.2），下一 tick 重试；
+   * - 只处理本次请求中的 ID（额外返回记录忽略）；
+   * - active + routable → 更新 running entry 的 issue snapshot；
+   * - terminal → stop（`{ kind: "terminal" }`）+ 屏障内安全 cleanup；
+   * - active 但 unroutable / 非 active 非 terminal / missing → stop（不 cleanup）。
+   *
+   * 刷新期间 worker 可能自然退出或已被新 attempt 接管：token 不匹配即不把旧刷新结果
+   * 作用于新生命周期；原 attempt 已退出且判定为 stop 时，取消该旧生命周期的 retry 并
+   * 释放其 claim（duplicate outcome 不产生 duplicate retry）；terminal 仍在 cleanup。
+   *
+   * 本方法可能在同一次调用内 `await` 多个 worker 收尾，但所有 state 写入仍经本类串行
+   * transition；调用方（poll loop，M5.5）负责不与 dispatch 并发交错。
+   */
+  public async reconcileRunningIssues(): Promise<ReconciliationResult> {
+    const stalledIssueIds: string[] = [];
+
+    // Part A: stall detection（不依赖 tracker；tracker 后续失败不撤销已执行的 stall）。
+    const stallTimeoutMs = this.stallTimeoutMs();
+    if (isStallDetectionEnabled(stallTimeoutMs)) {
+      const nowUtc = this.now();
+      for (const [issueId, record] of [...this.active.entries()]) {
+        if (!isWorkerStalled(record.entry, record.telemetry, nowUtc, stallTimeoutMs)) {
+          continue;
+        }
+        stalledIssueIds.push(issueId);
+        // stall stop → completeAttempt 归约 `stalled` + 建立一次 failure retry。
+        await record.worker.stop({ kind: "stall" });
+      }
+    }
+
+    // Part B: 对剩余 running 做一次批量 refresh。
+    const capturedTokens = new Map<string, string>();
+    for (const [issueId, record] of this.active.entries()) {
+      capturedTokens.set(issueId, record.token);
+    }
+    const scannedIssueIds = [...capturedTokens.keys()];
+    const stoppedIssueIds: string[] = [];
+    const cleanedIssueIds: string[] = [];
+    const updatedIssueIds: string[] = [];
+    const result = (
+      refreshFailed: boolean,
+    ): ReconciliationResult => ({
+      scannedIssueIds,
+      stalledIssueIds,
+      stoppedIssueIds,
+      cleanedIssueIds,
+      updatedIssueIds,
+      refreshFailed,
+    });
+
+    if (scannedIssueIds.length === 0) {
+      return result(false); // no-op：零 tracker 请求。
+    }
+
+    let refreshed: readonly Issue[];
+    try {
+      refreshed = await this.tracker.fetchIssuesByIds(scannedIssueIds);
+    } catch {
+      return result(true); // §14.2：保留当前 worker，下一 tick 重试。
+    }
+
+    const byId = new Map<string, Issue>();
+    for (const issue of refreshed) {
+      // 只处理本次请求的 ID；额外返回记录忽略。
+      if (capturedTokens.has(issue.id)) {
+        byId.set(issue.id, issue);
+      }
+    }
+
+    for (const issueId of scannedIssueIds) {
+      const record = this.active.get(issueId);
+      if (record !== undefined && record.token !== capturedTokens.get(issueId)) {
+        // refresh 期间已被新 attempt 接管：旧结果不得作用于新生命周期。
+        continue;
+      }
+
+      const issue = byId.get(issueId);
+
+      if (record === undefined) {
+        // 捕获的 attempt 已在 refresh 期间自然退出。只有 stop 分支需要接管旧生命周期的
+        // retry / claim；active 快照交给自然退出建立的 retry 流程。
+        if (issue === undefined) {
+          this.retireExitedLifecycle(issueId);
+          stoppedIssueIds.push(issueId);
+          continue;
+        }
+        const decision = decideReconciliationAction(issue, this.policy);
+        if (decision === "refresh_snapshot") {
+          continue;
+        }
+        this.retireExitedLifecycle(issueId);
+        stoppedIssueIds.push(issueId);
+        if (decision === "stop_and_cleanup") {
+          await this.cleanupTerminalWorkspace(issue);
+          cleanedIssueIds.push(issueId);
+        }
+        continue;
+      }
+
+      if (issue === undefined) {
+        // missing → stop，不 cleanup（§8.5 Part B / §16.3）。
+        await record.worker.stop({ kind: "reconciliation" });
+        stoppedIssueIds.push(issueId);
+        continue;
+      }
+
+      const decision = decideReconciliationAction(issue, this.policy);
+      if (decision === "refresh_snapshot") {
+        record.entry.issue = issue;
+        updatedIssueIds.push(issueId);
+        continue;
+      }
+      if (decision === "stop_and_cleanup") {
+        await this.stopAndCleanupTerminal(issueId, issue);
+        stoppedIssueIds.push(issueId);
+        cleanedIssueIds.push(issueId);
+        continue;
+      }
+      // active 但 unroutable / 非 active 非 terminal → stop，不 cleanup。
+      await record.worker.stop({ kind: "reconciliation" });
+      stoppedIssueIds.push(issueId);
+    }
+
+    return result(false);
+  }
+
+  /**
+   * Startup terminal workspace sweep（SPEC §8.1 / §8.6 / §14.3 / §16.1）。
+   *
+   * 用 tracker 公共 `fetchIssuesByStates(policy.terminalStates)` 拉取 terminal issues，
+   * 对每个 identifier 经真实 `cleanupWorkspace` 端口逐项 `removeWorkspace`：
+   *
+   * - 不做 required-label / dispatchable 筛选（§16.1 只按 terminal states）；
+   * - fetch 失败 → 诊断后返回，**不阻止服务启动**（§8.6 / §14.2）；
+   * - 单项 `refused` / `failed` / 异常 → 诊断后继续其余项，绝不做 `fs.rm` 等 fallback
+   *   （安全边界归 workspace 包，§9.5）；
+   * - `missing` 视为幂等成功；重复调用安全。
+   *
+   * 不复制 containment 逻辑；调用顺序（首个 dispatch 前）由 M5.5 编排保证。
+   */
+  public async runStartupTerminalCleanup(): Promise<StartupCleanupResult> {
+    const removed: string[] = [];
+    const missing: string[] = [];
+    const refused: string[] = [];
+    const failed: string[] = [];
+
+    if (this.cleanupPort === undefined) {
+      this.emitDiagnostic({
+        kind: "cleanup_unavailable",
+        issueId: null,
+        identifier: null,
+        message: "startup terminal cleanup skipped: no workspace cleanup port configured",
+      });
+      return { unavailable: true, fetchFailed: false, removed, missing, refused, failed };
+    }
+    const fetchByStates = this.tracker.fetchIssuesByStates;
+    if (fetchByStates === undefined) {
+      this.emitDiagnostic({
+        kind: "cleanup_unavailable",
+        issueId: null,
+        identifier: null,
+        message: "startup terminal cleanup skipped: tracker has no fetchIssuesByStates capability",
+      });
+      return { unavailable: true, fetchFailed: false, removed, missing, refused, failed };
+    }
+    if (this.policy.terminalStates.length === 0) {
+      return { unavailable: false, fetchFailed: false, removed, missing, refused, failed };
+    }
+
+    let issues: readonly Issue[];
+    try {
+      issues = await fetchByStates.call(this.tracker, this.policy.terminalStates);
+    } catch (error) {
+      this.emitDiagnostic({
+        kind: "cleanup_fetch_failed",
+        issueId: null,
+        identifier: null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      // fetch 失败不阻止服务启动（§8.6）。
+      return { unavailable: false, fetchFailed: true, removed, missing, refused, failed };
+    }
+
+    for (const issue of issues) {
+      const status = await this.removeWorkspaceFor(issue.identifier, issue.id);
+      switch (status) {
+        case "removed":
+          removed.push(issue.identifier);
+          break;
+        case "missing":
+          missing.push(issue.identifier);
+          break;
+        case "refused":
+          refused.push(issue.identifier);
+          break;
+        case "failed":
+          failed.push(issue.identifier);
+          break;
+        case null:
+          // cleanup 端口在上一次 await 期间被移除（不可变配置下不会发生）——保守返回。
+          return { unavailable: true, fetchFailed: false, removed, missing, refused, failed };
+      }
+    }
+
+    return { unavailable: false, fetchFailed: false, removed, missing, refused, failed };
   }
 
   private startWorker(
@@ -584,7 +851,7 @@ export class OrchestratorAuthority {
     //     refresh / launch，否则新 worker 会写入随后被旧 cleanup 删除的 workspace。
     const pendingCleanup = this.cleanupInFlight.get(issueId);
     if (pendingCleanup !== undefined) {
-      await pendingCleanup;
+      await pendingCleanup.promise;
       if (this.retryOwners.get(issueId) !== token) {
         return; // cleanup 期间被替换 / 取消。
       }
@@ -679,69 +946,125 @@ export class OrchestratorAuthority {
   }
 
   /**
-   * terminal refresh 的安全 workspace 清理：只经注入端口，**不做删除 fallback**。
-   * `refused` / `failed` / 异常都记为诊断。
+   * reconciliation 在 refresh 期间发现捕获的 attempt 已自然退出、且刷新结果要求 stop：
+   * 取消该**旧生命周期**的 retry timer / 在途 ownership 并释放其 claim。
    *
-   * 调用期间把 promise 登记到 `cleanupInFlight`，使同 issue 的后续 refresh / launch
-   * 必须等待删除真正结束——ownership token 只能保护内存状态，无法撤销已发生的删除。
+   * 仅在 `active` 中已无该 issue 时调用——即没有更新的 attempt 在跑。若退出后已经启动了
+   * 更新的 attempt，`reconcileRunningIssues` 会走 token 不匹配的 skip 分支，不会到这里。
+   * 因 dispatch 提交段会清除同 issue retry entry，此处存在的 entry 必属本次捕获的旧
+   * 生命周期，取消它是安全的，不会误伤后来者。terminal 分支随后仍会清理 workspace。
+   */
+  private retireExitedLifecycle(issueId: string): void {
+    this.cancelScheduledRetry(issueId);
+    this.state.claimed.delete(issueId);
+  }
+
+  /**
+   * terminal cleanup：只经注入端口，**不做删除 fallback**（§9.5 / §8.4 note）。
+   *
+   * 整个异步窗口由 {@link withCleanupBarrier} 保护：同 issue 的后续 refresh / launch
+   * 必须等删除真正结束，避免新 worker 写入随后被删的 workspace。
    */
   private async cleanupTerminalWorkspace(issue: Issue): Promise<void> {
-    const cleanup = this.retry?.cleanupWorkspace;
-    if (cleanup === undefined) {
-      return;
-    }
-    const promise = this.performTerminalCleanup(issue, cleanup);
-    this.cleanupInFlight.set(issue.id, promise);
+    await this.withCleanupBarrier(issue.id, () => this.performTerminalCleanup(issue));
+  }
+
+  /**
+   * reconciliation 的 terminal 收尾：**屏障先于 stop 建立**，随后在同一屏障内完成
+   * `stop → outcome/after_run 收尾 → removeWorkspace`，保证"停止 + 删除"次序确定，
+   * 且 stop 返回与 cleanup 登记之间没有新 worker 抢入的窗口（§7.4 / §8.5）。
+   */
+  private stopAndCleanupTerminal(issueId: string, issue: Issue): Promise<void> {
+    return this.withCleanupBarrier(issueId, async () => {
+      await this.stopWorker(issueId, { kind: "terminal" });
+      await this.performTerminalCleanup(issue);
+    });
+  }
+
+  /**
+   * 同 issue 收尾互斥屏障：把 `action` 串行排队在既有 barrier 之后，并在 action 结束后
+   * 释放。晚到的收尾不会覆盖前一个 promise 而提前解除互斥——`cleanupInFlight` 始终持有
+   * "最近一个尚未结束的收尾"。
+   */
+  private async withCleanupBarrier<T>(issueId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.cleanupInFlight.get(issueId);
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const barrier: CleanupBarrier = { promise, release };
+    this.cleanupInFlight.set(issueId, barrier);
     try {
-      await promise;
-    } finally {
-      if (this.cleanupInFlight.get(issue.id) === promise) {
-        this.cleanupInFlight.delete(issue.id);
+      // 串行化：前一个收尾（可能包含目录删除）结束后才轮到本次。
+      if (previous !== undefined) {
+        await previous.promise;
       }
+      return await action();
+    } finally {
+      if (this.cleanupInFlight.get(issueId) === barrier) {
+        this.cleanupInFlight.delete(issueId);
+      }
+      release();
     }
   }
 
-  private async performTerminalCleanup(
-    issue: Issue,
-    cleanup: RetryWorkspaceCleanup,
-  ): Promise<void> {
+  private performTerminalCleanup(issue: Issue): Promise<"removed" | "missing" | "refused" | "failed" | null> {
+    return this.removeWorkspaceFor(issue.identifier, issue.id);
+  }
+
+  /**
+   * 经注入端口删除一个 identifier 的 workspace，并把可判别结果映射为诊断。
+   *
+   * `removed` / `missing` 视为成功；`refused` / `failed` / 异常只记诊断并返回对应状态，
+   * 绝不在本包内做 `fs.rm` 等 destructive fallback（containment 归 workspace 包）。
+   */
+  private async removeWorkspaceFor(
+    identifier: string,
+    issueId: string | null,
+  ): Promise<"removed" | "missing" | "refused" | "failed" | null> {
+    const cleanup = this.cleanupPort;
+    if (cleanup === undefined) {
+      return null;
+    }
     try {
-      const result = await cleanup.removeWorkspace(issue.identifier);
+      const result = await cleanup.removeWorkspace(identifier);
       if (result.status === "removed" || result.status === "missing") {
-        return;
+        return result.status;
       }
       if (result.status === "refused") {
         this.emitDiagnostic({
           kind: "cleanup_refused",
-          issueId: issue.id,
-          identifier: issue.identifier,
+          issueId,
+          identifier,
           message:
             result.message ??
             `terminal workspace cleanup refused (${result.reason ?? "unknown reason"})`,
         });
-        return;
+        return "refused";
       }
       this.emitDiagnostic({
         kind: "cleanup_failed",
-        issueId: issue.id,
-        identifier: issue.identifier,
+        issueId,
+        identifier,
         message: result.message ?? "terminal workspace cleanup failed",
       });
+      return "failed";
     } catch (error) {
       this.emitDiagnostic({
         kind: "cleanup_error",
-        issueId: issue.id,
-        identifier: issue.identifier,
+        issueId,
+        identifier,
         message: error instanceof Error ? error.message : String(error),
       });
+      return "failed";
     }
   }
 
   private emitDiagnostic(diagnostic: RetryDiagnostic): void {
     try {
-      this.retry?.onDiagnostic?.(diagnostic);
+      this.cleanupDiagnostic?.(diagnostic);
     } catch {
-      /* 诊断 sink 异常隔离 */
+      /* 诊断 sink 异常隔离，不破坏 authority */
     }
   }
 }
