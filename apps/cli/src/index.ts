@@ -1,4 +1,4 @@
-/** M6.2 logging composition API; production CLI lifecycle remains M6.3–M6.5. */
-export {};
-
 export { createRuntimeLogObservers, registerTrackerLogSecrets } from "./logging";
+export { parseCliArgs, resolveWorkflowPath, type ParsedCliArgs } from "./args";
+export { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
+export type { SnapshotClock, ObservabilitySnapshot, SnapshotResult } from "@symphony/observability";

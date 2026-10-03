@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-10-03-cli-host-and-executable-contract.md](accepted/architecture/2026-10-03-cli-host-and-executable-contract.md) — CLI 宿主组合根与可执行契约（SPEC §17.7 / §18.1，M6.3 / NEST-83）：`createHost()` 进程内组合根与测试注入、`parseCliArgs` / `resolveWorkflowPath` 优先级解析、`apps/cli` 真实 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限）、Node >= 20 原生 ESM 运行、真实子进程生命周期测试与 SIGINT/SIGTERM 优雅停机
+
 - [accepted/architecture/2026-10-03-orchestrator-core-conformance.md](accepted/architecture/2026-10-03-orchestrator-core-conformance.md) — M5.6 完整 loop 证据、effective store 与 M6 宿主接线 policy
 
 - [accepted/architecture/2026-10-03-poll-loop-and-live-config-reapply.md](accepted/architecture/2026-10-03-poll-loop-and-live-config-reapply.md) — poll loop、startup 编排与 live config re-apply 跨包契约（SPEC §8.1、§14.2 / §14.3 / §14.4、§16.1 / §16.2、§6.2 / §6.3，M5.5 / NEST-78 / #54）：单 timer 链替代 `setInterval`（tick 结束按最新 interval 排下一次、首 tick 零延迟、慢 tick 不重叠）、startup 三步且 preflight fail-fast / terminal sweep best-effort、tick 严格按 §16.2 且降级出口经 `finally` 只排一个下一次 tick、authority `applyEffectiveSchedulingConfig` 原子 apply（policy 改可变 + continuation decider getter，retry cap / stall 继续 getter）、并发下调不终止运行 worker、`shutdown` 先失效全部 retry ownership 再停 worker 且幂等
