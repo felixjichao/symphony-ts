@@ -10,12 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cliRoot = path.resolve(__dirname, "..");
 const pkg = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8")) as { version: string; bin: { symphony: string } };
 const binPath = path.resolve(cliRoot, pkg.bin.symphony);
+const repoRoot = path.resolve(cliRoot, "../..");
+const nodeModulesBin = path.join(repoRoot, "node_modules", ".bin", "symphony");
 
 beforeAll(() => {
-  if (!existsSync(binPath)) {
+  if (!existsSync(binPath) || !existsSync(nodeModulesBin)) {
     execSync("npm run build", { cwd: cliRoot, stdio: "inherit" });
   }
   expect(existsSync(binPath)).toBe(true);
+  expect(existsSync(nodeModulesBin)).toBe(true);
 });
 
 function runToExit(args: string[], options: { cwd?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -96,8 +99,6 @@ describe("CLI binary child process execution (§17.7 / §18.1)", () => {
   });
 
   it("executes through canonical node_modules/.bin/symphony link", () => {
-    const repoRoot = path.resolve(cliRoot, "../..");
-    const nodeModulesBin = path.join(repoRoot, "node_modules", ".bin", "symphony");
     expect(existsSync(nodeModulesBin)).toBe(true);
     const output = execSync(`${nodeModulesBin} --version`, { encoding: "utf8" });
     expect(output.trim()).toBe(pkg.version);
