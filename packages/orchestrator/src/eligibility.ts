@@ -137,3 +137,28 @@ export function isDispatchEligible(
     perStateAvailableSlots(state, issue.state, policy) > 0
   );
 }
+
+/**
+ * retry refresh 后允许重新派发的判定（SPEC §16.6 `retry_dispatch_allowed(issue, state,
+ * ignore_existing_claim=issue_id)`）：与 {@link isDispatchEligible} 相同，但**忽略该
+ * issue 自己持有的 claim**——retry 恰需在 claim 保留的情况下消费它。
+ *
+ * 仍然要求：必填字段在场、state ∈ active ∧ ∉ terminal、`issue_routable`、不在
+ * `running`；**不**检查 claim（由 `ownClaimIssueId` 豁免）与并发 slot（slot 由调用方
+ * 单独检查，以便区分"不可派发"与 `no available orchestrator slots`）。
+ */
+export function isRetryDispatchAllowed(
+  issue: Issue,
+  state: OrchestratorRuntimeState,
+  policy: DispatchPolicy,
+  ownClaimIssueId: string,
+): boolean {
+  return (
+    hasRequiredDispatchFields(issue) &&
+    isActiveState(issue.state, policy) &&
+    !isTerminalState(issue.state, policy) &&
+    issueRoutable(issue, policy) &&
+    !state.running.has(issue.id) &&
+    (!state.claimed.has(issue.id) || issue.id === ownClaimIssueId)
+  );
+}

@@ -1,16 +1,20 @@
 /**
- * Orchestrator runtime authority：dispatch、worker lifecycle、outcome 归约
- * （SPEC §7.3 / §7.4、§16.4 / §16.5、§17.4，M5.2 / #51）。
+ * Orchestrator runtime authority：dispatch、worker lifecycle、outcome 归约，以及
+ * retry 队列 / timer 所有权（SPEC §7.3 / §7.4、§8.4、§14.2、§16.4 / §16.5 / §16.6、
+ * §17.4）。
  *
- * 单一写入者：所有状态变更经本类串行化为显式 transition。worker 只通过带
- * attempt token 的回调（事件 / 阶段 / outcome）回报，永不直接修改 state；tracker /
- * workspace / agent 也不反向持有调度状态。
+ * 单一写入者：所有状态变更经本类串行化为显式 transition。worker 只通过带 attempt
+ * token 的回调（事件 / 阶段 / outcome）回报，永不直接修改 state；tracker / workspace /
+ * agent 也不反向持有调度状态。retry timer 回调同样只能提交"带 issueId + retry token
+ * 的到期事件"，ownership 校验后才允许刷新 / 重新派发。
  *
  * 边界（根 `AGENTS.md`）：
  * - 本类**不接触** Codex `ChildProcess`，也**不解析** raw Codex JSON；
  * - 取消经 `WorkerControl.signal` 传给 `runAgentAttempt()`；
- * - retry 队列 / backoff（M5.3）、reconciliation / stall（M5.4）、poll loop（M5.5）
- *   不在此实现，但本类提供它们需要的控制与结果契约。
+ * - terminal refresh 的破坏性清理只经注入的 `cleanupWorkspace` 端口（workspace 包），
+ *   本类不做删除 fallback；
+ * - reconciliation / stall（M5.4）、poll loop / reload（M5.5）不在此实现，但本类提供
+ *   它们需要的 `stopWorker` / `getWorker` / `cancelScheduledRetry` 控制契约。
  */
 import type {
   AgentAttemptOptions,
@@ -22,6 +26,7 @@ import type {
   Issue,
   MonotonicTimestampMs,
   OrchestratorRuntimeState,
+  RetryEntry,
   RunAttempt,
   RunAttemptStatus,
   RunningEntry,
@@ -29,12 +34,27 @@ import type {
 } from "@symphony/domain";
 
 import { applyAgentEvent, createAgentTelemetryState, type AgentTelemetryState } from "./agent-events";
+import { continuationRetryDelayMs, failureRetryDelayMs } from "./backoff";
 import {
   createTrackerRefreshContinuationDecider,
   type TrackerRefreshSource,
 } from "./continuation-policy";
-import { isDispatchEligible, type DispatchPolicy } from "./eligibility";
+import {
+  globalAvailableSlots,
+  isDispatchEligible,
+  isRetryDispatchAllowed,
+  isTerminalState,
+  perStateAvailableSlots,
+  type DispatchPolicy,
+} from "./eligibility";
 import { classifyError, classifySuccess } from "./outcome";
+import {
+  createRetryScheduler,
+  type RetryDelayKind,
+  type RetryDiagnostic,
+  type RetryOptions,
+  type RetryScheduler,
+} from "./retry";
 import { WorkerControl, type WorkerHandle, type WorkerStopReason, type WorkerTerminalOutcome } from "./worker";
 
 /** 默认 runner：orchestrator 只依赖这个注入面，不直接 import agent 的私有实现。 */
@@ -54,6 +74,18 @@ export interface AttemptContext {
 /** composition 层提供的 attempt options 工厂（注入 workflow / config / env 等）。 */
 export type AttemptOptionsFactory = (context: AttemptContext) => AgentAttemptOptions;
 
+/** {@link OrchestratorAuthority.scheduleRetry} 的入参（SPEC §16.6 `schedule_retry`）。 */
+export interface RetryScheduleRequest {
+  readonly issueId: string;
+  readonly identifier: string | null;
+  /** retry 队列内 **1-based** attempt（§4.1.7；与 `RunAttempt.attempt` 语义不同）。 */
+  readonly attempt: number;
+  /** 触发本次 retry 的失败原因；continuation 为 `null`。 */
+  readonly error: string | null;
+  /** 延迟口径：continuation 固定 1s；failure `min(10000 * 2^(attempt-1), cap)`。 */
+  readonly kind: RetryDelayKind;
+}
+
 /** {@link OrchestratorAuthority} 构造参数。 */
 export interface OrchestratorAuthorityOptions {
   /** 单一权威 runtime state（由 {@link createOrchestratorRuntimeState} 初始化）。 */
@@ -64,25 +96,32 @@ export interface OrchestratorAuthorityOptions {
   readonly runner: AgentAttemptRunner;
   /** 由 authority 注入 signal / token / decider 后补齐其余 options 的工厂。 */
   readonly createAttemptOptions: AttemptOptionsFactory;
-  /** tracker refresh 能力（同线程 continuation 判定用）。 */
+  /** tracker refresh 能力（同线程 continuation 判定 + retry refresh）。 */
   readonly tracker: TrackerRefreshSource;
   /** 同步解析 issue 的绝对 workspace 路径（`WorkspaceManager.resolveWorkspacePath`）。 */
   readonly resolveWorkspacePath: (issue: Issue) => string;
   /** UTC 墙上时钟（可注入确定性时钟）。 */
   readonly now?: (() => UtcTimestampMs) | undefined;
-  /** 单调时钟（可注入确定性时钟，用于运行秒数核算）。 */
+  /**
+   * 单调时钟（可注入确定性时钟）：运行时长核算与 retry `dueAtMs`（§4.1.7 使用单调
+   * 时钟域）。
+   */
   readonly monotonicNow?: (() => MonotonicTimestampMs) | undefined;
   /**
-   * worker 终态归约完成后的回调（M5.3 retry 决策接入点）。调用时 running 已删除、
-   * success 已计入 `completed`，但 claim 尚未释放——若回调为本 issue 建立
-   * `retryAttempts` 条目，则 claim 被保留；否则 claim 被释放。
+   * worker 终态归约完成后的回调（外部观察 / 兼容接线点）。调用时 running 已删除、
+   * success 已计入 `completed`，但 claim 尚未释放。
    */
   readonly onOutcome?: ((outcome: WorkerTerminalOutcome) => void) | undefined;
   /**
-   * 同 issue retry entry 的 timer 取消接线点（M5.3 完整所有权）。dispatch 提交段
-   * 同步调用，用于在删除 `retryAttempts` 条目的同时取消其 timer。
+   * 同 issue retry entry 的 timer 取消接线点（M5.2 外部钩子）。dispatch 提交段同步
+   * 调用，用于在删除 `retryAttempts` 条目的同时取消其 timer。
    */
   readonly cancelRetry?: ((issueId: string) => void) | undefined;
+  /**
+   * retry 队列控制面（M5.3）。提供后 authority 拥有 retry scheduling：worker 终态按
+   * `retryKind` 建立 entry / timer，timer 到期执行 §16.6 `on_retry_timer` 刷新与重派。
+   */
+  readonly retry?: RetryOptions | undefined;
 }
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
@@ -108,7 +147,7 @@ interface DispatchOptions {
 }
 
 /**
- * 单一权威的 dispatch + worker lifecycle 实现。
+ * 单一权威的 dispatch + worker lifecycle + retry queue 实现。
  *
  * 提交段（`running` + `claimed` 写入、retry 清除、worker 注册）**同步**完成，
  * 中间没有 `await`：因此不会出现"已写入一半就被并发 dispatch 看到"的窗口，早到的
@@ -125,9 +164,17 @@ export class OrchestratorAuthority {
   private readonly monotonicNow: () => MonotonicTimestampMs;
   private readonly onOutcome: ((outcome: WorkerTerminalOutcome) => void) | undefined;
   private readonly cancelRetry: ((issueId: string) => void) | undefined;
+  private readonly retry: RetryOptions | undefined;
+  private readonly scheduler: RetryScheduler | undefined;
 
   private readonly active = new Map<string, ActiveWorkerRecord>();
+  /**
+   * 每个 issue 当前 retry ownership token：排队 timer 与在途 refresh 共用。旧 token
+   * 的迟到回调（stale / canceled timer、被替换的 refresh）一律被拒绝。
+   */
+  private readonly retryOwners = new Map<string, string>();
   private tokenCounter = 0;
+  private retryTokenCounter = 0;
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.state = options.state;
@@ -140,11 +187,20 @@ export class OrchestratorAuthority {
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.onOutcome = options.onOutcome;
     this.cancelRetry = options.cancelRetry;
+    this.retry = options.retry;
+    this.scheduler = options.retry !== undefined
+      ? (options.retry.scheduler ?? createRetryScheduler())
+      : undefined;
   }
 
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
   public get activeWorkerCount(): number {
     return this.active.size;
+  }
+
+  /** 当前排队中的 retry 数量（供 poll loop / status surface / 测试观察）。 */
+  public get pendingRetryCount(): number {
+    return this.state.retryAttempts.size;
   }
 
   /** 取某 issue 的当前 worker handle（供 M5.4 stop）。 */
@@ -163,6 +219,9 @@ export class OrchestratorAuthority {
    *
    * 同步构造 / 启动阶段的失败不会留下 running 脏项：要么在提交前抛出（state 未变），
    * 要么作为异常 worker outcome 经 {@link completeAttempt} 归约。
+   *
+   * 普通候选 dispatch **不**豁免 claim：排队中的 retry 由 refresh 路径用
+   * {@link dispatchRetry} 消费自己持有的 claim，普通 `dispatchIssue` 绝不抢占它。
    */
   public dispatchIssue(issue: Issue, options: DispatchOptions = {}): DispatchResult {
     // 1. 双检查：claimed 或 running 任一占用即跳过。
@@ -174,62 +233,17 @@ export class OrchestratorAuthority {
       return { kind: "not_eligible", issueId: issue.id, attemptToken: null };
     }
 
-    // 3. 同步构造（任何抛出都发生在 state 变更之前）。
-    const attemptNumber = options.attempt ?? null;
-    const workspacePath = this.resolveWorkspacePath(issue);
-    const token = `${issue.id}::${++this.tokenCounter}`;
-    const attempt: RunAttempt = {
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      attempt: attemptNumber,
-      workspacePath,
-      startedAt: this.now(),
-      status: "preparing_workspace",
-    };
-    const entry: RunningEntry = {
-      issue,
-      attempt,
-      session: null,
-      workspacePath,
-      startedAtMs: this.monotonicNow(),
-      workerHandle: null,
-    };
-    const worker = new WorkerControl({
-      issueId: issue.id,
-      attemptToken: token,
-      attempt: attemptNumber,
-    });
-    entry.workerHandle = worker;
-
-    // 4. 提交前先取消同 issue retry timer：失败则不提交，保持 state 一致。
-    //    取消失败时 retry 条目与 timer 所有权原样保留，下一次 tick 可重试；
-    //    绝不出现"running/claimed 已写入但 timer 未取消 / worker 未注册"的孤立状态。
-    const previousRetry = this.state.retryAttempts.get(issue.id);
-    if (previousRetry !== undefined && this.cancelRetry !== undefined) {
-      try {
-        this.cancelRetry(issue.id);
-      } catch (error) {
-        return {
-          kind: "failed",
-          issueId: issue.id,
-          attemptToken: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
+    try {
+      const token = this.commitDispatch(issue, options.attempt ?? null);
+      return { kind: "dispatched", issueId: issue.id, attemptToken: token };
+    } catch (error) {
+      return {
+        kind: "failed",
+        issueId: issue.id,
+        attemptToken: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-
-    // 5. 提交段（无 await）：running + claimed 原子进入，retry 条目清除。
-    this.state.running.set(issue.id, entry);
-    this.state.claimed.add(issue.id);
-    if (previousRetry !== undefined) {
-      this.state.retryAttempts.delete(issue.id);
-    }
-    this.active.set(issue.id, { token, worker, entry, telemetry: createAgentTelemetryState() });
-
-    // 6. 启动 runner（同步返回 Promise；结果异步归约）。
-    this.startWorker(issue, attemptNumber, token, worker, entry);
-
-    return { kind: "dispatched", issueId: issue.id, attemptToken: token };
   }
 
   /** 主动停止某 issue 的 worker（幂等；M5.4 / M5.5 复用）。 */
@@ -246,6 +260,67 @@ export class OrchestratorAuthority {
     while (this.active.size > 0) {
       await Promise.all([...this.active.values()].map((record) => record.worker.done));
     }
+  }
+
+  /**
+   * 入队 / 替换一次 retry（SPEC §8.4 / §16.6 `schedule_retry`）：先取消同 issue 旧
+   * timer（若在排），写入完整 {@link RetryEntry} 并保留 claim。返回新 entry；未启用
+   * retry 控制面时返回 `null`。
+   */
+  public scheduleRetry(request: RetryScheduleRequest): RetryEntry | null {
+    if (this.retry === undefined || this.scheduler === undefined) {
+      return null;
+    }
+
+    // 1. 取消同 issue 旧 timer（策略：新 retry 替换旧 timer）。
+    const existing = this.state.retryAttempts.get(request.issueId);
+    if (existing !== undefined) {
+      this.scheduler.cancel(existing.timerHandle);
+    }
+
+    // 2. 分配新 ownership token：同时使任何在途 refresh 的迟到结果失效。
+    const token = `retry::${request.issueId}::${++this.retryTokenCounter}`;
+    this.retryOwners.set(request.issueId, token);
+
+    // 3. 计算延迟：每次新建都读取当前 effective cap（§8.4）。
+    const delayMs =
+      request.kind === "continuation"
+        ? continuationRetryDelayMs()
+        : failureRetryDelayMs(request.attempt, this.retry.maxRetryBackoffMs());
+    const dueAtMs = this.monotonicNow() + delayMs;
+
+    // 4. 注册 timer：回调只提交带 issueId + token 的到期事件。
+    const timerHandle = this.scheduler.schedule(delayMs, () => {
+      void this.handleRetryTimerFired(request.issueId, token).catch(() => {
+        /* timer 回调异常隔离，不破坏 authority 状态权威 */
+      });
+    });
+
+    const entry: RetryEntry = {
+      issueId: request.issueId,
+      identifier: request.identifier,
+      attempt: request.attempt,
+      dueAtMs,
+      timerHandle,
+      error: request.error,
+    };
+    this.state.retryAttempts.set(request.issueId, entry);
+    // RetryQueued 仍是 claimed（§7.1）：保留 / 补上 claim 以防重复派发。
+    this.state.claimed.add(request.issueId);
+    return entry;
+  }
+
+  /**
+   * 取消某 issue 的排队 timer 与在途 refresh ownership（幂等）。供 dispatch 提交前的
+   * 替换、以及后续 M5.4 shutdown / M5.5 reload 复用；**不移除 claim**（调用方决定）。
+   */
+  public cancelScheduledRetry(issueId: string): void {
+    const entry = this.state.retryAttempts.get(issueId);
+    if (entry !== undefined) {
+      this.scheduler?.cancel(entry.timerHandle);
+      this.state.retryAttempts.delete(issueId);
+    }
+    this.retryOwners.delete(issueId);
   }
 
   private startWorker(
@@ -318,6 +393,62 @@ export class OrchestratorAuthority {
     worker.markCompletion(handling);
   }
 
+  /**
+   * 无 `await` 的 dispatch 提交段：构造 `RunAttempt` / `RunningEntry` / `WorkerControl`
+   * 后原子写入 `running` + `claimed`、取消并删除同 issue retry、注册 worker 并启动。
+   * 同步抛出（如外部 `cancelRetry` 失败）时 state 完全未变，由调用方转为 failed。
+   */
+  private commitDispatch(issue: Issue, attemptNumber: number | null): string {
+    const workspacePath = this.resolveWorkspacePath(issue);
+    const token = `${issue.id}::${++this.tokenCounter}`;
+    const attempt: RunAttempt = {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      attempt: attemptNumber,
+      workspacePath,
+      startedAt: this.now(),
+      status: "preparing_workspace",
+    };
+    const entry: RunningEntry = {
+      issue,
+      attempt,
+      session: null,
+      workspacePath,
+      startedAtMs: this.monotonicNow(),
+      workerHandle: null,
+    };
+    const worker = new WorkerControl({
+      issueId: issue.id,
+      attemptToken: token,
+      attempt: attemptNumber,
+    });
+    entry.workerHandle = worker;
+
+    // 提交前先取消同 issue retry timer：失败则不提交，保持 state 一致。
+    // 取消失败时 retry 条目与 timer 所有权原样保留，下一次 tick 可重试；
+    // 绝不出现"running/claimed 已写入但 timer 未取消 / worker 未注册"的孤立状态。
+    const previousRetry = this.state.retryAttempts.get(issue.id);
+    if (previousRetry !== undefined) {
+      // 外部 M5.2 接线点：同步抛错则调用方以 failed 返回，state 未变。
+      this.cancelRetry?.(issue.id);
+      // authority 自有的 timer + 在途 refresh ownership。
+      this.scheduler?.cancel(previousRetry.timerHandle);
+      this.retryOwners.delete(issue.id);
+    }
+
+    // 提交段（无 await）：running + claimed 原子进入，retry 条目清除。
+    this.state.running.set(issue.id, entry);
+    this.state.claimed.add(issue.id);
+    if (previousRetry !== undefined) {
+      this.state.retryAttempts.delete(issue.id);
+    }
+    this.active.set(issue.id, { token, worker, entry, telemetry: createAgentTelemetryState() });
+
+    // 启动 runner（同步返回 Promise；结果异步归约）。
+    this.startWorker(issue, attemptNumber, token, worker, entry);
+    return token;
+  }
+
   private completeAttempt(
     issueId: string,
     token: string,
@@ -364,16 +495,213 @@ export class OrchestratorAuthority {
       retryKind: classification.retryKind,
     };
 
-    // M5.3 接入点：回调可在归约后为 issue 建立 retry entry（从而保留 claim）。
+    // 外部观察接线点：异常隔离，不破坏 authority。
     try {
       this.onOutcome?.(terminal);
     } catch {
       /* 外部 sink 异常隔离，不破坏 authority */
     }
 
-    // claim 默认释放；若 onOutcome 已建立 retry entry，则保留 claim 供 retry。
+    // M5.3 retry 决策：按 outcome 的 retryKind 建立 entry（suppressRetry 时不排）。
+    if (this.retry !== undefined && !terminal.suppressRetry) {
+      this.scheduleOutcomeRetry(terminal);
+    }
+
+    // claim 默认释放；若已建立 retry entry（native 或外部 onOutcome），则保留 claim。
     if (!this.state.retryAttempts.has(issueId)) {
       this.state.claimed.delete(issueId);
+    }
+  }
+
+  /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
+  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome): void {
+    if (terminal.retryKind === "continuation") {
+      this.scheduleRetry({
+        issueId: terminal.issueId,
+        identifier: terminal.issueIdentifier,
+        attempt: 1,
+        kind: "continuation",
+        error: null,
+      });
+      return;
+    }
+    if (terminal.retryKind === "failure") {
+      this.scheduleRetry({
+        issueId: terminal.issueId,
+        identifier: terminal.issueIdentifier,
+        attempt: (terminal.attempt ?? 0) + 1,
+        kind: "failure",
+        error: terminal.error ?? `worker exited: ${terminal.status}`,
+      });
+    }
+  }
+
+  /**
+   * retry timer 到期（SPEC §16.6 `on_retry_timer`）：
+   *
+   * 1. 校验 ownership token（stale / canceled timer 直接忽略）；
+   * 2. pop retry entry，**保留 claim 与 refresh ownership**；
+   * 3. `fetch_issues_by_ids([issueId])` refresh；
+   * 4. fetch 失败 → 保持 claim，attempt+1 failure backoff，error=`retry refresh failed`；
+   * 5. missing → 释放 claim（不清理 workspace）；
+   * 6. terminal → 安全清理 workspace 并释放 claim；
+   * 7. inactive / unroutable / 缺必填字段 → 释放 claim，不 dispatch、不 cleanup；
+   * 8. active+routable 但 slot 不足 → 保持 claim，attempt+1，error=`no available
+   *    orchestrator slots`；
+   * 9. active+routable 且有 slot → 用当前 retry attempt 重新 dispatch。
+   *
+   * await 期间发生替换 / 取消 / 新 lifecycle 后，迟到结果必须丢弃——不能只在入口校验
+   * 一次。
+   */
+  private async handleRetryTimerFired(issueId: string, token: string): Promise<void> {
+    if (this.retry === undefined || this.scheduler === undefined) {
+      return;
+    }
+    // 1. stale / canceled timer：token 已被替换或删除。
+    if (this.retryOwners.get(issueId) !== token) {
+      return;
+    }
+    const entry = this.state.retryAttempts.get(issueId);
+    if (entry === undefined) {
+      return;
+    }
+    // 2. pop：保留 claim 与 refresh ownership（token 留在 retryOwners）。
+    this.state.retryAttempts.delete(issueId);
+
+    // 3. refresh by id。
+    let refreshed: readonly Issue[];
+    try {
+      refreshed = await this.tracker.fetchIssuesByIds([issueId]);
+    } catch {
+      if (this.retryOwners.get(issueId) !== token) {
+        return; // 已在刷新期间被替换 / 取消。
+      }
+      this.scheduleRetry({
+        issueId,
+        identifier: entry.identifier,
+        attempt: entry.attempt + 1,
+        kind: "failure",
+        error: "retry refresh failed",
+      });
+      return;
+    }
+    if (this.retryOwners.get(issueId) !== token) {
+      return; // 迟到结果：ownership 已变。
+    }
+
+    const issue = refreshed.find((candidate) => candidate.id === issueId);
+    if (issue === undefined) {
+      // 5. missing → 只释放 claim，不清理 workspace。
+      this.releaseRetry(issueId);
+      return;
+    }
+
+    if (isTerminalState(issue.state, this.policy)) {
+      // 6. terminal → 安全清理 workspace；清理期间仍持有 claim（普通 dispatch 不会
+      //    抢到同一 issue），清理完成且 ownership 未被替换后再释放。
+      await this.cleanupTerminalWorkspace(issue);
+      if (this.retryOwners.get(issueId) !== token) {
+        return; // 清理期间被替换 / 取消：不得 clobber 新 entry。
+      }
+      this.releaseRetry(issueId);
+      return;
+    }
+
+    if (!isRetryDispatchAllowed(issue, this.state, this.policy, issueId)) {
+      // 7. inactive / unroutable / 缺字段 → 释放 claim，不 dispatch、不 cleanup。
+      this.releaseRetry(issueId);
+      return;
+    }
+
+    if (
+      globalAvailableSlots(this.state) <= 0 ||
+      perStateAvailableSlots(this.state, issue.state, this.policy) <= 0
+    ) {
+      // 8. slot 不足 → 保持 claim，failure backoff 重排。
+      this.scheduleRetry({
+        issueId,
+        identifier: issue.identifier,
+        attempt: entry.attempt + 1,
+        kind: "failure",
+        error: "no available orchestrator slots",
+      });
+      return;
+    }
+
+    // 9. 有 slot：消费本次 ownership 后原子重新 dispatch（仍保留 claim）。
+    if (this.state.running.has(issueId)) {
+      this.releaseRetry(issueId);
+      return;
+    }
+    this.retryOwners.delete(issueId);
+    this.state.retryAttempts.delete(issueId);
+    try {
+      this.commitDispatch(issue, entry.attempt);
+    } catch (error) {
+      // 同步构造失败：不丢 claim，按 failure 重排（SPEC §16.4 "failed to spawn agent"）。
+      this.scheduleRetry({
+        issueId,
+        identifier: entry.identifier,
+        attempt: entry.attempt + 1,
+        kind: "failure",
+        error: `failed to dispatch retry: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  /** 释放 retry ownership：清 token + entry + claim（refresh 后不可派发路径）。 */
+  private releaseRetry(issueId: string): void {
+    this.retryOwners.delete(issueId);
+    this.state.retryAttempts.delete(issueId);
+    this.state.claimed.delete(issueId);
+  }
+
+  /**
+   * terminal refresh 的安全 workspace 清理：只经注入端口，**不做删除 fallback**。
+   * `refused` / `failed` / 异常都记为诊断，release 已在上游完成，不启动 worker。
+   */
+  private async cleanupTerminalWorkspace(issue: Issue): Promise<void> {
+    const cleanup = this.retry?.cleanupWorkspace;
+    if (cleanup === undefined) {
+      return;
+    }
+    try {
+      const result = await cleanup.removeWorkspace(issue.identifier);
+      if (result.status === "removed" || result.status === "missing") {
+        return;
+      }
+      if (result.status === "refused") {
+        this.emitDiagnostic({
+          kind: "cleanup_refused",
+          issueId: issue.id,
+          identifier: issue.identifier,
+          message:
+            result.message ??
+            `terminal workspace cleanup refused (${result.reason ?? "unknown reason"})`,
+        });
+        return;
+      }
+      this.emitDiagnostic({
+        kind: "cleanup_failed",
+        issueId: issue.id,
+        identifier: issue.identifier,
+        message: result.message ?? "terminal workspace cleanup failed",
+      });
+    } catch (error) {
+      this.emitDiagnostic({
+        kind: "cleanup_error",
+        issueId: issue.id,
+        identifier: issue.identifier,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private emitDiagnostic(diagnostic: RetryDiagnostic): void {
+    try {
+      this.retry?.onDiagnostic?.(diagnostic);
+    } catch {
+      /* 诊断 sink 异常隔离 */
     }
   }
 }
