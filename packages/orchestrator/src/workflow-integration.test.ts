@@ -204,6 +204,16 @@ describe("WORKFLOW → registry / tracker → loop → real workspace / agent su
     await sessionReady(next);
     expect(h.starts.map((entry) => entry.issue.identifier)).toEqual(["NEST-79", "NEXT"]);
     expect(readFileSync(path.join(h.world(next).cwd, "transcript.ndjson"), "utf8")).toContain("New NEXT");
+    const world = h.world(next);
+    h.tracker.track({ ...next, state: "Closed" });
+    h.tracker.activeIssues = [];
+    await h.tick();
+    expect(processAlive(world.pid)).toBe(false);
+    expect(h.cleanupObservations).toEqual([
+      { identifier: next.identifier, alive: false, lifecycle: "after\n" },
+    ]);
+    expect(existsSync(world.cwd)).toBe(false);
+    expect(h.state.running.size + h.state.retryAttempts.size + h.state.claimed.size).toBe(0);
   });
 
   it("tracker failures degrade, then recover without losing a running process or its claim", async () => {
