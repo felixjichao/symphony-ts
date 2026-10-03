@@ -296,6 +296,65 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.state.codexTotals.inputTokens).toBe(9999);
   });
 
+  it("确认前夹入的异 thread completion（other_message）不得抢占 owner", () => {
+    const ctx = makeCtx();
+
+    // thread 身份尚未确认：异 thread completion 被 agent 映射为 other_message。
+    apply(ctx, event({ event: "other_message", threadId: "foreign-thread-id", turnId: "foreign-turn-id" }));
+    expect(ctx.telemetry.threadId).toBeNull();
+    expect(ctx.telemetry.pendingThreadId).toBeNull();
+
+    // 真实 thread 确认后一切正常，usage 正常入账。
+    apply(ctx, event({ event: "session_started", threadId: "t1" }));
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1" }));
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "t1",
+        turnId: "u1",
+        usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+      }),
+    );
+
+    expect(ctx.entry.session?.threadId).toBe("t1");
+    expect(ctx.entry.session?.turnCount).toBe(1);
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+  });
+
+  it("候选 thread 与真实 thread 不一致时丢弃候选高水位，不混用", () => {
+    const ctx = makeCtx();
+
+    // 确认前先到候选 thread 的 usage。
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "candidate-thread",
+        usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 },
+      }),
+    );
+    expect(ctx.telemetry.reportedTotalTokens).toBe(120);
+
+    // 真实 thread 确认（与候选不同）：候选基线被丢弃。
+    apply(ctx, event({ event: "session_started", threadId: "real-thread", turnId: "u1", sessionId: "real-thread-u1" }));
+    expect(ctx.telemetry.threadId).toBe("real-thread");
+    expect(ctx.telemetry.reportedTotalTokens).toBe(0);
+    expect(ctx.entry.session?.codexTotalTokens).toBe(0);
+
+    // 真实 thread 的 usage 从零基线重新计，不与候选混用。
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "real-thread",
+        turnId: "u1",
+        usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+      }),
+    );
+    expect(ctx.entry.session?.lastReportedTotalTokens).toBe(150);
+  });
+
   it("复现 app-server fixture 的 interleaved-other-completed 序列：真实 turn 数保持 1", () => {
     const ctx = makeCtx();
 

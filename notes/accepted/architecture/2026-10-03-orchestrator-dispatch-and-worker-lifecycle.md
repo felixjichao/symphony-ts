@@ -31,7 +31,7 @@ M5.2（NEST-75 / #51）要在 `@symphony/orchestrator` 建立 dispatch 写路径
 
 6. **attempt token 隔离**：每个 worker 有唯一 token；事件 / 阶段 / 结果回调都先校验 token 仍是该 issue 的当前 owner，旧 worker 的迟到消息不改状态。
 
-7. **telemetry 记账**：只消费稳定 `AgentEvent`。缺席字段不覆盖；身份不完整不伪造 session——把 usage / PID / last event / timestamp / message 暂存在 per-attempt `AgentTelemetryState` 中并在取得完整身份后回填；usage 在身份未齐时也立即按高水位入账（"先到 usage、后到身份"或"身份始终未齐并最终启动失败"都不漏账）；**thread 身份是隔离边界**，异 thread 的无关 / 迟到遥测一律丢弃；**turn 身份只由可靠生命周期事件**（`session_started` / `turn_completed` / `turn_failed` / `turn_cancelled` / `turn_ended_with_error`）推进，`other_message` / `notification` / `malformed` 携带的 turn id 不改写身份或增加计数（agent 会把异 thread/turn completion 映射成 `other_message`）；token 按 thread 绝对快照的正差额入账，重复不重复计、回退保留已入账高水位；rate limits 原样保存不解释。
+7. **telemetry 记账**：只消费稳定 `AgentEvent`。缺席字段不覆盖；身份不完整不伪造 session——把 usage / PID / last event / timestamp / message 暂存在 per-attempt `AgentTelemetryState` 中并在取得完整身份后回填；usage 在身份未齐时也立即按高水位入账（"先到 usage、后到身份"或"身份始终未齐并最终启动失败"都不漏账）；**thread 身份是隔离边界**，异 thread 的无关 / 迟到遥测一律丢弃；**thread owner 与 turn 身份都只由可靠生命周期事件**（`session_started` / `turn_completed` / `turn_failed` / `turn_cancelled` / `turn_ended_with_error`）确认/推进——owner 确认前的遥测按候选 thread 暂存，`other_message` / `malformed` 等明确无关的诊断事件不得抢占 owner，真实 owner 与候选不一致时丢弃候选高水位不混用；`notification` 携带的 turn id 也不改写身份或增加计数（agent 会把异 thread/turn completion 映射成 `other_message`）；token 按 thread 绝对快照的正差额入账，重复不重复计、回退保留已入账高水位；rate limits 原样保存不解释。
 
 8. **continuation decider 注入**：`createTrackerRefreshContinuationDecider()` 在 orchestrator 内实现"每 turn 后 `fetchIssuesByIds` refresh → active+routable continue / 否则 stop"，agent 不 import tracker；refresh 失败 / 超时沿 `continuation_failed` / `continuation_timeout`；取消或 attempt 过期后迟到 refresh 不写状态。只决定 same-thread continue / stop，不读并发 slot 或 claim eligibility。
 
@@ -41,6 +41,7 @@ M5.2（NEST-75 / #51）要在 `@symphony/orchestrator` 建立 dispatch 写路径
 - **用 `Promise.race` 给 `stop()` 加超时后立即宣布退出**：会让 runner / child 在 orchestration 认为已停止后继续运行，破坏 M5.4 的 stall / reconciliation 语义。改为等待真实收尾，上界复用 agent 层既有 timeout。否。
 - **把取消信号只包在 runner 外层 Promise 上**：握手期 child 由 `startAppServerSession` 内部持有，外层 race 无法及时停止它。因此在 `launchTransport` / `startAppServerSession` / `executeContinuationDecider` 内部贯通 signal。否。
 - **新增 `attempt_cancelled` 错误码**：会扩大已冻结的 `AGENT_ERROR_CODES` 契约（现有测试断言恰好 14 个），而 orchestrator 已用自己记录的 stop reason 分类。复用 `turn_cancelled` 更小。否。
+- **用"首个带 threadId 的事件"确认 thread owner**：握手期可能先收到被 agent 映射为 `other_message` 的异 thread completion，一旦据此确认就会永久过滤掉真正的 session thread，导致身份 / 活动时间 / usage 全部丢失。改为只有可靠生命周期事件确认 owner，确认前的遥测按候选 thread 暂存并在 owner 不同时丢弃。否。
 - **在 `LiveSession` 上新增 `lastTurnId` / `seenTurnIds` 做去重**：会改 domain 契约；改为在 per-attempt `AgentTelemetryState` 上维护当前 thread / turn 身份与计数，并把"身份未齐时的遥测"缓存也放在这里。否。
 - **仅凭 `turnId !== session.turnId` 推进 turn 身份**：agent 会把异 thread / 异 turn completion 映射为稳定 `other_message`（`app-server-session.ts` 的 `incomingThreadId !== threadIdValue` 与 `turn.id !== activeTurn.turnId` 两条路径），会在单 turn 下把 `turnCount` 抬到 3 并短暂改混 thread 身份与 token 高水位。改为 thread 隔离 + 生命周期事件白名单。否。
 - **让 worker 直接修改 runtime state**：违反单一写入者。worker 只发带 token 的回调。否。

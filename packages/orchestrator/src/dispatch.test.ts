@@ -196,7 +196,8 @@ describe("OrchestratorAuthority.dispatchIssue — 验收 01/02/03", () => {
     expect(authority.activeWorkerCount).toBe(0);
     // retry 条目与 timer 所有权原样保留，下一次 tick 可重试。
     expect(state.retryAttempts.get(issue.id)).toBe(retryEntry);
-    expect(runner.contexts).toHaveLength(0);
+    // runner 从未被调用：FakeRunner.run 写入 options 数组。
+    expect(runner.options).toHaveLength(0);
   });
 
   it("claimed 或 running 已占用时拒绝重复 dispatch", () => {

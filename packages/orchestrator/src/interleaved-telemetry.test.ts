@@ -1,10 +1,9 @@
 /**
- * 真实 fixture 回归（审查 blocker 2）：异 thread / 异 turn 的 completion 由
- * agent 映射为稳定 `other_message`，不得推进 orchestrator 的 LiveSession turn 计数
- * 或改混身份。
+ * 真实 fixture 回归（审查 blocker 2 及其续修）：异 thread / 异 turn 的 completion 由
+ * agent 映射为稳定 `other_message`，不得推进 orchestrator 的 LiveSession turn 计数、
+ * 改混身份，或（在 thread owner 尚未确认时）抢占 owner。
  *
- * 使用真实 `runAgentAttempt` + 现有 app-server fixture（`--interleaved-other-completed`）
- * + 真实临时 workspace，不 mock runner。
+ * 使用真实 `runAgentAttempt` + 现有 app-server fixture + 真实临时 workspace，不 mock runner。
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -23,7 +22,12 @@ import type {
 } from "@symphony/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyAgentEvent, createAgentTelemetryState, createOrchestratorRuntimeState } from "./index";
+import {
+  applyAgentEvent,
+  createAgentTelemetryState,
+  createOrchestratorRuntimeState,
+  type AgentTelemetryState,
+} from "./index";
 
 const APP_SERVER_FIXTURE = fileURLToPath(
   new URL("../../agent/test-fixtures/app-server.mjs", import.meta.url),
@@ -74,7 +78,7 @@ function makeEntry(issue: Issue): RunningEntry {
   };
 }
 
-describe("interleaved other-completed — 真实 fixture（审查 blocker 2）", () => {
+describe("interleaved / early foreign completion — 真实 fixture", () => {
   let tempDir: string;
   let workspaceRoot: string;
 
@@ -88,7 +92,7 @@ describe("interleaved other-completed — 真实 fixture（审查 blocker 2）",
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("归约后的 LiveSession.turnCount 与 runner 的真实 turn 数一致，不混入异 thread/turn 事件", async () => {
+  function makeConfig(fixtureFlags: readonly string[]): ServiceConfig {
     const hooks: HooksConfig = {
       afterCreate: null,
       beforeRun: null,
@@ -103,7 +107,7 @@ describe("interleaved other-completed — 真实 fixture（审查 blocker 2）",
       maxConcurrentAgentsByState: {},
     };
     const polling: PollingConfig = { intervalMs: 10_000 };
-    const config: ServiceConfig = {
+    return {
       tracker: {
         kind: "memory",
         provider: {},
@@ -116,7 +120,7 @@ describe("interleaved other-completed — 真实 fixture（审查 blocker 2）",
       hooks,
       agent,
       codex: {
-        command: fixtureCommand(["--interleaved-other-completed"]),
+        command: fixtureCommand(fixtureFlags),
         approvalPolicy: "never",
         threadSandbox: null,
         turnSandboxPolicy: null,
@@ -125,7 +129,18 @@ describe("interleaved other-completed — 真实 fixture（审查 blocker 2）",
         stallTimeoutMs: 10_000,
       },
     };
+  }
 
+  interface Reduction {
+    readonly runTurnCount: number;
+    readonly runThreadId: string;
+    readonly session: RunningEntry["session"];
+    readonly telemetry: AgentTelemetryState;
+    readonly state: ReturnType<typeof createOrchestratorRuntimeState>;
+  }
+
+  async function runWithFixture(fixtureFlags: readonly string[]): Promise<Reduction> {
+    const config = makeConfig(fixtureFlags);
     const issue = makeIssue();
     const entry = makeEntry(issue);
     const telemetry = createAgentTelemetryState();
@@ -141,13 +156,40 @@ describe("interleaved other-completed — 真实 fixture（审查 blocker 2）",
       onEvent: (event) => applyAgentEvent(state, entry, telemetry, event),
     });
 
-    expect(result.turnCount).toBe(1);
-    expect(telemetry.turnCount).toBe(1);
-    expect(entry.session?.turnCount).toBe(1);
-    expect(entry.session?.threadId).toBe(result.threadId);
-    expect(entry.session?.turnId).toBe(result.lastTurn.turnId);
-    // 异 thread / 异 turn 事件不携带 usage，不应污染 token 汇总。
-    expect(state.codexTotals.inputTokens).toBe(0);
-    expect(state.codexTotals.totalTokens).toBe(0);
+    return {
+      runTurnCount: result.turnCount,
+      runThreadId: result.threadId,
+      session: entry.session,
+      telemetry,
+      state,
+    };
+  }
+
+  it("夹入的 other-completed 不污染 turn 计数与身份", async () => {
+    const r = await runWithFixture(["--interleaved-other-completed"]);
+
+    expect(r.runTurnCount).toBe(1);
+    expect(r.telemetry.turnCount).toBe(1);
+    expect(r.session?.turnCount).toBe(1);
+    expect(r.session?.threadId).toBe(r.runThreadId);
+    expect(r.state.codexTotals.inputTokens).toBe(0);
+    expect(r.state.codexTotals.totalTokens).toBe(0);
+  });
+
+  it("thread/start 响应前夹入异 thread completion：不锁定错误 owner，真实身份与 usage 不受影响", async () => {
+    const r = await runWithFixture(["--foreign-completed-before-thread-start", "--send-usage"]);
+
+    expect(r.runTurnCount).toBe(1);
+    expect(r.runThreadId).toBe("thread-test-uuid-1");
+    expect(r.session?.threadId).toBe("thread-test-uuid-1");
+    expect(r.session?.turnCount).toBe(1);
+    expect(r.telemetry.threadId).toBe("thread-test-uuid-1");
+    // fixture 单 turn 上报绝对 usage 100 / 50 / 150。
+    expect(r.state.codexTotals).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
+    expect(r.session?.codexTotalTokens).toBe(150);
   });
 });

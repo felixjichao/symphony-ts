@@ -37,8 +37,13 @@ import { composeSessionId } from "@symphony/domain";
  * 跨事件积累"身份未齐时的暂存遥测"与"当前 thread 的已入账 token 高水位"。
  */
 export interface AgentTelemetryState {
-  /** 已确认的当前 thread 身份；尚未确认时 `null`。 */
+  /** 已确认的当前 thread 身份（只能由可靠生命周期事件确认）；尚未确认时 `null`。 */
   threadId: string | null;
+  /**
+   * 确认前的候选 thread（来自 token usage 等非诊断事件）。真实 thread 确认时若候选不一致，
+   * 丢弃候选高水位，避免把无关 thread 的消耗与真实 thread 混用。
+   */
+  pendingThreadId: string | null;
   /** 已确认的当前 turn 身份；尚未确认时 `null`。 */
   turnId: string | null;
   /** 当前 thread 内已确认的 turn 数（按身份去重）。 */
@@ -60,6 +65,7 @@ export interface AgentTelemetryState {
 export function createAgentTelemetryState(): AgentTelemetryState {
   return {
     threadId: null,
+    pendingThreadId: null,
     turnId: null,
     turnCount: 0,
     reportedInputTokens: 0,
@@ -88,6 +94,15 @@ const TURN_IDENTITY_EVENTS: ReadonlySet<string> = new Set([
   "turn_ended_with_error",
 ]);
 
+/**
+ * 明确表示"与本 worker 无关"的诊断事件：异 thread / 异 turn completion 会被 agent 映射成
+ * `other_message`（`app-server-session.ts` 的 incomingThreadId / turn.id 检查），`malformed`
+ * 同理不可信。它们**不得**在 thread owner 确认前抢占 owner，也不得写入暂存遥测。
+ */
+function isUnrelatedDiagnostic(event: AgentEvent): boolean {
+  return event.event === "other_message" || event.event === "malformed";
+}
+
 function nonEmptyString(value: string | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -110,13 +125,39 @@ export function applyAgentEvent(
   }
 
   const eventThreadId = nonEmptyString(event.threadId);
+  const reliableLifecycle = TURN_IDENTITY_EVENTS.has(event.event);
+  const unrelatedDiagnostic = isUnrelatedDiagnostic(event);
 
-  // thread 隔离边界：身份已确认后，异 thread 的无关 / 迟到事件被丢弃。
-  if (telemetry.threadId !== null && eventThreadId !== null && eventThreadId !== telemetry.threadId) {
+  if (telemetry.threadId !== null) {
+    // thread 隔离边界：owner 已确认后，异 thread 的无关 / 迟到事件被丢弃。
+    if (eventThreadId !== null && eventThreadId !== telemetry.threadId) {
+      return;
+    }
+  } else if (unrelatedDiagnostic) {
+    // owner 未确认时，明确无关的诊断事件（如握手期夹入的异 thread completion）不得抢占
+    // owner，也不得写入暂存遥测——否则真正的 session thread 会被永久过滤掉。
     return;
   }
-  if (telemetry.threadId === null && eventThreadId !== null) {
+
+  // 只有可靠生命周期事件能确认 thread owner；确认时若与此前暂存的候选 thread 不同，
+  // 丢弃候选高水位，绝不把无关 thread 的消耗与真实 thread 混用。
+  if (telemetry.threadId === null && reliableLifecycle && eventThreadId !== null) {
+    if (telemetry.pendingThreadId !== null && telemetry.pendingThreadId !== eventThreadId) {
+      resetReportedBaseline(telemetry);
+    }
     telemetry.threadId = eventThreadId;
+    telemetry.pendingThreadId = eventThreadId;
+  } else if (
+    telemetry.threadId === null &&
+    !unrelatedDiagnostic &&
+    eventThreadId !== null
+  ) {
+    // 确认前的非诊断遥测（token usage / approval 等）：按候选 thread 暂存；候选切换时重置
+    // 高水位基线，避免与最终真实 thread 混用。
+    if (telemetry.pendingThreadId !== null && telemetry.pendingThreadId !== eventThreadId) {
+      resetReportedBaseline(telemetry);
+    }
+    telemetry.pendingThreadId = eventThreadId;
   }
 
   recordLastEvent(entry, telemetry, event);
@@ -251,4 +292,17 @@ function accountUsage(
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 丢弃当前候选 thread 的已入账高水位与最后一次快照（真实 owner 被确认为另一个 thread 时）。
+ *
+ * 只重置 per-thread 基线，不回滚已写入全局 `codexTotals` 的差额——全局是跨 session 聚合，
+ * 且此处无法安全反算；关键是后续真实 thread 的差额从零基线重新计，不会与候选混用。
+ */
+function resetReportedBaseline(telemetry: AgentTelemetryState): void {
+  telemetry.reportedInputTokens = 0;
+  telemetry.reportedOutputTokens = 0;
+  telemetry.reportedTotalTokens = 0;
+  telemetry.lastUsage = null;
 }
