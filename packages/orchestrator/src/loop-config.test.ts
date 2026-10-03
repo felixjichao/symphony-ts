@@ -7,6 +7,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { TurnCompletedContext } from "@symphony/agent";
+import type { Issue } from "@symphony/domain";
+
 import {
   createLoopHarness,
   defaultPolicy,
@@ -14,6 +17,11 @@ import {
   makeIssue,
   toEffective,
 } from "./loop.test-helpers";
+
+/** 构造一个只供 continuation decider 判定的最小 context（decider 只用 issue + signal）。 */
+function turnContext(issue: Issue): TurnCompletedContext {
+  return { issue } as unknown as TurnCompletedContext;
+}
 
 describe("live config re-apply（验收 06 interval）", () => {
   it("下一次 tick 使用 reload 后的 poll interval", async () => {
@@ -65,6 +73,49 @@ describe("live config re-apply（验收 07 concurrency）", () => {
 
     // 上调到 3：后续 dispatch 使用新上限。
     h.live.maxConcurrentAgents = 3;
+    h.preflight.result = { ok: true, effective: toEffective(h.live) };
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    expect(h.runner.started).toEqual([a.id, b.id, c.id]);
+  });
+
+  it("per-state concurrency override reload 影响后续 dispatch，下调不终止运行 worker（验收 07）", async () => {
+    const h = createLoopHarness({
+      maxConcurrentAgents: 3,
+      policy: defaultPolicy({ maxConcurrentAgentsByState: { todo: 1 } }),
+    });
+    const a = makeIssue("A-1", "Todo");
+    const b = makeIssue("B-1", "Todo");
+    const c = makeIssue("C-1", "Todo");
+    h.tracker.activeIssues = [a, b, c];
+    h.tracker.track(a);
+    h.tracker.track(b);
+    h.tracker.track(c);
+
+    await h.loop.start();
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    // 全局上限 3，但 per-state Todo = 1 → 只派发一个。
+    expect(h.runner.started).toEqual([a.id]);
+    expect(h.authority.activeWorkerCount).toBe(1);
+
+    // 上调 per-state Todo = 2 → 后续 dispatch 使用新上限。
+    h.live.policy = defaultPolicy({ maxConcurrentAgentsByState: { todo: 2 } });
+    h.preflight.result = { ok: true, effective: toEffective(h.live) };
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    expect(h.runner.started).toEqual([a.id, b.id]);
+
+    // 下调 per-state Todo = 1 → 已运行 worker 不被终止，只是不再新增。
+    h.live.policy = defaultPolicy({ maxConcurrentAgentsByState: { todo: 1 } });
+    h.preflight.result = { ok: true, effective: toEffective(h.live) };
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    expect(h.runner.started).toEqual([a.id, b.id]);
+    expect(h.authority.activeWorkerCount).toBe(2);
+
+    // 移除 override → fallback 全局上限 3，可派发第三个。
+    h.live.policy = defaultPolicy();
     h.preflight.result = { ok: true, effective: toEffective(h.live) };
     h.pollScheduler.fire();
     await h.loop.settled();
@@ -201,5 +252,35 @@ describe("live config re-apply（验收 10 active / terminal / labels）", () =>
 
     expect(h.cleanupCalls).toContain(aTerminal.identifier);
     expect(h.authority.activeWorkerCount).toBe(1);
+  });
+});
+
+describe("live config re-apply（现有 worker continuation 动态 policy）", () => {
+  it("reload 后运行中 worker 的 continuation 判定读取新 policy → 按新 required labels stop", async () => {
+    const h = createLoopHarness({ maxConcurrentAgents: 1 });
+    const issue = makeIssue("A-1", "Todo");
+    h.tracker.activeIssues = [issue];
+    h.tracker.track(issue);
+
+    await h.loop.start();
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    expect(h.runner.started).toEqual([issue.id]);
+
+    const decider = h.runner.continuationDeciders.get(issue.id);
+    expect(decider).toBeDefined();
+
+    // reload 前：required labels 为空 → 仍然 routable → continue（同一 live thread）。
+    await expect(decider!(turnContext(issue))).resolves.toMatchObject({ kind: "continue" });
+
+    // reload：要求 label "bug"；经一次 tick 应用新 policy（本次 reconciliation 仍用旧 policy）。
+    h.live.policy = defaultPolicy({ requiredLabels: ["bug"] });
+    h.preflight.result = { ok: true, effective: toEffective(h.live) };
+    h.pollScheduler.fire();
+    await h.loop.settled();
+    expect(h.authority.activeWorkerCount).toBe(1); // 现有 worker 未被终止
+
+    // reload 后：运行中 worker 的 continuation 读取最新 policy → 不再 routable → stop。
+    await expect(decider!(turnContext(issue))).resolves.toEqual({ kind: "stop" });
   });
 });

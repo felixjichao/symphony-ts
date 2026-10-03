@@ -43,6 +43,7 @@ M5.5（NEST-78 / #54）要在 `@symphony/orchestrator` 落地长运行 poll loop
 ## Consequences
 
 - M5.6 只需实现 `DispatchPreflightSource`（真实 workflow load + registry preflight）与 `CandidateIssueSource`（tracker adapter），把 `runAgentAttempt` / `WorkspaceManager` 注入 `OrchestratorAuthority`，即可组装真实长运行服务；loop 本身上下文无关、可确定性测试。
+- 审查建议的两项动态场景已固化进仓库 suite（`loop-config.test.ts`）：global / per-state concurrency override reload 对后续 dispatch 的影响，以及运行中 worker 的 continuation 在 policy reload 后按新 required-labels 规则 stop/continue；其余真实跨包接线与真实进程 / 目录关停竞态仍留 M5.6。
 - 已发布公共面新增 `OrchestratorLoop` / `OrchestratorStartupError` 与 `DispatchPreflightSource` / `CandidateIssueSource` / `EffectiveSchedulingConfig` / `DispatchPreflightResult` / `LoopDiagnostic` / `PollScheduler`；`OrchestratorAuthority` 新增 `applyEffectiveSchedulingConfig` / `beginShutdown` / `shutdown` / `waitForCleanups` / `pollIntervalMs` / `hasAvailableGlobalSlot` / `isStopping`，`createTrackerRefreshContinuationDecider` 的 `policy` 放宽为对象或 getter（向后兼容）。
 - 后续承诺：loop 不得引入 `setInterval`、不得跳过 reconciliation、不得在降级出口遗漏下一次 tick；authority 仍是唯一 state 写入者；关停必须使全部 retry ownership 失效后才停止 worker；任何新加的有效配置读取都必须走 getter / apply，不得缓存构造时快照。
 - scheduler state 仍 in-memory only（§14.3）：stop 后不保留 timer、retry、running；跨重启恢复仍靠 startup sweep + 重新轮询。

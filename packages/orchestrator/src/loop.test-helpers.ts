@@ -4,7 +4,11 @@
  * 提供可注入的 manual timer、fake tracker、可控 runner、可变 preflight 与
  * `OrchestratorLoop` harness，让布局确定复跑且不依赖真实等待。
  */
-import type { AgentAttemptOptions, AgentAttemptResult } from "@symphony/agent";
+import type {
+  AgentAttemptOptions,
+  AgentAttemptResult,
+  ContinuationDecider,
+} from "@symphony/agent";
 import type { Issue, OrchestratorRuntimeState, TimerHandle } from "@symphony/domain";
 
 import {
@@ -142,6 +146,8 @@ export class FakeTracker {
 export interface RunnerControl {
   readonly runner: AgentAttemptRunner;
   readonly started: string[];
+  /** 每次 attempt 由 authority 注入的 continuation decider（供动态 policy 回归）。 */
+  readonly continuationDeciders: Map<string, ContinuationDecider>;
   resolve(issueId: string): void;
   reject(issueId: string, error?: unknown): void;
 }
@@ -153,9 +159,13 @@ export function createRunnerControl(options: { autoRejectOnAbort?: boolean } = {
     { resolve: (result: AgentAttemptResult) => void; reject: (error: unknown) => void }
   >();
   const started: string[] = [];
+  const continuationDeciders = new Map<string, ContinuationDecider>();
 
   const runner: AgentAttemptRunner = (attemptOptions) => {
     started.push(attemptOptions.issue.id);
+    if (attemptOptions.continuationDecider !== undefined) {
+      continuationDeciders.set(attemptOptions.issue.id, attemptOptions.continuationDecider);
+    }
     return new Promise<AgentAttemptResult>((resolve, reject) => {
       pending.set(attemptOptions.issue.id, { resolve, reject });
       if (autoReject && attemptOptions.signal !== undefined) {
@@ -175,6 +185,7 @@ export function createRunnerControl(options: { autoRejectOnAbort?: boolean } = {
   return {
     runner,
     started,
+    continuationDeciders,
     resolve: (issueId) => {
       const entry = pending.get(issueId);
       if (entry !== undefined) {
@@ -316,6 +327,7 @@ export function createLoopHarness(options: LoopHarnessOptions = {}): LoopHarness
         issue: context.issue,
         attempt: context.attempt,
         signal: context.signal,
+        continuationDecider: context.continuationDecider,
       }) as unknown as AgentAttemptOptions,
     tracker: authorityTracker,
     resolveWorkspacePath: (issue) => `/tmp/symphony-loop-test/${issue.identifier}`,
