@@ -192,4 +192,19 @@ describe("interleaved / early foreign completion — 真实 fixture", () => {
     });
     expect(r.session?.codexTotalTokens).toBe(150);
   });
+
+  it("交错候选绝对快照 A→B→A 不重复入账（审查复现）", async () => {
+    const r = await runWithFixture(["--candidate-usage-before-thread-start", "--send-usage"]);
+
+    expect(r.runTurnCount).toBe(1);
+    expect(r.runThreadId).toBe("thread-test-uuid-1");
+    // A=100 + B=20 + A 重复快照 0 + A=150 增量 50 = 170（不是重复计 A 的 270）。
+    expect(r.state.codexTotals).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 50,
+      totalTokens: 170,
+    });
+    expect(r.session?.codexTotalTokens).toBe(150);
+    expect(r.session?.lastReportedTotalTokens).toBe(150);
+  });
 });

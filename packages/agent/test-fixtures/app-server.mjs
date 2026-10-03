@@ -32,6 +32,8 @@
 //   --interleaved-other-completed 发送异 thread/turn completion 夹入
 //   --foreign-completed-before-thread-start 在 thread/start 响应之前发送异 thread completion
 //                              （验证 orchestrator 不会让无关诊断事件抢占尚未确认的 thread owner）
+//   --candidate-usage-before-thread-start 在 thread/start 响应之前依次发送 A=100、B=20、A=100
+//                              的绝对 usage（A 为真实 thread id），验证交错候选快照不重复入账
 //   --send-usage               发送合法的 thread/tokenUsage/updated
 //   --send-invalid-usage       发送非法字段值的 thread/tokenUsage/updated
 //   --send-rate-limits         发送 account/rateLimits/updated
@@ -368,6 +370,20 @@ rl.on("line", (line) => {
             status: "completed",
           },
         });
+      }
+      if (args["candidate-usage-before-thread-start"]) {
+        const emitUsage = (threadId, total) => {
+          notify("thread/tokenUsage/updated", {
+            threadId,
+            tokenUsage: {
+              total: { inputTokens: total, outputTokens: 0, totalTokens: total },
+            },
+          });
+        };
+        // 真实 thread（thread-test-uuid-1）→ 无关 thread → 真实 thread 的相同绝对快照。
+        emitUsage("thread-test-uuid-1", 100);
+        emitUsage("foreign-thread-id", 20);
+        emitUsage("thread-test-uuid-1", 100);
       }
       if (args["missing-thread-id"]) {
         respond(id, { thread: {} });

@@ -281,7 +281,7 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.entry.session?.turnCount).toBe(1);
     // usage 属于当前 thread，正常入账并抬升高水位。
     expect(ctx.state.codexTotals.inputTokens).toBe(9999);
-    expect(ctx.telemetry.reportedInputTokens).toBe(9999);
+    expect(ctx.telemetry.baselines.get("t1")?.reportedInputTokens).toBe(9999);
 
     // 同一高水位下的重复快照不重复计。
     apply(
@@ -302,7 +302,9 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     // thread 身份尚未确认：异 thread completion 被 agent 映射为 other_message。
     apply(ctx, event({ event: "other_message", threadId: "foreign-thread-id", turnId: "foreign-turn-id" }));
     expect(ctx.telemetry.threadId).toBeNull();
-    expect(ctx.telemetry.pendingThreadId).toBeNull();
+    // 无任何遥测被写入（不抢占 owner、不建基线）。
+    expect(ctx.telemetry.baselines.size).toBe(0);
+    expect(ctx.entry.session).toBeNull();
 
     // 真实 thread 确认后一切正常，usage 正常入账。
     apply(ctx, event({ event: "session_started", threadId: "t1" }));
@@ -322,7 +324,7 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
   });
 
-  it("候选 thread 与真实 thread 不一致时丢弃候选高水位，不混用", () => {
+  it("候选 thread 与真实 thread 各自独立基线，不混用（候选额度保留）", () => {
     const ctx = makeCtx();
 
     // 确认前先到候选 thread 的 usage。
@@ -334,15 +336,17 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
         usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 },
       }),
     );
-    expect(ctx.telemetry.reportedTotalTokens).toBe(120);
+    expect(ctx.telemetry.baselines.get("candidate-thread")?.reportedTotalTokens).toBe(120);
+    // 候选消耗已入账全局（保留，不反算）。
+    expect(ctx.state.codexTotals.totalTokens).toBe(120);
 
-    // 真实 thread 确认（与候选不同）：候选基线被丢弃。
+    // 真实 thread 确认（与候选不同）：session 用真实 thread 自己的基线（缺失即 0）。
     apply(ctx, event({ event: "session_started", threadId: "real-thread", turnId: "u1", sessionId: "real-thread-u1" }));
     expect(ctx.telemetry.threadId).toBe("real-thread");
-    expect(ctx.telemetry.reportedTotalTokens).toBe(0);
+    expect(ctx.telemetry.baselines.get("real-thread")).toBeUndefined();
     expect(ctx.entry.session?.codexTotalTokens).toBe(0);
 
-    // 真实 thread 的 usage 从零基线重新计，不与候选混用。
+    // 真实 thread 的 usage 从自己的零基线计；候选额度不被混入。
     apply(
       ctx,
       event({
@@ -352,6 +356,36 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
         usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
       }),
     );
+    expect(ctx.entry.session?.lastReportedTotalTokens).toBe(150);
+    expect(ctx.telemetry.baselines.get("candidate-thread")?.reportedTotalTokens).toBe(120);
+    // 120（候选）+ 150（真实增量）= 270。
+    expect(ctx.state.codexTotals.totalTokens).toBe(270);
+  });
+
+  it("审查 blocker：A→B→A 交错候选快照不重复入账", () => {
+    const ctx = makeCtx();
+
+    const candidate = (threadId: string, total: number): AgentEvent =>
+      event({
+        event: "notification",
+        threadId,
+        usage: { inputTokens: total, outputTokens: 0, totalTokens: total },
+      });
+
+    apply(ctx, candidate("A", 100));
+    apply(ctx, candidate("B", 20));
+    // 切回 A 的相同绝对快照：A 自己的高水位已含 100，重复不计。
+    apply(ctx, candidate("A", 100));
+    expect(ctx.state.codexTotals.totalTokens).toBe(120);
+
+    // 确认 owner=A 并继续上报 A=150：只入账 50 的增量。
+    apply(ctx, event({ event: "session_started", threadId: "A", turnId: "u1", sessionId: "A-u1" }));
+    expect(ctx.entry.session?.codexTotalTokens).toBe(100);
+    apply(ctx, candidate("A", 150));
+
+    expect(ctx.state.codexTotals.totalTokens).toBe(170);
+    expect(ctx.state.codexTotals.inputTokens).toBe(170);
+    expect(ctx.entry.session?.codexTotalTokens).toBe(150);
     expect(ctx.entry.session?.lastReportedTotalTokens).toBe(150);
   });
 

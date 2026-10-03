@@ -10,15 +10,19 @@
  *
  * 口径（§13.5）：
  * - `LiveSession.codex*Tokens` 是当前 thread 的**绝对累计**快照；
- * - `codexTotals` 按"绝对快照 − 已入账高水位"的**正差额**聚合，重复快照不重复入账，
+ * - `codexTotals` 按"绝对快照 − 该 thread 已入账高水位"的**正差额**聚合：重复快照不重复入账，
  *   换 turn 不清零，回退 / 迟到快照保留已入账高水位；
- * - **thread 身份是隔离边界**：异 thread 的无关 / 迟到遥测一律隔离，不推进身份、不计数、
- *   不入账、不写 LiveSession；
- * - **turn 身份只由可靠的生命周期事件推进**（`session_started` / `turn_completed` /
- *   `turn_failed` / `turn_cancelled` / `turn_ended_with_error`），`other_message` /
- *   `notification` / `malformed` 等诊断事件携带的 turn id 不得改变当前身份或计数；
+ * - **每个 thread 独立维护高水位**（{@link AgentTelemetryState.baselines}）。thread 身份未确认
+ *   前可能出现多个候选 thread（含真实 thread 早到的 usage）：各自记在各自基线里，候选切换 /
+ *   owner 确认都不清除任何 thread 已计入的额度，因此 A→B→A 的重复绝对快照不会重复入账；
+ * - **thread 身份是隔离边界**：owner 确认后，异 thread 的无关 / 迟到遥测一律隔离，不推进身份、
+ *   不计数、不入账、不写 LiveSession；
+ * - **thread owner 与 turn 身份只由可靠生命周期事件确认/推进**（`session_started` /
+ *   `turn_completed` / `turn_failed` / `turn_cancelled` / `turn_ended_with_error`）；
+ *   `other_message` / `malformed` 在 owner 确认前不得抢占 owner，`notification` 等携带的 turn
+ *   id 不得改写身份或计数；
  * - 身份未齐时不伪造 session：把 usage / PID / last event / timestamp / message 暂存在
- *   {@link AgentTelemetryState}，取得完整身份后回填；usage 在身份未齐时也立即按高水位入账，
+ *   {@link AgentTelemetryState}，取得完整身份后回填；usage 到达即按所属 thread 高水位入账，
  *   因此"先到 usage、后到身份"或"身份始终未齐、最终启动失败"都不会漏账。
  */
 import type { AgentEvent, AgentTokenUsage } from "@symphony/agent";
@@ -30,30 +34,31 @@ import type {
 } from "@symphony/domain";
 import { composeSessionId } from "@symphony/domain";
 
+/** 单个 thread 的已入账 token 基线（绝对快照高水位 + 最后一次快照）。 */
+export interface ThreadUsageBaseline {
+  /** 该 thread 已入账的绝对高水位（回退快照不降低）。 */
+  reportedInputTokens: number;
+  reportedOutputTokens: number;
+  reportedTotalTokens: number;
+  /** 该 thread 最近一次绝对快照（用于回填 `LiveSession.codex*Tokens`）。 */
+  lastUsage: AgentTokenUsage | null;
+}
+
 /**
  * 单个 worker 的 per-attempt 遥测状态（不驻留在 domain 模型上）。
  *
  * 由 authority 为每个 attempt 新建并长期持有，随 attempt 结束丢弃；授权 `applyAgentEvent`
- * 跨事件积累"身份未齐时的暂存遥测"与"当前 thread 的已入账 token 高水位"。
+ * 跨事件积累"身份未齐时的暂存遥测"与"每个 thread 的已入账 token 高水位"。
  */
 export interface AgentTelemetryState {
   /** 已确认的当前 thread 身份（只能由可靠生命周期事件确认）；尚未确认时 `null`。 */
   threadId: string | null;
-  /**
-   * 确认前的候选 thread（来自 token usage 等非诊断事件）。真实 thread 确认时若候选不一致，
-   * 丢弃候选高水位，避免把无关 thread 的消耗与真实 thread 混用。
-   */
-  pendingThreadId: string | null;
   /** 已确认的当前 turn 身份；尚未确认时 `null`。 */
   turnId: string | null;
   /** 当前 thread 内已确认的 turn 数（按身份去重）。 */
   turnCount: number;
-  /** 当前 thread 的已入账 token 高水位（跨 turn 保留，回退快照不降低）。 */
-  reportedInputTokens: number;
-  reportedOutputTokens: number;
-  reportedTotalTokens: number;
-  /** 最近一次绝对 usage 快照（用于回填 `LiveSession.codex*Tokens`）。 */
-  lastUsage: AgentTokenUsage | null;
+  /** threadId（或身份未齐时的占位 key）→ 该 thread 的 token 基线。 */
+  baselines: Map<string, ThreadUsageBaseline>;
   /** 身份未齐时暂存的 last event / timestamp / message / pid。 */
   pendingLastEvent: CodexEventName | null;
   pendingLastTimestamp: UtcTimestampMs | null;
@@ -61,17 +66,16 @@ export interface AgentTelemetryState {
   pendingPid: string | null;
 }
 
+/** 尚无 thread 身份的 usage（会话 thread 建立前）归入的占位基线 key。 */
+const UNKNOWN_THREAD_KEY = "\u0000unknown-thread";
+
 /** 新建一个空的 per-attempt 遥测状态。 */
 export function createAgentTelemetryState(): AgentTelemetryState {
   return {
     threadId: null,
-    pendingThreadId: null,
     turnId: null,
     turnCount: 0,
-    reportedInputTokens: 0,
-    reportedOutputTokens: 0,
-    reportedTotalTokens: 0,
-    lastUsage: null,
+    baselines: new Map(),
     pendingLastEvent: null,
     pendingLastTimestamp: null,
     pendingLastMessage: null,
@@ -80,11 +84,12 @@ export function createAgentTelemetryState(): AgentTelemetryState {
 }
 
 /**
- * 可靠推进 turn 身份 / 计数的稳定事件名白名单。
+ * 可靠确认 thread owner / 推进 turn 身份与计数的稳定事件名白名单。
  *
  * 刻意**不**包含 `other_message`（异 thread/turn 诊断）、`notification`（token 遥测）、
- * `malformed`：这些事件可能携带与本 worker 无关的 turn id（见 `app-server-session.ts`
- * 的异 thread / 异 turn completion 映射），不得据此改写当前身份或增加计数。
+ * `malformed`：这些事件可能携带与本 worker 无关的 thread / turn id（见
+ * `app-server-session.ts` 的异 thread / 异 turn completion 映射），不得据此确认 owner 或
+ * 改写当前身份、增加计数。
  */
 const TURN_IDENTITY_EVENTS: ReadonlySet<string> = new Set([
   "session_started",
@@ -139,37 +144,22 @@ export function applyAgentEvent(
     return;
   }
 
-  // 只有可靠生命周期事件能确认 thread owner；确认时若与此前暂存的候选 thread 不同，
-  // 丢弃候选高水位，绝不把无关 thread 的消耗与真实 thread 混用。
+  // thread owner 只由可靠生命周期事件确认。确认前到达的 usage 已按各自 thread 记入基线，
+  // 因此这里**不**重置任何基线：同一 thread 已计入的额度必须保留，A→B→A 不重复入账。
   if (telemetry.threadId === null && reliableLifecycle && eventThreadId !== null) {
-    if (telemetry.pendingThreadId !== null && telemetry.pendingThreadId !== eventThreadId) {
-      resetReportedBaseline(telemetry);
-    }
     telemetry.threadId = eventThreadId;
-    telemetry.pendingThreadId = eventThreadId;
-  } else if (
-    telemetry.threadId === null &&
-    !unrelatedDiagnostic &&
-    eventThreadId !== null
-  ) {
-    // 确认前的非诊断遥测（token usage / approval 等）：按候选 thread 暂存；候选切换时重置
-    // 高水位基线，避免与最终真实 thread 混用。
-    if (telemetry.pendingThreadId !== null && telemetry.pendingThreadId !== eventThreadId) {
-      resetReportedBaseline(telemetry);
-    }
-    telemetry.pendingThreadId = eventThreadId;
   }
 
   recordLastEvent(entry, telemetry, event);
 
-  // usage 入账与 session 是否建立无关：身份未齐时也按高水位立即入账，避免漏账。
+  // usage 入账与 session 是否建立无关：到达即按所属 thread 的基线入账，避免漏账。
   if (event.usage !== undefined) {
-    accountUsage(state, entry, telemetry, event.usage);
+    accountUsage(state, entry, telemetry, eventThreadId ?? UNKNOWN_THREAD_KEY, event.usage);
   }
 
   // turn 身份 / 计数只由可靠生命周期事件推进。
   const eventTurnId = nonEmptyString(event.turnId);
-  if (eventTurnId !== null && TURN_IDENTITY_EVENTS.has(event.event)) {
+  if (eventTurnId !== null && reliableLifecycle && telemetry.threadId !== null) {
     if (telemetry.turnId === null) {
       telemetry.turnId = eventTurnId;
       telemetry.turnCount = Math.max(telemetry.turnCount, 1);
@@ -211,7 +201,7 @@ function recordLastEvent(
 }
 
 /**
- * 取得完整 thread + turn 身份后一次性建出 LiveSession，并用暂存遥测 + 已入账高水位回填。
+ * 取得完整 thread + turn 身份后一次性建出 LiveSession，并用该 thread 的基线 + 暂存遥测回填。
  * 缺任一分量时保持 `null`——绝不伪造 session 身份。
  */
 function materializeSession(
@@ -223,6 +213,7 @@ function materializeSession(
     if (telemetry.threadId === null || telemetry.turnId === null) {
       return;
     }
+    const baseline = telemetry.baselines.get(telemetry.threadId);
     entry.session = {
       sessionId: composeSessionId(telemetry.threadId, telemetry.turnId),
       threadId: telemetry.threadId,
@@ -231,12 +222,12 @@ function materializeSession(
       lastCodexEvent: telemetry.pendingLastEvent,
       lastCodexTimestamp: telemetry.pendingLastTimestamp,
       lastCodexMessage: telemetry.pendingLastMessage,
-      codexInputTokens: telemetry.lastUsage?.inputTokens ?? 0,
-      codexOutputTokens: telemetry.lastUsage?.outputTokens ?? 0,
-      codexTotalTokens: telemetry.lastUsage?.totalTokens ?? 0,
-      lastReportedInputTokens: telemetry.reportedInputTokens,
-      lastReportedOutputTokens: telemetry.reportedOutputTokens,
-      lastReportedTotalTokens: telemetry.reportedTotalTokens,
+      codexInputTokens: baseline?.lastUsage?.inputTokens ?? 0,
+      codexOutputTokens: baseline?.lastUsage?.outputTokens ?? 0,
+      codexTotalTokens: baseline?.lastUsage?.totalTokens ?? 0,
+      lastReportedInputTokens: baseline?.reportedInputTokens ?? 0,
+      lastReportedOutputTokens: baseline?.reportedOutputTokens ?? 0,
+      lastReportedTotalTokens: baseline?.reportedTotalTokens ?? 0,
       turnCount: telemetry.turnCount,
     };
     return;
@@ -251,58 +242,59 @@ function materializeSession(
   }
 }
 
-/** 按正差额把绝对 token 快照入账到 `codex_totals`，并维护已入账高水位。 */
+/**
+ * 按正差额把绝对 token 快照入账到 `codex_totals`，并维护**该 thread** 的已入账高水位。
+ *
+ * 高水位按 thread key 独立保存：候选切换 / owner 确认都不会清除某 thread 已计入的额度，
+ * 因此同一 thread 的重复绝对快照不会再次入账。
+ */
 function accountUsage(
   state: OrchestratorRuntimeState,
   entry: RunningEntry,
   telemetry: AgentTelemetryState,
+  threadKey: string,
   usage: AgentTokenUsage,
 ): void {
   const reportedInput = nonNegative(usage.inputTokens);
   const reportedOutput = nonNegative(usage.outputTokens);
   const reportedTotal = nonNegative(usage.totalTokens);
 
-  const deltaInput = Math.max(reportedInput - telemetry.reportedInputTokens, 0);
-  const deltaOutput = Math.max(reportedOutput - telemetry.reportedOutputTokens, 0);
-  const deltaTotal = Math.max(reportedTotal - telemetry.reportedTotalTokens, 0);
+  const baseline: ThreadUsageBaseline = telemetry.baselines.get(threadKey) ?? {
+    reportedInputTokens: 0,
+    reportedOutputTokens: 0,
+    reportedTotalTokens: 0,
+    lastUsage: null,
+  };
+
+  const deltaInput = Math.max(reportedInput - baseline.reportedInputTokens, 0);
+  const deltaOutput = Math.max(reportedOutput - baseline.reportedOutputTokens, 0);
+  const deltaTotal = Math.max(reportedTotal - baseline.reportedTotalTokens, 0);
 
   state.codexTotals.inputTokens += deltaInput;
   state.codexTotals.outputTokens += deltaOutput;
   state.codexTotals.totalTokens += deltaTotal;
 
-  telemetry.lastUsage = {
+  baseline.lastUsage = {
     inputTokens: reportedInput,
     outputTokens: reportedOutput,
     totalTokens: reportedTotal,
   };
-  telemetry.reportedInputTokens = Math.max(telemetry.reportedInputTokens, reportedInput);
-  telemetry.reportedOutputTokens = Math.max(telemetry.reportedOutputTokens, reportedOutput);
-  telemetry.reportedTotalTokens = Math.max(telemetry.reportedTotalTokens, reportedTotal);
+  baseline.reportedInputTokens = Math.max(baseline.reportedInputTokens, reportedInput);
+  baseline.reportedOutputTokens = Math.max(baseline.reportedOutputTokens, reportedOutput);
+  baseline.reportedTotalTokens = Math.max(baseline.reportedTotalTokens, reportedTotal);
+  telemetry.baselines.set(threadKey, baseline);
 
   const session = entry.session;
-  if (session !== null) {
+  if (session !== null && session.threadId === threadKey) {
     session.codexInputTokens = reportedInput;
     session.codexOutputTokens = reportedOutput;
     session.codexTotalTokens = reportedTotal;
-    session.lastReportedInputTokens = telemetry.reportedInputTokens;
-    session.lastReportedOutputTokens = telemetry.reportedOutputTokens;
-    session.lastReportedTotalTokens = telemetry.reportedTotalTokens;
+    session.lastReportedInputTokens = baseline.reportedInputTokens;
+    session.lastReportedOutputTokens = baseline.reportedOutputTokens;
+    session.lastReportedTotalTokens = baseline.reportedTotalTokens;
   }
 }
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-/**
- * 丢弃当前候选 thread 的已入账高水位与最后一次快照（真实 owner 被确认为另一个 thread 时）。
- *
- * 只重置 per-thread 基线，不回滚已写入全局 `codexTotals` 的差额——全局是跨 session 聚合，
- * 且此处无法安全反算；关键是后续真实 thread 的差额从零基线重新计，不会与候选混用。
- */
-function resetReportedBaseline(telemetry: AgentTelemetryState): void {
-  telemetry.reportedInputTokens = 0;
-  telemetry.reportedOutputTokens = 0;
-  telemetry.reportedTotalTokens = 0;
-  telemetry.lastUsage = null;
 }
