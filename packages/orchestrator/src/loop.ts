@@ -21,11 +21,15 @@
  *   stall timeout 由 authority 的 getter 从同一 effective 配置读取。普通并发上限下调
  *   不主动终止已运行 worker。
  * - **startup fail-fast**（§6.3 / §16.1）：初始 dispatch preflight 失败直接抛
- *   {@link OrchestratorStartupError}，不进入 scheduling loop、不安排 timer；成功后
- *   startup terminal sweep → immediate first tick。
- * - **stop 幂等**（§14.3）：取消 poll timer、等待在途 tick、再 `authority.shutdown()`
- *   停止 workers 与 retry timer；stop 后不再触发 tick / retry。实例 stop 后不可重启，
- *   重新运行创建新实例。
+ *   {@link OrchestratorStartupError}，不进入 scheduling loop、不安排 timer；成功
+ *   preflight 后若 startup terminal sweep 报 `unavailable`（缺 cleanup 端口或 tracker
+ *   `fetchIssuesByStates`）同样拒绝进入调度；**实际** terminal fetch / 单项 cleanup
+ *   失败仍是 best-effort 降级、不阻止启动。成功后 startup terminal sweep → immediate
+ *   first tick。
+ * - **stop 幂等**（§14.3）：**先同步**关闭 authority 调度权限（拒绝新 dispatch /
+ *   retry、失效在途 retry ownership、取消 retry timer、开始停止 workers），再等待
+ *   startup / 在途 tick 与全部收尾（workers + 已开始的 workspace cleanup）；stop 后
+ *   不再触发 tick / retry / 新 cleanup。实例 stop 后不可重启，重新运行创建新实例。
  *
  * 边界（根 `AGENTS.md`）：本模块不 fetch / spawn / cleanup —— 全部经 authority 与
  * 注入端口；不解释 agent / Codex 协议；diagnostic sink 异常被隔离。
@@ -34,6 +38,7 @@ import type { Issue, TimerHandle } from "@symphony/domain";
 
 import type { OrchestratorAuthority } from "./authority";
 import type { DispatchPolicy } from "./eligibility";
+import type { StartupCleanupResult } from "./reconciliation";
 import { createRetryScheduler, type RetryScheduler } from "./retry";
 import { sortForDispatch } from "./sort";
 
@@ -92,6 +97,7 @@ export type PollScheduler = RetryScheduler;
 export interface LoopDiagnostic {
   readonly kind:
     | "startup_validation_failed"
+    | "startup_cleanup_unavailable"
     | "startup_cleanup_failed"
     | "tick_validation_failed"
     | "candidate_fetch_failed"
@@ -129,13 +135,13 @@ export interface OrchestratorLoopOptions {
   readonly onDiagnostic?: ((diagnostic: LoopDiagnostic) => void) | undefined;
 }
 
-type LoopStatus = "idle" | "running" | "stopping" | "stopped";
+type LoopStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
 
 /**
  * 长运行 poll loop。
  *
- * 生命周期：`idle --start()--> running --stop()--> stopped`。`start()` 只可调用一次；
- * `stop()` 幂等。
+ * 生命周期：`idle --start()--> starting --(startup 成功)--> running --stop()--> stopped`。
+ * `start()` 只可调用一次；`stop()` 幂等且可在任意阶段调用。
  */
 export class OrchestratorLoop {
   private readonly authority: OrchestratorAuthority;
@@ -147,6 +153,7 @@ export class OrchestratorLoop {
   private status: LoopStatus = "idle";
   private pollTimer: TimerHandle | null = null;
   private activeTick: Promise<void> | null = null;
+  private startupPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
 
   public constructor(options: OrchestratorLoopOptions) {
@@ -171,14 +178,21 @@ export class OrchestratorLoop {
    * 启动服务（SPEC §16.1）：dispatch preflight → startup terminal cleanup → immediate
    * first tick（零延迟）。
    *
-   * 初始 preflight 失败抛 {@link OrchestratorStartupError}，不安排任何 timer；startup
-   * cleanup 失败只记诊断、不阻止启动（§8.6）。
+   * 初始 preflight 失败抛 {@link OrchestratorStartupError}，不安排任何 timer。startup
+   * 阶段返回的 Promise 会被 {@link stop} 等待，因此 stop 不会早于 startup 收尾返回。
    */
-  public async start(): Promise<void> {
+  public start(): Promise<void> {
     if (this.status !== "idle") {
-      throw new Error(`orchestrator loop cannot start from status "${this.status}"`);
+      return Promise.reject(
+        new Error(`orchestrator loop cannot start from status "${this.status}"`),
+      );
     }
+    this.status = "starting";
+    this.startupPromise = this.runStartup();
+    return this.startupPromise;
+  }
 
+  private async runStartup(): Promise<void> {
     const preflight = this.runPreflight();
     if (!preflight.ok) {
       this.status = "stopped";
@@ -188,24 +202,48 @@ export class OrchestratorLoop {
     // 先应用初始 effective（cleanup 用 policy.terminalStates），再 startup sweep。
     this.authority.applyEffectiveSchedulingConfig(preflight.effective);
 
+    let cleanup: StartupCleanupResult;
     try {
-      await this.authority.runStartupTerminalCleanup();
+      cleanup = await this.authority.runStartupTerminalCleanup();
     } catch (error) {
       this.emit({ kind: "startup_cleanup_failed", message: describeError(error) });
+      cleanup = {
+        unavailable: false,
+        fetchFailed: true,
+        removed: [],
+        missing: [],
+        refused: [],
+        failed: [],
+      };
     }
 
-    // startup cleanup 期间可能已被 stop：不得再进入调度。
-    if (this.status !== "idle") {
+    // stop 在 startup 期间被请求：不进入调度，也不据 unavailable 误报启动错误。
+    if (this.status !== "starting") {
       return;
     }
+    // 正式 loop 入口要求状态读取与 safe cleanup 接线完整（§8.1 / §16.1 / 已确认方案）：
+    // 缺 workspace cleanup 端口或 tracker `fetchIssuesByStates` 时拒绝进入调度。
+    // 注意：**实际** terminal fetch 失败 / 单项 cleanup 失败仍是 best-effort 降级
+    // （fetchFailed），不阻止启动（§8.6）。
+    if (cleanup.unavailable) {
+      this.status = "stopped";
+      const reason =
+        "startup terminal cleanup capability unavailable: workspace cleanup port or " +
+        "tracker fetchIssuesByStates is not wired";
+      this.emit({ kind: "startup_cleanup_unavailable", message: reason });
+      throw new OrchestratorStartupError(reason);
+    }
+
     this.status = "running";
     this.scheduleNext(0); // §16.1：immediate first tick
   }
 
   /**
-   * 停止服务（SPEC §14.3）。**同步**取消 poll timer，随后等待在途 tick 结束，再经
-   * `authority.shutdown()` 停止全部 worker 与 retry timer。幂等：重复调用共享同一
-   * 完成 Promise。stop 后不再触发 tick / retry。
+   * 停止服务（SPEC §14.3）。**先同步**关闭 authority 调度权限（拒绝新 dispatch /
+   * retry、失效在途 retry ownership、取消 retry timer、开始停止 workers），再等待
+   * startup / 在途 tick 与全部收尾（workers + 已开始的 workspace cleanup）。
+   *
+   * 幂等：重复调用共享同一完成 Promise。stop 后不再触发 tick / retry / 新 cleanup。
    */
   public stop(): Promise<void> {
     if (this.stopPromise !== null) {
@@ -213,16 +251,26 @@ export class OrchestratorLoop {
     }
     this.status = "stopping";
     this.cancelPollTimer();
+    // 同步前缀：在等待任何在途异步工作**之前**关闭调度并开始停止 workers。
+    const shutdown = this.authority.shutdown();
+    const startup = this.startupPromise;
+    const tick = this.activeTick;
     this.stopPromise = (async () => {
-      const tick = this.activeTick;
+      if (startup !== null) {
+        try {
+          await startup;
+        } catch {
+          /* startup 失败 / 被 stop 中断；仅等待其收尾。 */
+        }
+      }
       if (tick !== null) {
         try {
           await tick;
         } catch {
-          /* tick 内部已隔离异常，这里只等待收尾。 */
+          /* tick 内部已隔离异常。 */
         }
       }
-      await this.authority.shutdown();
+      await shutdown;
       this.status = "stopped";
     })();
     return this.stopPromise;

@@ -20,6 +20,7 @@ import {
   type PollScheduler,
   type RetryDiagnostic,
   type RetryWorkspaceCleanup,
+  type TrackerRefreshSource,
 } from "./index";
 
 export const ACTIVE_STATES = ["Todo", "In Progress"] as const;
@@ -255,6 +256,10 @@ export interface LoopHarnessOptions {
   readonly stallTimeoutMs?: number;
   readonly cleanup?: RetryWorkspaceCleanup;
   readonly runnerControl?: RunnerControl;
+  /** 是否注入 cleanup 端口（默认 true）；false 用于验证 startup 能力缺失 fail-fast。 */
+  readonly withCleanup?: boolean;
+  /** tracker 是否具备 `fetchIssuesByStates`（默认 true）；false 同样触发能力缺失。 */
+  readonly withTrackerStates?: boolean;
 }
 
 /**
@@ -284,6 +289,8 @@ export function createLoopHarness(options: LoopHarnessOptions = {}): LoopHarness
   const diagnostics: LoopDiagnostic[] = [];
   const retryDiagnostics: RetryDiagnostic[] = [];
   const cleanupCalls: string[] = [];
+  const withCleanup = options.withCleanup ?? true;
+  const withTrackerStates = options.withTrackerStates ?? true;
 
   const cleanup: RetryWorkspaceCleanup =
     options.cleanup ??
@@ -293,6 +300,12 @@ export function createLoopHarness(options: LoopHarnessOptions = {}): LoopHarness
         return { status: "removed" as const };
       },
     };
+
+  // 能力缺失用：tracker facade 省略 `fetchIssuesByStates`（authority 的 startup sweep
+  // 因此报 unavailable），但保留 `fetchIssuesByIds` 供 reconciliation 使用。
+  const authorityTracker: TrackerRefreshSource = withTrackerStates
+    ? tracker
+    : { fetchIssuesByIds: (issueIds) => tracker.fetchIssuesByIds(issueIds) };
 
   const authority = new OrchestratorAuthority({
     state,
@@ -304,19 +317,23 @@ export function createLoopHarness(options: LoopHarnessOptions = {}): LoopHarness
         attempt: context.attempt,
         signal: context.signal,
       }) as unknown as AgentAttemptOptions,
-    tracker,
+    tracker: authorityTracker,
     resolveWorkspacePath: (issue) => `/tmp/symphony-loop-test/${issue.identifier}`,
     now: () => clocks.utc,
     monotonicNow: () => clocks.monotonic,
-    retry: {
-      scheduler: retryScheduler,
-      maxRetryBackoffMs: () => live.maxRetryBackoffMs,
-      cleanupWorkspace: cleanup,
-      onDiagnostic: (diagnostic) => retryDiagnostics.push(diagnostic),
-    },
     stallTimeoutMs: () => live.stallTimeoutMs,
-    cleanupWorkspace: cleanup,
-    onCleanupDiagnostic: (diagnostic) => retryDiagnostics.push(diagnostic),
+    ...(withCleanup
+      ? {
+          retry: {
+            scheduler: retryScheduler,
+            maxRetryBackoffMs: () => live.maxRetryBackoffMs,
+            cleanupWorkspace: cleanup,
+            onDiagnostic: (diagnostic: RetryDiagnostic) => retryDiagnostics.push(diagnostic),
+          },
+          cleanupWorkspace: cleanup,
+          onCleanupDiagnostic: (diagnostic: RetryDiagnostic) => retryDiagnostics.push(diagnostic),
+        }
+      : {}),
   });
 
   const preflight = livePreflight(live);

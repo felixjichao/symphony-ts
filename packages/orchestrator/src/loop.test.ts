@@ -26,6 +26,20 @@ describe("OrchestratorLoop startup（验收 01 / 02）", () => {
     expect(h.diagnostics.at(-1)).toMatchObject({ kind: "startup_validation_failed" });
   });
 
+  it("startup 能力缺失（无 cleanup 端口 / tracker 缺 fetchIssuesByStates）：拒绝进入调度、不排 timer", async () => {
+    const noCleanup = createLoopHarness({ withCleanup: false });
+    await expect(noCleanup.loop.start()).rejects.toBeInstanceOf(OrchestratorStartupError);
+    expect(noCleanup.loop.stopped).toBe(true);
+    expect(noCleanup.pollScheduler.scheduledDelays).toEqual([]);
+    expect(noCleanup.diagnostics.at(-1)).toMatchObject({ kind: "startup_cleanup_unavailable" });
+
+    const noStates = createLoopHarness({ withTrackerStates: false });
+    await expect(noStates.loop.start()).rejects.toBeInstanceOf(OrchestratorStartupError);
+    expect(noStates.loop.stopped).toBe(true);
+    expect(noStates.pollScheduler.scheduledDelays).toEqual([]);
+    expect(noStates.diagnostics.at(-1)).toMatchObject({ kind: "startup_cleanup_unavailable" });
+  });
+
   it("startup 顺序 validate → terminal cleanup → immediate first tick；首次 tick 零延迟", async () => {
     const h = createLoopHarness();
     const active = makeIssue("A-1", "Todo");

@@ -256,6 +256,12 @@ export class OrchestratorAuthority {
    */
   private stopping = false;
   private shutdownPromise: Promise<void> | null = null;
+  /**
+   * 已开始的 workspace 删除（startup sweep / reconciliation / retry terminal cleanup）
+   * 的全局在途登记。`shutdown()` 等待它们真正结束，避免调用方以为已关停后旧生命周期
+   * 仍迟到删除目录；`removeWorkspaceFor` 在 stopping 后拒绝**开启**新的删除。
+   */
+  private readonly inFlightCleanups = new Set<Promise<unknown>>();
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.state = options.state;
@@ -326,19 +332,17 @@ export class OrchestratorAuthority {
   }
 
   /**
-   * 全局关停（M5.5 lifecycle，SPEC §14.3）：**同步**置 stopping、使全部 retry
-   * ownership 失效（含已 pop entry、仍在 `fetchIssuesByIds` 的 refresh）、取消所有
-   * 排队 retry timer，然后以 `{ kind: "shutdown" }` 停止全部 worker 并等待真实收尾。
+   * **同步**关闭调度权限（M5.5 lifecycle，SPEC §14.3）：置 stopping、使全部 retry
+   * ownership 失效（含已 pop entry、仍在 `fetchIssuesByIds` 的 refresh）、取消并清空
+   * 排队 retry timer，并拒绝之后**开启**新的 workspace 删除。幂等。
    *
-   * - 幂等：重复调用共享同一完成 Promise；
-   * - 关停后不再有新 dispatch / retry，也不遗留 timer handle；
-   * - 不删除正常 workspace（agent / workspace 各自负责自己的收尾）。
+   * 调用方（loop.stop）必须在等待任何在途 tick / startup **之前**调用它，确保关停
+   * 窗口内不再产生新 dispatch / retry / cleanup。
    */
-  public shutdown(): Promise<void> {
-    if (this.shutdownPromise !== null) {
-      return this.shutdownPromise;
+  public beginShutdown(): void {
+    if (this.stopping) {
+      return;
     }
-    // 同步使全部在途 retry ownership 失效：迟到 refresh 回校验 token 时会被拒绝。
     this.stopping = true;
     this.retryOwners.clear();
     if (this.scheduler !== undefined) {
@@ -347,6 +351,24 @@ export class OrchestratorAuthority {
       }
     }
     this.state.retryAttempts.clear();
+  }
+
+  /**
+   * 全局关停（M5.5 lifecycle，SPEC §14.3）：先同步 {@link beginShutdown}（拒绝新
+   * dispatch / retry、失效 ownership、取消 retry timer），再以 `{ kind: "shutdown" }`
+   * 停止全部 worker，并等待**全部收尾**真正结束——worker 生命周期以及已开始的
+   * workspace cleanup。
+   *
+   * - **同步前缀**：`beginShutdown()` 在返回 Promise 前执行，因此调用方能立即阻止
+   *   新工作，无需等待异步收尾；
+   * - 幂等：重复调用共享同一完成 Promise；
+   * - 不删除正常 workspace（cleanup 只处理 terminal 收尾，且停止后不再开启新删除）。
+   */
+  public shutdown(): Promise<void> {
+    if (this.shutdownPromise !== null) {
+      return this.shutdownPromise;
+    }
+    this.beginShutdown();
 
     const records = [...this.active.values()];
     this.shutdownPromise = (async () => {
@@ -354,6 +376,7 @@ export class OrchestratorAuthority {
         records.map((record) => record.worker.stop({ kind: "shutdown" })),
       );
       await this.waitForIdle();
+      await this.waitForCleanups();
     })();
     return this.shutdownPromise;
   }
@@ -418,6 +441,13 @@ export class OrchestratorAuthority {
   public async waitForIdle(): Promise<void> {
     while (this.active.size > 0) {
       await Promise.all([...this.active.values()].map((record) => record.worker.done));
+    }
+  }
+
+  /** 等待所有已开始的 workspace 删除真正结束（含 shutdown 前已在途的删除）。 */
+  public async waitForCleanups(): Promise<void> {
+    while (this.inFlightCleanups.size > 0) {
+      await Promise.allSettled([...this.inFlightCleanups]);
     }
   }
 
@@ -1201,8 +1231,13 @@ export class OrchestratorAuthority {
     if (cleanup === undefined) {
       return null;
     }
+    // 关停后不再**开启**新的删除（§14.3）：已开始的删除由 inFlightCleanups 跟踪，
+    // 并由 shutdown() 等待其真正结束。
+    if (this.stopping) {
+      return null;
+    }
     try {
-      const result = await cleanup.removeWorkspace(identifier);
+      const result = await this.trackCleanup(cleanup.removeWorkspace(identifier));
       if (result.status === "removed" || result.status === "missing") {
         return result.status;
       }
@@ -1241,5 +1276,14 @@ export class OrchestratorAuthority {
     } catch {
       /* 诊断 sink 异常隔离，不破坏 authority */
     }
+  }
+
+  /** 登记一个已开始的删除，settle 后自动移除；供 shutdown 等待真实收尾。 */
+  private trackCleanup<T>(operation: Promise<T>): Promise<T> {
+    const tracked: Promise<T> = operation.finally(() => {
+      this.inFlightCleanups.delete(tracked);
+    });
+    this.inFlightCleanups.add(tracked);
+    return tracked;
   }
 }
