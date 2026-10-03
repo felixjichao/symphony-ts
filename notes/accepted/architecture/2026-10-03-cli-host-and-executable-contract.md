@@ -15,7 +15,7 @@ SPEC §17.7 and §18.1 require an executable CLI entrypoint and composition root
 
 2. **Packaging and `bin` contract**:
    - `vite` is declared explicitly in `apps/cli/package.json` devDependencies (pinned to `^5.4.21`, matching the monorepo lockfile).
-   - `apps/cli` build script runs `tsc -p tsconfig.json && vite build`, using SSR mode to bundle `src/bin.ts` into a standalone Node ESM executable at `dist/bin/symphony.js` with shebang `#!/usr/bin/env node` and executable file mode `0o755`.
+   - `apps/cli` build script runs `tsc -p tsconfig.json && vite build && npm rebuild @symphony/cli`, using SSR mode to bundle `src/bin.ts` into a standalone Node ESM executable at `dist/bin/symphony.js` with shebang `#!/usr/bin/env node` and executable file mode `0o755`. The subsequent `npm rebuild @symphony/cli` is required because `bin` points to an uncommitted build artifact: during a fresh `npm ci`, the target file does not yet exist on disk, so npm skips creating the canonical `node_modules/.bin/symphony` symlink; running `npm rebuild @symphony/cli` during the build lifecycle reconstructs the symlink once the bundle is generated.
    - `package.json` specifies `"bin": { "symphony": "./dist/bin/symphony.js" }`.
    - `dist/` is gitignored.
 
