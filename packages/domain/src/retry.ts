@@ -20,6 +20,8 @@ export interface RetryEntry {
    * 不可得为 `null`。
    */
   identifier: string | null;
+  /** Best-effort snapshot URL (§13.3); absent metadata remains compatible. */
+  issueUrl?: string | null;
   /**
    * SPEC `attempt`：retry 队列内 **1-based** 尝试号（永不为 null）；注意与
    * `RunAttempt.attempt`（首跑为 null）语义不同。

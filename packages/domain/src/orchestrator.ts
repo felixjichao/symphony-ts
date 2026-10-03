@@ -6,7 +6,7 @@ import type { MonotonicTimestampMs } from "./time";
 
 /**
  * 聚合 token / 运行时长（SPEC §4.1.8 `codex_totals`，口径见 §13.3 / §13.5）。
- * 可变运行时记录：session 结束或快照核算时由 orchestrator 更新。
+ * 可变运行时记录：worker 结束时由 orchestrator 更新；只读快照另加活跃 elapsed，不回写。
  */
 export interface CodexTotals {
   /** 绝对累计输入 token（§13.5：只入账 absolute thread totals，忽略 delta payload）。 */
@@ -14,7 +14,7 @@ export interface CodexTotals {
   outputTokens: number;
   totalTokens: number;
   /**
-   * 聚合运行秒数：已结束 session 的累计 + 快照时刻活跃 session 的 elapsed
+   * 已结束 worker 的累计运行秒数；public snapshot 另加活跃 worker elapsed
    * （§13.3 / §13.5 live aggregate 口径；不要求后台持续累计）。
    */
   secondsRunning: number;
