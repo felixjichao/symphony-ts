@@ -36,8 +36,18 @@
  *
  * 边界约束（根 `AGENTS.md`）：本包是唯一的 coordination 层 —— tracker /
  * workspace / agent 不得反向持有调度或 retry 策略。orchestration state mutation
- * 只经本包 API；poll loop / config re-apply 的写路径随后续 M5 子任务落地
- * （进度见 docs/conformance.md）。
+ * 只经本包 API。
+ *
+ * M5.5 落定 **poll loop / startup 编排 / per-tick 失败降级 / live config re-apply /
+ * stop lifecycle**（SPEC §8.1、§14.2 / §14.3 / §14.4、§16.1 / §16.2）：
+ * {@link OrchestratorLoop} 管理单 timer 链（tick 结束后按最新 interval 安排下一次，
+ * 不用 `setInterval`）、严格 tick 顺序（reconcile → preflight → fetch → sort →
+ * dispatch until slots exhausted）、per-tick 失败降级（validation / fetch 失败跳过本
+ * tick 但服务存活）、startup fail-fast 与 immediate first tick，以及幂等 stop。
+ * {@link OrchestratorAuthority.applyEffectiveSchedulingConfig} 提供 live config
+ * 原子 apply，{@link OrchestratorAuthority.shutdown} 提供全局关停（使在途 retry
+ * ownership 失效、停止 workers、不遗留 timer）。跨包端到端 conformance 收口
+ * （M5.6）随后落地。
  */
 
 export { createInitialCodexTotals, createOrchestratorRuntimeState } from "./runtime-state";
@@ -127,3 +137,17 @@ export type {
   OrchestratorAuthorityOptions,
   RetryScheduleRequest,
 } from "./authority";
+
+// --- M5.5：poll loop / startup / per-tick 降级 / live config re-apply / stop
+//     （SPEC §8.1、§14.2 / §14.3 / §14.4、§16.1 / §16.2）---
+
+export { OrchestratorLoop, OrchestratorStartupError } from "./loop";
+export type {
+  CandidateIssueSource,
+  DispatchPreflightResult,
+  DispatchPreflightSource,
+  EffectiveSchedulingConfig,
+  LoopDiagnostic,
+  OrchestratorLoopOptions,
+  PollScheduler,
+} from "./loop";

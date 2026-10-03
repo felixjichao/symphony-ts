@@ -30,8 +30,14 @@ export interface TrackerRefreshSource {
 /** {@link createTrackerRefreshContinuationDecider} 的注入点。 */
 export interface TrackerRefreshContinuationOptions {
   readonly tracker: TrackerRefreshSource;
-  /** 当前 effective 调度策略（active / terminal states、required labels、routable）。 */
-  readonly policy: DispatchPolicy;
+  /**
+   * 当前 effective 调度策略（active / terminal states、required labels、routable）。
+   *
+   * 接受静态对象（旧接线）或 **getter**（M5.5 live config re-apply）：每次 turn
+   * 完成判定时读取，因此 workflow reload 后的新 policy 立即作用于之后的
+   * continuation 判定，不缓存构造时快照。
+   */
+  readonly policy: DispatchPolicy | (() => DispatchPolicy);
   /**
    * 当前 attempt 是否仍是该 issue 的权威 running entry。attempt 已被替换 / 移除时，
    * 迟到 refresh 不得再写状态或触发下一 turn。
@@ -55,6 +61,10 @@ export interface TrackerRefreshContinuationOptions {
 export function createTrackerRefreshContinuationDecider(
   options: TrackerRefreshContinuationOptions,
 ): ContinuationDecider {
+  const policyOption = options.policy;
+  const currentPolicy: () => DispatchPolicy =
+    typeof policyOption === "function" ? policyOption : () => policyOption;
+
   return async (context: TurnCompletedContext): Promise<ContinuationDecision> => {
     // 用函数读取，避免 TS 对 readonly optional 属性跨 await 的窄化误判。
     const cancelled = (): boolean => context.signal?.aborted ?? false;
@@ -77,13 +87,14 @@ export function createTrackerRefreshContinuationDecider(
 
     options.onRefreshed(refreshed);
 
-    if (isTerminalState(refreshed.state, options.policy)) {
+    const policy = currentPolicy();
+    if (isTerminalState(refreshed.state, policy)) {
       return { kind: "stop" };
     }
-    if (!isActiveState(refreshed.state, options.policy)) {
+    if (!isActiveState(refreshed.state, policy)) {
       return { kind: "stop" };
     }
-    if (!issueRoutable(refreshed, options.policy)) {
+    if (!issueRoutable(refreshed, policy)) {
       return { kind: "stop" };
     }
     return { kind: "continue", issue: refreshed };

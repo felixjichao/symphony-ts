@@ -14,8 +14,10 @@
  * - 取消经 `WorkerControl.signal` 传给 `runAgentAttempt()`；
  * - terminal refresh / reconciliation / startup sweep 的破坏性清理只经注入的
  *   `cleanupWorkspace` 端口（workspace 包），本类不做删除 fallback；
- * - poll loop / reload（M5.5）不在此实现，但本类提供它们需要的
- *   `reconcileRunningIssues` / `runStartupTerminalCleanup` / `stopWorker` 控制契约。
+ * - poll loop 的编排（startup / tick 顺序 / per-tick 降级）在 `loop.ts`；本类为它
+ *   提供 `reconcileRunningIssues` / `runStartupTerminalCleanup` / `dispatchIssue` /
+ *   `applyEffectiveSchedulingConfig`（live config re-apply）与 `shutdown`（全局关停）
+ *   控制契约。
  */
 import type {
   AgentAttemptOptions,
@@ -195,7 +197,12 @@ interface DispatchOptions {
  */
 export class OrchestratorAuthority {
   private readonly state: OrchestratorRuntimeState;
-  private readonly policy: DispatchPolicy;
+  /**
+   * 当前 effective 调度策略。M5.5 起经 {@link applyEffectiveSchedulingConfig} 在
+   * 每次 tick 更新（workflow reload 后生效）；dispatch / retry / reconciliation /
+   * startup sweep / continuation 每次都读取现值，不缓存构造时快照。
+   */
+  private policy: DispatchPolicy;
   private readonly runner: AgentAttemptRunner;
   private readonly createAttemptOptions: AttemptOptionsFactory;
   private readonly tracker: TrackerRefreshSource;
@@ -242,6 +249,13 @@ export class OrchestratorAuthority {
   private tokenCounter = 0;
   private retryTokenCounter = 0;
   private reconcileEpochCounter = 0;
+  /**
+   * 全局关停标记（M5.5 shutdown）：同步置位后拒绝新 dispatch / retry，使在途
+   * retry refresh 的迟到结果失效，并停止全部 worker。幂等由 {@link shutdownPromise}
+   * 保证。
+   */
+  private stopping = false;
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.state = options.state;
@@ -278,6 +292,72 @@ export class OrchestratorAuthority {
     return this.active.get(issueId)?.worker;
   }
 
+  /** 当前 effective poll interval（M5.5 loop 用它安排下一次 tick）。 */
+  public get pollIntervalMs(): number {
+    return this.state.pollIntervalMs;
+  }
+
+  /** 是否仍有全局 dispatch slot（M5.5 loop 的 dispatch-until-slots-exhausted）。 */
+  public hasAvailableGlobalSlot(): boolean {
+    return globalAvailableSlots(this.state) > 0;
+  }
+
+  /** 是否已进入全局关停（M5.5 诊断 / 测试观察）。 */
+  public get isStopping(): boolean {
+    return this.stopping;
+  }
+
+  /**
+   * 原子应用一次 effective 调度配置（M5.5 live config re-apply，SPEC §6.2）。
+   *
+   * 只写入两个"当前生效"标量（`pollIntervalMs` / `maxConcurrentAgents`）与
+   * `policy`；retry cap / stall timeout 继续由构造时注入的 getter 从同一 effective
+   * 配置读取，因此本接口无需触碰它们。并发上限**下调不主动终止**已运行 worker：
+   * 新值只影响之后的 slot 判定与 dispatch。
+   */
+  public applyEffectiveSchedulingConfig(update: {
+    readonly pollIntervalMs: number;
+    readonly maxConcurrentAgents: number;
+    readonly policy: DispatchPolicy;
+  }): void {
+    this.state.pollIntervalMs = update.pollIntervalMs;
+    this.state.maxConcurrentAgents = update.maxConcurrentAgents;
+    this.policy = update.policy;
+  }
+
+  /**
+   * 全局关停（M5.5 lifecycle，SPEC §14.3）：**同步**置 stopping、使全部 retry
+   * ownership 失效（含已 pop entry、仍在 `fetchIssuesByIds` 的 refresh）、取消所有
+   * 排队 retry timer，然后以 `{ kind: "shutdown" }` 停止全部 worker 并等待真实收尾。
+   *
+   * - 幂等：重复调用共享同一完成 Promise；
+   * - 关停后不再有新 dispatch / retry，也不遗留 timer handle；
+   * - 不删除正常 workspace（agent / workspace 各自负责自己的收尾）。
+   */
+  public shutdown(): Promise<void> {
+    if (this.shutdownPromise !== null) {
+      return this.shutdownPromise;
+    }
+    // 同步使全部在途 retry ownership 失效：迟到 refresh 回校验 token 时会被拒绝。
+    this.stopping = true;
+    this.retryOwners.clear();
+    if (this.scheduler !== undefined) {
+      for (const entry of this.state.retryAttempts.values()) {
+        this.scheduler.cancel(entry.timerHandle);
+      }
+    }
+    this.state.retryAttempts.clear();
+
+    const records = [...this.active.values()];
+    this.shutdownPromise = (async () => {
+      await Promise.allSettled(
+        records.map((record) => record.worker.stop({ kind: "shutdown" })),
+      );
+      await this.waitForIdle();
+    })();
+    return this.shutdownPromise;
+  }
+
   /**
    * 派发一个 issue（§7.4 dispatch）。
    *
@@ -294,6 +374,10 @@ export class OrchestratorAuthority {
    * {@link dispatchRetry} 消费自己持有的 claim，普通 `dispatchIssue` 绝不抢占它。
    */
   public dispatchIssue(issue: Issue, options: DispatchOptions = {}): DispatchResult {
+    // 0. 关停后拒绝新 dispatch（M5.5）。
+    if (this.stopping) {
+      return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    }
     // 1. 双检查：claimed / running 任一占用即跳过；同 issue cleanup 在途也跳过
     //    （cleanup 会删除 workspace，必须等它结束后由下一次 tick 重新评估）。
     if (
@@ -343,7 +427,8 @@ export class OrchestratorAuthority {
    * retry 控制面时返回 `null`。
    */
   public scheduleRetry(request: RetryScheduleRequest): RetryEntry | null {
-    if (this.retry === undefined || this.scheduler === undefined) {
+    // 关停后不再建立 / 替换 retry timer（M5.5）。
+    if (this.stopping || this.retry === undefined || this.scheduler === undefined) {
       return null;
     }
 
@@ -712,7 +797,8 @@ export class OrchestratorAuthority {
 
     const continuationDecider = createTrackerRefreshContinuationDecider({
       tracker: this.tracker,
-      policy: this.policy,
+      // getter：continuation 判定读取当前 effective policy，reload 后立即生效。
+      policy: () => this.policy,
       isCurrent,
       onRefreshed: (refreshed) => {
         if (isCurrent()) {
@@ -876,6 +962,10 @@ export class OrchestratorAuthority {
 
   /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
   private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome): void {
+    // 关停期间自然退出的 worker 不得重建 retry / timer（M5.5）。
+    if (this.stopping) {
+      return;
+    }
     if (terminal.retryKind === "continuation") {
       this.scheduleRetry({
         issueId: terminal.issueId,
@@ -915,7 +1005,8 @@ export class OrchestratorAuthority {
    * 一次。
    */
   private async handleRetryTimerFired(issueId: string, token: string): Promise<void> {
-    if (this.retry === undefined || this.scheduler === undefined) {
+    // 关停后不再处理到期 retry（同步校验；shutdown 已 clear ownership）。
+    if (this.stopping || this.retry === undefined || this.scheduler === undefined) {
       return;
     }
     // 1. stale / canceled timer：token 已被替换或删除。
