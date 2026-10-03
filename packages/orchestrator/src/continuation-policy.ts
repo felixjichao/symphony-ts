@@ -19,6 +19,12 @@ import { isActiveState, isTerminalState, issueRoutable, type DispatchPolicy } fr
 /** decider 需要的只读 tracker refresh 能力（§11.1 `fetch_issues_by_ids`）。 */
 export interface TrackerRefreshSource {
   fetchIssuesByIds(issueIds: readonly string[]): Promise<readonly Issue[]>;
+  /**
+   * OPTIONAL：startup terminal sweep（§8.6 / §11.1.1 `fetch_issues_by_states`）与
+   * reconciliation 所需的按状态读取。未接线的组合根（或测试 fake）可以省略；省略时
+   * {@link OrchestratorAuthority.runStartupTerminalCleanup} 报 `unavailable` 而不发请求。
+   */
+  fetchIssuesByStates?(stateNames: readonly string[]): Promise<readonly Issue[]>;
 }
 
 /** {@link createTrackerRefreshContinuationDecider} 的注入点。 */

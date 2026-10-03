@@ -46,10 +46,22 @@ export interface RetryWorkspaceCleanup {
   removeWorkspace(identifier: string): Promise<RetryWorkspaceCleanupResult>;
 }
 
-/** retry 生命周期里的 operator-visible 诊断（cleanup 拒绝 / 失败 / 异常）。 */
+/**
+ * workspace cleanup / startup sweep 生命周期里的 operator-visible 诊断。
+ *
+ * M5.3 只产生 `cleanup_refused` / `cleanup_failed` / `cleanup_error`；M5.4 的 startup
+ * terminal sweep 额外产生 `cleanup_fetch_failed`（terminal states 拉取失败）与
+ * `cleanup_unavailable`（tracker / cleanup 端口未接线）。startup 级别的诊断没有
+ * 单一 issue，`issueId` 因此可为 `null`。
+ */
 export interface RetryDiagnostic {
-  readonly kind: "cleanup_refused" | "cleanup_failed" | "cleanup_error";
-  readonly issueId: string;
+  readonly kind:
+    | "cleanup_refused"
+    | "cleanup_failed"
+    | "cleanup_error"
+    | "cleanup_fetch_failed"
+    | "cleanup_unavailable";
+  readonly issueId: string | null;
   readonly identifier: string | null;
   readonly message: string;
 }

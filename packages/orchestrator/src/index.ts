@@ -23,10 +23,21 @@
  * unroutable / slot 不足 / 重新 dispatch 全分支。retry timer 回调只提交带
  * issueId + retry token 的到期事件，迟到 / 已取消回调被 ownership token 隔离。
  *
+ * M5.4 落地 **active-run reconciliation / stall detection / terminal cleanup /
+ * startup terminal sweep**（SPEC §7.3 / §7.4、§8.5 / §8.6、§14.2 / §14.3、§16.3、
+ * §17.4）：{@link OrchestratorAuthority.reconcileRunningIssues} 先按 UTC 时钟域做
+ * stall 判定（`stall_timeout_ms <= 0` 禁用、仅 `elapsed > timeout` 触发），再对剩余
+ * running 做一次批量 `fetchIssuesByIds`，按 terminal / active+routable / 其余分支
+ * 更新 snapshot 或 stop（terminal 在停止后安全 cleanup）；refresh 失败保留 worker。
+ * startup sweep（{@link OrchestratorAuthority.runStartupTerminalCleanup}）按 terminal
+ * states 拉取并逐 identifier 经真实 workspace 端口清理，fetch / 单项失败都只记诊断。
+ * cleanup 端口从 retry 选项提升为 authority 顶层能力，并由 per-issue 收尾屏障与后续
+ * refresh / launch 串行化。纯判定见 `reconciliation.ts`。
+ *
  * 边界约束（根 `AGENTS.md`）：本包是唯一的 coordination 层 —— tracker /
  * workspace / agent 不得反向持有调度或 retry 策略。orchestration state mutation
- * 只经本包 API；reconciliation / stall（M5.4）、poll loop（M5.5）的写路径随后续
- * M5 子任务落地（进度见 docs/conformance.md）。
+ * 只经本包 API；poll loop / config re-apply 的写路径随后续 M5 子任务落地
+ * （进度见 docs/conformance.md）。
  */
 
 export { createInitialCodexTotals, createOrchestratorRuntimeState } from "./runtime-state";
@@ -89,6 +100,23 @@ export type {
   TrackerRefreshContinuationOptions,
   TrackerRefreshSource,
 } from "./continuation-policy";
+
+// --- M5.4：reconciliation / stall / terminal cleanup / startup sweep
+//     （SPEC §7.3 / §7.4、§8.5 / §8.6、§14.2 / §14.3、§16.3、§17.4）---
+
+export {
+  decideReconciliationAction,
+  isStallDetectionEnabled,
+  isWorkerStalled,
+  stallActivityBaselineMs,
+  stallElapsedMs,
+} from "./reconciliation";
+export type {
+  ReconciliationDecision,
+  ReconciliationResult,
+  StartupCleanupResult,
+  TerminalIssueSource,
+} from "./reconciliation";
 
 export { OrchestratorAuthority } from "./authority";
 export type {
