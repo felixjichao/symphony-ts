@@ -6,7 +6,12 @@ import type { AgentEvent } from "@symphony/agent";
 import type { Issue, RunningEntry } from "@symphony/domain";
 import { describe, expect, it } from "vitest";
 
-import { applyAgentEvent, createOrchestratorRuntimeState } from "./index";
+import {
+  applyAgentEvent,
+  createAgentTelemetryState,
+  createOrchestratorRuntimeState,
+  type AgentTelemetryState,
+} from "./index";
 
 function makeIssue(): Issue {
   return {
@@ -54,32 +59,43 @@ function event(partial: Partial<AgentEvent> & Pick<AgentEvent, "event">): AgentE
   };
 }
 
+interface Ctx {
+  readonly state: ReturnType<typeof createOrchestratorRuntimeState>;
+  readonly entry: RunningEntry;
+  readonly telemetry: AgentTelemetryState;
+}
+
+function makeCtx(): Ctx {
+  return {
+    state: createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 }),
+    entry: makeEntry(),
+    telemetry: createAgentTelemetryState(),
+  };
+}
+
+function apply(ctx: Ctx, ev: AgentEvent): void {
+  applyAgentEvent(ctx.state, ctx.entry, ctx.telemetry, ev);
+}
+
 describe("applyAgentEvent — 验收 06/07", () => {
   it("身份不完整时不伪造 session，但 account 级 rate limits 正常保存", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
 
-    applyAgentEvent(
-      state,
-      entry,
-      event({ event: "startup_failed", rateLimits: { primary: { remaining: 5 } } }),
-    );
+    apply(ctx, event({ event: "startup_failed", rateLimits: { primary: { remaining: 5 } } }));
 
-    expect(entry.session).toBeNull();
-    expect(state.codexRateLimits).toEqual({ primary: { remaining: 5 } });
+    expect(ctx.entry.session).toBeNull();
+    expect(ctx.state.codexRateLimits).toEqual({ primary: { remaining: 5 } });
   });
 
   it("首个带 thread+turn 身份的事件建立 LiveSession 并初始化 turnCount=1", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
 
-    applyAgentEvent(
-      state,
-      entry,
+    apply(
+      ctx,
       event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1", summary: "started" }),
     );
 
-    expect(entry.session).toMatchObject({
+    expect(ctx.entry.session).toMatchObject({
       sessionId: "t1-u1",
       threadId: "t1",
       turnId: "u1",
@@ -92,47 +108,41 @@ describe("applyAgentEvent — 验收 06/07", () => {
   });
 
   it("线程级 session_started（无 turnId）不计数；新 turnId 计数 +1，重复不计数", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
 
-    // 无 turnId 的线程级事件不会建立 session。
-    applyAgentEvent(state, entry, event({ event: "session_started", threadId: "t1" }));
-    expect(entry.session).toBeNull();
+    apply(ctx, event({ event: "session_started", threadId: "t1" }));
+    expect(ctx.entry.session).toBeNull();
 
-    applyAgentEvent(state, entry, event({ event: "session_started", threadId: "t1", turnId: "u1" }));
-    expect(entry.session?.turnCount).toBe(1);
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1" }));
+    expect(ctx.entry.session?.turnCount).toBe(1);
 
-    // 同一 turn 的重复 / 后续事件不增加计数。
-    applyAgentEvent(state, entry, event({ event: "turn_completed", threadId: "t1", turnId: "u1" }));
-    expect(entry.session?.turnCount).toBe(1);
+    apply(ctx, event({ event: "turn_completed", threadId: "t1", turnId: "u1" }));
+    expect(ctx.entry.session?.turnCount).toBe(1);
 
-    // 新 turn 计数 +1。
-    applyAgentEvent(state, entry, event({ event: "session_started", threadId: "t1", turnId: "u2" }));
-    expect(entry.session?.turnCount).toBe(2);
-    expect(entry.session?.turnId).toBe("u2");
-    expect(entry.session?.sessionId).toBe("t1-u2");
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u2" }));
+    expect(ctx.entry.session?.turnCount).toBe(2);
+    expect(ctx.entry.session?.turnId).toBe("u2");
+    expect(ctx.entry.session?.sessionId).toBe("t1-u2");
   });
 
   it("缺席字段不覆盖已有值，未知事件名可正常记录", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
 
-    applyAgentEvent(
-      state,
-      entry,
+    apply(
+      ctx,
       event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1", summary: "first" }),
     );
-    applyAgentEvent(state, entry, event({ event: "future_unknown_event", timestamp: 999, codexAppServerPid: null }));
+    apply(ctx, event({ event: "future_unknown_event", timestamp: 999, codexAppServerPid: null }));
 
-    expect(entry.session?.lastCodexEvent).toBe("future_unknown_event");
-    expect(entry.session?.lastCodexTimestamp).toBe(999);
-    expect(entry.session?.lastCodexMessage).toBe("first");
-    expect(entry.session?.codexAppServerPid).toBe("12");
+    expect(ctx.entry.session?.lastCodexEvent).toBe("future_unknown_event");
+    expect(ctx.entry.session?.lastCodexTimestamp).toBe(999);
+    expect(ctx.entry.session?.lastCodexMessage).toBe("first");
+    expect(ctx.entry.session?.codexAppServerPid).toBe("12");
   });
 
   it("usage 按绝对快照的正差额入账，重复不重复计、回退保留高水位", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1" }));
 
     const usageEvent = (inputTokens: number, outputTokens: number, totalTokens: number): AgentEvent =>
       event({
@@ -142,36 +152,162 @@ describe("applyAgentEvent — 验收 06/07", () => {
         usage: { inputTokens, outputTokens, totalTokens },
       });
 
-    applyAgentEvent(state, entry, usageEvent(100, 20, 120));
-    expect(state.codexTotals).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120 });
-    expect(entry.session).toMatchObject({ codexInputTokens: 100, lastReportedInputTokens: 100 });
+    apply(ctx, usageEvent(100, 20, 120));
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+    expect(ctx.entry.session).toMatchObject({ codexInputTokens: 100, lastReportedInputTokens: 100 });
 
-    // 重复快照：不重复入账。
-    applyAgentEvent(state, entry, usageEvent(100, 20, 120));
-    expect(state.codexTotals.inputTokens).toBe(100);
+    apply(ctx, usageEvent(100, 20, 120));
+    expect(ctx.state.codexTotals.inputTokens).toBe(100);
 
-    // 增长：按差额入账。
-    applyAgentEvent(state, entry, usageEvent(150, 30, 180));
-    expect(state.codexTotals).toMatchObject({ inputTokens: 150, outputTokens: 30, totalTokens: 180 });
+    apply(ctx, usageEvent(150, 30, 180));
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 150, outputTokens: 30, totalTokens: 180 });
 
-    // 回退 / 迟到快照：不入账，高水位保留。
-    applyAgentEvent(state, entry, usageEvent(10, 2, 12));
-    expect(state.codexTotals.inputTokens).toBe(150);
-    expect(entry.session?.lastReportedInputTokens).toBe(150);
-    expect(entry.session?.codexInputTokens).toBe(10);
+    apply(ctx, usageEvent(10, 2, 12));
+    expect(ctx.state.codexTotals.inputTokens).toBe(150);
+    expect(ctx.entry.session?.lastReportedInputTokens).toBe(150);
+    expect(ctx.entry.session?.codexInputTokens).toBe(10);
 
-    // 高水位之后再次增长：从高水位继续差额入账，不重复累加。
-    applyAgentEvent(state, entry, usageEvent(160, 32, 192));
-    expect(state.codexTotals).toMatchObject({ inputTokens: 160, outputTokens: 32, totalTokens: 192 });
+    apply(ctx, usageEvent(160, 32, 192));
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 160, outputTokens: 32, totalTokens: 192 });
   });
 
   it("rate limits 原样保存、不解释结构", () => {
-    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1, maxConcurrentAgents: 1 });
-    const entry = makeEntry();
+    const ctx = makeCtx();
     const payload = { primary: { usedPercent: 40 }, secondary: null, extra: [1, "x"] };
 
-    applyAgentEvent(state, entry, event({ event: "notification", rateLimits: payload }));
+    apply(ctx, event({ event: "notification", rateLimits: payload }));
 
-    expect(state.codexRateLimits).toBe(payload);
+    expect(ctx.state.codexRateLimits).toBe(payload);
+  });
+});
+
+describe("applyAgentEvent — 审查 blocker 1：身份未齐的遥测缓存", () => {
+  it("thread 绝对 usage 早于 turn 身份到达：仍入账并在 session 建立后回填", () => {
+    const ctx = makeCtx();
+
+    // 合法 thread 绝对 usage，尚无 turnId（turn/start 响应之前）。
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "t1",
+        usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 },
+      }),
+    );
+
+    expect(ctx.entry.session).toBeNull();
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 80, outputTokens: 40, totalTokens: 120 });
+    expect(ctx.telemetry.pendingLastTimestamp).toBe(100);
+
+    // 身份到位后回填 LiveSession，且不重复入账。
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1", timestamp: 101 }));
+
+    expect(ctx.entry.session).toMatchObject({
+      sessionId: "t1-u1",
+      threadId: "t1",
+      turnId: "u1",
+      codexInputTokens: 80,
+      codexOutputTokens: 40,
+      codexTotalTokens: 120,
+      lastReportedInputTokens: 80,
+      lastCodexTimestamp: 101,
+      turnCount: 1,
+    });
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 80, outputTokens: 40, totalTokens: 120 });
+  });
+
+  it("身份始终未齐且最终启动失败：usage 不永久漏账", () => {
+    const ctx = makeCtx();
+
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "t1",
+        usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 },
+      }),
+    );
+    apply(ctx, event({ event: "startup_failed", timestamp: 200 }));
+
+    expect(ctx.entry.session).toBeNull();
+    expect(ctx.state.codexTotals).toMatchObject({ inputTokens: 80, outputTokens: 40, totalTokens: 120 });
+  });
+});
+
+describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", () => {
+  function established(): Ctx {
+    const ctx = makeCtx();
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1" }));
+    return ctx;
+  }
+
+  it("异 thread 的 other_message 完全隔离：不改身份、不计数、不入账、不覆盖 last event", () => {
+    const ctx = established();
+
+    apply(
+      ctx,
+      event({
+        event: "other_message",
+        threadId: "different-thread",
+        turnId: "u1",
+        timestamp: 500,
+        usage: { inputTokens: 9999, outputTokens: 9999, totalTokens: 9999 },
+        summary: "foreign",
+      }),
+    );
+
+    expect(ctx.entry.session?.threadId).toBe("t1");
+    expect(ctx.entry.session?.turnId).toBe("u1");
+    expect(ctx.entry.session?.turnCount).toBe(1);
+    expect(ctx.entry.session?.lastCodexTimestamp).toBe(100);
+    expect(ctx.state.codexTotals.inputTokens).toBe(0);
+  });
+
+  it("同 thread 异 turn 的 other_message 不推进身份 / 计数，也不重复计 token", () => {
+    const ctx = established();
+
+    apply(
+      ctx,
+      event({
+        event: "other_message",
+        threadId: "t1",
+        turnId: "different-turn-id",
+        timestamp: 500,
+        usage: { inputTokens: 9999, outputTokens: 9999, totalTokens: 9999 },
+      }),
+    );
+
+    expect(ctx.entry.session?.turnId).toBe("u1");
+    expect(ctx.entry.session?.turnCount).toBe(1);
+    // usage 属于当前 thread，正常入账并抬升高水位。
+    expect(ctx.state.codexTotals.inputTokens).toBe(9999);
+    expect(ctx.telemetry.reportedInputTokens).toBe(9999);
+
+    // 同一高水位下的重复快照不重复计。
+    apply(
+      ctx,
+      event({
+        event: "notification",
+        threadId: "t1",
+        turnId: "u1",
+        usage: { inputTokens: 9999, outputTokens: 9999, totalTokens: 9999 },
+      }),
+    );
+    expect(ctx.state.codexTotals.inputTokens).toBe(9999);
+  });
+
+  it("复现 app-server fixture 的 interleaved-other-completed 序列：真实 turn 数保持 1", () => {
+    const ctx = makeCtx();
+
+    apply(ctx, event({ event: "session_started", threadId: "t1" }));
+    apply(ctx, event({ event: "session_started", threadId: "t1", turnId: "u1", sessionId: "t1-u1" }));
+    apply(ctx, event({ event: "other_message", threadId: "different-thread-id", turnId: "u1" }));
+    apply(ctx, event({ event: "other_message", threadId: "t1", turnId: "different-turn-id" }));
+    apply(ctx, event({ event: "turn_completed", threadId: "t1", turnId: "u1" }));
+
+    expect(ctx.entry.session?.turnCount).toBe(1);
+    expect(ctx.entry.session?.turnId).toBe("u1");
+    expect(ctx.entry.session?.threadId).toBe("t1");
+    expect(ctx.telemetry.turnCount).toBe(1);
   });
 });

@@ -58,7 +58,8 @@ export type {
   WorkerTerminalOutcome,
 } from "./worker";
 
-export { applyAgentEvent } from "./agent-events";
+export { applyAgentEvent, createAgentTelemetryState } from "./agent-events";
+export type { AgentTelemetryState } from "./agent-events";
 
 export { classifyError, classifyStop, classifySuccess } from "./outcome";
 export type { TerminalClassification } from "./outcome";

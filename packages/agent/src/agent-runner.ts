@@ -183,8 +183,8 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
     });
     throwIfCancelled();
 
-    // 4. 启动 Codex live session
-    reportPhase("launching_agent_process");
+    // 4. 启动 Codex live session（launching_agent_process / initializing_session 由
+    //    session 内部按真实 launch / 握手时点上报，避免握手期一直显示 launching）。
     session = await startAppServerSession({
       command: codexConfig.command,
       workspacePath: workspace.path,
@@ -198,6 +198,7 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
       threadSandbox: codexConfig.threadSandbox,
       turnSandboxPolicy: codexConfig.turnSandboxPolicy,
       ...(signal !== undefined ? { signal } : {}),
+      onPhase: (phase) => reportPhase(phase),
       onEvent: (event) => {
         if (event.event === "turn_completed") {
           turnCompletedHolder.event = event;
@@ -218,7 +219,6 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
     const decider = options.continuationDecider ?? defaultContinuationDecider;
     const timeoutMs = options.continuationTimeoutMs ?? DEFAULT_CONTINUATION_TIMEOUT_MS;
 
-    reportPhase("initializing_session");
     while (true) {
       throwIfCancelled();
       turnCount += 1;

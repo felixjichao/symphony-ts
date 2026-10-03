@@ -110,6 +110,7 @@ function makeHarness(
     onOutcome: (outcome: WorkerTerminalOutcome) => void;
     runner: AgentAttemptRunner;
     createAttemptOptions: AttemptOptionsFactory;
+    cancelRetry: (issueId: string) => void;
   }> = {},
 ): Harness {
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 30_000, maxConcurrentAgents: 10 });
@@ -134,7 +135,7 @@ function makeHarness(
     resolveWorkspacePath: (issue) => `/tmp/ws/${issue.identifier}`,
     now: () => clock++,
     monotonicNow: () => monotonic,
-    cancelRetry: (issueId) => cancelledRetries.push(issueId),
+    cancelRetry: overrides.cancelRetry ?? ((issueId) => cancelledRetries.push(issueId)),
     onOutcome: (outcome) => {
       outcomes.push(outcome);
       overrides.onOutcome?.(outcome);
@@ -167,6 +168,35 @@ describe("OrchestratorAuthority.dispatchIssue — 验收 01/02/03", () => {
     expect(state.running.get(issue.id)?.attempt.status).toBe("preparing_workspace");
     expect(contexts).toHaveLength(1);
     expect(contexts[0]?.signal.aborted).toBe(false);
+  });
+
+  it("cancelRetry 同步抛错时进入一致的失败路径：不写入 running/claim、不丢 retry 所有权", () => {
+    const { authority, state, runner } = makeHarness({
+      cancelRetry: () => {
+        throw new Error("timer cancel failed");
+      },
+    });
+    const issue = makeIssue();
+    const retryEntry = {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      attempt: 2,
+      dueAtMs: 0,
+      timerHandle: "timer",
+      error: null,
+    };
+    state.retryAttempts.set(issue.id, retryEntry);
+
+    const result = authority.dispatchIssue(issue);
+
+    expect(result.kind).toBe("failed");
+    expect(result.error).toBe("timer cancel failed");
+    expect(state.running.size).toBe(0);
+    expect(state.claimed.size).toBe(0);
+    expect(authority.activeWorkerCount).toBe(0);
+    // retry 条目与 timer 所有权原样保留，下一次 tick 可重试。
+    expect(state.retryAttempts.get(issue.id)).toBe(retryEntry);
+    expect(runner.contexts).toHaveLength(0);
   });
 
   it("claimed 或 running 已占用时拒绝重复 dispatch", () => {

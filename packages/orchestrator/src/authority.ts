@@ -28,7 +28,7 @@ import type {
   UtcTimestampMs,
 } from "@symphony/domain";
 
-import { applyAgentEvent } from "./agent-events";
+import { applyAgentEvent, createAgentTelemetryState, type AgentTelemetryState } from "./agent-events";
 import {
   createTrackerRefreshContinuationDecider,
   type TrackerRefreshSource,
@@ -87,16 +87,19 @@ export interface OrchestratorAuthorityOptions {
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
 export interface DispatchResult {
-  readonly kind: "dispatched" | "skipped" | "not_eligible";
+  readonly kind: "dispatched" | "skipped" | "not_eligible" | "failed";
   readonly issueId: string;
   /** 仅 `dispatched` 时非 `null`。 */
   readonly attemptToken: string | null;
+  /** 仅 `failed` 时非 `null`：dispatch 前置失败原因（如 timer 取消失败）。 */
+  readonly error?: string | undefined;
 }
 
 interface ActiveWorkerRecord {
   readonly token: string;
   readonly worker: WorkerControl;
   readonly entry: RunningEntry;
+  readonly telemetry: AgentTelemetryState;
 }
 
 interface DispatchOptions {
@@ -198,16 +201,32 @@ export class OrchestratorAuthority {
     });
     entry.workerHandle = worker;
 
-    // 4. 提交段（无 await）：running + claimed 原子进入，retry 条目 + timer 清除。
+    // 4. 提交前先取消同 issue retry timer：失败则不提交，保持 state 一致。
+    //    取消失败时 retry 条目与 timer 所有权原样保留，下一次 tick 可重试；
+    //    绝不出现"running/claimed 已写入但 timer 未取消 / worker 未注册"的孤立状态。
+    const previousRetry = this.state.retryAttempts.get(issue.id);
+    if (previousRetry !== undefined && this.cancelRetry !== undefined) {
+      try {
+        this.cancelRetry(issue.id);
+      } catch (error) {
+        return {
+          kind: "failed",
+          issueId: issue.id,
+          attemptToken: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    // 5. 提交段（无 await）：running + claimed 原子进入，retry 条目清除。
     this.state.running.set(issue.id, entry);
     this.state.claimed.add(issue.id);
-    const hadRetry = this.state.retryAttempts.delete(issue.id);
-    if (hadRetry) {
-      this.cancelRetry?.(issue.id);
+    if (previousRetry !== undefined) {
+      this.state.retryAttempts.delete(issue.id);
     }
-    this.active.set(issue.id, { token, worker, entry });
+    this.active.set(issue.id, { token, worker, entry, telemetry: createAgentTelemetryState() });
 
-    // 5. 启动 runner（同步返回 Promise；结果异步归约）。
+    // 6. 启动 runner（同步返回 Promise；结果异步归约）。
     this.startWorker(issue, attemptNumber, token, worker, entry);
 
     return { kind: "dispatched", issueId: issue.id, attemptToken: token };
@@ -243,10 +262,11 @@ export class OrchestratorAuthority {
 
     const onEvent = (event: AgentEvent): void => {
       // attempt token 隔离：已结束 / 被替换的旧 worker 不得更新新运行。
-      if (!isCurrent()) {
+      const record = this.active.get(issue.id);
+      if (record === undefined || record.token !== token) {
         return;
       }
-      applyAgentEvent(this.state, entry, event);
+      applyAgentEvent(this.state, entry, record.telemetry, event);
     };
 
     const onPhase = (phase: RunAttemptStatus): void => {

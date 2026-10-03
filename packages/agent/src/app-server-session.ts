@@ -79,6 +79,14 @@ export interface AppServerSessionOptions {
    * 的 transport，使进行中的 `sendRequest` 以取消错误收敛，且不遗留孤儿子进程。
    */
   readonly signal?: AbortSignal | undefined;
+  /**
+   * 握手阶段内部观测点（M5.2 / #51）：`launching_agent_process` 在子进程 launch 前上报，
+   * `initializing_session` 在 transport 就绪、开始 `initialize` 握手时上报。使上层阶段
+   * 观测不会被"整个握手都算 launching"误导。
+   */
+  readonly onPhase?:
+    | ((phase: "launching_agent_process" | "initializing_session") => void)
+    | undefined;
 }
 
 /**
@@ -1318,6 +1326,13 @@ export async function startAppServerSession(
   const exitInfoHolder: { current: TransportExitInfo | null } = { current: null };
 
   const signal = options.signal;
+  const reportPhase = (phase: "launching_agent_process" | "initializing_session"): void => {
+    try {
+      options.onPhase?.(phase);
+    } catch {
+      /* 外部 sink 异常隔离 */
+    }
+  };
   const abortListener = (): void => {
     // 握手期取消：终止已 launch 的 transport，使在途 sendRequest 以 port_exit / 取消收敛。
     if (transport !== null) {
@@ -1408,6 +1423,7 @@ export async function startAppServerSession(
   };
 
   try {
+    reportPhase("launching_agent_process");
     transport = await launchTransport({
       command: options.command,
       workspacePath: options.workspacePath,
@@ -1428,6 +1444,7 @@ export async function startAppServerSession(
       throw handshakeCancellationError(options.workspacePath);
     }
 
+    reportPhase("initializing_session");
     session = new AppServerSessionImpl(transport, options);
 
     // 1. initialize request
