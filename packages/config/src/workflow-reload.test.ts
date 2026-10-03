@@ -456,3 +456,30 @@ describe("watchWorkflow — injectable store & reloadWithResult (M6.4)", () => {
     }
   });
 });
+
+describe("explicit monitoring lifecycle (§17.7 host ordering)", () => {
+  it("initializes without timers, starts once, and ignores late callbacks/reload after close", () => {
+    write(workflowBody({ intervalMs: 100, body: "initial" }));
+    const active = new Set<() => void>();
+    const history: (() => void)[] = [];
+    handle = watchWorkflow({ cwd: dir, autoStart: false, scheduler: {
+      schedule(callback) { active.add(callback); history.push(callback); return callback; },
+      cancel(timer) { active.delete(timer as () => void); },
+    } });
+    expect(active.size).toBe(0);
+    expect(handle.current().serviceConfig.polling.intervalMs).toBe(100);
+    handle.startMonitoring(); handle.startMonitoring();
+    expect(active.size).toBe(1);
+    write(workflowBody({ intervalMs: 200, body: "valid reload" }));
+    history[0]!();
+    expect(handle.current().serviceConfig.polling.intervalMs).toBe(200);
+    handle.close(); handle.close(); handle.startMonitoring();
+    const last = handle.current();
+    write(workflowBody({ intervalMs: 300, body: "too late" }));
+    history[0]!(); handle.reload();
+    expect(handle.reloadWithResult().ok).toBe(false);
+    expect(handle.current()).toBe(last);
+    expect(active.size).toBe(0);
+    expect(history).toHaveLength(1);
+  });
+});

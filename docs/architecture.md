@@ -51,7 +51,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | M3 | Workspace Manager（§9） | ✅ 已完成（M3.1：provisioning 内核、确定性路径与 non-directory Fail Safely 策略；M3.2：lexical + canonical 双层 containment、symlink escape 拒绝与可复用 execution-boundary primitive；M3.3：四个 lifecycle hook 的执行层、fatal / best-effort 语义与 safe cleanup primitive；M3.4：`WORKFLOW.md → resolved ServiceConfig → workspace → 真实 temp filesystem → 真实 shell hook` 端到端集成与 §17.2 逐项收口。§17.2 的 "agent launch 以 per-issue workspace path 为 cwd 并拒绝 out-of-root 路径" 属 M4，OPTIONAL workspace population / synchronization 不实现，见 [packages/workspace/README.md](../packages/workspace/README.md) 的 Known limitations） |
 | M4 | Agent Runner（§10、§12） | ✅ 已完成（M4.1：独立的 Codex app-server 协议基线 + 升级规则（[docs/upstream.md](upstream.md)）、`CodexConfig` approval / sandbox pass-through 改为形状类别表达并由 config 做 JSON-safety 校验、`AgentError` / `AgentEvent` / `ContinuationDecider` 契约层与守边界的结构测试。M4.2：与 Codex 业务无关的 transport / launch 内核——`bash -lc <codex.command>` 真实子进程、launch 前重过 `assertWorkspacePathSafe` 且 `cwd === workspace.path`、NDJSON framing 与有界行长、request-id 关联与 pending 生命周期、`readTimeoutMs`、stdout/stderr 物理隔离、SIGTERM→SIGKILL 进程组有界关停，显式 `env` + 通用 `excludeEnvNames`（不硬编码 provider secret 名），§17.2 的 agent launch 项与 §17.5 的 launch / cwd / read timeout / framing 四项翻为 `implemented`。M4.3：Codex app-server live session 生命周期；M4.4：headless server requests 处理与 runtime event 映射；M4.5：Agent Runner 组合与 continuation 执行；M4.6：`WORKFLOW.md → config → workspace → runner → fake app-server` 端到端 Core Conformance 与 §17.2 / §17.5 / §10 / §12 收口） |
 | M5 | Orchestrator：状态机 / polling / scheduling / reconciliation / retry（§7、§8、§14、§16） | ✅ 已完成（M5.1–M5.6；§17.4 非 conditional 条目已收口） |
-| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 进行中（M6.1 snapshot、M6.2 structured logging/helpers 与 M6.3 CLI host / bin executable 已实现；获取层 timeout、live reload、完整 exit-code matrix 与可选 HTTP/dashboard 尚未实现） |
+| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 进行中：Core 实现及本地证据已齐备（M6.1–M6.5）；M6.5 合入及 main CI 验收仍待完成，HTTP/dashboard 为 optional extension |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
 里程碑顺序跟随依赖方向（orchestrator 在 tracker / workspace / agent 之后接线），单个里程碑的范围以 issue 标注的 SPEC section 与 [conformance.md](conformance.md) 矩阵为准。
@@ -68,4 +68,12 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 
 ## M6.1 read-only snapshot
 
-`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。M6.2 logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；HTTP/生产 CLI host 仍属后续工作。
+`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。M6.2 logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；生产 CLI host 通过相同 ports 装配；HTTP 属 optional extension。
+
+## M6.5 executable lifecycle
+
+`args.ts` 解析 argv/path，`host.ts` 管理进程无关资源，`lifecycle.ts` 的 `runCli` 安装本次 signal/fatal handlers 并返回退出码，`bin.ts` 只设置 `process.exitCode`。顺序固定为 argv → path → initial config/tracker preflight → runtime/observability 装配 → SIGINT/SIGTERM handlers → watcher monitoring → loop。config 的 `autoStart: false` 延迟 interval；其他调用者默认仍自动监听。
+
+host stop 同步关闭 EffectiveRuntime 提交与 watcher，再调用既有 loop.stop 的同步前缀关闭 authority 调度；等待 startup/tick/worker/cleanup 后输出最终 lifecycle 日志并关闭 logger，shell 最后移除本次 handlers。重复信号与 stop 共享收口 promise；失败优先；信号取消正常启动不会记录 startup completed。timer 迟到回调、closed reload/preflight 均不复活 runtime。原有 scheduler、attempt/root 绑定、session.stop → after_run 与 transport TERM→KILL 保持唯一实现。
+
+文件、用例名和命令见 [M6 Core 证据索引](conformance.md#m65-core-证据索引)，设计取舍见 [lifecycle Note](../notes/accepted/architecture/2026-10-03-cli-process-lifecycle.md)。M6 完成须 M6.1–M6.5 全合入且对应测试及 main CI 通过；M7 不承担本轮 host 返工。

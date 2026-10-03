@@ -11,3 +11,4 @@ export {
   type WorkspaceBinding,
 } from "./workspace-lifecycle";
 export type { SnapshotClock, ObservabilitySnapshot, SnapshotResult } from "@symphony/observability";
+export { runCli, type RunCliOptions, type LifecycleProcess } from "./lifecycle";

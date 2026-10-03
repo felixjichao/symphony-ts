@@ -62,6 +62,7 @@ export type {
   WorkflowReloadEvent,
   WorkflowReloadResult,
   WorkflowWatchHandle,
+  WorkflowWatchScheduler,
 } from "./workflow-reload";
 
 export type {
