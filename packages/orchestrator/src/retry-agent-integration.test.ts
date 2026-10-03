@@ -37,10 +37,25 @@ const APP_SERVER_FIXTURE = fileURLToPath(
   new URL("../../agent/test-fixtures/app-server.mjs", import.meta.url),
 );
 
-function fixtureCommand(): string {
-  return [process.execPath, APP_SERVER_FIXTURE]
+function fixtureCommand(extraArgs: readonly string[] = []): string {
+  return [process.execPath, APP_SERVER_FIXTURE, ...extraArgs]
     .map((part) => JSON.stringify(part))
     .join(" ");
+}
+
+/** 进程是否仍存活（`kill(pid, 0)`）：用于验证 attempt 结束后子进程确实退出。 */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface AttemptRecords {
+  readonly startup: string;
+  readonly world: string;
 }
 
 const POLICY: DispatchPolicy = {
@@ -77,9 +92,9 @@ class ManualScheduler implements RetryScheduler {
 }
 
 /** 轮询等待异步 retry handler 真正派发（短间隔，非退避测试）。 */
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() - start > timeoutMs) {
       throw new Error("waitFor timed out");
     }
@@ -167,10 +182,44 @@ describe("retry 真实链路：subprocess → outcome → fake timer → refresh
     const state = createOrchestratorRuntimeState({ pollIntervalMs: 10_000, maxConcurrentAgents: 10 });
     const scheduler = new ManualScheduler();
     const results: AgentAttemptResult[] = [];
+    const records: AttemptRecords[] = [];
     const runner: AgentAttemptRunner = async (options) => {
       const result = await runAgentAttempt(options);
       results.push(result);
       return result;
+    };
+
+    // 每次 attempt 的 config 注入独立的 record 文件，用进程级证据区分两次 subprocess。
+    const createAttemptOptions = (context: AttemptContext) => {
+      const index = records.length;
+      const record: AttemptRecords = {
+        startup: path.join(tempDir, `startup-${index}.txt`),
+        world: path.join(tempDir, `world-${index}.json`),
+      };
+      records.push(record);
+      const attemptConfig: ServiceConfig = {
+        ...config,
+        codex: {
+          ...config.codex,
+          command: fixtureCommand([
+            "--record-startup",
+            record.startup,
+            "--record-world",
+            record.world,
+          ]),
+        },
+      };
+      return {
+        issue: context.issue,
+        attempt: context.attempt,
+        workflow,
+        workflowPath,
+        getConfig: () => attemptConfig,
+        signal: context.signal,
+        onPhase: context.onPhase,
+        onEvent: context.onEvent,
+        continuationDecider: context.continuationDecider,
+      };
     };
 
     const authority = new OrchestratorAuthority({
@@ -181,17 +230,7 @@ describe("retry 真实链路：subprocess → outcome → fake timer → refresh
       resolveWorkspacePath: (target) => manager.resolveWorkspacePath(target.identifier),
       now: () => 1_000,
       monotonicNow: () => 5_000,
-      createAttemptOptions: (context: AttemptContext) => ({
-        issue: context.issue,
-        attempt: context.attempt,
-        workflow,
-        workflowPath,
-        getConfig: () => config,
-        signal: context.signal,
-        onPhase: context.onPhase,
-        onEvent: context.onEvent,
-        continuationDecider: context.continuationDecider,
-      }),
+      createAttemptOptions,
       retry: {
         scheduler,
         maxRetryBackoffMs: () => config.agent.maxRetryBackoffMs,
@@ -201,13 +240,35 @@ describe("retry 真实链路：subprocess → outcome → fake timer → refresh
       },
     });
 
+    interface WorldRecord {
+      readonly pid: number;
+      readonly cwd: string;
+      readonly argv: readonly string[];
+    }
+    const readWorld = async (file: string): Promise<WorldRecord> =>
+      JSON.parse(await fs.readFile(file, "utf8")) as WorldRecord;
+    const readPid = async (file: string): Promise<number> =>
+      Number.parseInt((await fs.readFile(file, "utf8")).trim(), 10);
+
     try {
       // 第一次 attempt：真实 subprocess 握手、单 turn、正常退出 → continuation retry。
       authority.dispatchIssue(issue);
       await authority.waitForIdle();
       expect(results).toHaveLength(1);
       expect(results[0]?.workspace.createdNow).toBe(true);
-      expect(await fs.stat(results[0]!.workspace.path)).toBeDefined();
+      expect(records).toHaveLength(1);
+
+      // 进程级证据：startup PID、world cwd 绑定 workspace、attempt 结束后进程已退出。
+      const pid0 = await readPid(records[0]!.startup);
+      const world0 = await readWorld(records[0]!.world);
+      expect(Number.isInteger(pid0) && pid0 > 0).toBe(true);
+      expect(world0.pid).toBe(pid0);
+      expect(world0.cwd).toBe(results[0]!.workspace.path);
+      expect(isAlive(pid0)).toBe(false);
+
+      // 在复用前写入 marker：retry 复用同一 workspace 时必须保留内容。
+      const markerPath = path.join(results[0]!.workspace.path, "reuse-marker.txt");
+      await fs.writeFile(markerPath, "keep-across-retry", "utf8");
 
       const retry = state.retryAttempts.get(issue.id);
       expect(retry).toMatchObject({ attempt: 1, error: null });
@@ -217,15 +278,25 @@ describe("retry 真实链路：subprocess → outcome → fake timer → refresh
       await waitFor(() => authority.activeWorkerCount === 1);
       await authority.waitForIdle();
       expect(results).toHaveLength(2);
+      expect(records).toHaveLength(2);
 
-      // 新 session / 新 subprocess attempt。
+      // 新 session / 新 subprocess attempt：两次 PID 不同。
       expect(results[1]?.turnCount).toBe(1);
       expect(results[1]?.threadId).toBeTruthy();
       expect(results[1]?.lastTurn.sessionId).toBeTruthy();
-      // workspace 复用：同一确定性路径，第二次不再新建。
+      const pid1 = await readPid(records[1]!.startup);
+      const world1 = await readWorld(records[1]!.world);
+      expect(Number.isInteger(pid1) && pid1 > 0).toBe(true);
+      expect(pid1).not.toBe(pid0);
+      expect(world1.pid).toBe(pid1);
+      expect(world1.cwd).toBe(results[1]!.workspace.path);
+      expect(world1.cwd).toBe(world0.cwd);
+      expect(isAlive(pid1)).toBe(false);
+
+      // workspace 复用：同一确定性路径，第二次不再新建，且 marker 内容保留。
       expect(results[1]?.workspace.path).toBe(results[0]?.workspace.path);
       expect(results[1]?.workspace.createdNow).toBe(false);
-      expect(await fs.stat(results[1]!.workspace.path)).toBeDefined();
+      expect(await fs.readFile(markerPath, "utf8")).toBe("keep-across-retry");
     } finally {
       authority.cancelScheduledRetry(issue.id);
     }
