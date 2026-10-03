@@ -25,6 +25,15 @@ import type {
  */
 export const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
 
+/** 握手期外部取消的 typed 错误（复用 §10.6 `turn_cancelled`，见 M5.2 / #51）。 */
+function handshakeCancellationError(workspacePath: string, cause?: unknown): AgentError {
+  return new AgentError(
+    "turn_cancelled",
+    "App-server session startup was cancelled by the attempt AbortSignal",
+    cause === undefined ? { path: workspacePath } : { path: workspacePath, cause },
+  );
+}
+
 /**
  * {@link startAppServerSession} 入参。
  */
@@ -65,6 +74,19 @@ export interface AppServerSessionOptions {
   readonly onServerRequest?: ((request: TransportServerRequest) => void) | undefined;
   /** 观测点：对端发出的 notification。 */
   readonly onNotification?: ((notification: TransportNotification) => void) | undefined;
+  /**
+   * attempt 级外部取消信号（M5.2 / #51）。握手阶段同样生效：abort 会终止已 launch
+   * 的 transport，使进行中的 `sendRequest` 以取消错误收敛，且不遗留孤儿子进程。
+   */
+  readonly signal?: AbortSignal | undefined;
+  /**
+   * 握手阶段内部观测点（M5.2 / #51）：`launching_agent_process` 在子进程 launch 前上报，
+   * `initializing_session` 在 transport 就绪、开始 `initialize` 握手时上报。使上层阶段
+   * 观测不会被"整个握手都算 launching"误导。
+   */
+  readonly onPhase?:
+    | ((phase: "launching_agent_process" | "initializing_session") => void)
+    | undefined;
 }
 
 /**
@@ -1303,6 +1325,29 @@ export async function startAppServerSession(
   let transport: Transport | null = null;
   const exitInfoHolder: { current: TransportExitInfo | null } = { current: null };
 
+  const signal = options.signal;
+  const reportPhase = (phase: "launching_agent_process" | "initializing_session"): void => {
+    try {
+      options.onPhase?.(phase);
+    } catch {
+      /* 外部 sink 异常隔离 */
+    }
+  };
+  const abortListener = (): void => {
+    // 握手期取消：终止已 launch 的 transport，使在途 sendRequest 以 port_exit / 取消收敛。
+    if (transport !== null) {
+      void transport.stop().catch(() => {
+        /* stop 幂等；异常不改变取消语义 */
+      });
+    }
+  };
+  if (signal !== undefined) {
+    if (signal.aborted) {
+      throw handshakeCancellationError(options.workspacePath);
+    }
+    signal.addEventListener("abort", abortListener, { once: true });
+  }
+
   const listener: TransportListener = {
     onNotification(notification: TransportNotification) {
       session?.handleNotification(notification);
@@ -1378,6 +1423,7 @@ export async function startAppServerSession(
   };
 
   try {
+    reportPhase("launching_agent_process");
     transport = await launchTransport({
       command: options.command,
       workspacePath: options.workspacePath,
@@ -1389,9 +1435,16 @@ export async function startAppServerSession(
       ...(options.shutdownTimeoutMs !== undefined
         ? { shutdownTimeoutMs: options.shutdownTimeoutMs }
         : {}),
+      ...(signal !== undefined ? { signal } : {}),
       listener,
     });
 
+    if (signal?.aborted) {
+      await transport.stop();
+      throw handshakeCancellationError(options.workspacePath);
+    }
+
+    reportPhase("initializing_session");
     session = new AppServerSessionImpl(transport, options);
 
     // 1. initialize request
@@ -1501,6 +1554,11 @@ export async function startAppServerSession(
     if (transport !== null) {
       await transport.stop();
     }
+    // 取消优先于 launch / 协议错误：orchestrator 按自己记录的 stop reason 分类，
+    // 但把结果标成取消可以避免把主动停止误判成普通失败。
+    if (signal?.aborted) {
+      throw handshakeCancellationError(options.workspacePath, error);
+    }
     if (exitInfoHolder.current !== null && !exitInfoHolder.current.stopped && exitInfoHolder.current.exitCode === 127) {
       throw new AgentError(
         "codex_not_found",
@@ -1513,5 +1571,9 @@ export async function startAppServerSession(
       );
     }
     throw error;
+  } finally {
+    if (signal !== undefined) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }

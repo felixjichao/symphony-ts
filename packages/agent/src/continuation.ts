@@ -67,6 +67,19 @@ export const DEFAULT_CONTINUATION_GUIDANCE =
 /** continuation decider 默认等待超时窗口（30 秒）。 */
 export const DEFAULT_CONTINUATION_TIMEOUT_MS = 30_000;
 
+/** attempt 级外部取消的 typed 错误（复用 §10.6 `turn_cancelled`，见 M5.2 / #51）。 */
+function cancellationError(context: TurnCompletedContext): AgentError {
+  return new AgentError(
+    "turn_cancelled",
+    "Continuation decision was cancelled by the attempt AbortSignal",
+    {
+      threadId: context.threadId,
+      turnId: context.turnId,
+      sessionId: composeSessionId(context.threadId, context.turnId),
+    },
+  );
+}
+
 /** 默认 continuation decider：单 turn 正常结束。 */
 export const defaultContinuationDecider: ContinuationDecider = async () => ({
   kind: "stop",
@@ -79,6 +92,7 @@ export async function executeContinuationDecider(
   decider: ContinuationDecider,
   context: Omit<TurnCompletedContext, "signal">,
   timeoutMs: number = DEFAULT_CONTINUATION_TIMEOUT_MS,
+  externalSignal?: AbortSignal,
 ): Promise<ContinuationDecision> {
   const effectiveTimeout =
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -88,6 +102,27 @@ export async function executeContinuationDecider(
   const controller = new AbortController();
   let settled = false;
   let timer: NodeJS.Timeout | undefined;
+
+  // attempt 级外部取消（M5.2 / #51）：concatenate 到内部 signal，使 decider 的异步
+  // refresh 协作取消，并让本函数立即以取消错误收敛，而不是等满 timeout。
+  let externalAbortListener: (() => void) | undefined;
+  const externalAbortPromise = new Promise<never>((_, reject) => {
+    if (externalSignal === undefined) {
+      return;
+    }
+    if (externalSignal.aborted) {
+      controller.abort();
+      reject(cancellationError(context));
+      return;
+    }
+    externalAbortListener = () => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      reject(cancellationError(context));
+    };
+    externalSignal.addEventListener("abort", externalAbortListener, { once: true });
+  });
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -146,7 +181,11 @@ export async function executeContinuationDecider(
   );
 
   try {
-    const decision = await Promise.race([safeDeciderPromise, timeoutPromise]);
+    const decision = await Promise.race([
+      safeDeciderPromise,
+      timeoutPromise,
+      externalAbortPromise,
+    ]);
 
     if (typeof decision !== "object" || decision === null || !("kind" in decision)) {
       throw new AgentError(
@@ -207,6 +246,9 @@ export async function executeContinuationDecider(
     settled = true;
     if (timer !== undefined) {
       clearTimeout(timer);
+    }
+    if (externalAbortListener !== undefined && externalSignal !== undefined) {
+      externalSignal.removeEventListener("abort", externalAbortListener);
     }
   }
 }

@@ -133,7 +133,11 @@ transport 面按**方案 A** 收敛：`src/index.ts` 只 re-export transport 的
 
 ### Continuation 契约（SPEC §10.2 / §10.3）
 
-`ContinuationDecider(context: TurnCompletedContext) => Promise<ContinuationDecision>`，decision 只有 `stop` 与 `continue`（携带 issue 快照）两个分支。**为什么是个注入点**：官方参考实现在每个 turn 后 refresh tracker 再决定是否继续，而那需要 tracker 语义；AGENTS.md 禁止 `agent → tracker`，所以 eligibility 由 M5 注入，本包只提供同一个 live thread 上继续 turn 的能力与契约形状。`DEFAULT_CONTINUATION_GUIDANCE` 固定简短 guidance 避免完整 prompt 重复；`agent.maxTurns` 作为硬上限控制 attempt 生命周期总轮数；`executeContinuationDecider()` 默认提供 30 秒有界等待与 `AbortSignal`。
+`ContinuationDecider(context: TurnCompletedContext) => Promise<ContinuationDecision>`，decision 只有 `stop` 与 `continue`（携带 issue 快照）两个分支。**为什么是个注入点**：官方参考实现在每个 turn 后 refresh tracker 再决定是否继续，而那需要 tracker 语义；AGENTS.md 禁止 `agent → tracker`，所以 eligibility 由 M5 注入，本包只提供同一个 live thread 上继续 turn 的能力与契约形状。`DEFAULT_CONTINUATION_GUIDANCE` 固定简短 guidance 避免完整 prompt 重复；`agent.maxTurns` 作为硬上限控制 attempt 生命周期总轮数；`executeContinuationDecider()` 默认提供 30 秒有界等待与 `AbortSignal`，并接受可选参数 `externalSignal` 供 attempt 级取消立即收敛。
+
+### attempt 级取消与阶段回调（M5.2 / #51）
+
+`AgentAttemptOptions.signal?: AbortSignal` 是 orchestrator 拥有的 attempt 取消入口：abort 后本包不再启动新 turn、终止进行中的 session（含**握手期**已 launch 的 transport），并把 attempt 以 `AgentError("turn_cancelled")` 收敛；取消覆盖 launch 前 / workspace·hook 后 / 握手中 / turn 等待 / continuation 等待 / finally 收尾。`AgentAttemptOptions.onPhase?: (phase: RunAttemptStatus) => void` 上报稳定非终态阶段（`preparing_workspace` / `building_prompt` / `launching_agent_process` / `initializing_session` / `streaming_turn` / `finishing`），只报执行事实、不携带调度状态。二者都是**可选**：旧调用不传时行为不变。scheduler / retry policy 仍不属本包。
 
 ## Configuration
 

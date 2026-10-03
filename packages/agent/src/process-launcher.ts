@@ -10,6 +10,19 @@ import {
 } from "./transport";
 
 /**
+ * attempt 级取消的 typed 错误（M5.2 / #51）：复用 SPEC §10.6 的 `turn_cancelled`
+ * category，因为外部取消语义就是"中断进行中的 turn / attempt"。orchestrator 用自己
+ * 记录的 stop reason 做终态分类，不依赖本错误码。
+ */
+function cancellationError(workspacePath: string): AgentError {
+  return new AgentError(
+    "turn_cancelled",
+    "Coding agent launch was cancelled by the attempt AbortSignal",
+    { path: workspacePath },
+  );
+}
+
+/**
  * Coding-agent 子进程 launch 边界（SPEC §10.1 Launch Contract、§17.2 "Agent launch
  * uses the per-issue workspace path as cwd and rejects out-of-root paths"、
  * §17.5 "Launch command uses workspace cwd and invokes `bash -lc <codex.command>`"，
@@ -70,6 +83,15 @@ export interface LaunchTransportOptions {
   readonly maxProtocolLineBytes?: number | undefined;
   /** `stop()` 中 SIGTERM → SIGKILL 的等待窗口。 */
   readonly shutdownTimeoutMs?: number | undefined;
+  /**
+   * attempt 级外部取消信号（M5.2 / #51）。
+   *
+   * 只影响 launch 边界自身的窗口：signal 在 spawn 前已 abort → 不 spawn；在
+   * `spawn` 事件到达前 abort → 立即杀掉已创建的进程组并拒绝。已 spawn 后的运行期
+   * 取消由上层（Codex client / runner）经 session `stop()` 完成——本层不持有
+   * `AbortSignal` 的长期订阅，避免把 session 生命周期语义下沉到 launch 边界。
+   */
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
@@ -115,6 +137,9 @@ export async function launchTransport(options: LaunchTransportOptions): Promise<
       "codex.command must be a non-empty string (SPEC §5.3.6 / §10.1)",
     );
   }
+  if (options.signal?.aborted) {
+    throw cancellationError(options.workspacePath);
+  }
   const cwd = path.resolve(options.workspacePath);
   const transportOptions: NdjsonTransportOptions = {
     ...(options.readTimeoutMs !== undefined ? { readTimeoutMs: options.readTimeoutMs } : {}),
@@ -140,6 +165,12 @@ export async function launchTransport(options: LaunchTransportOptions): Promise<
       `Refused to launch coding agent: workspace path failed §9.5 containment re-validation before spawn (${error instanceof Error ? error.message : String(error)})`,
       { path: cwd, cause: error },
     );
+  }
+
+  // 安全校验与 spawn 之间没有可被取消信号插入的 await 间隙：若校验期间已被取消，
+  // 这里在 spawn 之前直接拒绝，保证不产生"已取消却仍启动"的子进程。
+  if (options.signal?.aborted) {
+    throw cancellationError(cwd);
   }
 
   // SPEC §10.1: invocation is `bash -lc <codex.command>`, working directory is the
@@ -169,6 +200,18 @@ export async function launchTransport(options: LaunchTransportOptions): Promise<
   });
 
   await Promise.race([spawned, spawnFailed]);
+
+  // spawn 事件到达前被取消：立即终止刚建立的进程组，绝不把 child 交给上层。
+  if (options.signal?.aborted) {
+    try {
+      if (child.pid !== undefined) {
+        process.kill(-child.pid, "SIGKILL");
+      }
+    } catch {
+      /* 已退出 */
+    }
+    throw cancellationError(cwd);
+  }
 
   try {
     return createNdjsonTransport(child, transportOptions);
