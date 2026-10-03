@@ -57,7 +57,7 @@ describe("WORKFLOW → registry / tracker → loop → real workspace / agent su
     expect(h.state.codexRateLimits).toMatchObject({ limitId: "lim-1" });
     expect(h.events.length).toBeGreaterThan(0);
     expect(h.state.retryAttempts.get(target.id)).toEqual({ issueId: target.id, identifier: target.identifier,
-      attempt: 1, dueAtMs: 6000, timerHandle: expect.any(Number), error: null });
+      attempt: 1, dueAtMs: 6000, timerHandle: expect.any(Number), error: null, issueUrl: target.url });
     expect(h.retry.pendingDelays()).toEqual([1000]);
     const refreshCount = h.tracker.refreshIdCalls.length;
     await h.tick(); // claimed retry prevents duplicate candidate dispatch; no running ID refresh.

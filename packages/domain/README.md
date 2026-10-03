@@ -47,3 +47,7 @@ M1.1 已落地的公共 API（唯一出口 `src/index.ts`；进度见 [docs/conf
 - §13.3 只读 runtime snapshot 的行类型归属本包（见 [architecture.md](../../docs/architecture.md)），随 observability（M6）落地；
 - `CodexEventName` 是 string 别名而非闭合枚举：§10.4 事件清单是开放集合。M4.1（#37）已在 `@symphony/agent` 定型事件**形状**（`AgentEvent`）与保证存在的名称清单（`AGENT_EVENT_NAMES`），但事件**产生与映射**（哪个 Codex notification → 哪个事件名）随 M4.4 落地；
 - `deriveWorkspaceKey` 对空 identifier 抛 `TypeError`（§11.3 非空约束前置），调用方不得捕获后静默降级。
+
+## M6.1 observability contracts
+
+`ObservabilityRuntimeView` 排除 handles 并提供 readonly 输入；`ObservabilitySnapshot` / running / retry rows 与 `SnapshotClock` / `SnapshotResult` 是 §13.3 / §13.5 的公共共享类型。`RetryEntry.issueUrl?: string | null` 为兼容旧调用的展示 metadata，snapshot 将缺席值归一为 null。state 的 secondsRunning 仅保存 ended 累计，投影另加 active elapsed。见 [snapshot Note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。

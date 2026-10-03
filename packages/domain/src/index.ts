@@ -61,3 +61,8 @@ export type {
   OrchestratorRuntimeState,
   RunningEntry,
 } from "./orchestrator";
+
+export type {
+  ObservabilityRuntimeView, ObservabilitySnapshot, ObservabilityRunningRow,
+  ObservabilityRetryRow, SnapshotClock, SnapshotTokens, SnapshotValue, SnapshotResult,
+} from "./observability";

@@ -350,7 +350,7 @@ describe("retry 入队 — 验收 01 / 02 / 03 / 04 / 05", () => {
     expect(h.scheduler.lastPending.delayMs).toBe(1_000);
   });
 
-  it("验收 04：RetryEntry 六个字段完整且 dueAtMs 用单调时钟", () => {
+  it("验收 04：RetryEntry 字段完整（含可选 URL metadata）且 dueAtMs 用单调时钟", () => {
     const h = makeHarness();
     const entry = h.authority.scheduleRetry({
       issueId: "issue-9",
@@ -361,7 +361,7 @@ describe("retry 入队 — 验收 01 / 02 / 03 / 04 / 05", () => {
     })!;
 
     expect(Object.keys(entry).sort()).toEqual(
-      ["attempt", "dueAtMs", "error", "identifier", "issueId", "timerHandle"].sort(),
+      ["attempt", "dueAtMs", "error", "identifier", "issueId", "issueUrl", "timerHandle"].sort(),
     );
     expect(entry.issueId).toBe("issue-9");
     expect(entry.identifier).toBe("ABC-9");

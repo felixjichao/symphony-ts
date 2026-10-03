@@ -89,6 +89,7 @@ export type AttemptOptionsFactory = (context: AttemptContext) => AgentAttemptOpt
 export interface RetryScheduleRequest {
   readonly issueId: string;
   readonly identifier: string | null;
+  readonly issueUrl?: string | null;
   /** retry 队列内 **1-based** attempt（§4.1.7；与 `RunAttempt.attempt` 语义不同）。 */
   readonly attempt: number;
   /** 触发本次 retry 的失败原因；continuation 为 `null`。 */
@@ -489,6 +490,7 @@ export class OrchestratorAuthority {
     const entry: RetryEntry = {
       issueId: request.issueId,
       identifier: request.identifier,
+      issueUrl: request.issueUrl ?? null,
       attempt: request.attempt,
       dueAtMs,
       timerHandle,
@@ -981,7 +983,7 @@ export class OrchestratorAuthority {
 
     // M5.3 retry 决策：按 outcome 的 retryKind 建立 entry（suppressRetry 时不排）。
     if (this.retry !== undefined && !terminal.suppressRetry) {
-      this.scheduleOutcomeRetry(terminal);
+      this.scheduleOutcomeRetry(terminal, entry.issue.url);
     }
 
     // claim 默认释放；若已建立 retry entry（native 或外部 onOutcome），则保留 claim。
@@ -991,7 +993,7 @@ export class OrchestratorAuthority {
   }
 
   /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
-  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome): void {
+  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome, issueUrl: string | null): void {
     // 关停期间自然退出的 worker 不得重建 retry / timer（M5.5）。
     if (this.stopping) {
       return;
@@ -1000,6 +1002,7 @@ export class OrchestratorAuthority {
       this.scheduleRetry({
         issueId: terminal.issueId,
         identifier: terminal.issueIdentifier,
+        issueUrl,
         attempt: 1,
         kind: "continuation",
         error: null,
@@ -1010,6 +1013,7 @@ export class OrchestratorAuthority {
       this.scheduleRetry({
         issueId: terminal.issueId,
         identifier: terminal.issueIdentifier,
+        issueUrl,
         attempt: (terminal.attempt ?? 0) + 1,
         kind: "failure",
         error: terminal.error ?? `worker exited: ${terminal.status}`,
@@ -1071,6 +1075,7 @@ export class OrchestratorAuthority {
       this.scheduleRetry({
         issueId,
         identifier: entry.identifier,
+        issueUrl: entry.issueUrl ?? null,
         attempt: entry.attempt + 1,
         kind: "failure",
         error: "retry refresh failed",
@@ -1113,6 +1118,7 @@ export class OrchestratorAuthority {
       this.scheduleRetry({
         issueId,
         identifier: issue.identifier,
+        issueUrl: issue.url,
         attempt: entry.attempt + 1,
         kind: "failure",
         error: "no available orchestrator slots",
@@ -1133,7 +1139,8 @@ export class OrchestratorAuthority {
       // 同步构造失败：不丢 claim，按 failure 重排（SPEC §16.4 "failed to spawn agent"）。
       this.scheduleRetry({
         issueId,
-        identifier: entry.identifier,
+        identifier: issue.identifier,
+        issueUrl: issue.url,
         attempt: entry.attempt + 1,
         kind: "failure",
         error: `failed to dispatch retry: ${error instanceof Error ? error.message : String(error)}`,
