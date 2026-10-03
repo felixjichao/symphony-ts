@@ -135,7 +135,6 @@ Updated prompt
       expect(host.effective.serviceConfig.polling.intervalMs).toBe(3000);
 
       // Verify running child process was NOT killed or restarted by reload (AC #10)
-      // Check if process still exists
       let processStillAlive = false;
       try {
         process.kill(Number(childPid), 0);
@@ -156,14 +155,17 @@ Updated prompt
     const workflowPath = path.join(temp, "WORKFLOW.md");
 
     const scheduledDelays: number[] = [];
+    const scheduledEntries: Array<{ id: number; delayMs: number; callback: () => void; cancelled: boolean }> = [];
+    let nextTimerId = 1;
     const manualScheduler = {
       schedule: (delayMs: number, callback: () => void) => {
         scheduledDelays.push(delayMs);
-        const timer = setTimeout(callback, delayMs);
-        return timer;
+        const entry = { id: nextTimerId++, delayMs, callback, cancelled: false };
+        scheduledEntries.push(entry);
+        return entry;
       },
-      cancel: (timer: ReturnType<typeof setTimeout>) => {
-        clearTimeout(timer);
+      cancel: (entry: { cancelled: boolean }) => {
+        entry.cancelled = true;
       },
     };
 
@@ -210,6 +212,17 @@ Prompt
 
       // First tick was scheduled with delay 0 (immediate)
       expect(scheduledDelays[0]).toBe(0);
+      expect(scheduledEntries).toHaveLength(1);
+
+      // Trigger the first tick
+      const firstTickCallback = scheduledEntries[0]!.callback;
+      firstTickCallback();
+      await host.loop.settled();
+
+      // After first tick completes, reschedule() scheduled next tick with interval 8000
+      expect(scheduledDelays).toHaveLength(2);
+      expect(scheduledDelays[1]).toBe(8000);
+      expect(scheduledEntries[1]!.cancelled).toBe(false);
 
       // Reload with new interval 2500
       await writeFile(
@@ -232,6 +245,21 @@ Prompt
       await waitFor(() => host.effective.serviceConfig.polling.intervalMs === 2500, 3000);
       expect(host.state.pollIntervalMs).toBe(2500);
 
+      // Verify the already scheduled 8000ms timer was NOT cancelled immediately upon reload
+      expect(scheduledEntries[1]!.cancelled).toBe(false);
+      // And no extra timer was created yet
+      expect(scheduledDelays).toHaveLength(2);
+
+      // Trigger the pending 8000ms tick
+      const secondTickCallback = scheduledEntries[1]!.callback;
+      secondTickCallback();
+      await host.loop.settled();
+
+      // Now the tick has executed, picked up the new interval, and rescheduled with 2500
+      expect(scheduledDelays).toHaveLength(3);
+      expect(scheduledDelays[2]).toBe(2500);
+      expect(scheduledEntries[2]!.cancelled).toBe(false);
+
       await host.stop();
     } finally {
       await rm(temp, { recursive: true, force: true });
@@ -253,7 +281,7 @@ Prompt
       documentation: "docs/testing.md#fixture",
       secretProviderKeys: [],
       secretEnvVars: [],
-      defaultActiveStates: ["open"],
+      defaultActiveStates: ["open", "review"],
       defaultTerminalStates: ["closed"],
       createAdapter: () => ({
         kind: "fixture",
@@ -269,13 +297,13 @@ Prompt
 tracker:
   kind: fixture
 polling:
-  interval_ms: 10000
+  interval_ms: 100
 agent:
   max_concurrent_agents: 2
 workspace:
   root: ${path.join(temp, "workspaces")}
 codex:
-  command: node ${appServerFixture} --delay-completed-ms 5000
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
 ---
 Prompt
 `,
@@ -290,9 +318,11 @@ Prompt
 
       await host.start();
 
-      // Wait until 2 workers are running
+      // Wait until 2 workers are running (global limit = 2)
       await waitFor(() => host.state.running.size === 2, 4000);
-      expect(host.state.running.size).toBe(2);
+      expect(host.state.running.has("id-ISSUE-01")).toBe(true);
+      expect(host.state.running.has("id-ISSUE-02")).toBe(true);
+      expect(host.state.running.has("id-ISSUE-03")).toBe(false);
 
       // Lower concurrency to 1
       await writeFile(
@@ -301,13 +331,13 @@ Prompt
 tracker:
   kind: fixture
 polling:
-  interval_ms: 10000
+  interval_ms: 100
 agent:
   max_concurrent_agents: 1
 workspace:
   root: ${path.join(temp, "workspaces")}
 codex:
-  command: node ${appServerFixture} --delay-completed-ms 5000
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
 ---
 Prompt
 `,
@@ -318,31 +348,128 @@ Prompt
 
       // Both already running workers remain running (not terminated)
       expect(host.state.running.size).toBe(2);
-      // But no available slot exists
-      expect(host.authority.hasAvailableGlobalSlot()).toBe(false);
 
-      // Raise concurrency to 3
+      // Now release worker 1
+      await writeFile(path.join(temp, "workspaces", "ISSUE-01", "release.flag"), "ok\n");
+      await waitFor(() => host.state.completed.has("id-ISSUE-01"), 4000);
+
+      // Running workers now 1 (worker 2 is still running)
+      expect(host.state.running.size).toBe(1);
+      expect(host.state.running.has("id-ISSUE-02")).toBe(true);
+
+      // Wait a moment across multiple poll ticks; observe that ISSUE-03 is STILL blocked from dispatching!
+      await new Promise((r) => setTimeout(r, 300));
+      expect(host.state.running.size).toBe(1);
+      expect(host.state.running.has("id-ISSUE-03")).toBe(false);
+
+      // Raise concurrency to 2
       await writeFile(
         workflowPath,
         `---
 tracker:
   kind: fixture
 polling:
-  interval_ms: 10000
+  interval_ms: 100
 agent:
-  max_concurrent_agents: 3
+  max_concurrent_agents: 2
 workspace:
   root: ${path.join(temp, "workspaces")}
 codex:
-  command: node ${appServerFixture} --delay-completed-ms 5000
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
 ---
 Prompt
 `,
         "utf8",
       );
 
-      await waitFor(() => host.effective.serviceConfig.agent.maxConcurrentAgents === 3, 3000);
-      expect(host.authority.hasAvailableGlobalSlot()).toBe(true);
+      await waitFor(() => host.effective.serviceConfig.agent.maxConcurrentAgents === 2, 3000);
+
+      // On next poll tick, ISSUE-03 is dispatched!
+      await waitFor(() => host.state.running.has("id-ISSUE-03"), 4000);
+      expect(host.state.running.size).toBe(2);
+      expect(host.state.running.has("id-ISSUE-02")).toBe(true);
+      expect(host.state.running.has("id-ISSUE-03")).toBe(true);
+
+      // Now test per-state limit reload: add 2 issues in state 'review'
+      const review1 = makeIssue("REV-01", "review");
+      const review2 = makeIssue("REV-02", "review");
+      issues.push(review1, review2);
+
+      // Reload config with global = 5, but per-state review = 1
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 100
+agent:
+  max_concurrent_agents: 5
+  max_concurrent_agents_by_state:
+    review: 1
+workspace:
+  root: ${path.join(temp, "workspaces")}
+codex:
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
+---
+Prompt
+`,
+        "utf8",
+      );
+
+      await waitFor(
+        () => host.effective.serviceConfig.agent.maxConcurrentAgentsByState["review"] === 1,
+        3000,
+      );
+
+      // Release worker 2 and 3 so global slots open up
+      await writeFile(path.join(temp, "workspaces", "ISSUE-02", "release.flag"), "ok\n");
+      await writeFile(path.join(temp, "workspaces", "ISSUE-03", "release.flag"), "ok\n");
+      await waitFor(() => host.state.completed.has("id-ISSUE-02"), 4000);
+      await waitFor(() => host.state.completed.has("id-ISSUE-03"), 4000);
+
+      // REV-01 gets dispatched, but REV-02 is blocked by per-state limit (1)
+      await waitFor(() => host.state.running.has("id-REV-01"), 4000);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(host.state.running.has("id-REV-02")).toBe(false);
+
+      // Reload per-state review limit to 2
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 100
+agent:
+  max_concurrent_agents: 5
+  max_concurrent_agents_by_state:
+    review: 2
+workspace:
+  root: ${path.join(temp, "workspaces")}
+codex:
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
+---
+Prompt
+`,
+        "utf8",
+      );
+
+      await waitFor(
+        () => host.effective.serviceConfig.agent.maxConcurrentAgentsByState["review"] === 2,
+        3000,
+      );
+
+      // On next tick, REV-02 is dispatched!
+      await waitFor(() => host.state.running.has("id-REV-02"), 4000);
+
+      // Clean up running workers
+      await waitFor(async () => await pathExists(path.join(temp, "workspaces", "REV-01")), 4000);
+      await waitFor(async () => await pathExists(path.join(temp, "workspaces", "REV-02")), 4000);
+      await writeFile(path.join(temp, "workspaces", "REV-01", "release.flag"), "ok\n");
+      await writeFile(path.join(temp, "workspaces", "REV-02", "release.flag"), "ok\n");
+      await waitFor(() => host.state.completed.has("id-REV-01"), 4000);
+      await waitFor(() => host.state.completed.has("id-REV-02"), 4000);
 
       await host.stop();
     } finally {
@@ -350,10 +477,30 @@ Prompt
     }
   });
 
-  it("AC #4: retry cap and stall reload: dynamic getters update immediately without rescheduling existing timers", async () => {
+  it("AC #4: retry cap and stall reload: dynamic getters update immediately without restarting host and drive runtime reconciliation and retry", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-reload-cap-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");
 
+    const issues: Issue[] = [
+      makeIssue("STALL-01", "open"),
+      makeIssue("FAIL-01", "open"),
+      makeIssue("FAIL-02", "open"),
+    ];
+
+    const scheduledRetryDelays: number[] = [];
+    const retryScheduler = {
+      schedule: (delayMs: number, callback: () => void) => {
+        scheduledRetryDelays.push(delayMs);
+        const timer = setTimeout(callback, delayMs);
+        return timer;
+      },
+      cancel: (timer: ReturnType<typeof setTimeout>) => {
+        clearTimeout(timer);
+      },
+    };
+
+    let simulatedNow = 100000;
+    let simulatedMonotonic = 10000;
     const profile: TrackerAdapterProfile = {
       kind: "fixture",
       documentation: "docs/testing.md#fixture",
@@ -363,12 +510,13 @@ Prompt
       defaultTerminalStates: ["closed"],
       createAdapter: () => ({
         kind: "fixture",
-        fetchIssuesByIds: async () => [],
-        fetchIssuesByStates: async () => [],
+        fetchIssuesByIds: async (ids) => issues.filter((i) => ids.includes(i.id)),
+        fetchIssuesByStates: async (states) => issues.filter((i) => states.includes(i.state)),
       }),
     };
 
     try {
+      // 1. Test stall_timeout dynamic getter driving reconciliation
       await writeFile(
         workflowPath,
         `---
@@ -379,8 +527,8 @@ polling:
 agent:
   max_retry_backoff_ms: 120000
 codex:
-  stall_timeout_ms: 45000
-  command: node ${appServerFixture}
+  stall_timeout_ms: 60000
+  command: node ${appServerFixture} --silent-turn
 workspace:
   root: ${path.join(temp, "workspaces")}
 ---
@@ -392,13 +540,26 @@ Prompt
       const host = await createHost({
         workflowPath,
         trackerProfiles: [profile],
+        retryScheduler,
+        now: () => simulatedNow,
+        monotonicNow: () => simulatedMonotonic,
         watcherIntervalMs: 50,
       });
 
-      expect(host.effective.serviceConfig.agent.maxRetryBackoffMs).toBe(120000);
-      expect(host.effective.serviceConfig.codex.stallTimeoutMs).toBe(45000);
+      // Dispatch STALL-01
+      host.authority.dispatchIssue(issues[0]!);
+      await waitFor(() => host.state.running.has("id-STALL-01"), 3000);
 
-      // Reload with new values
+      // Advance time by 5 seconds
+      simulatedNow += 5000;
+      simulatedMonotonic += 5000;
+
+      // Reconcile: worker is NOT stalled because 5000ms < 60000ms
+      const reconcile1 = await host.authority.reconcileRunningIssues();
+      expect(reconcile1.stoppedIssueIds).toEqual([]);
+      expect(host.state.running.has("id-STALL-01")).toBe(true);
+
+      // Reload stall_timeout_ms to 2000ms (2 seconds)
       await writeFile(
         workflowPath,
         `---
@@ -407,10 +568,10 @@ tracker:
 polling:
   interval_ms: 10000
 agent:
-  max_retry_backoff_ms: 30000
+  max_retry_backoff_ms: 120000
 codex:
-  stall_timeout_ms: 15000
-  command: node ${appServerFixture}
+  stall_timeout_ms: 2000
+  command: node ${appServerFixture} --silent-turn
 workspace:
   root: ${path.join(temp, "workspaces")}
 ---
@@ -419,9 +580,69 @@ Prompt
         "utf8",
       );
 
-      await waitFor(() => host.effective.serviceConfig.agent.maxRetryBackoffMs === 30000, 3000);
-      expect(host.effective.serviceConfig.agent.maxRetryBackoffMs).toBe(30000);
-      expect(host.effective.serviceConfig.codex.stallTimeoutMs).toBe(15000);
+      await waitFor(() => host.effective.serviceConfig.codex.stallTimeoutMs === 2000, 3000);
+
+      // Reconcile again: dynamic getter returns 2000ms, and 5000ms > 2000ms -> stalled!
+      const reconcile2 = await host.authority.reconcileRunningIssues();
+      expect(reconcile2.stalledIssueIds).toEqual(["id-STALL-01"]);
+      expect(host.state.running.has("id-STALL-01")).toBe(false);
+
+      // 2. Test max_retry_backoff_ms dynamic getter driving retry queue backoff capping
+      // Initial max_retry_backoff_ms is 120000.
+      // Dispatch FAIL-01 with exit-on-turn-start so it fails attempt 1.
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 10000
+agent:
+  max_retry_backoff_ms: 120000
+codex:
+  stall_timeout_ms: 60000
+  command: node ${appServerFixture} --exit-on-turn-start
+workspace:
+  root: ${path.join(temp, "workspaces")}
+---
+Prompt
+`,
+        "utf8",
+      );
+      await waitFor(() => host.effective.serviceConfig.agent.maxRetryBackoffMs === 120000, 3000);
+
+      host.authority.dispatchIssue(issues[1]!);
+      await waitFor(() => scheduledRetryDelays.length === 1, 4000);
+      // Attempt 1 retry backoff is uncapped 10000ms (< 120000ms)
+      expect(scheduledRetryDelays[0]).toBe(10000);
+
+      // Now reload max_retry_backoff_ms to 1500ms
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 10000
+agent:
+  max_retry_backoff_ms: 1500
+codex:
+  stall_timeout_ms: 60000
+  command: node ${appServerFixture} --exit-on-turn-start
+workspace:
+  root: ${path.join(temp, "workspaces")}
+---
+Prompt
+`,
+        "utf8",
+      );
+      await waitFor(() => host.effective.serviceConfig.agent.maxRetryBackoffMs === 1500, 3000);
+
+      // Dispatch FAIL-02: fails attempt 1
+      host.authority.dispatchIssue(issues[2]!);
+      await waitFor(() => scheduledRetryDelays.length === 2, 4000);
+      // Attempt 1 retry backoff is min(10000, 1500) = 1500ms!
+      expect(scheduledRetryDelays[1]).toBe(1500);
 
       await host.stop();
     } finally {
@@ -429,7 +650,108 @@ Prompt
     }
   });
 
-  it("AC #6: tracker provider config reload immediately routes next calls to new adapter", async () => {
+  it("AC #5: next child worker receives updated prompt, codex command, and options after reload", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-reload-child-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const promptRecordA = path.join(temp, "prompt-a.txt");
+    const promptRecordB = path.join(temp, "prompt-b.txt");
+    const worldRecordA = path.join(temp, "world-a.json");
+    const worldRecordB = path.join(temp, "world-b.json");
+
+    const issues: Issue[] = [
+      makeIssue("CHILD-01", "open"),
+    ];
+
+    const profile: TrackerAdapterProfile = {
+      kind: "fixture",
+      documentation: "docs/testing.md#fixture",
+      secretProviderKeys: [],
+      secretEnvVars: [],
+      defaultActiveStates: ["open"],
+      defaultTerminalStates: ["closed"],
+      createAdapter: () => ({
+        kind: "fixture",
+        fetchIssuesByIds: async (ids) => issues.filter((i) => ids.includes(i.id)),
+        fetchIssuesByStates: async (states) => issues.filter((i) => states.includes(i.state)),
+      }),
+    };
+
+    try {
+      // 1. Initial workflow with Prompt A and command with Record A
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 10000
+workspace:
+  root: ${path.join(temp, "workspaces")}
+codex:
+  command: node ${appServerFixture} --record-prompt ${promptRecordA} --record-world ${worldRecordA}
+---
+Prompt Content Version 1: Initial Instructions
+`,
+        "utf8",
+      );
+
+      const host = await createHost({
+        workflowPath,
+        trackerProfiles: [profile],
+        watcherIntervalMs: 50,
+      });
+
+      await host.start();
+
+      // Child 1 starts and completes
+      await waitFor(() => host.state.completed.has("id-CHILD-01"), 6000);
+
+      const promptA = await readFile(promptRecordA, "utf8");
+      expect(promptA).toContain("Prompt Content Version 1: Initial Instructions");
+      const worldA = JSON.parse(await readFile(worldRecordA, "utf8"));
+      expect(worldA.argv).toContain(promptRecordA);
+
+      // 2. Reload workflow with Prompt B and command with Record B
+      await writeFile(
+        workflowPath,
+        `---
+tracker:
+  kind: fixture
+polling:
+  interval_ms: 10000
+workspace:
+  root: ${path.join(temp, "workspaces")}
+codex:
+  command: node ${appServerFixture} --record-prompt ${promptRecordB} --record-world ${worldRecordB}
+---
+Prompt Content Version 2: Updated Instructions
+`,
+        "utf8",
+      );
+
+      await waitFor(
+        () => host.effective.serviceConfig.codex.command.includes(promptRecordB),
+        3000,
+      );
+
+      // Dispatch Child 2 under updated workflow B
+      const child2 = makeIssue("CHILD-02", "open");
+      issues.push(child2);
+      host.authority.dispatchIssue(child2);
+      await waitFor(() => host.state.completed.has("id-CHILD-02"), 6000);
+
+      const promptB = await readFile(promptRecordB, "utf8");
+      expect(promptB).toContain("Prompt Content Version 2: Updated Instructions");
+      const worldB = JSON.parse(await readFile(worldRecordB, "utf8"));
+      expect(worldB.argv).toContain(promptRecordB);
+
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("AC #6: tracker provider config reload immediately routes next calls to new adapter and returns its issues", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-reload-tracker-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");
 
@@ -442,12 +764,13 @@ Prompt
       defaultActiveStates: ["open"],
       defaultTerminalStates: ["closed"],
       createAdapter: (ctx) => {
-        const instanceId = `adapter-${ctx.provider["endpoint"] ?? "default"}`;
+        const endpoint = (ctx.provider["endpoint"] as string) ?? "default";
+        const instanceId = `adapter-${endpoint}`;
         adapterInstances.push(instanceId);
         return {
           kind: "dyn_tracker",
-          fetchIssuesByIds: async () => [],
-          fetchIssuesByStates: async () => [],
+          fetchIssuesByIds: async (_ids) => [makeIssue(`ID-${endpoint}`)],
+          fetchIssuesByStates: async (_states) => [makeIssue(`ISSUE-FROM-${endpoint}`)],
         };
       },
     };
@@ -480,10 +803,13 @@ Prompt
 
       expect(adapterInstances).toEqual(["adapter-v1"]);
 
-      // Call tracker proxy
-      await host.tracker.fetchIssuesByStates(["open"]);
+      // Call tracker proxy: routes to adapter v1
+      const issuesV1 = await host.tracker.fetchIssuesByStates(["open"]);
+      expect(issuesV1.map((i) => i.identifier)).toEqual(["ISSUE-FROM-v1"]);
+      const byIdV1 = await host.tracker.fetchIssuesByIds(["id-v1"]);
+      expect(byIdV1.map((i) => i.identifier)).toEqual(["ID-v1"]);
 
-      // Update provider config
+      // Update provider config to endpoint v2
       await writeFile(
         workflowPath,
         `---
@@ -506,8 +832,11 @@ Prompt
       await waitFor(() => host.effective.serviceConfig.tracker.provider["endpoint"] === "v2", 3000);
       expect(adapterInstances).toContain("adapter-v2");
 
-      // Verify that next tracker call hits new adapter
-      expect(host.tracker.kind).toBe("dyn_tracker");
+      // Verify that next tracker calls immediately route to adapter v2
+      const issuesV2 = await host.tracker.fetchIssuesByStates(["open"]);
+      expect(issuesV2.map((i) => i.identifier)).toEqual(["ISSUE-FROM-v2"]);
+      const byIdV2 = await host.tracker.fetchIssuesByIds(["id-v2"]);
+      expect(byIdV2.map((i) => i.identifier)).toEqual(["ID-v2"]);
 
       await host.stop();
     } finally {
@@ -624,14 +953,15 @@ Healed prompt
     }
   });
 
-  it("AC #9: workspace root reload consistency (Attempt A cleans up in Root A, Attempt B in Root B, old roots not swept)", async () => {
+  it("AC #9: workspace root reload consistency (in-flight Attempt A in Root A, reload to Root B, Attempt B in Root B, after_run and terminal cleanup removes Root A while Root B remains intact)", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-reload-root-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");
     const rootA = path.join(temp, "root-A");
     const rootB = path.join(temp, "root-B");
+    const hookLog = path.join(temp, "hook.log");
 
     const issues: Issue[] = [
-      makeIssue("ISSUE-A", "open"),
+      makeIssue("TASK-COMMON", "open"),
     ];
 
     const profile: TrackerAdapterProfile = {
@@ -648,6 +978,7 @@ Healed prompt
       }),
     };
 
+    let host: Awaited<ReturnType<typeof createHost>> | null = null;
     try {
       await writeFile(
         workflowPath,
@@ -656,86 +987,103 @@ tracker:
   kind: fixture
 polling:
   interval_ms: 10000
+hooks:
+  after_run: node -e 'require("node:fs").appendFileSync(process.env.TEST_HOOK_LOG, "after_run:" + process.cwd() + "\\n")'
 workspace:
   root: ${rootA}
 codex:
-  command: node ${appServerFixture}
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
 ---
 Prompt A
 `,
         "utf8",
       );
 
-      const host = await createHost({
+      host = await createHost({
         workflowPath,
         trackerProfiles: [profile],
         watcherIntervalMs: 50,
       });
 
-      await host.start();
+        process.env.TEST_HOOK_LOG = hookLog;
 
-      // Wait until ISSUE-A finishes attempt in Root A
-      await waitFor(() => host.state.completed.has("id-ISSUE-A"), 6000);
+        await host.start();
 
-      // Verify directory was created in Root A
-      const expectedPathA = path.join(rootA, "ISSUE-A");
-      expect(await pathExists(expectedPathA)).toBe(true);
+        // Wait until TASK-COMMON starts running in Root A
+        await waitFor(() => host!.state.running.has("id-TASK-COMMON"), 4000);
+        const expectedPathA = path.join(rootA, "TASK-COMMON");
+        expect(await pathExists(expectedPathA)).toBe(true);
 
-      // Now reload workspace root to Root B
-      await writeFile(
-        workflowPath,
-        `---
+        // While Attempt A is still in-flight, reload workspace root to Root B
+        await writeFile(
+          workflowPath,
+          `---
 tracker:
   kind: fixture
 polling:
   interval_ms: 10000
+hooks:
+  after_run: node -e 'require("node:fs").appendFileSync(process.env.TEST_HOOK_LOG, "after_run:" + process.cwd() + "\\n")'
 workspace:
   root: ${rootB}
 codex:
-  command: node ${appServerFixture}
+  command: node ${appServerFixture} --wait-file ./release.flag --delay-completed-ms 20
 ---
 Prompt B
 `,
-        "utf8",
-      );
+          "utf8",
+        );
 
-      await waitFor(() => host.effective.serviceConfig.workspace.root === rootB, 3000);
-      expect(host.effective.serviceConfig.workspace.root).toBe(rootB);
+        await waitFor(() => host!.effective.serviceConfig.workspace.root === rootB, 3000);
+        expect(host!.effective.serviceConfig.workspace.root).toBe(rootB);
 
-      // Dispatch ISSUE-B in Root B
-      const issueB = makeIssue("ISSUE-B", "open");
-      issues.push(issueB);
-      host.authority.dispatchIssue(issueB);
+        // Dispatch TASK-B in Root B
+        const issueB = makeIssue("TASK-B", "open");
+        issues.push(issueB);
+        host!.authority.dispatchIssue(issueB);
 
-      await waitFor(() => host.state.completed.has("id-ISSUE-B"), 6000);
+        await waitFor(() => host!.state.running.has("id-TASK-B"), 4000);
+        const expectedPathB = path.join(rootB, "TASK-B");
+        await waitFor(async () => await pathExists(expectedPathB), 4000);
+        expect(await pathExists(expectedPathB)).toBe(true);
 
-      // Verify ISSUE-B was executed in Root B
-      const expectedPathB = path.join(rootB, "ISSUE-B");
-      expect(await pathExists(expectedPathB)).toBe(true);
+        // Both workspaces exist simultaneously
+        expect(await pathExists(expectedPathA)).toBe(true);
+        expect(await pathExists(expectedPathB)).toBe(true);
 
-      // Terminal cleanup for ISSUE-A: because ISSUE-A was bound to Root A, its cleanup removes Root A/ISSUE-A
-      const cleanupA = await host.cleanupWorkspace.removeWorkspaceForIssue!({
-        issueId: "id-ISSUE-A",
-        identifier: "ISSUE-A",
-      });
-      expect(cleanupA.status).toBe("removed");
-      expect(await pathExists(expectedPathA)).toBe(false);
+        // Now mark TASK-COMMON as terminal (closed) in tracker while worker A is still running
+        issues[0] = makeIssue("TASK-COMMON", "closed");
 
-      // Verify Root B/ISSUE-B is untouched by ISSUE-A's cleanup
-      expect(await pathExists(expectedPathB)).toBe(true);
+        // Trigger reconciliation: M5 reconciliation sees TASK-COMMON is running and now closed -> stop worker -> after_run hook -> terminal cleanup
+        const reconcileA = await host!.authority.reconcileRunningIssues();
+        expect(reconcileA.stoppedIssueIds).toEqual(["id-TASK-COMMON"]);
+        expect(reconcileA.cleanedIssueIds).toEqual(["id-TASK-COMMON"]);
 
-      // Terminal cleanup for ISSUE-B removes Root B/ISSUE-B
-      const cleanupB = await host.cleanupWorkspace.removeWorkspaceForIssue!({
-        issueId: "id-ISSUE-B",
-        identifier: "ISSUE-B",
-      });
-      expect(cleanupB.status).toBe("removed");
-      expect(await pathExists(expectedPathB)).toBe(false);
+        // Verify Root A directory was removed by terminal cleanup
+        await waitFor(async () => !(await pathExists(expectedPathA)), 4000);
+        expect(await pathExists(expectedPathA)).toBe(false);
 
-      await host.stop();
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+        // Verify Root B workspace is COMPLETELY INTACT and unaffected!
+        expect(await pathExists(expectedPathB)).toBe(true);
+
+        // Verify after_run hook was executed for Root A workspace
+        const hookContent = await readFile(hookLog, "utf8");
+        expect(hookContent).toContain(`after_run:${expectedPathA}`);
+
+        // Now mark TASK-B as terminal (closed) in tracker while worker B is still running
+        issues[1] = makeIssue("TASK-B", "closed");
+        const reconcileB = await host!.authority.reconcileRunningIssues();
+        expect(reconcileB.stoppedIssueIds).toEqual(["id-TASK-B"]);
+        expect(reconcileB.cleanedIssueIds).toEqual(["id-TASK-B"]);
+        await waitFor(async () => !(await pathExists(expectedPathB)), 4000);
+        expect(await pathExists(expectedPathB)).toBe(false);
+      } finally {
+        delete process.env.TEST_HOOK_LOG;
+        if (host) {
+          await host.stop();
+        }
+        await rm(temp, { recursive: true, force: true });
+      }
   });
 
   it("AC #14: watcher and host.effective share the exact same object reference; no dual truth sources", async () => {

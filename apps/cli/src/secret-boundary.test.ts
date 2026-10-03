@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,15 @@ import {
   type TrackerAdapterProfile,
 } from "@symphony/tracker";
 import { createHost } from "./host";
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const appServerFixture = fileURLToPath(
   new URL("../../../packages/agent/test-fixtures/app-server.mjs", import.meta.url),
@@ -192,6 +201,23 @@ Prompt
   it("AC #13: reload switches secret exclusions to follow selected profile, failed reload does not alter exclusions", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-secret-reload-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");
+    const envRecordA = path.join(temp, "env-a.json");
+    const envRecordB = path.join(temp, "env-b.json");
+    const envRecordC = path.join(temp, "env-c.json");
+
+    const origAlpha = process.env.SECRET_ALPHA;
+    const origBeta = process.env.SECRET_BETA;
+    const origSentinel = process.env.SENTINEL_NON_SECRET;
+
+    process.env.SECRET_ALPHA = "secret-alpha-val";
+    process.env.SECRET_BETA = "secret-beta-val";
+    process.env.SENTINEL_NON_SECRET = "sentinel-ok";
+
+    const issues: Issue[] = [
+      makeIssue("ISS-A", "open"),
+      makeIssue("ISS-B", "open"),
+      makeIssue("ISS-C", "open"),
+    ];
 
     const profileA: TrackerAdapterProfile = {
       kind: "profile_a",
@@ -202,8 +228,8 @@ Prompt
       defaultTerminalStates: ["closed"],
       createAdapter: () => ({
         kind: "profile_a",
-        fetchIssuesByIds: async () => [],
-        fetchIssuesByStates: async () => [],
+        fetchIssuesByIds: async (ids) => issues.filter((i) => ids.includes(i.id)),
+        fetchIssuesByStates: async (states) => issues.filter((i) => states.includes(i.state)),
       }),
     };
 
@@ -216,8 +242,8 @@ Prompt
       defaultTerminalStates: ["closed"],
       createAdapter: () => ({
         kind: "profile_b",
-        fetchIssuesByIds: async () => [],
-        fetchIssuesByStates: async () => [],
+        fetchIssuesByIds: async (ids) => issues.filter((i) => ids.includes(i.id)),
+        fetchIssuesByStates: async (states) => issues.filter((i) => states.includes(i.state)),
       }),
     };
 
@@ -232,7 +258,7 @@ polling:
 workspace:
   root: ${path.join(temp, "workspaces")}
 codex:
-  command: node ${appServerFixture}
+  command: node ${appServerFixture} --record-env-presence SECRET_ALPHA,SECRET_BETA,SENTINEL_NON_SECRET --record-env-file ${envRecordA}
 ---
 Prompt A
 `,
@@ -245,9 +271,19 @@ Prompt A
         watcherIntervalMs: 50,
       });
 
+      await host.start();
+
       expect(host.effective.serviceConfig.tracker.kind).toBe("profile_a");
-      const snap1 = host.getSnapshot();
-      expect(snap1).toBeDefined();
+
+      // Dispatch attempt under profile_a
+      const issueA = makeIssue("ISS-A", "open");
+      host.authority.dispatchIssue(issueA);
+      await waitFor(async () => await pathExists(envRecordA), 8000);
+
+      const recordA = JSON.parse(await readFile(envRecordA, "utf8")) as Record<string, { present: boolean }>;
+      expect(recordA["SECRET_ALPHA"]?.present).toBe(false);
+      expect(recordA["SECRET_BETA"]?.present).toBe(true);
+      expect(recordA["SENTINEL_NON_SECRET"]?.present).toBe(true);
 
       // Update to profile_b
       await writeFile(
@@ -260,7 +296,7 @@ polling:
 workspace:
   root: ${path.join(temp, "workspaces")}
 codex:
-  command: node ${appServerFixture}
+  command: node ${appServerFixture} --record-env-presence SECRET_ALPHA,SECRET_BETA,SENTINEL_NON_SECRET --record-env-file ${envRecordB}
 ---
 Prompt B
 `,
@@ -270,27 +306,62 @@ Prompt B
       await waitFor(() => host.effective.serviceConfig.tracker.kind === "profile_b", 4000);
       expect(host.effective.serviceConfig.tracker.kind).toBe("profile_b");
 
+      // Dispatch attempt under profile_b
+      const issueB = makeIssue("ISS-B", "open");
+      host.authority.dispatchIssue(issueB);
+      await waitFor(async () => await pathExists(envRecordB), 8000);
+
+      const recordB = JSON.parse(await readFile(envRecordB, "utf8")) as Record<string, { present: boolean }>;
+      expect(recordB["SECRET_ALPHA"]?.present).toBe(true);
+      expect(recordB["SECRET_BETA"]?.present).toBe(false);
+      expect(recordB["SENTINEL_NON_SECRET"]?.present).toBe(true);
+
       // Now trigger invalid reload
       await writeFile(
         workflowPath,
         `---
 tracker:
   kind: unsupported_kind
+workspace:
+  root: ${path.join(temp, "workspaces")}
+codex:
+  command: node ${appServerFixture} --record-env-presence SECRET_ALPHA,SECRET_BETA,SENTINEL_NON_SECRET --record-env-file ${envRecordC}
 ---
-Invalid YAML
+Prompt C
 `,
         "utf8",
       );
 
-      // Wait a moment for watcher to run
+      // Wait a moment for watcher to run and reject invalid config
       await new Promise((r) => setTimeout(r, 200));
 
       // After failed reload, runtime remains on profile_b
       expect(host.effective.serviceConfig.tracker.kind).toBe("profile_b");
 
+      // Dispatch attempt after failed reload: must retain profile_b exclusion
+      // Because failed reload rejected the new workflow, codex command also remained on profile_b
+      await rm(envRecordB);
+      const issueC = makeIssue("ISS-C", "open");
+      host.authority.dispatchIssue(issueC);
+      await waitFor(async () => await pathExists(envRecordB), 8000);
+
+      const recordC = JSON.parse(await readFile(envRecordB, "utf8")) as Record<string, { present: boolean }>;
+      expect(recordC["SECRET_ALPHA"]?.present).toBe(true);
+      expect(recordC["SECRET_BETA"]?.present).toBe(false);
+      expect(recordC["SENTINEL_NON_SECRET"]?.present).toBe(true);
+
       await host.stop();
     } finally {
+      if (origAlpha !== undefined) process.env.SECRET_ALPHA = origAlpha;
+      else delete process.env.SECRET_ALPHA;
+
+      if (origBeta !== undefined) process.env.SECRET_BETA = origBeta;
+      else delete process.env.SECRET_BETA;
+
+      if (origSentinel !== undefined) process.env.SENTINEL_NON_SECRET = origSentinel;
+      else delete process.env.SENTINEL_NON_SECRET;
+
       await rm(temp, { recursive: true, force: true });
     }
-  });
+  }, 25000);
 });

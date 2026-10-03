@@ -214,4 +214,27 @@ describe("EffectiveRuntimeController unit tests (M6.4)", () => {
     expect(controller.store.current()).toBe(wf2);
     expect(controller.current.effectiveWorkflow).toBe(wf2);
   });
+
+  it("isolates onCommit observer exception without failing accept()", () => {
+    const logger = createStructuredLogger({ sinks: [] });
+    const observers = createRuntimeLogObservers(logger);
+    const registry = new TrackerAdapterRegistry([makeProfile("p1")]);
+
+    let onCommitInvoked = false;
+    const controller = new EffectiveRuntimeController({
+      workflowPath: "/test/WORKFLOW.md",
+      registry,
+      logger,
+      observers,
+      onCommit: () => {
+        onCommitInvoked = true;
+        throw new Error("simulated observer error");
+      },
+    });
+
+    const wf = mockWorkflow({ intervalMs: 3333 });
+    expect(() => controller.accept(wf)).not.toThrow();
+    expect(onCommitInvoked).toBe(true);
+    expect(controller.current.effectiveWorkflow).toBe(wf);
+  });
 });

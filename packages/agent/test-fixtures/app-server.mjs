@@ -420,6 +420,15 @@ rl.on("line", (line) => {
         cwd: process.cwd(),
       });
 
+      if (args["record-prompt"]) {
+        try {
+          const text = params?.prompt ?? params?.input?.[0]?.text ?? "";
+          fs.appendFileSync(args["record-prompt"], text + "\n", "utf8");
+        } catch {
+          /* ignore */
+        }
+      }
+
       if (args["exit-on-turn-start"]) {
         process.exit(1);
         return;
@@ -723,6 +732,20 @@ rl.on("line", (line) => {
             }, delayMs);
           });
         }, 10);
+        return;
+      }
+
+      if (args["wait-file"]) {
+        const checkWait = () => {
+          if (fs.existsSync(args["wait-file"])) {
+            setTimeout(() => {
+              sendCompletedNotification(params.threadId, turnId);
+            }, delayMs);
+          } else {
+            setTimeout(checkWait, 20);
+          }
+        };
+        checkWait();
         return;
       }
 

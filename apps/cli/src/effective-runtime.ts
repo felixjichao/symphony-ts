@@ -168,6 +168,10 @@ export class EffectiveRuntimeController {
       this.authority.applyEffectiveSchedulingConfig(scheduling);
     }
 
-    this.onCommit?.(nextRuntime);
+    try {
+      this.onCommit?.(nextRuntime);
+    } catch {
+      // 隔离提交后的观察器异常，防止破坏已原子生效的 runtime 发布契约
+    }
   }
 }

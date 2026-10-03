@@ -160,10 +160,10 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | 验收部分 | 状态 | 可复跑证据 |
 |---|---|---|
 | EffectiveRuntime 单一权威与原子 `accept` 校验 / 回滚 | implemented | `npm test -w @symphony/cli -- src/effective-runtime.test.ts`（atomic accept、invalid yaml / failed adapter construction 零部分生效、fail-fast 保留上一版本、authority apply 联动） |
-| Live reload 配置热更新与调度器/轮询动态生效 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #1–#4：poll interval 更新不重排现有延迟、concurrency 降低保留运行 worker 且阻止新派发、raising 恢复派发、retry cap / stall timeout 即时动态 getter 生效） |
-| Tracker provider 动态重载与代理路由 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #6–#8：tracker endpoint/provider reload 立即路由下一调用至新 adapter、构造失败回滚上一 runtime） |
-| 运行中 worker 保持与 workspace root 迁移隔离 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #9, #10：reload 绝不杀死或重启运行中的子进程；`workspace.root` 改变后已派发 attempt 在原 root 清理，新 attempt 在新 root 运行并清理，旧 root 不被误扫） |
-| 单点真理源（zero dual truth sources） | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #14：watcher 与 host 共享唯一 `EffectiveRuntimeController` 存储，无双重真相源） |
-| Secret boundary 敏感环境变量安全隔离 | implemented | `npm test -w @symphony/cli -- src/secret-boundary.test.ts`（AC #11–#13：宿主 env 凭据供 tracker adapter 认证、子进程 env 物理排除 tracker secrets、保留无害环境与 PATH/sentinel 探测） |
+| Live reload 配置热更新与调度器/轮询动态生效 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #1–#4：有效 reload 更新 effective 配置且不杀死在途 worker；poll interval 更新保持挂出 timer 并由下一次 schedule 使用新延迟；concurrency 下调保留在途 worker 且在槽位释放时阻止新派发、上调恢复派发并按 state 限制生效；retry cap 与 stall timeout 动态 getter 即时生效并驱动 real worker reconciliation 检测 stall 停止与 retry delay 截断） |
+| Tracker provider 动态重载与下一 worker prompt/command 更新 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #5, #6–#8：下一 attempt 子进程接收重载后的 prompt 与 codex command/options；tracker provider reload 后 tracker proxy 调用立即路由至新 adapter 实例并拉取其工单；构造失败或非法配置原子保留上一 runtime） |
+| 运行中 worker 保持与 workspace root 迁移隔离 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #9, #10：reload 绝不杀死或重启运行中子进程；在途 Attempt A 跨 root reload 运行，Attempt B 在新 root 派发，M5 reconciliation 终态清理触发 worker 终止、after_run hook 并精确删除 Root A，Root B 同名/异名目录完全保留不被误删） |
+| 单点真理源（zero dual truth sources）与 preflight 每 tick 重新校验 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts` 与 `src/host.test.ts`（AC #14：watcher 与 host 共享唯一 EffectiveRuntime 引用；preflight 在每个 dispatch cycle 强制重新读取与再校验，即使 mtime/size 未变或 env 缺失也立即拦截拒绝启动，不退化缓存） |
+| Secret boundary 敏感环境变量安全隔离与 Profile 切换跟随 | implemented | `npm test -w @symphony/cli -- src/secret-boundary.test.ts`（AC #11–#13：宿主 env 凭据供 tracker adapter 认证；真实派发子进程并以 env presence 文件断言排除 GITHUB_TOKEN 与 Profile A 密钥；Profile A→B 重载后子进程排除 Profile B 密钥并释放 A；非法重载失败后子进程排除名单保持 Profile B；保留无害环境与 PATH/sentinel） |
 | Config 包注入式 store 与 `reloadWithResult()` 契约 | implemented | `npm test -w @symphony/config -- src/workflow-reload.test.ts`（`watchWorkflow({ store })` 代理至注入 store、`reloadWithResult({ ifChanged })` 支持受控同步探测） |
 

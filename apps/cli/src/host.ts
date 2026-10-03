@@ -117,7 +117,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   const preflight: DispatchPreflightSource = {
     preflight: (): DispatchPreflightResult => {
-      const result = watcher.reloadWithResult({ ifChanged: true });
+      const result = watcher.reloadWithResult();
       if (!result.ok) {
         return {
           ok: false,
