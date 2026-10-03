@@ -55,7 +55,14 @@ export { DEFAULT_PROMPT_TEMPLATE, renderPrompt } from "./prompt-rendering";
 export type { RenderPromptOptions } from "./prompt-rendering";
 
 export { watchWorkflow } from "./workflow-reload";
-export type { WatchWorkflowOptions, WorkflowReloadEvent, WorkflowWatchHandle } from "./workflow-reload";
+export type {
+  ReloadWithResultOptions,
+  WatchWorkflowOptions,
+  WorkflowEffectiveStore,
+  WorkflowReloadEvent,
+  WorkflowReloadResult,
+  WorkflowWatchHandle,
+} from "./workflow-reload";
 
 export type {
   TrackerConfigExtension,

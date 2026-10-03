@@ -49,6 +49,33 @@ export type WorkflowReloadEvent =
   | { readonly kind: "reloaded"; readonly effective: EffectiveWorkflow }
   | { readonly kind: "error"; readonly error: SymphonyConfigError };
 
+/**
+ * 允许外部注入的 Effective 存储 / 状态同步接口（M6.4）。
+ * 组合根（CLI）可藉此将 watcher 与 EffectiveRuntimeController 连接。
+ */
+export interface WorkflowEffectiveStore {
+  /** 获取当前提交的 EffectiveWorkflow。 */
+  current(): EffectiveWorkflow;
+  /**
+   * 接受新 EffectiveWorkflow 并原子提交。
+   * 若提交准备失败（如 adapter 构造失败），应抛出异常（如 SymphonyConfigError），
+   * 阻止 watcher 发布该版本并保留旧状态。
+   */
+  accept(effective: EffectiveWorkflow): void;
+}
+
+/**
+ * reload 操作的显式结果（SPEC §6.2 / §6.3 dispatch preflight 消费）。
+ */
+export type WorkflowReloadResult =
+  | { readonly ok: true; readonly effective: EffectiveWorkflow }
+  | { readonly ok: false; readonly error: SymphonyConfigError };
+
+export interface ReloadWithResultOptions {
+  /** 若为 true，且文件 stamp 未变且上次 reload 成功，则直接返回上次结果，不重复重读与重构。默认 false。 */
+  readonly ifChanged?: boolean | undefined;
+}
+
 /** {@link watchWorkflow} 的注入点（在 {@link LoadEffectiveWorkflowOptions} 之上追加）。 */
 export interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
   /** 轮询间隔（ms）；默认 1000。测试可注入 10–20 以确定性复跑。 */
@@ -62,6 +89,8 @@ export interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
    * `error` 事件。监听器侧的错误上报由监听器自己负责（M6 接线日志 / dashboard）。
    */
   readonly onEvent?: (event: WorkflowReloadEvent) => void;
+  /** 可选注入的 effective store。不传时使用内部 last-known-good 引用。 */
+  readonly store?: WorkflowEffectiveStore | undefined;
 }
 
 /** {@link watchWorkflow} 返回的 handle。 */
@@ -74,6 +103,10 @@ export interface WorkflowWatchHandle {
    * `error`。`close()` 后为 no-op。
    */
   reload(): void;
+  /**
+   * 同步再校验并返回显式结果。
+   */
+  reloadWithResult(options?: ReloadWithResultOptions): WorkflowReloadResult;
   /** 显式停止轮询。幂等；`close()` 后不再产生事件，`current()` 仍可读。 */
   close(): void;
 }
@@ -99,8 +132,25 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
   // stamp 先于初始 load 读取：文件恰在两者之间被改写时，只会多触发一次（无害的）
   // reload，而不是让新内容被漏检、把陈旧 effective config 一直保留到下次变化。
   let stamp = readWorkflowStamp(workflowPath);
-  let lastKnownGood = loadEffectiveWorkflow(options);
   let closed = false;
+
+  let internalLastKnownGood: EffectiveWorkflow | undefined;
+  const store: WorkflowEffectiveStore = options.store ?? {
+    current: () => {
+      if (internalLastKnownGood === undefined) {
+        throw new Error("Store is not initialized");
+      }
+      return internalLastKnownGood;
+    },
+    accept: (effective) => {
+      internalLastKnownGood = effective;
+    },
+  };
+
+  const initial = loadEffectiveWorkflow(options);
+  store.accept(initial);
+
+  let lastReloadResult: WorkflowReloadResult = { ok: true, effective: initial };
 
   /**
    * 上报事件并隔离监听器异常：watcher 是 §6.2 crash-resistance 的载体，不能因下游
@@ -118,7 +168,20 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
     }
   };
 
-  const reloadNow = (): void => {
+  const performReload = (force = true): WorkflowReloadResult => {
+    if (closed) {
+      return {
+        ok: false,
+        error: new SymphonyConfigError("invalid_config", "Workflow watcher is closed", { path: workflowPath }),
+      };
+    }
+
+    const currentStamp = readWorkflowStamp(workflowPath);
+    if (!force && currentStamp === stamp && lastReloadResult.ok) {
+      return lastReloadResult;
+    }
+
+    stamp = currentStamp;
     let next: EffectiveWorkflow;
     try {
       next = loadEffectiveWorkflow(options);
@@ -128,12 +191,30 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
         throw error;
       }
       // §6.2：invalid reload 保留 last-known-good，只上报 operator-visible error。
+      lastReloadResult = { ok: false, error };
       emit({ kind: "error", error });
-      return;
+      return lastReloadResult;
     }
+
+    try {
+      store.accept(next);
+    } catch (error) {
+      const configError = error instanceof SymphonyConfigError
+        ? error
+        : new SymphonyConfigError(
+            "invalid_config",
+            error instanceof Error ? error.message : String(error),
+            { path: workflowPath, cause: error },
+          );
+      lastReloadResult = { ok: false, error: configError };
+      emit({ kind: "error", error: configError });
+      return lastReloadResult;
+    }
+
     // 成功路径：事件在 try 之外上报——监听器异常绝不能被当成加载失败。
-    lastKnownGood = next;
+    lastReloadResult = { ok: true, effective: next };
     emit({ kind: "reloaded", effective: next });
+    return lastReloadResult;
   };
 
   const timer = setInterval(() => {
@@ -142,18 +223,19 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
       return;
     }
     // 先记录新 stamp：持续写坏的文件只上报一次，不每 tick 重复刷事件。
-    stamp = next;
-    reloadNow();
+    performReload(false);
   }, intervalMs);
 
   return {
-    current: () => lastKnownGood,
+    current: () => store.current(),
     reload: () => {
       if (closed) {
         return;
       }
-      stamp = readWorkflowStamp(workflowPath);
-      reloadNow();
+      performReload(true);
+    },
+    reloadWithResult: (opts?: ReloadWithResultOptions) => {
+      return performReload(!opts?.ifChanged);
     },
     close: () => {
       if (closed) {

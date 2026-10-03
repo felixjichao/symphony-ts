@@ -49,7 +49,7 @@
 | §13.1 / §13.2 | 结构化日志、required context、安全预算与失败隔离 | `packages/observability` + CLI helpers | implemented（接线 helpers，生产 host 待 M6.3） | `npm test -w @symphony/observability`；`npm test -w @symphony/cli -- src/logging.test.ts`；`npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts` |
 | §13.6 | richer AgentEvent humanization（conditional） | `packages/observability` | deferred | MVP 固定 event/outcome/reason 与生命周期模板，不复制自由 summary |
 | §13 | status surface（可选 HTTP / dashboard） | `packages/observability` | planned M6 | — |
-| §17.7 / §18.1 | CLI lifecycle 与组件装配（静态 initial effective runtime host + bin executable 契约） | `apps/cli` | implemented | Core Conformance — `npm test -w @symphony/cli`（`src/args.test.ts` 纯逻辑解析 argv 与 fallback；`src/host.test.ts` in-process `createHost` 构造/装配/start/stop/preflight 校验；`src/bin.test.ts` 真实子进程 `package.json` bin contract、显式/CWD 默认 WORKFLOW.md、缺失/错误配置洁净退出 1 与 SIGINT/SIGTERM 优雅停机；动态 reload 留 M6.4，exit-code matrix 留 M6.5） |
+| §17.7 / §18.1 | CLI lifecycle、组件装配与动态热重载（initial effective runtime host + bin executable 契约 + M6.4 EffectiveRuntime authority / live reload / secret boundary） | `apps/cli` | implemented | Core Conformance — `npm test -w @symphony/cli`（`src/args.test.ts` 纯逻辑解析 argv 与 fallback；`src/host.test.ts` in-process `createHost` 构造/装配/start/stop/preflight 校验；`src/bin.test.ts` 真实子进程 `package.json` bin contract、显式/CWD 默认 WORKFLOW.md、缺失/错误配置洁净退出 1 与 SIGINT/SIGTERM 优雅停机；`src/effective-runtime.test.ts` 单一权威原子 `accept` 与 fail-fast 回滚；`src/host-reload.test.ts` 动态热重载全语义、单 timer 链与调度器更新、运行中 worker 保持、workspace root 迁移与精准清理；`src/secret-boundary.test.ts` 子进程敏感环境变量安全过滤与宿主 tracker 凭据隔离；exit-code matrix 留 M6.5） |
 | §15 | 安全与运维安全加固 | 跨包（orchestrator / workspace 主导） | planned M7 | — |
 | App. A | SSH worker 扩展（可选） | 待定 | planned M7（可选） | — |
 
@@ -154,3 +154,16 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | `missing_workflow_file` / `unsupported_tracker_kind` / `invalid_config` 洁净失败 | implemented | `npm test -w @symphony/cli -- src/host.test.ts` 与 `src/bin.test.ts`（结构化日志输出 `config_validation failed`，exit code 1） |
 | `apps/cli/package.json` 真实 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限） | implemented | `npm test -w @symphony/cli -- src/bin.test.ts`（读取 package.json bin 配置、校验首行 `#!/usr/bin/env node` 与执行权限） |
 | 真实子进程执行与 SIGINT / SIGTERM 优雅关停 | implemented | `npm test -w @symphony/cli -- src/bin.test.ts`（真实 spawn 子进程，覆盖显式/默认 workflow 命中、退出码 1 负例、接收信号优雅关停以 0 退出） |
+
+## §6.2 / §13 / §18.1 分项证据（M6.4 Live reload + EffectiveRuntime authority + secret boundary wiring）
+
+| 验收部分 | 状态 | 可复跑证据 |
+|---|---|---|
+| EffectiveRuntime 单一权威与原子 `accept` 校验 / 回滚 | implemented | `npm test -w @symphony/cli -- src/effective-runtime.test.ts`（atomic accept、invalid yaml / failed adapter construction 零部分生效、fail-fast 保留上一版本、authority apply 联动） |
+| Live reload 配置热更新与调度器/轮询动态生效 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #1–#4：poll interval 更新不重排现有延迟、concurrency 降低保留运行 worker 且阻止新派发、raising 恢复派发、retry cap / stall timeout 即时动态 getter 生效） |
+| Tracker provider 动态重载与代理路由 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #6–#8：tracker endpoint/provider reload 立即路由下一调用至新 adapter、构造失败回滚上一 runtime） |
+| 运行中 worker 保持与 workspace root 迁移隔离 | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #9, #10：reload 绝不杀死或重启运行中的子进程；`workspace.root` 改变后已派发 attempt 在原 root 清理，新 attempt 在新 root 运行并清理，旧 root 不被误扫） |
+| 单点真理源（zero dual truth sources） | implemented | `npm test -w @symphony/cli -- src/host-reload.test.ts`（AC #14：watcher 与 host 共享唯一 `EffectiveRuntimeController` 存储，无双重真相源） |
+| Secret boundary 敏感环境变量安全隔离 | implemented | `npm test -w @symphony/cli -- src/secret-boundary.test.ts`（AC #11–#13：宿主 env 凭据供 tracker adapter 认证、子进程 env 物理排除 tracker secrets、保留无害环境与 PATH/sentinel 探测） |
+| Config 包注入式 store 与 `reloadWithResult()` 契约 | implemented | `npm test -w @symphony/config -- src/workflow-reload.test.ts`（`watchWorkflow({ store })` 代理至注入 store、`reloadWithResult({ ifChanged })` 支持受控同步探测） |
+

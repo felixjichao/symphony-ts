@@ -100,6 +100,22 @@ if (args["record-world"]) {
   }
 }
 
+if (args["record-env-presence"] && args["record-env-file"]) {
+  try {
+    const varNames = String(args["record-env-presence"]).split(",").map((s) => s.trim()).filter(Boolean);
+    const presence = {};
+    for (const name of varNames) {
+      presence[name] = {
+        present: Object.prototype.hasOwnProperty.call(process.env, name) && process.env[name] !== undefined,
+        value: name.startsWith("TEST_") || name.startsWith("SENTINEL_") ? process.env[name] : undefined,
+      };
+    }
+    fs.writeFileSync(args["record-env-file"], JSON.stringify(presence), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 if (args["record-exit"]) {
   process.on("exit", () => {
     try {
