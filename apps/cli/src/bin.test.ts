@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createConnection } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +8,15 @@ import { build } from "vite";
 import { fileURLToPath } from "node:url";
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { appServer, binPath, cliRoot, httpsTracker, startProcess, workflow } from "./process.test-helpers";
+
+// Cleanup must reach every resource even when the process result rejected.
+async function closeFixture(proc: ReturnType<typeof startProcess>, tracker: Awaited<ReturnType<typeof httpsTracker>>, dir: string) {
+  try { await proc.close(); }
+  finally {
+    try { await tracker.close(); }
+    finally { await rm(dir, { recursive: true, force: true }); }
+  }
+}
 
 const pkg = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8")) as { version: string; bin: { symphony: string } };
 const link = path.resolve(cliRoot, "../../node_modules/.bin/symphony");
@@ -54,7 +64,7 @@ describe("CLI binary child process execution (§17.7 / §18.1)", () => {
       expect(result.signal).toBeNull();
       expect(result.stderr).toContain('event="shutdown" outcome="completed"');
       expect(result.stderr).not.toContain("fixture-secret");
-    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+    } finally { await closeFixture(proc, tracker, dir); }
   });
   it.each(["explicit", "default"])("fails cleanly with missing %s workflow", async (mode) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "sym-missing-"));
@@ -97,6 +107,38 @@ function assertStopped(workspace: string) {
 }
 
 describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
+  it("cleans HTTPS listener and temp directory after a real child timeout without hiding rejection", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-timeout-"));
+    const tracker = await httpsTracker();
+    // Only advance the parent's watchdog; child I/O and termination remain real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const proc = startProcess(["-e", 'process.stdout.write("timeout-ready\\n"); setInterval(() => {}, 1000);'], dir, process.execPath);
+    let cleaned = false;
+    try {
+      await proc.waitForOutput("timeout-ready");
+      vi.advanceTimersByTime(15000);
+      await expect(proc.result).rejects.toThrow("Process timeout:");
+      await expect(closeFixture(proc, tracker, dir)).rejects.toThrow("Process timeout:");
+      cleaned = true;
+      vi.useRealTimers();
+      expect(proc.child.signalCode).toBe("SIGKILL");
+      expect(() => process.kill(proc.child.pid!, 0)).toThrow();
+      expect(existsSync(dir)).toBe(false);
+      const address = new URL(tracker.url);
+      const connectionError = await new Promise<Error>((resolve, reject) => {
+        const socket = createConnection({ host: address.hostname, port: Number(address.port) });
+        socket.once("error", (error) => { socket.destroy(); resolve(error); });
+        socket.once("connect", () => { socket.destroy(); reject(new Error("Fixture HTTPS listener still accepts connections")); });
+      });
+      expect(connectionError).toMatchObject({ code: "ECONNREFUSED" });
+    } finally {
+      vi.useRealTimers();
+      if (!cleaned) {
+        try { await closeFixture(proc, tracker, dir); } catch { /* Expected timeout; cleanup still ran. */ }
+      }
+    }
+  });
+
   it.each(["SIGINT", "SIGTERM"] as const)("waits for agent termination and after_run on %s, deduplicating mixed signals", async (signal) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-agent-"));
     const tracker = await httpsTracker(); tracker.enableIssue();
@@ -128,7 +170,10 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       expect(result.stderr).not.toContain("fixture-secret");
       const transcript = readFileSync(path.join(workspace, "transcript.jsonl"), "utf8");
       expect(transcript).toContain('"method":"turn/start"');
-    } finally { await writeFile(release, "release"); await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+    } finally {
+      try { await writeFile(release, "release"); }
+      finally { await closeFixture(proc, tracker, dir); }
+    }
   }, 20000);
 
   it("interrupts startup at a real HTTPS request barrier without scheduling work", async () => {
@@ -147,7 +192,10 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       expect(result.stderr).not.toContain('event="startup" outcome="completed"');
       expect(tracker.requests.some((url) => url.searchParams.get("state") === "open")).toBe(false);
       expect(existsSync(path.join(root, "GH-1", "world.json"))).toBe(false);
-    } finally { tracker.releaseStartup(); await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+    } finally {
+      try { tracker.releaseStartup(); }
+      finally { await closeFixture(proc, tracker, dir); }
+    }
   });
 
   it("keeps live invalid reload recoverable, applies valid reload to a new real agent, and stops both roots", async () => {
@@ -177,7 +225,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       assertStopped(path.join(rootA, "GH-1")); assertStopped(path.join(rootB, "GH-2"));
       expect(result.stderr).toContain('event="workflow_reload" outcome="completed"');
       expect(result.stderr).not.toContain("Rejected secret prompt");
-    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+    } finally { await closeFixture(proc, tracker, dir); }
   });
 
   it("classifies SIGKILL only as abnormal termination", async () => {
@@ -191,7 +239,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       const result = await proc.result;
       expect(result.code).toBeNull(); expect(result.signal).toBe("SIGKILL");
       expect(result.stderr).not.toContain('event="shutdown" outcome="completed"');
-    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+    } finally { await closeFixture(proc, tracker, dir); }
   });
 });
 
