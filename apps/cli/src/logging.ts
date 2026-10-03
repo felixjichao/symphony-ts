@@ -2,9 +2,9 @@
 import { isAgentEventName, type AgentAttemptOptions, type AgentEvent } from "@symphony/agent";
 import { SymphonyConfigError, type WorkflowReloadEvent } from "@symphony/config";
 import type { StructuredLogger, StructuredLogEvent } from "@symphony/observability";
-import type { OrchestratorEvent, WorkerTerminalOutcome, LoopDiagnostic, RetryDiagnostic } from "@symphony/orchestrator";
+import type { OrchestratorEvent, WorkerTerminalOutcome, LoopDiagnostic, RetryDiagnostic, WorkspaceCleanupIssueContext } from "@symphony/orchestrator";
 import { TrackerError, type TrackerAdapter, type TrackerAdapterProfile, type TrackerEnv, type GitHubMalformedRecord } from "@symphony/tracker";
-import type { WorkspaceHookEvent } from "@symphony/workspace";
+import type { WorkspaceHookEvent, WorkspaceManager, WorkspaceLifecycleHookOptions } from "@symphony/workspace";
 
 /** Register raw/resolved candidate secrets before construction or failure logging; retain old values. */
 export function registerTrackerLogSecrets(logger: StructuredLogger, profile: TrackerAdapterProfile,
@@ -27,7 +27,25 @@ export function createRuntimeLogObservers(logger: StructuredLogger) {
   };
   const service = (event: string, outcome: StructuredLogEvent["outcome"], reason: string): void =>
     logger.emit({ scope: "service", severity: outcome === "failed" ? "error" : "info", event, outcome, reason });
+  const onHookEventForIssue = (context: Pick<RetryDiagnostic, "issueId" | "identifier"> & { readonly attempt?: AgentAttemptOptions["attempt"]; readonly issueUrl?: AgentAttemptOptions["issue"]["url"] }) =>
+    safe((event: WorkspaceHookEvent) => logger.emit({
+      scope: "issue", issue_id: context.issueId, issue_identifier: context.identifier,
+      ...(context.attempt === undefined ? {} : { attempt: context.attempt }),
+      ...(context.issueUrl === undefined ? {} : { issue_url: context.issueUrl }),
+      severity: "warn", event: "workspace_hook", outcome: "failed", reason: event.outcome, hook: event.hook,
+    }));
   return {
+    onHookEventForIssue,
+    /** Read current hooks at cleanup time; context comes from authority, never from paths/state diffs. */
+    observeCleanup(manager: Pick<WorkspaceManager, "removeWorkspace">,
+      getHooks: () => WorkspaceLifecycleHookOptions["hooks"]) {
+      const removeWorkspaceForIssue = (context: WorkspaceCleanupIssueContext) =>
+        manager.removeWorkspace(context.identifier, { hooks: getHooks(), onHookEvent: onHookEventForIssue(context) });
+      return {
+        removeWorkspace: (identifier: string) => removeWorkspaceForIssue({ issueId: null, identifier }),
+        removeWorkspaceForIssue,
+      };
+    },
     lifecycle: safe((fact: { event: "startup" | "shutdown"; outcome: "started" | "completed" | "failed" }) =>
       service(fact.event, fact.outcome, `${fact.event}_${fact.outcome}`)),
     onConfigFailure: safe((error: unknown) => service("config_validation", "failed",
@@ -63,16 +81,17 @@ export function createRuntimeLogObservers(logger: StructuredLogger) {
       ...(diagnostic.cleanupStatus === undefined ? {} : { status: diagnostic.cleanupStatus }),
     })),
     observeTracker(adapter: TrackerAdapter): TrackerAdapter {
-      const operation = async <T>(invoke: () => Promise<T>): Promise<T> => {
+      const operation = async <T>(name: "fetch_issues_by_states" | "fetch_issues_by_ids", invoke: () => Promise<T>): Promise<T> => {
         try { return await invoke(); }
         catch (error) {
-          try { service("tracker_error", "failed", error instanceof TrackerError ? error.category : "tracker_runtime_error"); } catch { /* preserve original failure */ }
+          try { logger.emit({ scope: "service", severity: "error", event: "tracker_error", outcome: "failed",
+            reason: error instanceof TrackerError ? error.category : "tracker_runtime_error", operation: name }); } catch { /* preserve original failure */ }
           throw error;
         }
       };
       return { kind: adapter.kind,
-        fetchIssuesByStates: (states) => operation(() => adapter.fetchIssuesByStates(states)),
-        fetchIssuesByIds: (ids) => operation(() => adapter.fetchIssuesByIds(ids)),
+        fetchIssuesByStates: (states) => operation("fetch_issues_by_states", () => adapter.fetchIssuesByStates(states)),
+        fetchIssuesByIds: (ids) => operation("fetch_issues_by_ids", () => adapter.fetchIssuesByIds(ids)),
       };
     },
     observeAttempt(options: AgentAttemptOptions): AgentAttemptOptions {
@@ -90,7 +109,7 @@ export function createRuntimeLogObservers(logger: StructuredLogger) {
           ...(event.turnId === undefined ? {} : { turn_id: event.turnId }),
         });
       });
-      const onHookEvent = safe((event: WorkspaceHookEvent) => logger.emit({ ...identity, scope: "issue", severity: "warn", event: "workspace_hook", outcome: "failed", reason: event.outcome, hook: event.hook }));
+      const onHookEvent = onHookEventForIssue({ issueId: options.issue.id, identifier: options.issue.identifier, issueUrl: options.issue.url, attempt: options.attempt });
       const onStderr = safe((line: string) => logger.emit({ ...identity,
         ...(sessionId ? { scope: "session", session_id: sessionId } as const : { scope: "issue" } as const),
         severity: "warn", event: "agent_stderr", outcome: "completed", reason: "stderr_diagnostic",

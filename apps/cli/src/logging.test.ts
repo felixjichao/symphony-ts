@@ -1,5 +1,5 @@
 /** §17.6 integration: public implementations, temp workflow/fs, real app-server child. */
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,7 @@ const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const fixture = fileURLToPath(new URL("../../../packages/agent/test-fixtures/app-server.mjs", import.meta.url));
 const good = { id: 1, number: 1, title: "work", state: "open" };
 const bad = { number: 2, title: "", state: "open" };
-async function harness(failSink = false, failFormat = false) {
+async function harness(failSink = false, failFormat = false, beforeRemove = "echo hook-body secret-token; exit 1", hookTimeoutMs = 5000) {
   const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-log-"));
   const root = path.join(temp, "ws"); const workflowPath = path.join(temp, "WORKFLOW.md");
   const lines: string[] = [];
@@ -28,7 +28,7 @@ async function harness(failSink = false, failFormat = false) {
   const command = [process.execPath, fixture, "--record-world", "world.json", "--logging-stderr", "--delay-completed-ms", "150"].map(quote).join(" ") + ' --cwd "$(pwd)"';
   const workflow = `---\n${JSON.stringify({ tracker: { kind: "github", provider: { repo: "acme/widget", token: "secret-token" } }, workspace: { root },
     agent: { max_turns: 2 }, codex: { command, read_timeout_ms: 5000, turn_timeout_ms: 5000 },
-    hooks: { after_run: "echo secret-token; exit 1", timeout_ms: 5000 } })}\n---\nHandle {{ issue.identifier }}\n`;
+    hooks: { after_run: "echo secret-token; exit 1", before_remove: beforeRemove, timeout_ms: hookTimeoutMs } })}\n---\nHandle {{ issue.identifier }}\n`;
   await writeFile(workflowPath, workflow);
   registerTrackerLogSecrets(logger, profile, { token: "secret-token" }, {});
   const effective = loadEffectiveWorkflow({ path: workflowPath, trackerExtension: registry.createConfigExtension() });
@@ -41,7 +41,7 @@ async function harness(failSink = false, failFormat = false) {
     createAttemptOptions: (context) => observers.observeAttempt({ ...context, workflow: effective.definition, workflowPath, getConfig: () => effective.serviceConfig }),
     resolveWorkspacePath: (issue) => manager.resolveWorkspacePath(issue.identifier),
     onEvent: observers.onEvent, onOutcome: observers.onOutcome, onCleanupDiagnostic: observers.onCleanupDiagnostic,
-    cleanupWorkspace: { removeWorkspace: (identifier) => manager.removeWorkspace(identifier) },
+    cleanupWorkspace: observers.observeCleanup(manager, () => effective.serviceConfig.hooks),
   });
   const loop = new OrchestratorLoop({ authority, candidates: adapter,
     preflight: { preflight: () => ({ ok: true, effective: { pollIntervalMs: 30000, maxConcurrentAgents: 1, policy: { activeStates: ["open"], terminalStates: ["closed"], requiredLabels: [], maxConcurrentAgentsByState: {} } } }) },
@@ -79,6 +79,38 @@ describe("runtime logging composition", () => {
       expect(h.lines.at(-1)).toContain('event="shutdown" outcome="completed"');
     } finally { await h.close(); }
   });
+  it.each([
+    ["failure", "echo hook-body secret-token; exit 1", 5000, "failed"],
+    ["timeout", "echo hook-body secret-token; sleep 30", 30, "timeout"],
+  ] as const)("before_remove %s is visible with explicit issue context and deletion continues", async (_kind, script, timeout, reason) => {
+    const h = await harness(false, false, script, timeout);
+    try {
+      const workspace = await h.manager.createWorkspace("GH-1");
+      const result = await h.authority.runStartupTerminalCleanup();
+      expect(result.removed).toEqual(["GH-1"]);
+      await expect(access(workspace.path)).rejects.toMatchObject({ code: "ENOENT" });
+      const hook = h.lines.find((s) => s.includes('hook="before_remove"'));
+      expect(hook).toContain('event="workspace_hook" outcome="failed"');
+      expect(hook).toContain(`reason="${reason}"`);
+      expect(hook).toContain('issue_id="1" issue_identifier="GH-1"');
+      expect(h.lines.at(-1)).toContain('event="workspace_cleanup" outcome="completed"');
+      expect(h.lines.join()).not.toMatch(/hook-body|secret-token|sleep 30/);
+    } finally { await h.close(); }
+  });
+  it("throwing hook observer cannot change before_remove best-effort deletion", async () => {
+    const h = await harness();
+    try {
+      const workspace = await h.manager.createWorkspace("GH-1");
+      let calls = 0;
+      const observers = createRuntimeLogObservers({
+        ...h.logger, emit() { calls++; throw new Error("observer failed secret-token"); },
+      });
+      const cleanup = observers.observeCleanup(h.manager, () => h.effective.serviceConfig.hooks);
+      expect(await cleanup.removeWorkspaceForIssue({ issueId: "1", identifier: "GH-1" })).toMatchObject({ status: "removed" });
+      expect(calls).toBe(1);
+      await expect(access(workspace.path)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await h.close(); }
+  });
   it("formatter clock failure does not change real loop/worker completion or cleanup", async () => {
     const h = await harness(false, true);
     try {
@@ -112,6 +144,9 @@ describe("runtime logging composition", () => {
       await expect(adapter.fetchIssuesByStates(["open"])).rejects.toBe(error);
       await expect(adapter.fetchIssuesByIds(["1"])).rejects.toBe(error);
       expect(h.lines.join()).not.toContain("secret-token"); expect(h.lines.at(-1)).toContain("tracker_request");
+      const errors = h.lines.filter((s) => s.includes('event="tracker_error"'));
+      expect(errors.at(-2)).toContain('operation="fetch_issues_by_states"');
+      expect(errors.at(-1)).toContain('operation="fetch_issues_by_ids"');
     } finally { await h.close(); }
   });
   it("initial load/profile failures log only stable codes; secret registration covers raw/resolved/env rotation", async () => {

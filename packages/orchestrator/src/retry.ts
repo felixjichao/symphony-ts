@@ -41,9 +41,17 @@ export interface RetryWorkspaceCleanupResult {
   readonly message?: string | undefined;
 }
 
+/** Scalar identity passed by authority for issue-bound cleanup hook observations. */
+export interface WorkspaceCleanupIssueContext {
+  readonly issueId: string | null;
+  readonly identifier: string;
+}
+
 /** terminal cleanup 端口。 */
 export interface RetryWorkspaceCleanup {
   removeWorkspace(identifier: string): Promise<RetryWorkspaceCleanupResult>;
+  /** Optional composition port with explicit identity for before_remove observation. */
+  removeWorkspaceForIssue?(context: WorkspaceCleanupIssueContext): Promise<RetryWorkspaceCleanupResult>;
 }
 
 /**

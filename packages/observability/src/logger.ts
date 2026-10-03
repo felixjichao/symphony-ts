@@ -15,7 +15,7 @@ export interface StructuredLoggerOptions {
   readonly secrets?: readonly string[];
   readonly now?: () => Date;
 }
-const CONTEXT = ["issue_url", "attempt", "thread_id", "turn_id", "codex_app_server_pid", "status", "duration_ms", "retry_in_ms", "retry_kind", "hook", "error_code"] as const;
+const CONTEXT = ["issue_url", "attempt", "thread_id", "turn_id", "codex_app_server_pid", "status", "duration_ms", "retry_in_ms", "retry_kind", "hook", "error_code", "operation"] as const;
 const TEXT = ["message", "error", "stderr"] as const;
 const NUMBERS = new Set<string>(["attempt", "duration_ms", "retry_in_ms"]);
 const RAW_TEXT_LIMIT = 65536;

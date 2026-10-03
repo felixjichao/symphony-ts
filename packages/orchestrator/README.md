@@ -48,3 +48,5 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 ## Read-only fact observers (M6.2)
 
 `OrchestratorAuthorityOptions.onEvent` consumes frozen scalar `OrchestratorEvent` facts for committed dispatch, accepted worker, retry scheduling, dispatch failure and applied reconciliation (stop versus retire_exited_lifecycle). Retry reasons distinguish worker failure, continuation, refresh failure, unavailable slots, dispatch failure and manual retry. All observer failures are isolated after actions commit; callbacks never drive policy or replace existing outcome/retry entrypoints. Existing terminal outcomes additionally expose optional captured sessionId/issueUrl; cleanup diagnostics now include successful removed/missing results. No observability runtime import or snapshot/state diff is used.
+
+Cleanup composition may implement optional `removeWorkspaceForIssue(WorkspaceCleanupIssueContext)` to receive authority-owned issue identity for before_remove diagnostics; legacy `removeWorkspace(identifier)` ports continue to work. The authority chooses one port per cleanup, without retry/fallback on a context-aware operation failure.

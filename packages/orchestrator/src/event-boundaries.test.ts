@@ -1,10 +1,10 @@
 /** SPEC §13 / §17.6: facts at commit points, never scheduler input. */
 import { describe, expect, it } from "vitest";
 import type { AgentAttemptOptions, AgentAttemptResult } from "@symphony/agent";
-import { OrchestratorAuthority, createOrchestratorRuntimeState, type OrchestratorEvent, type WorkerTerminalOutcome } from "./index";
+import { OrchestratorAuthority, createOrchestratorRuntimeState, type OrchestratorEvent, type WorkerTerminalOutcome, type RetryWorkspaceCleanup } from "./index";
 import { makeIssue, defaultPolicy, ManualScheduler } from "./loop.test-helpers";
 const issue = makeIssue("GH-1", "Todo");
-function harness(throws = false, synchronousFailure = false) {
+function harness(throws = false, synchronousFailure = false, cleanup?: RetryWorkspaceCleanup) {
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 10, maxConcurrentAgents: 1 });
   const timer = new ManualScheduler();
   const events: OrchestratorEvent[] = [];
@@ -27,7 +27,7 @@ function harness(throws = false, synchronousFailure = false) {
     tracker: { fetchIssuesByIds: async () => { if (refreshFailure) throw new Error("network"); return pendingRefresh ?? refreshed; } },
     resolveWorkspacePath: () => { if (badPath) throw new Error("path failure"); return "/workspace/GH-1"; }, now: () => utc, monotonicNow: () => 5000,
     stallTimeoutMs: () => 1000,
-    cleanupWorkspace: { removeWorkspace: async () => ({ status: "removed" }) },
+    cleanupWorkspace: cleanup ?? { removeWorkspace: async () => ({ status: "removed" }) },
     retry: { scheduler: timer, maxRetryBackoffMs: () => 300000, cleanupWorkspace: { removeWorkspace: async () => ({ status: "removed" }) } },
     onOutcome(outcome) { outcomes.push(outcome); if (throws) throw new Error("observer"); },
     onEvent(event) {
@@ -68,6 +68,20 @@ describe("event boundaries", () => {
     await h.authority.reconcileRunningIssues(); await h.authority.reconcileRunningIssues();
     expect(h.events.filter((e) => e.event === "reconciliation_applied")).toEqual([expect.objectContaining({ reason, action: "stop" })]);
     expect(h.state.running.size + h.state.claimed.size + h.state.retryAttempts.size).toBe(0);
+    await h.authority.shutdown();
+  });
+  it("context-aware cleanup receives authority identity once and preserves the legacy port", async () => {
+    let legacyCalls = 0;
+    const contexts: { issueId: string | null; identifier: string }[] = [];
+    const h = harness(false, false, {
+      async removeWorkspace() { legacyCalls++; return { status: "removed" }; },
+      async removeWorkspaceForIssue(context) { contexts.push(context); return { status: "removed" }; },
+    });
+    h.authority.dispatchIssue(issue); h.refresh([{ ...issue, state: "Done" }]);
+    await h.authority.reconcileRunningIssues();
+    expect(contexts).toEqual([{ issueId: issue.id, identifier: issue.identifier }]);
+    expect(legacyCalls).toBe(0);
+    expect(h.state.running.size + h.state.claimed.size).toBe(0);
     await h.authority.shutdown();
   });
   it("stall outcome and retry remain correct under observer exceptions", async () => {

@@ -19,6 +19,7 @@ interface LogFields {
   readonly retry_kind?: string;
   readonly hook?: string;
   readonly error_code?: string;
+  readonly operation?: "fetch_issues_by_states" | "fetch_issues_by_ids";
 }
 export type StructuredLogEvent = LogFields & (
   | { readonly scope: "service" }

@@ -1282,7 +1282,9 @@ export class OrchestratorAuthority {
       return null;
     }
     try {
-      const result = await this.trackCleanup(cleanup.removeWorkspace(identifier));
+      const result = await this.trackCleanup(cleanup.removeWorkspaceForIssue === undefined
+        ? cleanup.removeWorkspace(identifier)
+        : cleanup.removeWorkspaceForIssue({ issueId, identifier }));
       if (result.status === "removed" || result.status === "missing") {
         this.emitDiagnostic({ kind: "cleanup_completed", issueId, identifier, message: result.status, cleanupStatus: result.status });
         return result.status;

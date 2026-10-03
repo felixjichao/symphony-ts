@@ -86,6 +86,7 @@ export type {
   RetryOptions,
   RetryScheduler,
   RetryWorkspaceCleanup,
+  WorkspaceCleanupIssueContext,
   RetryWorkspaceCleanupResult,
 } from "./retry";
 
