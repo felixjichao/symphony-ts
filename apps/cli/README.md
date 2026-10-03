@@ -22,18 +22,25 @@ symphony [path-to-WORKFLOW.md]
 - 新子命令：在本 app 内注册，业务逻辑一律下沉到对应 owner 包；
 - app 只做装配与进程管理，不承载领域规则——判断"这段逻辑该不该在 cli"时以各包 README 的 Purpose 为准。
 
-## Host Lifecycle & Composition (M6.3)
+## Host Lifecycle & Composition (M6.3 / M6.4)
 
 `createHost(options)` 建立组合根：
-`argv → resolveWorkflowPath → TrackerAdapterRegistry → loadEffectiveWorkflow → registerTrackerLogSecrets → observeTracker → WorkspaceManager → OrchestratorAuthority → OrchestratorLoop → SymphonyHost`
+`argv → resolveWorkflowPath → TrackerAdapterRegistry → watchWorkflow(store) → EffectiveRuntimeController → registerTrackerLogSecrets → observeTracker → WorkspaceLifecycleCoordinator → OrchestratorAuthority → OrchestratorLoop → SymphonyHost`
 
-提供可直接在 integration test 中构造的 `SymphonyHost` 实例（`start()` / `stop()` / `authority` / `loop` / `state` / `effective` / `logger`），且 core 库无 `process.exit()`。`apps/cli/package.json` 建立真实 `bin: { "symphony": "./dist/bin/symphony.js" }` 契约，经 `npm run build` 打包为 Node >= 20 可独立运行的 ESM 脚本。
+- **EffectiveRuntime 单一权威（M6.4）**：
+  `EffectiveRuntimeController` 独占维护不可变快照，原子结合 `EffectiveWorkflow`、`ServiceConfig`、所选 tracker profile/adapter、child env `excludeEnvNames`、`WorkspaceManager` 与调度配置投影。配置热更新通过 watcher `store` 与 `preflight` 同步校验，零双重真相源，校验失败 fail-fast 回滚且保留前一版本；
+- **Workspace 生命周期三层隔离（M6.4）**：
+  调度派发由 `WorkspaceLifecycleCoordinator` 锁定当前 attempt 的 workspace root 与 manager，运行中 worker 绝不重启或中断；终态清理精准路由至该 attempt 派发时的旧 root，根路径切换不跨根误删，旧 root 绝不被盲目扫描；
+- **Secret Boundary 物理隔离（M6.4）**：
+  宿主环境变量中的敏感 token 供 tracker adapter 认证使用，但在派发 agent 子进程时由 `excludeEnvNames` 物理排除，子进程环境仅保留无害基础配置。
 
-真实子进程可复跑测试见 `npm test -w @symphony/cli -- src/bin.test.ts`。
+真实子进程可复跑测试见：
+- `npm test -w @symphony/cli -- src/bin.test.ts`
+- `npm test -w @symphony/cli -- src/host-reload.test.ts`
+- `npm test -w @symphony/cli -- src/secret-boundary.test.ts`
 
 ## Known limitations
 
-- 动态 workflow live reload 与单一 `EffectiveRuntime` authority、tracker secret → agent child env exclusion 留属 M6.4（NEST-84）；
 - 信号竞态（signal race）、重复 signal 幂等处理与最终 exit-code matrix 留属 M6.5（NEST-85）；
 - HTTP status surface 属可选扩展。
 

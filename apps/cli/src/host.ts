@@ -1,5 +1,9 @@
 import { runAgentAttempt } from "@symphony/agent";
-import { loadEffectiveWorkflow, type EffectiveWorkflow } from "@symphony/config";
+import {
+  watchWorkflow,
+  type EffectiveWorkflow,
+  type WorkflowWatchHandle,
+} from "@symphony/config";
 import type { OrchestratorRuntimeState } from "@symphony/domain";
 import {
   createStructuredLogger,
@@ -14,11 +18,12 @@ import {
   createOrchestratorRuntimeState,
   OrchestratorAuthority,
   OrchestratorLoop,
-  type DispatchPolicy,
   type DispatchPreflightResult,
-  type EffectiveSchedulingConfig,
+  type DispatchPreflightSource,
   type PollScheduler,
   type RetryScheduler,
+  type RetryWorkspaceCleanup,
+  type WorkspaceCleanupIssueContext,
 } from "@symphony/orchestrator";
 import {
   createGitHubAdapterProfile,
@@ -27,15 +32,19 @@ import {
   type TrackerAdapterProfile,
   type TrackerEnv,
 } from "@symphony/tracker";
-import { createWorkspaceManager } from "@symphony/workspace";
 import { resolveWorkflowPath } from "./args";
-import { createRuntimeLogObservers, registerTrackerLogSecrets } from "./logging";
+import { EffectiveRuntimeController } from "./effective-runtime";
+import { createRuntimeLogObservers } from "./logging";
+import { WorkspaceLifecycleCoordinator } from "./workspace-lifecycle";
 
 export interface SymphonyHost {
   readonly workflowPath: string;
   readonly effective: EffectiveWorkflow;
   readonly state: OrchestratorRuntimeState;
   readonly authority: OrchestratorAuthority;
+  readonly cleanupWorkspace: RetryWorkspaceCleanup;
+  readonly workspaceCoordinator: WorkspaceLifecycleCoordinator;
+  readonly tracker: TrackerAdapter;
   readonly loop: OrchestratorLoop;
   readonly logger: StructuredLogger;
   readonly clock: SnapshotClock;
@@ -55,6 +64,7 @@ export interface CreateHostOptions {
   readonly retryScheduler?: RetryScheduler | undefined;
   readonly now?: (() => number) | undefined;
   readonly monotonicNow?: (() => number) | undefined;
+  readonly watcherIntervalMs?: number | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -66,70 +76,78 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     ? new TrackerAdapterRegistry(options.trackerProfiles)
     : new TrackerAdapterRegistry([createGitHubAdapterProfile({ onMalformedRecord: observers.onMalformedRecord })]);
 
-  let effective: EffectiveWorkflow;
+  const controller = new EffectiveRuntimeController({
+    workflowPath,
+    registry,
+    env: options.env,
+    logger,
+    observers,
+  });
+
+  let watcher: WorkflowWatchHandle;
   try {
-    effective = loadEffectiveWorkflow({
+    watcher = watchWorkflow({
       path: workflowPath,
+      ...(options.watcherIntervalMs !== undefined ? { intervalMs: options.watcherIntervalMs } : {}),
       trackerExtension: registry.createConfigExtension(),
       ...(options.env !== undefined ? { env: options.env } : {}),
+      store: controller.store,
+      onEvent: (event) => {
+        observers.onWorkflowEvent(event);
+      },
     });
   } catch (error) {
     observers.onConfigFailure(error);
     throw error;
   }
 
-  const profile = registry.lookup(effective.serviceConfig.tracker.kind);
-  if (profile) {
-    registerTrackerLogSecrets(
-      logger,
-      profile,
-      effective.serviceConfig.tracker.provider,
-      options.env ?? process.env,
-    );
-  }
+  const workspaceCoordinator = new WorkspaceLifecycleCoordinator(controller, observers);
 
-  let rawAdapter: TrackerAdapter;
-  try {
-    rawAdapter = registry.create(effective.serviceConfig.tracker, options.env);
-  } catch (error) {
-    observers.onConfigFailure(error);
-    throw error;
-  }
-  const adapter = observers.observeTracker(rawAdapter);
-
-  const command = effective.serviceConfig.codex.command.trim();
-  if (!command) {
-    const error = new Error("codex.command is empty");
-    observers.onConfigFailure(error);
-    throw error;
-  }
-
-  const manager = createWorkspaceManager({ workspace: effective.serviceConfig.workspace });
-
-  const activeStates = effective.serviceConfig.tracker.activeStates ?? profile?.defaultActiveStates ?? [];
-  const terminalStates = effective.serviceConfig.tracker.terminalStates ?? profile?.defaultTerminalStates ?? [];
-  const policy: DispatchPolicy = {
-    activeStates,
-    terminalStates,
-    requiredLabels: effective.serviceConfig.tracker.requiredLabels,
-    maxConcurrentAgentsByState: effective.serviceConfig.agent.maxConcurrentAgentsByState,
-  };
-  const initialEffective: EffectiveSchedulingConfig = {
-    pollIntervalMs: effective.serviceConfig.polling.intervalMs,
-    maxConcurrentAgents: effective.serviceConfig.agent.maxConcurrentAgents,
-    policy,
+  const trackerProxy: TrackerAdapter = {
+    get kind() {
+      return controller.current.adapter.kind;
+    },
+    fetchIssuesByStates(states) {
+      return controller.current.adapter.fetchIssuesByStates(states);
+    },
+    fetchIssuesByIds(ids) {
+      return controller.current.adapter.fetchIssuesByIds(ids);
+    },
   };
 
-  const preflight = {
-    preflight: (): DispatchPreflightResult => ({
-      ok: true,
-      effective: initialEffective,
-    }),
+  const preflight: DispatchPreflightSource = {
+    preflight: (): DispatchPreflightResult => {
+      const result = watcher.reloadWithResult();
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error.message,
+        };
+      }
+      return {
+        ok: true,
+        effective: controller.current.scheduling,
+      };
+    },
   };
 
+  const initialEffective = controller.current.scheduling;
   const state = createOrchestratorRuntimeState(initialEffective);
 
-  const cleanupWorkspace = observers.observeCleanup(manager, () => effective.serviceConfig.hooks);
+  const cleanupWorkspace: RetryWorkspaceCleanup = {
+    removeWorkspace: (identifier: string) => cleanupWorkspace.removeWorkspaceForIssue!({ issueId: null, identifier }),
+    removeWorkspaceForIssue: async (context: WorkspaceCleanupIssueContext) => {
+      const { manager, release } = workspaceCoordinator.resolveForCleanup(context);
+      const result = await manager.removeWorkspace(context.identifier, {
+        hooks: controller.current.serviceConfig.hooks,
+        onHookEvent: observers.onHookEventForIssue(context),
+      });
+      if (result.status === "removed" || result.status === "missing") {
+        release();
+      }
+      return result;
+    },
+  };
 
   const now = options.now ?? (() => Date.now());
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
@@ -140,24 +158,19 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   const authority = new OrchestratorAuthority({
     state,
-    policy,
-    tracker: adapter,
+    policy: controller.current.scheduling.policy,
+    tracker: trackerProxy,
     runner: runAgentAttempt,
-    createAttemptOptions: (context) => observers.observeAttempt({
-      ...context,
-      workflow: effective.definition,
-      workflowPath,
-      getConfig: () => effective.serviceConfig,
-    }),
-    resolveWorkspacePath: (issue) => manager.resolveWorkspacePath(issue.identifier),
+    createAttemptOptions: (context) => workspaceCoordinator.createAttemptOptions(context),
+    resolveWorkspacePath: (issue) => workspaceCoordinator.resolveForDispatch(issue),
     onEvent: observers.onEvent,
     onOutcome: observers.onOutcome,
     onCleanupDiagnostic: observers.onCleanupDiagnostic,
     cleanupWorkspace,
-    stallTimeoutMs: () => effective.serviceConfig.codex.stallTimeoutMs,
+    stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
     retry: {
       ...(options.retryScheduler !== undefined ? { scheduler: options.retryScheduler } : {}),
-      maxRetryBackoffMs: () => effective.serviceConfig.agent.maxRetryBackoffMs,
+      maxRetryBackoffMs: () => controller.current.serviceConfig.agent.maxRetryBackoffMs,
       cleanupWorkspace,
       onDiagnostic: observers.onCleanupDiagnostic,
     },
@@ -165,9 +178,11 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     monotonicNow,
   });
 
+  controller.setAuthority(authority);
+
   const loop = new OrchestratorLoop({
     authority,
-    candidates: adapter,
+    candidates: trackerProxy,
     preflight,
     ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
     onDiagnostic: observers.onDiagnostic,
@@ -175,9 +190,14 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   return {
     workflowPath,
-    effective,
+    get effective() {
+      return controller.current.effectiveWorkflow;
+    },
     state,
     authority,
+    cleanupWorkspace,
+    workspaceCoordinator,
+    tracker: trackerProxy,
     loop,
     logger,
     clock,
@@ -196,6 +216,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     async stop() {
       observers.lifecycle({ event: "shutdown", outcome: "started" });
       try {
+        watcher.close();
         await loop.stop();
         observers.lifecycle({ event: "shutdown", outcome: "completed" });
       } finally {
@@ -204,4 +225,3 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     },
   };
 }
-

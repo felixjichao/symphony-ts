@@ -100,6 +100,22 @@ if (args["record-world"]) {
   }
 }
 
+if (args["record-env-presence"] && args["record-env-file"]) {
+  try {
+    const varNames = String(args["record-env-presence"]).split(",").map((s) => s.trim()).filter(Boolean);
+    const presence = {};
+    for (const name of varNames) {
+      presence[name] = {
+        present: Object.prototype.hasOwnProperty.call(process.env, name) && process.env[name] !== undefined,
+        value: name.startsWith("TEST_") || name.startsWith("SENTINEL_") ? process.env[name] : undefined,
+      };
+    }
+    fs.writeFileSync(args["record-env-file"], JSON.stringify(presence), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 if (args["record-exit"]) {
   process.on("exit", () => {
     try {
@@ -404,6 +420,15 @@ rl.on("line", (line) => {
         cwd: process.cwd(),
       });
 
+      if (args["record-prompt"]) {
+        try {
+          const text = params?.prompt ?? params?.input?.[0]?.text ?? "";
+          fs.appendFileSync(args["record-prompt"], text + "\n", "utf8");
+        } catch {
+          /* ignore */
+        }
+      }
+
       if (args["exit-on-turn-start"]) {
         process.exit(1);
         return;
@@ -707,6 +732,20 @@ rl.on("line", (line) => {
             }, delayMs);
           });
         }, 10);
+        return;
+      }
+
+      if (args["wait-file"]) {
+        const checkWait = () => {
+          if (fs.existsSync(args["wait-file"])) {
+            setTimeout(() => {
+              sendCompletedNotification(params.threadId, turnId);
+            }, delayMs);
+          } else {
+            setTimeout(checkWait, 20);
+          }
+        };
+        checkWait();
         return;
       }
 

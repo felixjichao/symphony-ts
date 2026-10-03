@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-10-03-effective-runtime-and-workspace-reload-lifecycle.md](accepted/architecture/2026-10-03-effective-runtime-and-workspace-reload-lifecycle.md) — EffectiveRuntime 单一权威与 Workspace 动态重载生命周期（SPEC §6.2 / §13 / §18.1，M6.4 / NEST-84）：`EffectiveRuntimeController` 单点真相（不可变快照、watcher store 结合零双源、原子 `accept` 校验与回滚）、三种生命周期分层（current runtime / attempt frozen execution options / coordinator-bound cleanup）、workspace 根目录热重载与终态清理精准归属（旧 attempt 清理在旧 root、新 attempt 清理在新 root、不跨根误删、不暴力杀 worker、不遍历扫旧根）、secret boundary 运行时隔离（child env 严格排除 tracker secrets、宿主 adapter 正常认证）
+
 - [accepted/architecture/2026-10-03-cli-host-and-executable-contract.md](accepted/architecture/2026-10-03-cli-host-and-executable-contract.md) — CLI 宿主组合根与可执行契约（SPEC §17.7 / §18.1，M6.3 / NEST-83）：`createHost()` 进程内组合根与测试注入、`parseCliArgs` / `resolveWorkflowPath` 优先级解析、`apps/cli` 真实 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限）、Node >= 20 原生 ESM 运行、真实子进程生命周期测试与 SIGINT/SIGTERM 优雅停机
 
 - [accepted/architecture/2026-10-03-orchestrator-core-conformance.md](accepted/architecture/2026-10-03-orchestrator-core-conformance.md) — M5.6 完整 loop 证据、effective store 与 M6 宿主接线 policy

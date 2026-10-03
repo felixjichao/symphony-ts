@@ -23,6 +23,8 @@ import {
   renderPrompt,
   SymphonyConfigError,
   watchWorkflow,
+  type EffectiveWorkflow,
+  type WorkflowEffectiveStore,
   type WorkflowReloadEvent,
   type WorkflowWatchHandle,
 } from "./index";
@@ -344,5 +346,113 @@ describe("watchWorkflow — lifecycle contract (SPEC §6.2 / §6.3)", () => {
 
     expect(events).toEqual([]);
     expect(watcher.current().serviceConfig.polling.intervalMs).toBe(5000);
+  });
+});
+
+describe("watchWorkflow — injectable store & reloadWithResult (M6.4)", () => {
+  it("delegates current() and accept() to injected store", () => {
+    write(workflowBody({ intervalMs: 5000, body: "initial" }));
+    let storeCurrent: EffectiveWorkflow | undefined;
+    const store: WorkflowEffectiveStore = {
+      current: () => {
+        if (!storeCurrent) throw new Error("not set");
+        return storeCurrent;
+      },
+      accept: (next: EffectiveWorkflow) => {
+        storeCurrent = next;
+      },
+    };
+
+    const watcher = watchWorkflow({
+      cwd: dir,
+      env: {},
+      home: "/home/test-user",
+      intervalMs: 60_000,
+      store,
+    });
+    handle = watcher;
+
+    expect(watcher.current()).toBe(storeCurrent);
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(5000);
+
+    write(workflowBody({ intervalMs: 3000, body: "second version with longer content" }));
+    const result = watcher.reloadWithResult();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.effective).toBe(storeCurrent);
+      expect(result.effective.serviceConfig.polling.intervalMs).toBe(3000);
+    }
+  });
+
+  it("handles store.accept failure: retains previous store.current, emits error, returns ok: false", () => {
+    write(workflowBody({ intervalMs: 5000, body: "initial" }));
+    let storeCurrent: EffectiveWorkflow | undefined;
+    let failNext = false;
+    const store: WorkflowEffectiveStore = {
+      current: () => {
+        if (!storeCurrent) throw new Error("not set");
+        return storeCurrent;
+      },
+      accept: (next: EffectiveWorkflow) => {
+        if (failNext) {
+          throw new SymphonyConfigError("invalid_config", "simulated store failure", { path: join(dir, "WORKFLOW.md") });
+        }
+        storeCurrent = next;
+      },
+    };
+
+    const localEvents: WorkflowReloadEvent[] = [];
+    const watcher = watchWorkflow({
+      cwd: dir,
+      env: {},
+      home: "/home/test-user",
+      intervalMs: 60_000,
+      store,
+      onEvent: (e) => localEvents.push(e),
+    });
+    handle = watcher;
+
+    const initial = storeCurrent;
+    failNext = true;
+    write(workflowBody({ intervalMs: 2000, body: "broken long enough to change stamp" }));
+
+    const result = watcher.reloadWithResult();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("invalid_config");
+      expect(result.error.message).toContain("simulated store failure");
+    }
+
+    expect(watcher.current()).toBe(initial);
+    expect(localEvents).toHaveLength(1);
+    expect(localEvents[0]?.kind).toBe("error");
+
+    // Fix and verify recovery
+    failNext = false;
+    write(workflowBody({ intervalMs: 1500, body: "recovered with even longer content here" }));
+    const result2 = watcher.reloadWithResult();
+    expect(result2.ok).toBe(true);
+    expect(watcher.current().serviceConfig.polling.intervalMs).toBe(1500);
+  });
+
+  it("reloadWithResult({ ifChanged: true }) reuses last result if stamp did not change", () => {
+    write(workflowBody({ intervalMs: 5000, body: "static body" }));
+    const watcher = watchWorkflow({
+      cwd: dir,
+      env: {},
+      home: "/home/test-user",
+      intervalMs: 60_000,
+    });
+    handle = watcher;
+
+    const r1 = watcher.reloadWithResult({ ifChanged: true });
+    expect(r1.ok).toBe(true);
+
+    // Call again with ifChanged: true without modifying file
+    const r2 = watcher.reloadWithResult({ ifChanged: true });
+    expect(r2.ok).toBe(true);
+    if (r1.ok && r2.ok) {
+      expect(r2.effective).toBe(r1.effective);
+    }
   });
 });

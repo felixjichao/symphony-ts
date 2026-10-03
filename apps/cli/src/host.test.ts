@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import type { Issue, TimerHandle } from "@symphony/domain";
 import type { RetryScheduler } from "@symphony/orchestrator";
 import { SymphonyConfigError } from "@symphony/config";
 import { createStructuredLogger } from "@symphony/observability";
-import type { TrackerAdapterProfile } from "@symphony/tracker";
+import { createGitHubAdapterProfile, type TrackerAdapterProfile } from "@symphony/tracker";
 import { fileURLToPath } from "node:url";
 import { createHost } from "./host";
 
@@ -381,5 +381,73 @@ describe("createHost in-process composition", () => {
     }
   }, 15000);
 
+  it("preflight re-validates and rejects startup when env secret is removed even if file stamp is unchanged", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-preflight-env-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const env: Record<string, string | undefined> = { GITHUB_TOKEN: "valid-secret" };
+    const profile = createGitHubAdapterProfile({ fetchImpl: async () => new Response("[]", { status: 200 }) });
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+
+      const host = await createHost({
+        workflowPath,
+        env,
+        trackerProfiles: [profile],
+        watcherIntervalMs: 60000,
+      });
+
+      // Remove the secret from env
+      delete env.GITHUB_TOKEN;
+
+      // host.start() runs preflight during startup validation and must fail
+      await expect(host.start()).rejects.toThrow();
+
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("preflight re-validates and rejects startup when file content changes to invalid tracker kind even if mtime/size are preserved", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-preflight-stamp-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const env = { GITHUB_TOKEN: "valid-secret" };
+    const profile = createGitHubAdapterProfile({ fetchImpl: async () => new Response("[]", { status: 200 }) });
+
+    try {
+      const body = `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`;
+      await writeFile(workflowPath, body);
+
+      const targetTime = new Date("2026-01-01T00:00:00Z");
+      await utimes(workflowPath, targetTime, targetTime);
+      const originalStat = await stat(workflowPath);
+
+      const host = await createHost({
+        workflowPath,
+        env,
+        trackerProfiles: [profile],
+        watcherIntervalMs: 60000,
+      });
+
+      // Replace kind: github with equal-length kind: badbad and restore same mtime
+      await writeFile(workflowPath, body.replace("kind: github", "kind: badbad"));
+      await utimes(workflowPath, targetTime, targetTime);
+      const newStat = await stat(workflowPath);
+
+      expect(newStat.mtimeMs).toBe(originalStat.mtimeMs);
+      expect(newStat.size).toBe(originalStat.size);
+
+      // host.start() preflight must re-read from disk and reject badbad
+      await expect(host.start()).rejects.toThrow();
+
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
 });
 
