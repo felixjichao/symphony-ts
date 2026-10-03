@@ -26,7 +26,7 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 
 ## Known limitations
 
-- M5 core 与 §17.4 非 conditional 条目已收口；structured logs、snapshot API 与 CLI composition root 仍属 M6。外部 tracker / 真实 Codex 不在默认 Core Conformance 范围；
+- M5 core 与 §17.4 非 conditional 条目已收口；M6.1 snapshot 输出与同步 unavailable 已实现，获取层 timeout 尚未实现。structured logs 归 M6.2、CLI host 归 M6.3–M6.5，HTTP/dashboard 为可选扩展。外部 tracker / 真实 Codex 不在默认 Core Conformance 范围；
 - retry `dueAtMs` 用单调时钟、`delay` 用注入 scheduler；测试注入手动 scheduler，不依赖真实 sleep；
 - terminal retry refresh 的 workspace 清理只经注入的 `cleanupWorkspace` 端口（生产接 `WorkspaceManager.removeWorkspace`），`refused` / `failed` / 异常只记诊断并释放 claim，本包不做删除 fallback；
 - worker 停止的上界由 agent 层自身的 `shutdownTimeoutMs` 与 workspace hook effective timeout 提供，本包不额外引入硬超时（避免"超时宣布退出却让 runner 继续运行"）；
@@ -39,7 +39,7 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 
 宿主接线示例见 `src/workflow.test-helpers.ts`：使用 registry 的 extension 加载 effective workflow，校验非空 codex.command，成功才提交整套配置与 adapter；profile 默认 states 由注册表 profile 提供，不要求 config 层回写。candidate/refresh/startup sweep 共享同一 adapter；attempt 使用真实 `runAgentAttempt`；路径与删除经真实 `WorkspaceManager`。M6 应消费这些既有 public ports，不重写 scheduler semantics。配置与生命周期 policy 见 [Agent Note](../../notes/accepted/architecture/2026-10-03-orchestrator-core-conformance.md)。
 
-运行 `npm test -w @symphony/orchestrator`；13 项 §17.4 映射见 [conformance](../../docs/conformance.md#174-orchestrator-core-conformance)。两项 conditional snapshot API 尚未实现。
+运行 `npm test -w @symphony/orchestrator`；13 项 §17.4 映射见 [conformance](../../docs/conformance.md#174-orchestrator-core-conformance)。两项 conditional snapshot 验收中，running/retry/token/rate-limit 输出投影与同步 unavailable 已由 M6.1 实现；获取层 timeout 尚未实现，本地同步入口不适用，因此 timeout/unavailable 合并项未全部完成。snapshot 证据及边界见 [conformance 的 §17.6 分项](../../docs/conformance.md#176-分项证据m61)；structured logging、CLI host 和可选 HTTP/dashboard 仍属后续工作。
 
 ## M6.1 snapshot metadata
 
