@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@symphony/domain";
 import type { TrackerAdapterProfile } from "@symphony/tracker";
-import { createHost } from "./host";
+import { createHost, type SymphonyHost } from "./host";
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -487,19 +487,35 @@ Prompt
       makeIssue("FAIL-02", "open"),
     ];
 
-    const scheduledRetryDelays: number[] = [];
+    interface TrackedTimer {
+      id: number;
+      delayMs: number;
+      timer: ReturnType<typeof setTimeout>;
+      cancelled: boolean;
+    }
+    const trackedTimers: TrackedTimer[] = [];
+    let nextTimerId = 1;
     const retryScheduler = {
       schedule: (delayMs: number, callback: () => void) => {
-        scheduledRetryDelays.push(delayMs);
-        const timer = setTimeout(callback, delayMs);
-        return timer;
+        const handle: TrackedTimer = {
+          id: nextTimerId++,
+          delayMs,
+          timer: setTimeout(callback, delayMs),
+          cancelled: false,
+        };
+        trackedTimers.push(handle);
+        return handle;
       },
-      cancel: (timer: ReturnType<typeof setTimeout>) => {
-        clearTimeout(timer);
+      cancel: (handle: unknown) => {
+        if (handle !== null && typeof handle === "object" && "timer" in handle) {
+          const t = handle as TrackedTimer;
+          t.cancelled = true;
+          clearTimeout(t.timer);
+        }
       },
     };
 
-    let simulatedNow = 100000;
+    let simulatedNow = Date.now();
     let simulatedMonotonic = 10000;
     const profile: TrackerAdapterProfile = {
       kind: "fixture",
@@ -515,6 +531,8 @@ Prompt
       }),
     };
 
+    let host: SymphonyHost | null = null;
+
     try {
       // 1. Test stall_timeout dynamic getter driving reconciliation
       await writeFile(
@@ -525,7 +543,7 @@ tracker:
 polling:
   interval_ms: 10000
 agent:
-  max_retry_backoff_ms: 120000
+  max_retry_backoff_ms: 60000
 codex:
   stall_timeout_ms: 60000
   command: node ${appServerFixture} --silent-turn
@@ -537,7 +555,7 @@ Prompt
         "utf8",
       );
 
-      const host = await createHost({
+      host = await createHost({
         workflowPath,
         trackerProfiles: [profile],
         retryScheduler,
@@ -548,15 +566,22 @@ Prompt
 
       // Dispatch STALL-01
       host.authority.dispatchIssue(issues[0]!);
-      await waitFor(() => host.state.running.has("id-STALL-01"), 3000);
 
-      // Advance time by 5 seconds
-      simulatedNow += 5000;
+      // Wait until STALL-01 has established a real live session with lastCodexTimestamp
+      await waitFor(
+        () => Boolean(host!.state.running.get("id-STALL-01")?.session?.lastCodexTimestamp),
+        5000,
+      );
+
+      // Align simulated UTC time with the real session's last activity timestamp + 5000ms
+      const stallTimestamp = host.state.running.get("id-STALL-01")!.session!.lastCodexTimestamp!;
+      simulatedNow = stallTimestamp + 5000;
       simulatedMonotonic += 5000;
 
       // Reconcile: worker is NOT stalled because 5000ms < 60000ms
       const reconcile1 = await host.authority.reconcileRunningIssues();
       expect(reconcile1.stoppedIssueIds).toEqual([]);
+      expect(reconcile1.stalledIssueIds).toEqual([]);
       expect(host.state.running.has("id-STALL-01")).toBe(true);
 
       // Reload stall_timeout_ms to 2000ms (2 seconds)
@@ -568,7 +593,7 @@ tracker:
 polling:
   interval_ms: 10000
 agent:
-  max_retry_backoff_ms: 120000
+  max_retry_backoff_ms: 60000
 codex:
   stall_timeout_ms: 2000
   command: node ${appServerFixture} --silent-turn
@@ -580,16 +605,26 @@ Prompt
         "utf8",
       );
 
-      await waitFor(() => host.effective.serviceConfig.codex.stallTimeoutMs === 2000, 3000);
+      await waitFor(() => host!.effective.serviceConfig.codex.stallTimeoutMs === 2000, 3000);
 
       // Reconcile again: dynamic getter returns 2000ms, and 5000ms > 2000ms -> stalled!
       const reconcile2 = await host.authority.reconcileRunningIssues();
       expect(reconcile2.stalledIssueIds).toEqual(["id-STALL-01"]);
+
+      // Wait for STALL-01 attempt completion and retry queue registration
+      await waitFor(() => host!.state.retryAttempts.has("id-STALL-01"), 5000);
       expect(host.state.running.has("id-STALL-01")).toBe(false);
 
+      const stallRetry = host.state.retryAttempts.get("id-STALL-01")!;
+      expect(stallRetry.attempt).toBe(1);
+      expect(stallRetry.error).toContain("stall");
+      const stallTimerHandle = stallRetry.timerHandle as TrackedTimer;
+      // STALL-01 retry backoff: failureRetryDelayMs(1, 60000) = 10000ms
+      expect(stallTimerHandle.delayMs).toBe(10000);
+      expect(stallTimerHandle.cancelled).toBe(false);
+
       // 2. Test max_retry_backoff_ms dynamic getter driving retry queue backoff capping
-      // Initial max_retry_backoff_ms is 120000.
-      // Dispatch FAIL-01 with exit-on-turn-start so it fails attempt 1.
+      // Reload codex command to exit-on-turn-start and set max_retry_backoff_ms to 120000
       await writeFile(
         workflowPath,
         `---
@@ -609,12 +644,28 @@ Prompt
 `,
         "utf8",
       );
-      await waitFor(() => host.effective.serviceConfig.agent.maxRetryBackoffMs === 120000, 3000);
+      await waitFor(
+        () =>
+          host!.effective.serviceConfig.agent.maxRetryBackoffMs === 120000 &&
+          Boolean(host!.effective.serviceConfig.codex.command?.includes("--exit-on-turn-start")),
+        3000,
+      );
 
+      // Dispatch FAIL-01: fails attempt 1 because --exit-on-turn-start exits immediately
       host.authority.dispatchIssue(issues[1]!);
-      await waitFor(() => scheduledRetryDelays.length === 1, 4000);
-      // Attempt 1 retry backoff is uncapped 10000ms (< 120000ms)
-      expect(scheduledRetryDelays[0]).toBe(10000);
+      await waitFor(() => host!.state.retryAttempts.has("id-FAIL-01"), 6000);
+
+      const fail1Retry = host.state.retryAttempts.get("id-FAIL-01")!;
+      expect(fail1Retry.attempt).toBe(1);
+      const fail1TimerHandle = fail1Retry.timerHandle as TrackedTimer;
+      // Attempt 1 retry backoff is uncapped: min(10000, 120000) = 10000ms
+      expect(fail1TimerHandle.delayMs).toBe(10000);
+      expect(fail1TimerHandle.cancelled).toBe(false);
+
+      // Verify STALL-01's existing timer was preserved and not cancelled
+      expect(host.state.retryAttempts.get("id-STALL-01")?.timerHandle).toBe(stallTimerHandle);
+      expect(stallTimerHandle.cancelled).toBe(false);
+      expect(stallTimerHandle.delayMs).toBe(10000);
 
       // Now reload max_retry_backoff_ms to 1500ms
       await writeFile(
@@ -636,16 +687,31 @@ Prompt
 `,
         "utf8",
       );
-      await waitFor(() => host.effective.serviceConfig.agent.maxRetryBackoffMs === 1500, 3000);
+      await waitFor(() => host!.effective.serviceConfig.agent.maxRetryBackoffMs === 1500, 3000);
 
       // Dispatch FAIL-02: fails attempt 1
       host.authority.dispatchIssue(issues[2]!);
-      await waitFor(() => scheduledRetryDelays.length === 2, 4000);
-      // Attempt 1 retry backoff is min(10000, 1500) = 1500ms!
-      expect(scheduledRetryDelays[1]).toBe(1500);
+      await waitFor(() => host!.state.retryAttempts.has("id-FAIL-02"), 6000);
 
-      await host.stop();
+      const fail2Retry = host.state.retryAttempts.get("id-FAIL-02")!;
+      expect(fail2Retry.attempt).toBe(1);
+      const fail2TimerHandle = fail2Retry.timerHandle as TrackedTimer;
+      // Attempt 1 retry backoff is capped: min(10000, 1500) = 1500ms!
+      expect(fail2TimerHandle.delayMs).toBe(1500);
+      expect(fail2TimerHandle.cancelled).toBe(false);
+
+      // Verify BOTH previous retry timers (STALL-01 and FAIL-01) remain preserved with their original 10000ms delay
+      expect(host.state.retryAttempts.get("id-STALL-01")?.timerHandle).toBe(stallTimerHandle);
+      expect(stallTimerHandle.cancelled).toBe(false);
+      expect(stallTimerHandle.delayMs).toBe(10000);
+
+      expect(host.state.retryAttempts.get("id-FAIL-01")?.timerHandle).toBe(fail1TimerHandle);
+      expect(fail1TimerHandle.cancelled).toBe(false);
+      expect(fail1TimerHandle.delayMs).toBe(10000);
     } finally {
+      if (host !== null) {
+        await host.stop();
+      }
       await rm(temp, { recursive: true, force: true });
     }
   });
@@ -1047,9 +1113,15 @@ Prompt B
         await waitFor(async () => await pathExists(expectedPathB), 4000);
         expect(await pathExists(expectedPathB)).toBe(true);
 
+        // Pre-create a same-named directory and marker file in Root B to prove it is not deleted when Root A's TASK-COMMON is cleaned up
+        const sameNamedInB = path.join(rootB, "TASK-COMMON");
+        await mkdir(sameNamedInB, { recursive: true });
+        await writeFile(path.join(sameNamedInB, "marker.txt"), "root-b-marker", "utf8");
+
         // Both workspaces exist simultaneously
         expect(await pathExists(expectedPathA)).toBe(true);
         expect(await pathExists(expectedPathB)).toBe(true);
+        expect(await pathExists(sameNamedInB)).toBe(true);
 
         // Now mark TASK-COMMON as terminal (closed) in tracker while worker A is still running
         issues[0] = makeIssue("TASK-COMMON", "closed");
@@ -1063,7 +1135,9 @@ Prompt B
         await waitFor(async () => !(await pathExists(expectedPathA)), 4000);
         expect(await pathExists(expectedPathA)).toBe(false);
 
-        // Verify Root B workspace is COMPLETELY INTACT and unaffected!
+        // Verify Root B same-named directory (and its marker file) and TASK-B workspace are COMPLETELY INTACT and unaffected!
+        expect(await pathExists(sameNamedInB)).toBe(true);
+        expect(await readFile(path.join(sameNamedInB, "marker.txt"), "utf8")).toBe("root-b-marker");
         expect(await pathExists(expectedPathB)).toBe(true);
 
         // Verify after_run hook was executed for Root A workspace

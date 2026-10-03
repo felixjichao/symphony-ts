@@ -8,7 +8,7 @@ import {
   createGitHubAdapterProfile,
   type TrackerAdapterProfile,
 } from "@symphony/tracker";
-import { createHost } from "./host";
+import { createHost, type SymphonyHost } from "./host";
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -213,11 +213,7 @@ Prompt
     process.env.SECRET_BETA = "secret-beta-val";
     process.env.SENTINEL_NON_SECRET = "sentinel-ok";
 
-    const issues: Issue[] = [
-      makeIssue("ISS-A", "open"),
-      makeIssue("ISS-B", "open"),
-      makeIssue("ISS-C", "open"),
-    ];
+    const issues: Issue[] = [];
 
     const profileA: TrackerAdapterProfile = {
       kind: "profile_a",
@@ -247,6 +243,8 @@ Prompt
       }),
     };
 
+    let host: SymphonyHost | null = null;
+
     try {
       await writeFile(
         workflowPath,
@@ -265,7 +263,7 @@ Prompt A
         "utf8",
       );
 
-      const host = await createHost({
+      host = await createHost({
         workflowPath,
         trackerProfiles: [profileA, profileB],
         watcherIntervalMs: 50,
@@ -275,8 +273,9 @@ Prompt A
 
       expect(host.effective.serviceConfig.tracker.kind).toBe("profile_a");
 
-      // Dispatch attempt under profile_a
+      // Dispatch attempt under profile_a (staged candidate addition)
       const issueA = makeIssue("ISS-A", "open");
+      issues.push(issueA);
       host.authority.dispatchIssue(issueA);
       await waitFor(async () => await pathExists(envRecordA), 8000);
 
@@ -303,11 +302,12 @@ Prompt B
         "utf8",
       );
 
-      await waitFor(() => host.effective.serviceConfig.tracker.kind === "profile_b", 4000);
+      await waitFor(() => host!.effective.serviceConfig.tracker.kind === "profile_b", 4000);
       expect(host.effective.serviceConfig.tracker.kind).toBe("profile_b");
 
-      // Dispatch attempt under profile_b
+      // Dispatch attempt under profile_b (staged candidate addition)
       const issueB = makeIssue("ISS-B", "open");
+      issues.push(issueB);
       host.authority.dispatchIssue(issueB);
       await waitFor(async () => await pathExists(envRecordB), 8000);
 
@@ -342,6 +342,7 @@ Prompt C
       // Because failed reload rejected the new workflow, codex command also remained on profile_b
       await rm(envRecordB);
       const issueC = makeIssue("ISS-C", "open");
+      issues.push(issueC);
       host.authority.dispatchIssue(issueC);
       await waitFor(async () => await pathExists(envRecordB), 8000);
 
@@ -349,9 +350,11 @@ Prompt C
       expect(recordC["SECRET_ALPHA"]?.present).toBe(true);
       expect(recordC["SECRET_BETA"]?.present).toBe(false);
       expect(recordC["SENTINEL_NON_SECRET"]?.present).toBe(true);
-
-      await host.stop();
     } finally {
+      if (host !== null) {
+        await host.stop();
+      }
+
       if (origAlpha !== undefined) process.env.SECRET_ALPHA = origAlpha;
       else delete process.env.SECRET_ALPHA;
 
