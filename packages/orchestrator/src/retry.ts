@@ -27,23 +27,6 @@ export interface RetryScheduler {
 }
 
 /**
- * 默认 runtime timer：用 `setTimeout` / `clearTimeout` 实现。生产组合根不注入自定义
- * scheduler 时使用；测试注入手动 scheduler，因此不产生真实等待。
- */
-export function createRetryScheduler(): RetryScheduler {
-  return {
-    schedule(delayMs: number, callback: () => void): TimerHandle {
-      return setTimeout(callback, Math.max(0, delayMs));
-    },
-    cancel(handle: TimerHandle): void {
-      if (handle !== null && handle !== undefined) {
-        clearTimeout(handle as ReturnType<typeof setTimeout>);
-      }
-    },
-  };
-}
-
-/**
  * terminal retry refresh 触发的 workspace 安全清理端口（SPEC §8.4 note）。
  *
  * 结构上与 `@symphony/workspace` 的 `WorkspaceManager.removeWorkspace` 兼容：只消费
@@ -69,6 +52,62 @@ export interface RetryDiagnostic {
   readonly issueId: string;
   readonly identifier: string | null;
   readonly message: string;
+}
+
+/**
+ * Node `setTimeout` 能表达的最大延迟（`2^31 - 1` ms ≈ 24.8 天）；超过它 Node 会把
+ * 延迟压成 `1` ms 并发出 `TimeoutOverflowWarning`。默认 scheduler 用**分段 timer**
+ * 保证更大的合法 backoff（如 `max_retry_backoff_ms = 3_000_000_000`）仍按指定延迟
+ * 触发，而不是静默变成 1 ms。
+ */
+export const RETRY_MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** 默认 runtime scheduler 的内部状态（分段 timer 的可取消句柄）。 */
+interface SystemTimerState {
+  cancelled: boolean;
+  handle: ReturnType<typeof setTimeout> | null;
+}
+
+/** 默认 runtime timer：用 `setTimeout` / `clearTimeout` 实现，超长延迟自动分段。
+ *
+ * 生产组合根不注入自定义 scheduler 时使用；测试注入手动 scheduler，因此不产生真实
+ * 等待。超过 {@link RETRY_MAX_TIMER_DELAY_MS} 的延迟拆成连续多段，`cancel` 会同时
+ * 取消当前段。
+ */
+export function createRetryScheduler(): RetryScheduler {
+  return {
+    schedule(delayMs: number, callback: () => void): TimerHandle {
+      const state: SystemTimerState = { cancelled: false, handle: null };
+      let remaining = Math.max(0, delayMs);
+      const step = (): void => {
+        if (state.cancelled) {
+          return;
+        }
+        const segment = Math.min(remaining, RETRY_MAX_TIMER_DELAY_MS);
+        remaining -= segment;
+        if (remaining > 0) {
+          state.handle = setTimeout(step, segment);
+        } else {
+          state.handle = setTimeout(() => {
+            if (!state.cancelled) {
+              callback();
+            }
+          }, segment);
+        }
+      };
+      step();
+      return state;
+    },
+    cancel(handle: TimerHandle): void {
+      if (handle !== null && typeof handle === "object" && "cancelled" in handle) {
+        const state = handle as SystemTimerState;
+        state.cancelled = true;
+        if (state.handle !== null) {
+          clearTimeout(state.handle);
+        }
+      }
+    },
+  };
 }
 
 /**

@@ -28,7 +28,9 @@ M5.3（NEST-76 / #52）要在 `@symphony/orchestrator` 落地 worker 退出后�
 
 6. **重派走专用内部提交路径**：新增 `isRetryDispatchAllowed(issue, state, policy, ownClaimIssueId)`（§16.6 `ignore_existing_claim`），只豁免该 issue 自己的 claim，仍拒绝 running / 其它 claim / terminal / inactive / unroutable；slot 由调用方单独检查以区分"不可派发"与 slot 不足。重派复用 `commitDispatch()` 的无 `await` 提交段，普通 `dispatchIssue()` 不豁免 claim，不公开通用 `ignoreClaim` 开关。同步构造失败按 failure 重排（§16.4 "failed to spawn agent"）。
 
-7. **terminal cleanup 只经端口**：`cleanupWorkspace.removeWorkspace(identifier)` 与 `WorkspaceManager.removeWorkspace` 结构兼容；`refused` / `failed` / 异常经 `onDiagnostic` 暴露并释放该 retry claim，不启动 worker、不做删除 fallback。
+7. **terminal cleanup 只经端口，并与同 issue 后续 launch 串行**：`cleanupWorkspace.removeWorkspace(identifier)` 与 `WorkspaceManager.removeWorkspace` 结构兼容；`refused` / `failed` / 异常经 `onDiagnostic` 暴露并释放该 retry claim，不启动 worker、不做删除 fallback。更重要的是：cleanup 是**异步删除**，ownership token 只能保护内存状态、无法撤销已经发生的目录删除，因此 authority 维护 `cleanupInFlight: Map<issueId, Promise<void>>`——cleanup 在途时，同 issue 的 retry refresh / 重派必须先 `await` 该 promise 且重新校验 token；普通 `dispatchIssue()` 也直接 `skipped`。这样"旧 cleanup 删目录"与"新 worker 用 workspace"不会交叠。
+
+8. **默认 scheduler 用分段 timer**：Node `setTimeout` 对超过 `2^31 - 1` ms 的延迟会压成 `1` ms（`TimeoutOverflowWarning`），而配置解析接受任意正整数 `max_retry_backoff_ms`（如 `3_000_000_000`），failure backoff 因此可能超过该上限。默认 `createRetryScheduler()` 把延迟按 `RETRY_MAX_TIMER_DELAY_MS = 2_147_483_647` 拆成连续多段，`cancel` 同时取消当前段，从而保持规定的实际触发时间，而不是静默压缩 effective cap。
 
 ## Alternatives considered
 
@@ -38,6 +40,8 @@ M5.3（NEST-76 / #52）要在 `@symphony/orchestrator` 落地 worker 退出后�
 - **公开 `dispatchIssue(issue, { ignoreClaim: true })` 让 retry 复用普通路径**：等于对所有调用方敞开 claim 绕过，普通候选可抢 retry claim。改为私有专用入口 + 纯函数 `isRetryDispatchAllowed`。否。
 - **timer fired 时先释放 claim 再 refresh，失败再重新 claim**：违反 §7.4（launch 前 claim 必须已持有），且释放瞬间普通 dispatch 可能抢占同一 issue。改为 refresh 全程保留 claim。否。
 - **terminal cleanup refused / failed 时做 `fs.rm` fallback**：会把 destructive 动作带出 workspace 包的 containment 校验（§9.5）。改为只记诊断 + 释放 claim。否。
+- **只在 cleanup 结束后检查 token（不串行化 launch）**：token 只能避免覆盖内存状态，无法撤销旧 cleanup 已经/正在进行的目录删除；新 worker 可能写入随后被删的 workspace（审查已复现）。改为 `cleanupInFlight` 让后续 refresh / launch 先等待删除结束。否。
+- **把超过上限的 backoff clamp 到 `2^31 - 1`**：会静默改变 effective `max_retry_backoff_ms` 语义，使实际派发时间短于 `dueAtMs` 与公式。改为分段 timer 保持延迟。否。
 - **把 `delay` 直接算成绝对 `dueAtMs` 交给 scheduler**：scheduler 需要的是相对延迟，且 `dueAtMs` 归 domain 记录（单调时钟）。由 authority 计算 `delayMs` 并记录 `dueAtMs = nowMs + delayMs`，scheduler 只负责按时回调。否。
 - **引入第三方 timer / fake-timer 库**：增加依赖且与仓库"最小依赖"约定冲突；测试用注入的手动 `RetryScheduler` 即可确定性触发。否。
 

@@ -58,7 +58,7 @@ export {
 
 // --- M5.3：retry 队列 / timer 所有权 / backoff 决策（SPEC §8.4、§14.2、§16.6）---
 
-export { createRetryScheduler } from "./retry";
+export { RETRY_MAX_TIMER_DELAY_MS, createRetryScheduler } from "./retry";
 export type {
   RetryDelayKind,
   RetryDiagnostic,

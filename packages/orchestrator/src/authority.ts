@@ -54,6 +54,7 @@ import {
   type RetryDiagnostic,
   type RetryOptions,
   type RetryScheduler,
+  type RetryWorkspaceCleanup,
 } from "./retry";
 import { WorkerControl, type WorkerHandle, type WorkerStopReason, type WorkerTerminalOutcome } from "./worker";
 
@@ -173,6 +174,12 @@ export class OrchestratorAuthority {
    * 的迟到回调（stale / canceled timer、被替换的 refresh）一律被拒绝。
    */
   private readonly retryOwners = new Map<string, string>();
+  /**
+   * 每个 issue 进行中的 terminal workspace cleanup。用于把 cleanup 与后续同 issue 的
+   * refresh / launch **串行化**：ownership token 只能保护内存状态，无法撤销已经发生
+   * 的目录删除，因此新 retry / 新 dispatch 必须等旧 cleanup 真正结束后才能启动 worker。
+   */
+  private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private tokenCounter = 0;
   private retryTokenCounter = 0;
 
@@ -224,8 +231,13 @@ export class OrchestratorAuthority {
    * {@link dispatchRetry} 消费自己持有的 claim，普通 `dispatchIssue` 绝不抢占它。
    */
   public dispatchIssue(issue: Issue, options: DispatchOptions = {}): DispatchResult {
-    // 1. 双检查：claimed 或 running 任一占用即跳过。
-    if (this.state.claimed.has(issue.id) || this.state.running.has(issue.id)) {
+    // 1. 双检查：claimed / running 任一占用即跳过；同 issue cleanup 在途也跳过
+    //    （cleanup 会删除 workspace，必须等它结束后由下一次 tick 重新评估）。
+    if (
+      this.cleanupInFlight.has(issue.id) ||
+      this.state.claimed.has(issue.id) ||
+      this.state.running.has(issue.id)
+    ) {
       return { kind: "skipped", issueId: issue.id, attemptToken: null };
     }
     // 2. 完整 eligibility（含 state / label / slot）。
@@ -568,6 +580,16 @@ export class OrchestratorAuthority {
     // 2. pop：保留 claim 与 refresh ownership（token 留在 retryOwners）。
     this.state.retryAttempts.delete(issueId);
 
+    // 2b. 若同 issue 仍有 terminal cleanup 在途（旧回调删目录），必须先等它结束再
+    //     refresh / launch，否则新 worker 会写入随后被旧 cleanup 删除的 workspace。
+    const pendingCleanup = this.cleanupInFlight.get(issueId);
+    if (pendingCleanup !== undefined) {
+      await pendingCleanup;
+      if (this.retryOwners.get(issueId) !== token) {
+        return; // cleanup 期间被替换 / 取消。
+      }
+    }
+
     // 3. refresh by id。
     let refreshed: readonly Issue[];
     try {
@@ -658,13 +680,31 @@ export class OrchestratorAuthority {
 
   /**
    * terminal refresh 的安全 workspace 清理：只经注入端口，**不做删除 fallback**。
-   * `refused` / `failed` / 异常都记为诊断，release 已在上游完成，不启动 worker。
+   * `refused` / `failed` / 异常都记为诊断。
+   *
+   * 调用期间把 promise 登记到 `cleanupInFlight`，使同 issue 的后续 refresh / launch
+   * 必须等待删除真正结束——ownership token 只能保护内存状态，无法撤销已发生的删除。
    */
   private async cleanupTerminalWorkspace(issue: Issue): Promise<void> {
     const cleanup = this.retry?.cleanupWorkspace;
     if (cleanup === undefined) {
       return;
     }
+    const promise = this.performTerminalCleanup(issue, cleanup);
+    this.cleanupInFlight.set(issue.id, promise);
+    try {
+      await promise;
+    } finally {
+      if (this.cleanupInFlight.get(issue.id) === promise) {
+        this.cleanupInFlight.delete(issue.id);
+      }
+    }
+  }
+
+  private async performTerminalCleanup(
+    issue: Issue,
+    cleanup: RetryWorkspaceCleanup,
+  ): Promise<void> {
     try {
       const result = await cleanup.removeWorkspace(issue.identifier);
       if (result.status === "removed" || result.status === "missing") {

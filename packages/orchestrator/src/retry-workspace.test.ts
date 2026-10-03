@@ -7,7 +7,7 @@
  * - workspace 被换成逃逸 symlink 时 `removeWorkspace` 返回 `refused`，目录保留、
  *   出根目标无损，authority 只记诊断并释放 claim（不做删除 fallback、不启动 worker）。
  */
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -265,5 +265,111 @@ describe("terminal retry refresh 的真实 workspace 清理", () => {
     expect(h.diagnostics).toHaveLength(1);
     expect(h.diagnostics[0]).toMatchObject({ kind: "cleanup_refused", issueId: issue.id });
     expect(h.outcomes).toHaveLength(1);
+  });
+});
+
+describe("cleanup 与后续 launch 串行化（审查 blocker 1）", () => {
+  it("替换 retry 不得在旧 terminal cleanup 删除期间启动新 worker", async () => {
+    const root = await makeTempRoot();
+    const manager = createWorkspaceManager({ workspace: { root } });
+    const issue = makeIssue({ identifier: "RACE-1" });
+    const workspace = await manager.createWorkspace(issue.identifier);
+
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let cleanupStarted = false;
+
+    const state = createOrchestratorRuntimeState({ pollIntervalMs: 1_000, maxConcurrentAgents: 2 });
+    const callbacks: Array<() => void> = [];
+    const runResolvers: Array<(result: AgentAttemptResult) => void> = [];
+    let launches = 0;
+    let currentIssue: Issue = { ...issue, state: "Done" };
+
+    const authority = new OrchestratorAuthority({
+      state,
+      policy: POLICY,
+      tracker: { fetchIssuesByIds: async () => [currentIssue] },
+      runner: () => {
+        launches += 1;
+        return new Promise<AgentAttemptResult>((resolve) => {
+          runResolvers.push(resolve);
+        });
+      },
+      createAttemptOptions: (context) =>
+        ({ issue: context.issue, attempt: context.attempt }) as unknown as AgentAttemptOptions,
+      resolveWorkspacePath: () => workspace.path,
+      now: () => 1_000,
+      monotonicNow: () => 5_000,
+      retry: {
+        scheduler: {
+          schedule: (_delayMs, callback) => {
+            callbacks.push(callback);
+            return callbacks.length;
+          },
+          cancel: () => {},
+        },
+        maxRetryBackoffMs: () => 300_000,
+        cleanupWorkspace: {
+          removeWorkspace: async (identifier: string) => {
+            cleanupStarted = true;
+            await cleanupGate;
+            return manager.removeWorkspace(identifier);
+          },
+        },
+      },
+    });
+
+    // 1. 触发 terminal retry：cleanup 启动并暂停在 gate。
+    authority.scheduleRetry({
+      issueId: issue.id,
+      identifier: issue.identifier,
+      attempt: 1,
+      kind: "failure",
+      error: "x",
+    });
+    callbacks[0]!();
+    await waitFor(() => cleanupStarted);
+
+    // 2. 用新 retry 替换，issue 恢复 active，触发新 timer。
+    currentIssue = issue;
+    authority.scheduleRetry({
+      issueId: issue.id,
+      identifier: issue.identifier,
+      attempt: 2,
+      kind: "failure",
+      error: "replacement",
+    });
+    callbacks[1]!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 旧 cleanup 未结束：新 retry 必须等待，不得 launch（审查复现的缺陷点）。
+    expect(launches).toBe(0);
+    expect(state.running.has(issue.id)).toBe(false);
+
+    // 3. 放开 cleanup：先删目录再 launch，之后写入的 worker 文件不会被删。
+    releaseCleanup();
+    await waitFor(() => launches === 1 && state.running.has(issue.id));
+
+    await mkdir(workspace.path, { recursive: true });
+    await writeFile(path.join(workspace.path, "new-worker.txt"), "new worker is using this workspace", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(await pathExists(workspace.path)).toBe(true);
+    expect(await readFile(path.join(workspace.path, "new-worker.txt"), "utf8")).toBe(
+      "new worker is using this workspace",
+    );
+
+    // 收尾：停止 worker 并让它收束。
+    const stopped = authority.stopWorker(issue.id, { kind: "shutdown" });
+    runResolvers.at(-1)?.({
+      workspace,
+      issue,
+      threadId: "race-thread",
+      turnCount: 1,
+      lastTurn: { turnId: "race-turn", sessionId: "race-thread-race-turn" },
+      stopReason: "decider_stop",
+    });
+    await stopped;
   });
 });
