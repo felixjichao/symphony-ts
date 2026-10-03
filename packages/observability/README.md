@@ -43,4 +43,10 @@ logger.close();
 
 Redaction precedes escaped UTF-8 truncation: reason 128 bytes, message 896, error 1024, stderr 2048; core/context strings at most 4096 escaped bytes and never silently truncated. Overbudget raw text is omitted; invalid/oversized context yields fixed `logging_format_failed` with null identity keys. A throwing sink cannot prevent delivery to other sinks; one `logging_sink_failed` warning reaches remaining sinks, with no recursion. Default stderr also isolates asynchronous stream errors and drops subsequent lines while backpressured, resuming on drain without a private queue. `renderStructuredLogEvent` is the lower-level throwing renderer without registered secrets; use logger.emit for runtime output.
 
-§13.6 richer humanization is conditional/deferred. CLI helpers adapt runtime ports; production host/signal entrypoints remain M6.3–M6.5. See [logging note](../../notes/accepted/architecture/2026-10-03-structured-logging.md).
+§13.6 richer humanization is conditional/deferred. CLI helpers adapt runtime ports; production host/signal entrypoints now use the same observers and are covered by M6.3–M6.5. See [logging note](../../notes/accepted/architecture/2026-10-03-structured-logging.md).
+
+## M6 Core host evidence
+
+`npm test -w @symphony/cli -- src/bin.test.ts` verifies `rejects %s startup preflight with nonzero safe diagnostics`, issue/session identity in `waits for agent termination and after_run on %s, deduplicating mixed signals`, and operator-visible recoverable reload in `keeps live invalid reload recoverable, applies valid reload to a new real agent, and stops both roots`. Snapshot, token/rate-limit aggregation and sink-isolation files, exact case names and commands are indexed in [M6 Core conformance](../../docs/conformance.md#m65-core-证据索引). Runtime facts remain read-only observer inputs; snapshots/log lines are never scheduler authority or a fatal-error channel. Host supplies an independent failure promise to the shell.
+
+M6 Core implementation evidence is ready; completion still requires all five submilestones merged and main CI success. HTTP §13.7 and richer §13.6 humanization remain optional/conditional; synchronous snapshot timeout is not applicable to this local projector. These fixtures do not establish §17.8 external Real Integration.

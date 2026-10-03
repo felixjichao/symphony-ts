@@ -22,10 +22,12 @@ symphony [path-to-WORKFLOW.md]
 - 新子命令：在本 app 内注册，业务逻辑一律下沉到对应 owner 包；
 - app 只做装配与进程管理，不承载领域规则——判断"这段逻辑该不该在 cli"时以各包 README 的 Purpose 为准。
 
-## Host Lifecycle & Composition (M6.3 / M6.4)
+## Host Lifecycle & Composition (M6.3–M6.5)
 
 `createHost(options)` 建立组合根：
-`argv → resolveWorkflowPath → TrackerAdapterRegistry → watchWorkflow(store) → EffectiveRuntimeController → registerTrackerLogSecrets → observeTracker → WorkspaceLifecycleCoordinator → OrchestratorAuthority → OrchestratorLoop → SymphonyHost`
+`parse argv → resolveWorkflowPath → initial config/tracker preflight → runtime/observability composition → install shell handlers → startMonitoring → loop.start`
+
+`createHost()` initializes without timers. `host.start()` explicitly starts monitoring before the loop. `runCli()` owns signals/fatal fallbacks and returns the final exit code; bin sets `process.exitCode` and lets the event loop exit naturally. Host installs no process handlers and never calls `process.exit()`. Duplicate starts/stops share promises; stopped hosts cannot restart. Stop synchronously closes runtime commits and monitoring, then invokes existing loop.stop before awaiting startup/workers/cleanup. Handlers remain installed throughout cleanup and only this runner's listeners are removed.
 
 - **EffectiveRuntime 单一权威（M6.4）**：
   `EffectiveRuntimeController` 独占维护不可变快照，原子结合 `EffectiveWorkflow`、`ServiceConfig`、所选 tracker profile/adapter、child env `excludeEnvNames`、`WorkspaceManager` 与调度配置投影。配置热更新通过 watcher `store` 与 `preflight` 同步校验，零双重真相源，校验失败 fail-fast 回滚且保留前一版本；
@@ -41,7 +43,7 @@ symphony [path-to-WORKFLOW.md]
 
 ## Known limitations
 
-- 信号竞态（signal race）、重复 signal 幂等处理与最终 exit-code matrix 留属 M6.5（NEST-85）；
+- M6.5 实现及本地证据已齐备；全合入与 main CI 验收之前 M6 Core 不标完成。
 - HTTP status surface 属可选扩展。
 
 ## Runtime log observers (M6.2)
@@ -51,3 +53,16 @@ symphony [path-to-WORKFLOW.md]
 Attempt wrappers invoke existing reduction callbacks first and independently isolate logging. Hook bodies and free agent summaries are omitted; thread-only starts have no fabricated session. Use `observeCleanup(manager, () => currentConfig.hooks)` for authority cleanup: its optional `removeWorkspaceForIssue` port receives explicit issue ID/identifier, reads current hooks and supplies the isolated `onHookEventForIssue(context)` callback. Standalone hook callers can also use that callback; never infer issue identity from workspace paths. Tracker wrappers preserve returned issues and original thrown errors, logging stable `operation=fetch_issues_by_states` or `fetch_issues_by_ids` with the error category. Watcher success means watcher acceptance, not effective host-runtime commit. Lifecycle callers report completed only after actual start/stop completion.
 
 `npm test -w @symphony/cli -- src/logging.test.ts` verifies real config, registry, workspace, authority/loop and fake app-server subprocess wiring.
+
+## Exit status and evidence
+
+| 场景 | 结果 |
+|---|---|
+| help/version、graceful SIGINT/SIGTERM、信号取消正常 startup 且收口成功 | 0 |
+| initial config/tracker preflight、startup、致命 host 或非预期 shutdown failure | 1；后续 graceful signal 不覆盖失败 |
+| invalid live reload、普通 tracker/agent failure、best-effort hooks、log sink failure | 保持恢复语义，不自行退出 |
+| SIGKILL | abnormal termination；无 graceful 清理保证 |
+
+`src/bin.test.ts` 每轮 rebuild 真正 package bin，使用 loopback HTTPS + test CA (`NODE_EXTRA_CA_CERTS`)；请求、session、文件 marker 作 readiness barrier。两根 workspace 的 agent PID、cwd、transcript、prompt 与 after_run marker 均重读核验；stubborn agent 沿用 transport deadline。测试用 key/cert 仅服务本地 fixture，生产 HTTPS 校验不变。`test-fixtures/lifecycle-harness.ts` 仅补充退出码证据，不代替正式 bin 链路。
+
+`npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts` 覆盖 signals、startup/reload race、timer 清零/迟到回调、failure priority 和资源释放；`npm test -w @symphony/config -- src/workflow-reload.test.ts` 验证显式 monitoring 兼容性。每个 M6 Core 项的用例名见 [conformance](../../docs/conformance.md#m65-core-证据索引)。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 和外部 Real Integration 未在此实现。

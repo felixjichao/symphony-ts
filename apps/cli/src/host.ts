@@ -3,6 +3,7 @@ import {
   watchWorkflow,
   type EffectiveWorkflow,
   type WorkflowWatchHandle,
+  type WorkflowWatchScheduler,
 } from "@symphony/config";
 import type { OrchestratorRuntimeState } from "@symphony/domain";
 import {
@@ -50,6 +51,7 @@ export interface SymphonyHost {
   readonly clock: SnapshotClock;
   getSnapshot(): ObservabilitySnapshot;
   tryGetSnapshot(): SnapshotResult;
+  readonly failure: Promise<unknown>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -64,6 +66,7 @@ export interface CreateHostOptions {
   readonly retryScheduler?: RetryScheduler | undefined;
   readonly now?: (() => number) | undefined;
   readonly monotonicNow?: (() => number) | undefined;
+  readonly watcherScheduler?: WorkflowWatchScheduler | undefined;
   readonly watcherIntervalMs?: number | undefined;
 }
 
@@ -84,10 +87,15 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     observers,
   });
 
+  let reportFailure!: (error: unknown) => void;
+  const failure = new Promise<unknown>((resolve) => { reportFailure = resolve; });
   let watcher: WorkflowWatchHandle;
   try {
     watcher = watchWorkflow({
       path: workflowPath,
+      autoStart: false,
+      ...(options.watcherScheduler !== undefined ? { scheduler: options.watcherScheduler } : {}),
+      onFatal: reportFailure,
       ...(options.watcherIntervalMs !== undefined ? { intervalMs: options.watcherIntervalMs } : {}),
       trackerExtension: registry.createConfigExtension(),
       ...(options.env !== undefined ? { env: options.env } : {}),
@@ -98,130 +106,163 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     });
   } catch (error) {
     observers.onConfigFailure(error);
+    try { logger.close(); } catch { /* Preserve initial validation failure. */ }
     throw error;
   }
 
-  const workspaceCoordinator = new WorkspaceLifecycleCoordinator(controller, observers);
+  try {
+    const workspaceCoordinator = new WorkspaceLifecycleCoordinator(controller, observers);
 
-  const trackerProxy: TrackerAdapter = {
-    get kind() {
-      return controller.current.adapter.kind;
-    },
-    fetchIssuesByStates(states) {
-      return controller.current.adapter.fetchIssuesByStates(states);
-    },
-    fetchIssuesByIds(ids) {
-      return controller.current.adapter.fetchIssuesByIds(ids);
-    },
-  };
+    const trackerProxy: TrackerAdapter = {
+      get kind() {
+        return controller.current.adapter.kind;
+      },
+      fetchIssuesByStates(states) {
+        return controller.current.adapter.fetchIssuesByStates(states);
+      },
+      fetchIssuesByIds(ids) {
+        return controller.current.adapter.fetchIssuesByIds(ids);
+      },
+    };
 
-  const preflight: DispatchPreflightSource = {
-    preflight: (): DispatchPreflightResult => {
-      const result = watcher.reloadWithResult();
-      if (!result.ok) {
+    const preflight: DispatchPreflightSource = {
+      preflight: (): DispatchPreflightResult => {
+        const result = watcher.reloadWithResult();
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: result.error.message,
+          };
+        }
         return {
-          ok: false,
-          error: result.error.message,
+          ok: true,
+          effective: controller.current.scheduling,
         };
-      }
-      return {
-        ok: true,
-        effective: controller.current.scheduling,
-      };
-    },
-  };
+      },
+    };
 
-  const initialEffective = controller.current.scheduling;
-  const state = createOrchestratorRuntimeState(initialEffective);
+    const initialEffective = controller.current.scheduling;
+    const state = createOrchestratorRuntimeState(initialEffective);
 
-  const cleanupWorkspace: RetryWorkspaceCleanup = {
-    removeWorkspace: (identifier: string) => cleanupWorkspace.removeWorkspaceForIssue!({ issueId: null, identifier }),
-    removeWorkspaceForIssue: async (context: WorkspaceCleanupIssueContext) => {
-      const { manager, release } = workspaceCoordinator.resolveForCleanup(context);
-      const result = await manager.removeWorkspace(context.identifier, {
-        hooks: controller.current.serviceConfig.hooks,
-        onHookEvent: observers.onHookEventForIssue(context),
-      });
-      if (result.status === "removed" || result.status === "missing") {
-        release();
-      }
-      return result;
-    },
-  };
+    const cleanupWorkspace: RetryWorkspaceCleanup = {
+      removeWorkspace: (identifier: string) => cleanupWorkspace.removeWorkspaceForIssue!({ issueId: null, identifier }),
+      removeWorkspaceForIssue: async (context: WorkspaceCleanupIssueContext) => {
+        const { manager, release } = workspaceCoordinator.resolveForCleanup(context);
+        const result = await manager.removeWorkspace(context.identifier, {
+          hooks: controller.current.serviceConfig.hooks,
+          onHookEvent: observers.onHookEventForIssue(context),
+        });
+        if (result.status === "removed" || result.status === "missing") {
+          release();
+        }
+        return result;
+      },
+    };
 
-  const now = options.now ?? (() => Date.now());
-  const monotonicNow = options.monotonicNow ?? (() => performance.now());
-  const clock: SnapshotClock = {
-    wallNow: () => now(),
-    monotonicNow: () => monotonicNow(),
-  };
+    const now = options.now ?? (() => Date.now());
+    const monotonicNow = options.monotonicNow ?? (() => performance.now());
+    const clock: SnapshotClock = {
+      wallNow: () => now(),
+      monotonicNow: () => monotonicNow(),
+    };
 
-  const authority = new OrchestratorAuthority({
-    state,
-    policy: controller.current.scheduling.policy,
-    tracker: trackerProxy,
-    runner: runAgentAttempt,
-    createAttemptOptions: (context) => workspaceCoordinator.createAttemptOptions(context),
-    resolveWorkspacePath: (issue) => workspaceCoordinator.resolveForDispatch(issue),
-    onEvent: observers.onEvent,
-    onOutcome: observers.onOutcome,
-    onCleanupDiagnostic: observers.onCleanupDiagnostic,
-    cleanupWorkspace,
-    stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
-    retry: {
-      ...(options.retryScheduler !== undefined ? { scheduler: options.retryScheduler } : {}),
-      maxRetryBackoffMs: () => controller.current.serviceConfig.agent.maxRetryBackoffMs,
+    const authority = new OrchestratorAuthority({
+      state,
+      policy: controller.current.scheduling.policy,
+      tracker: trackerProxy,
+      runner: runAgentAttempt,
+      createAttemptOptions: (context) => workspaceCoordinator.createAttemptOptions(context),
+      resolveWorkspacePath: (issue) => workspaceCoordinator.resolveForDispatch(issue),
+      onEvent: observers.onEvent,
+      onOutcome: observers.onOutcome,
+      onCleanupDiagnostic: observers.onCleanupDiagnostic,
       cleanupWorkspace,
-      onDiagnostic: observers.onCleanupDiagnostic,
-    },
-    now,
-    monotonicNow,
-  });
+      stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
+      retry: {
+        ...(options.retryScheduler !== undefined ? { scheduler: options.retryScheduler } : {}),
+        maxRetryBackoffMs: () => controller.current.serviceConfig.agent.maxRetryBackoffMs,
+        cleanupWorkspace,
+        onDiagnostic: observers.onCleanupDiagnostic,
+      },
+      now,
+      monotonicNow,
+    });
 
-  controller.setAuthority(authority);
+    controller.setAuthority(authority);
 
-  const loop = new OrchestratorLoop({
-    authority,
-    candidates: trackerProxy,
-    preflight,
-    ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
-    onDiagnostic: observers.onDiagnostic,
-  });
+    const loop = new OrchestratorLoop({
+      authority,
+      candidates: trackerProxy,
+      preflight,
+      ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
+      onDiagnostic: observers.onDiagnostic,
+    });
 
-  return {
-    workflowPath,
-    get effective() {
-      return controller.current.effectiveWorkflow;
-    },
-    state,
-    authority,
-    cleanupWorkspace,
-    workspaceCoordinator,
-    tracker: trackerProxy,
-    loop,
-    logger,
-    clock,
-    getSnapshot: () => projectObservabilitySnapshot(state, clock),
-    tryGetSnapshot: () => tryProjectObservabilitySnapshot(state, clock),
-    async start() {
-      observers.lifecycle({ event: "startup", outcome: "started" });
-      try {
-        await loop.start();
-        observers.lifecycle({ event: "startup", outcome: "completed" });
-      } catch (error) {
-        observers.lifecycle({ event: "startup", outcome: "failed" });
-        throw error;
-      }
-    },
-    async stop() {
+    let stopping = false;
+    let startPromise: Promise<void> | undefined;
+    let stopPromise: Promise<void> | undefined;
+    const stop = (): Promise<void> => {
+      if (stopPromise !== undefined) return stopPromise;
+      stopping = true;
+      let resolveStop!: () => void;
+      let rejectStop!: (error: unknown) => void;
+      stopPromise = new Promise<void>((resolve, reject) => { resolveStop = resolve; rejectStop = reject; });
+      controller.close();
       observers.lifecycle({ event: "shutdown", outcome: "started" });
-      try {
-        watcher.close();
-        await loop.stop();
-        observers.lifecycle({ event: "shutdown", outcome: "completed" });
-      } finally {
-        logger.close();
-      }
-    },
-  };
+      const errors: unknown[] = [];
+      try { watcher.close(); } catch (error) { errors.push(error); }
+      // Call the loop's synchronous shutdown prefix before waiting for startup.
+      let shutdown: Promise<void>;
+      try { shutdown = loop.stop(); } catch (error) { shutdown = Promise.reject(error); }
+      void (async () => {
+        try { await shutdown; } catch (error) { errors.push(error); }
+        observers.lifecycle({ event: "shutdown", outcome: errors.length ? "failed" : "completed" });
+        try { logger.close(); } catch (error) { errors.push(error); }
+        if (errors.length) throw new AggregateError(errors, "Host shutdown failed");
+      })().then(resolveStop, rejectStop);
+      return stopPromise;
+    };
+
+    return {
+      workflowPath,
+      get effective() {
+        return controller.current.effectiveWorkflow;
+      },
+      state,
+      authority,
+      cleanupWorkspace,
+      workspaceCoordinator,
+      tracker: trackerProxy,
+      loop,
+      logger,
+      clock,
+      getSnapshot: () => projectObservabilitySnapshot(state, clock),
+      tryGetSnapshot: () => tryProjectObservabilitySnapshot(state, clock),
+      failure,
+      start() {
+        if (stopping) return Promise.reject(new Error("Host is stopped"));
+        if (startPromise !== undefined) return startPromise;
+        observers.lifecycle({ event: "startup", outcome: "started" });
+        startPromise = (async () => {
+          try {
+            watcher.startMonitoring();
+            if (stopping) return;
+            await loop.start();
+            if (!stopping) observers.lifecycle({ event: "startup", outcome: "completed" });
+          } catch (error) {
+            observers.lifecycle({ event: "startup", outcome: "failed" });
+            try { await stop(); } catch { /* Preserve the original startup failure. */ }
+            throw error;
+          }
+        })();
+        return startPromise;
+      },
+      stop,
+    };
+  } catch (error) {
+    controller.close();
+    try { watcher.close(); } catch { /* Continue construction rollback. */ }
+    try { logger.close(); } catch { /* Preserve the original construction failure. */ }
+    throw error;
+  }
 }

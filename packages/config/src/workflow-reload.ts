@@ -80,6 +80,11 @@ export interface ReloadWithResultOptions {
 export interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
   /** 轮询间隔（ms）；默认 1000。测试可注入 10–20 以确定性复跑。 */
   readonly intervalMs?: number;
+  /** Initialize/preflight without a timer; default true preserves existing callers. */
+  readonly autoStart?: boolean;
+  readonly scheduler?: WorkflowWatchScheduler;
+  /** Unexpected monitoring defects, distinct from recoverable typed config errors. */
+  readonly onFatal?: (error: unknown) => void;
   /**
    * 重载事件回调（operator-visible error contract 的载体）。初始加载**不**触发
    * 事件——初始失败由 {@link watchWorkflow} 直接 throw。
@@ -93,8 +98,15 @@ export interface WatchWorkflowOptions extends LoadEffectiveWorkflowOptions {
   readonly store?: WorkflowEffectiveStore | undefined;
 }
 
+export interface WorkflowWatchScheduler {
+  schedule(callback: () => void, intervalMs: number): unknown;
+  cancel(handle: unknown): void;
+}
+
 /** {@link watchWorkflow} 返回的 handle。 */
 export interface WorkflowWatchHandle {
+  /** Start monitoring once; after close this is a no-op. */
+  startMonitoring(): void;
   /** 当前 effective workflow（last-known-good）：创建成功后恒有值，只被 valid reload 替换。 */
   current(): EffectiveWorkflow;
   /**
@@ -217,16 +229,30 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
     return lastReloadResult;
   };
 
-  const timer = setInterval(() => {
-    const next = readWorkflowStamp(workflowPath);
-    if (next === stamp) {
-      return;
-    }
-    // 先记录新 stamp：持续写坏的文件只上报一次，不每 tick 重复刷事件。
-    performReload(false);
-  }, intervalMs);
+  const scheduler = options.scheduler ?? {
+    schedule: (callback: () => void, delay: number) => setInterval(callback, delay),
+    cancel: (handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>),
+  };
+  let timer: unknown;
+  let monitoring = false;
+  const startMonitoring = (): void => {
+    if (closed || monitoring) return;
+    timer = scheduler.schedule(() => {
+      if (closed) return;
+      try {
+        const next = readWorkflowStamp(workflowPath);
+        if (next !== stamp) performReload(false);
+      } catch (error) {
+        if (options.onFatal === undefined) throw error;
+        options.onFatal(error);
+      }
+    }, intervalMs);
+    monitoring = true;
+  };
+  if (options.autoStart !== false) startMonitoring();
 
   return {
+    startMonitoring,
     current: () => store.current(),
     reload: () => {
       if (closed) {
@@ -242,7 +268,8 @@ export function watchWorkflow(options: WatchWorkflowOptions = {}): WorkflowWatch
         return;
       }
       closed = true;
-      clearInterval(timer);
+      if (monitoring) scheduler.cancel(timer);
+      monitoring = false;
     },
   };
 }

@@ -26,6 +26,17 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 
 日常开发命令、TS 布局约定见 [docs/development.md](docs/development.md)。
 
+## 运行 CLI
+
+```bash
+npm run build
+node apps/cli/dist/bin/symphony.js ./WORKFLOW.md
+# 无路径参数时使用 cwd 的 ./WORKFLOW.md；SIGINT / SIGTERM 等待资源收口后退出 0。
+npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts
+```
+
+startup/preflight、致命生命周期或 shutdown 失败退出 1。CLI 自然退出，不以强制 exit 隐藏 watcher、poll、retry 或 agent 遗留。M6 Core 各项文件、用例名与命令见 [conformance](docs/conformance.md#m65-core-证据索引)。本地 HTTPS tracker / app-server fixture 证据不代表外部 GitHub / Codex Real Integration；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 均不在 M6 Core 范围。
+
 ## 包布局
 
 | 包 | SPEC §3 组件 | SPEC sections | 职责 |
@@ -64,7 +75,7 @@ npm test -w @symphony/domain  # 只跑某个 workspace 的测试
 | M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定随 M4.2 落地） | ✅ 已完成 |
 | M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | ✅ 已完成（M4.1–M4.5 各层实现，以及 WORKFLOW.md → config → workspace → runner → fake app-server 端到端 Core Conformance 与 §17.2 / §17.5 / §10 / §12 收口） |
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | ✅ 已完成（M5.1–M5.6；§17.4 非 conditional 条目已收口） |
-| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 进行中（M6.1 snapshot 与 M6.2 structured logging/helpers 已实现；获取层 timeout、CLI host 与可选 HTTP/dashboard 尚未实现） |
+| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 进行中：Core 实现及本地证据已齐备（M6.1–M6.5）；M6.5 待合入与 main CI 验收，尚不标为完成。HTTP/dashboard 为 optional extension |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
 里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 [docs/conformance.md](docs/conformance.md) 矩阵为准。

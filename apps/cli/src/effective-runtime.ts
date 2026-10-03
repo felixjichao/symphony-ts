@@ -48,6 +48,7 @@ export class EffectiveRuntimeController {
   private readonly onCommit: ((runtime: EffectiveRuntime) => void) | undefined;
 
   private currentRuntime: EffectiveRuntime | null = null;
+  private closed = false;
   private authority: OrchestratorAuthority | null = null;
 
   constructor(options: EffectiveRuntimeControllerOptions) {
@@ -77,6 +78,10 @@ export class EffectiveRuntimeController {
     };
   }
 
+  public close(): void {
+    this.closed = true;
+  }
+
   /**
    * 同步准备并提交新 EffectiveWorkflow。
    *
@@ -93,6 +98,9 @@ export class EffectiveRuntimeController {
    * 任何步骤在提交前失败均抛出异常，完整保留原 currentRuntime，不发事件，不产生 partial publish。
    */
   public accept(effective: EffectiveWorkflow): void {
+    if (this.closed) {
+      throw new SymphonyConfigError("invalid_config", "Effective runtime is stopped", { path: this.workflowPath });
+    }
     const command = effective.serviceConfig.codex.command.trim();
     if (!command) {
       throw new SymphonyConfigError(

@@ -331,6 +331,9 @@ describe("§10.3 / §17.5 stderr 与协议流物理隔离", () => {
     const echo = await transport.sendRequest({ method: "test/echo", params: { survived: true } });
 
     expect(resultObject(echo.result).echo).toEqual({ survived: true });
+    // stdout response is not a barrier for the independent stderr pipe.
+    await waitFor(() => collector.stderrLines.filter((line) => line.startsWith("noise ")).length === 200
+      && collector.issues.some((issue) => issue.reason === "oversized_line"));
     expect(collector.stderrLines.filter((line) => line.startsWith("noise "))).toHaveLength(200);
     // 超长 stderr 行被丢弃（有界），且只报告一次，不影响 stdout 上的成帧。
     expect(collector.issues.filter((issue) => issue.reason === "oversized_line")).toHaveLength(1);

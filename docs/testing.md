@@ -62,19 +62,19 @@ npm run gate                      # typecheck + test + lint + docs:check 一键�
 
 poll/retry scheduler 分离且可手动推进，不等待真实 backoff；retry due 用单调 clock，stall 将注入 UTC clock 对齐真实 AgentEvent 时间。短有界等待只用于进程/文件/异步收尾观测。断言 PID/cwd、目录 marker、after_run 与删除次序，finally/afterEach 先 stop 再删除临时目录。关停 barrier 覆盖 candidate fetch、retry refresh、startup cleanup 与 terminal cleanup 在途；既有 `loop-shutdown.test.ts` 补齐迟到回调与自然退出竞态。
 
-新增 integration suite 在交付前连续复跑；`npm run gate` 是完整门禁。外部 provider、真实 Codex 与 CLI 尚未验证，不能从本地 fixture 通过推导生产就绪。
+新增 integration suite 在交付前连续复跑；`npm run gate` 是完整门禁。外部 provider 与真实 Codex 尚未验证；CLI executable 的本地 process 证据见 M6.5，不能从 fixture 通过推导外部 Real Integration。
 
 ## M6.1 snapshot evidence
 
 运行 `npm test -w @symphony/observability`：empty/session-null/session-established、双时钟各采样一次、稳定排序、monotonic delay、active/ended duration 不双计、absolute totals、双向深复制隔离、handles 白名单排除及同步 unavailable；`snapshot-boundaries.test.ts` 对生产入口/投影 AST 检查 import、async/await 和 I/O/timer 边界。
 
-运行 `npm test -w @symphony/orchestrator -- src/observability-integration.test.ts`：真实 authority 的 onEvent 经真实 applyAgentEvent，配受控 runner / 手动 clocks / timer ports，验证重复/回退/异 thread usage、多 turn、normal exit 与 shutdown 结算、观察失败不改变 claim/重派、retry URL outcome → refresh failure → slot/dispatch failure（含 null）。完整 `npm test -w @symphony/orchestrator` 同时继续回归 M5 真实 subprocess。根 `npm run typecheck` 与 `npm run gate` 为交付门禁。同步 projector 没有 timeout；不能以这些证据宣称 logging、HTTP 或整个 §17.6 完成。
+运行 `npm test -w @symphony/orchestrator -- src/observability-integration.test.ts`：真实 authority 的 onEvent 经真实 applyAgentEvent，配受控 runner / 手动 clocks / timer ports，验证重复/回退/异 thread usage、多 turn、normal exit 与 shutdown 结算、观察失败不改变 claim/重派、retry URL outcome → refresh failure → slot/dispatch failure（含 null）。完整 `npm test -w @symphony/orchestrator` 同时继续回归 M5 真实 subprocess。根 `npm run typecheck` 与 `npm run gate` 为交付门禁。同步 projector 没有获取层 timeout；logging/CLI 的其他证据见 M6 Core 索引，HTTP 仍为 optional extension。
 
 ## M6.2 logging Core Conformance
 
 Four entrypoints: `npm test -w @symphony/observability` (snapshot + logger), `npm test -w @symphony/tracker -- src/github/adapter.test.ts`, `npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts`, and `npm test -w @symphony/cli -- src/logging.test.ts`. Tests observe actual committed state/timers and captured safe lines. CLI harness uses real temp WORKFLOW/config/registry/WorkspaceManager/authority/loop and fake app-server subprocess, including two turns, hook failure, fragmented stderr, 10MiB line overflow/recovery, sink/clock failures and filesystem reload rejection. Only external provider/process behavior and clocks/timers are fixtures. Existing M5 integration/shutdown and M6.1 snapshot suites run in the same `npm run gate`.
 
-Fixed lifecycle templates are the MVP; free AgentEvent summaries/hooks/protocol payloads are omitted. The harness verifies composition helpers, not the production executable, signal handlers or host effective-runtime reload commit (M6.3–M6.5). Richer §13.6 humanization is conditional/deferred.
+Fixed lifecycle templates are the MVP; free AgentEvent summaries/hooks/protocol payloads are omitted. The helper harness verifies composition helpers; production executable/signals and host reload commit are additionally verified by M6.3–M6.5 below. Richer §13.6 humanization is conditional/deferred.
 
 ## M6.3 CLI host and executable Core Conformance
 
@@ -84,4 +84,21 @@ Fixed lifecycle templates are the MVP; free AgentEvent summaries/hooks/protocol 
 - `src/bin.test.ts`：真实子进程集成测试，验证 `package.json` 的 `bin` 契约（`dist/bin/symphony.js` shebang 与执行权限）、显式与 CWD 默认 workflow 加载、缺失文件 / 非法配置退出码 1 且输出结构化错误、以及 `SIGINT` / `SIGTERM` 优雅停机并以 0 退出；
 - `src/logging.test.ts`：M6.2 logging helpers 回归。
 
-动态 reload（M6.4）、信号竞态与完整 exit-code matrix（M6.5）不在本阶段范围。
+历史 M6.3 范围不含 live reload/signals race；这些证据由 M6.4/M6.5 补齐，见下。
+
+## M6.5 process lifecycle and closure
+
+```bash
+npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts
+npm test -w @symphony/cli -- src/host-reload.test.ts src/secret-boundary.test.ts src/effective-runtime.test.ts
+npm test -w @symphony/config -- src/workflow-reload.test.ts
+npm run gate
+```
+
+`bin.test.ts` 每轮 build 当前源码对应的真实 package executable；测试不复用旧 dist。内置 GitHub profile 经 loopback HTTPS + committed test-only CA/key + child `NODE_EXTRA_CA_CERTS` 访问；无公网和生产 HTTPS 豁免。path/default/missing/preflight/logs/signals/reload/真实 agent termination 经正式 bin；`lifecycle-harness.ts` 调用同一 runCli 但注入故障资源，只补充 abnormal/shutdown exit codes。
+
+readiness 用真实 request/session/transcript/prompt/after_run marker，无固定 sleep、共享 request 计数或旧 bundle fallback。计数仅在单实例 barrier 建立后捕获；attempt/root 分开归因。startup terminal fetch barrier 内发送信号，after_run barrier 内发送第二信号；后者先重读 PID 确认消失再写 marker，父测试读取 `dead` 与 cwd 并再次检查 PID。忽略 SIGTERM 的 app-server 沿用已有 TERM→KILL deadline；SIGKILL 单独仅证明 abnormal termination。finally 先关闭 child 并等待 close，再关 tracker/删目录。全仓回归发现既有 transport stderr flood 断言错误地将 stdout 回包当作独立 stderr pipe 的 barrier，已改为等实际 200 行与 oversized diagnostic 完整接收，未改变 transport 实现。
+
+`lifecycle.test.ts` 使用真实 config/host/loop，受控 watcher/poll/retry ports 核对资源归零；先制造真实 failed attempt 的 retry，停止后重放已捕获 callbacks 验证无 tracker request、新提交或 dispatch。startup 和 watcher-close 故障仍释放其他资源；shell tests 检查自己安装的 handlers、failure priority。M6.4 的回归装配保留，仅将依赖构造时自动 monitoring 的用例改为显式 start + 不自动执行 poll 的 scheduler。
+
+逐项文件、用例名、命令见 [M6 Core 索引](conformance.md#m65-core-证据索引)。本地 gate 不替代 M6.5 合入后的 main CI；M6.1–M6.5 全合入与 main CI success 前不标 M6 Core 完成。HTTP §13.7、tools §11.5、durable recovery、SSH 不在本轮范围。

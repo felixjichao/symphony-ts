@@ -67,6 +67,9 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 
+// M6.5: exercise the existing transport TERM -> KILL deadline; no host timeout.
+if (args["ignore-sigterm"]) process.on("SIGTERM", () => {});
+
 if (args["exit-before-handshake"]) {
   const code =
     args["exit-before-handshake"] === true

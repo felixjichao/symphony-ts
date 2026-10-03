@@ -1,197 +1,209 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { build } from "vite";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
+import { appServer, binPath, cliRoot, httpsTracker, startProcess, workflow } from "./process.test-helpers";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cliRoot = path.resolve(__dirname, "..");
 const pkg = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8")) as { version: string; bin: { symphony: string } };
-const binPath = path.resolve(cliRoot, pkg.bin.symphony);
-const repoRoot = path.resolve(cliRoot, "../..");
-const nodeModulesBin = path.join(repoRoot, "node_modules", ".bin", "symphony");
-
-beforeAll(() => {
-  if (!existsSync(binPath) || !existsSync(nodeModulesBin)) {
-    execSync("npm run build", { cwd: cliRoot, stdio: "inherit" });
-  }
-  expect(existsSync(binPath)).toBe(true);
-  expect(existsSync(nodeModulesBin)).toBe(true);
-});
-
-function runToExit(args: string[], options: { cwd?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(binPath, args, {
-      cwd: options.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-
-    child.on("exit", (code) => {
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-function runUntilStartupAndStop(args: string[], options: { cwd?: string; signal?: "SIGINT" | "SIGTERM" } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(binPath, args, {
-      cwd: options.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let stopped = false;
-
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => {
-      stderr += d.toString();
-      if (!stopped && stderr.includes('event="startup"') && stderr.includes('outcome="completed"')) {
-        stopped = true;
-        child.kill(options.signal ?? "SIGINT");
-      }
-    });
-
-    const timeout = setTimeout(() => {
-      if (!stopped) {
-        child.kill("SIGKILL");
-        reject(new Error(`Timed out waiting for startup. Stderr: ${stderr}`));
-      }
-    }, 10000);
-
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-function createSampleWorkflow(root: string, overrides: string = ""): string {
-  return `---\ntracker:\n  kind: github\n  provider:\n    repo: acme/widget\n    token: test-token\nworkspace:\n  root: ${root}\npolling:\n  interval_ms: 100000\ncodex:\n  command: "echo test"\n${overrides}---\nHandle {{ issue.identifier }}\n`;
-}
+const link = path.resolve(cliRoot, "../../node_modules/.bin/symphony");
+let harnessDir: string;
+let harness: string;
+beforeAll(async () => {
+  execFileSync("npm", ["run", "build"], { cwd: cliRoot, stdio: "pipe" });
+  harnessDir = await mkdtemp(path.join(os.tmpdir(), "sym-shell-harness-"));
+  harness = path.join(harnessDir, "harness.mjs");
+  await build({ configFile: false, logLevel: "silent", ssr: { noExternal: true }, build: {
+    ssr: fileURLToPath(new URL("../test-fixtures/lifecycle-harness.ts", import.meta.url)),
+    outDir: harnessDir, target: "node20", rollupOptions: { output: { entryFileNames: "harness.mjs" } },
+  } });
+}, 30000);
+afterAll(async () => { if (harnessDir) await rm(harnessDir, { recursive: true, force: true }); });
 
 describe("CLI binary child process execution (§17.7 / §18.1)", () => {
-  it("verifies package.json bin contract points to an executable with shebang", () => {
+  it("verifies executable shebang and canonical package bin link", () => {
     expect(pkg.bin.symphony).toBe("./dist/bin/symphony.js");
-    const content = readFileSync(binPath, "utf8");
-    expect(content.startsWith("#!/usr/bin/env node")).toBe(true);
+    expect(readFileSync(binPath, "utf8").startsWith("#!/usr/bin/env node")).toBe(true);
+    expect(existsSync(link)).toBe(true);
+    expect(execFileSync(link, ["--version"], { encoding: "utf8" }).trim()).toBe(pkg.version);
   });
-
-  it("prints help and exits with 0 on --help", async () => {
-    const { code, stdout } = await runToExit(["--help"]);
-    expect(code).toBe(0);
-    expect(stdout).toContain("Usage: symphony");
-    expect(stdout).toContain("--help");
+  it.each(["--help", "--version"])("prints %s and exits naturally with zero", async (arg) => {
+    const proc = startProcess([arg]);
+    const result = await proc.result;
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toContain(arg === "--help" ? "Usage: symphony" : pkg.version);
   });
-
-  it("prints version and exits with 0 on --version", async () => {
-    const { code, stdout } = await runToExit(["--version"]);
-    expect(code).toBe(0);
-    expect(stdout.trim()).toBe(pkg.version);
-  });
-
-  it("executes through canonical node_modules/.bin/symphony link", () => {
-    expect(existsSync(nodeModulesBin)).toBe(true);
-    const output = execSync(`${nodeModulesBin} --version`, { encoding: "utf8" });
-    expect(output.trim()).toBe(pkg.version);
-  });
-
-  it("launches and stops gracefully with explicit workflow path", async () => {
-    const temp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-explicit-"));
-    const workflowPath = path.join(temp, "custom-WORKFLOW.md");
-
+  it.each([
+    ["absolute", "SIGINT"], ["relative", "SIGTERM"], ["default", "SIGINT"],
+  ] as const)("loads %s path and gracefully stops on %s", async (mode, signal) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-bin-"));
+    const tracker = await httpsTracker();
+    const filename = mode === "default" ? "WORKFLOW.md" : "custom.md";
+    await writeFile(path.join(dir, filename), workflow(path.join(dir, "work"), tracker.url));
+    const proc = startProcess(mode === "default" ? [] : [mode === "absolute" ? path.join(dir, filename) : filename], dir);
     try {
-      await writeFile(workflowPath, createSampleWorkflow(temp));
-      const { code, stderr } = await runUntilStartupAndStop([workflowPath]);
-      expect(code).toBe(0);
-      expect(stderr).toContain('event="startup" outcome="started"');
-      expect(stderr).toContain('event="startup" outcome="completed"');
-      expect(stderr).toContain('event="shutdown" outcome="completed"');
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+      await proc.waitForOutput('event="startup" outcome="completed"');
+      await tracker.waitForRequest((url) => url.searchParams.get("state") === "open");
+      proc.child.kill(signal);
+      const result = await proc.result;
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain('event="shutdown" outcome="completed"');
+      expect(result.stderr).not.toContain("fixture-secret");
+    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
   });
-
-  it("discovers default ./WORKFLOW.md in cwd and stops gracefully", async () => {
-    const temp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-cwd-"));
-    const workflowPath = path.join(temp, "WORKFLOW.md");
-
+  it.each(["explicit", "default"])("fails cleanly with missing %s workflow", async (mode) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-missing-"));
     try {
-      await writeFile(workflowPath, createSampleWorkflow(temp));
-      const { code, stderr } = await runUntilStartupAndStop([], { cwd: temp });
-      expect(code).toBe(0);
-      expect(stderr).toContain('event="startup" outcome="completed"');
-      expect(stderr).toContain('event="shutdown" outcome="completed"');
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+      const result = await startProcess(mode === "explicit" ? [path.join(dir, "missing.md")] : [], dir).result;
+      expect(result.code).toBe(1);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain("missing_workflow_file");
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
-
-  it("fails with exit code 1 when explicit workflow file is missing", async () => {
-    const nonExistent = path.join(os.tmpdir(), "does-not-exist-WORKFLOW.md");
-    const { code, stderr } = await runToExit([nonExistent]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("missing_workflow_file");
-  });
-
-  it("fails with exit code 1 when default WORKFLOW.md is missing in cwd", async () => {
-    const emptyTemp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-empty-"));
+  it.each([
+    ["syntax", "---\n[invalid-yaml\n---\nPrompt", "config_validation"],
+    ["tracker", "---\ntracker:\n  kind: unknown\n---\nPrompt", "unsupported_tracker_kind"],
+    ["secret", "---\ntracker:\n  kind: github\n  provider:\n    repo: acme/widget\n    token: $MISSING_CLI_FIXTURE_SECRET\n---\nPrompt", "missing_tracker_secret"],
+    ["command", "---\ntracker:\n  kind: github\n  provider:\n    repo: acme/widget\n    token: fixture-secret\ncodex:\n  command: ' '\n---\nPrompt", "invalid_config"],
+    ["HTTPS", "---\ntracker:\n  kind: github\n  provider:\n    repo: acme/widget\n    token: fixture-secret\n    api_url: http://127.0.0.1\n---\nPrompt", "invalid_tracker_config"],
+  ])("rejects %s startup preflight with nonzero safe diagnostics", async (_name, content, diagnostic) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-invalid-"));
     try {
-      const { code, stderr } = await runToExit([], { cwd: emptyTemp });
-      expect(code).toBe(1);
-      expect(stderr).toContain("missing_workflow_file");
-    } finally {
-      await rm(emptyTemp, { recursive: true, force: true });
-    }
+      await writeFile(path.join(dir, "WORKFLOW.md"), content!);
+      const result = await startProcess([], dir).result;
+      expect(result.code).toBe(1);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain(diagnostic);
+      expect(result.stderr).not.toContain("fixture-secret");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+const checkStopped = fileURLToPath(new URL("../test-fixtures/check-stopped.mjs", import.meta.url));
+const command = (flags = "") => `${process.execPath} ${appServer} --record-world world.json --record-transcript transcript.jsonl --record-prompt prompt.txt --silent-turn ${flags}`;
+const hook = (release?: string) => `${process.execPath} ${checkStopped}${release ? ` ${release}` : ""}`;
+function readJson<T>(filename: string): T { return JSON.parse(readFileSync(filename, "utf8")) as T; }
+async function waitFile(filename: string) { await vi.waitFor(() => expect(existsSync(filename)).toBe(true), { timeout: 10000, interval: 10 }); }
+function assertStopped(workspace: string) {
+  const world = readJson<{ pid: number; cwd: string }>(path.join(workspace, "world.json"));
+  const marker = readJson<{ pid: number; dead: boolean; cwd: string }>(path.join(workspace, "after-run.json"));
+  expect(marker).toEqual({ pid: world.pid, cwd: world.cwd, dead: true });
+  expect(() => process.kill(world.pid, 0)).toThrow();
+}
+
+describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
+  it.each(["SIGINT", "SIGTERM"] as const)("waits for agent termination and after_run on %s, deduplicating mixed signals", async (signal) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-agent-"));
+    const tracker = await httpsTracker(); tracker.enableIssue();
+    const root = path.join(dir, "work");
+    const workspace = path.join(root, "GH-1");
+    const release = path.join(dir, "release-hook");
+    await writeFile(path.join(dir, "WORKFLOW.md"), workflow(root, tracker.url, { command: command(signal === "SIGTERM" ? "--ignore-sigterm" : ""), afterRun: hook(release) }));
+    const proc = startProcess([], dir);
+    try {
+      await proc.waitForOutput('event="session_started"');
+      await waitFile(path.join(workspace, "world.json"));
+      proc.child.kill(signal);
+      await waitFile(path.join(workspace, "after-run-entered"));
+      // Parent verifies the child died while host cleanup is still blocked.
+      expect(proc.child.exitCode).toBeNull();
+      expect(existsSync(path.join(workspace, "after-run.json"))).toBe(false);
+      const world = readJson<{ pid: number }>(path.join(workspace, "world.json"));
+      expect(() => process.kill(world.pid, 0)).toThrow();
+      // The hook remains blocked, so this signal is delivered during cleanup.
+      expect(proc.child.kill(signal === "SIGINT" ? "SIGTERM" : "SIGINT")).toBe(true);
+      await proc.waitForOutput('event="shutdown" outcome="started"');
+      await writeFile(release, "release");
+      const result = await proc.result;
+      expect(result.code).toBe(0); expect(result.signal).toBeNull();
+      assertStopped(workspace);
+      expect(result.stderr.match(/event="shutdown" outcome="started"/g)).toHaveLength(1);
+      expect(result.stderr.match(/event="shutdown" outcome="completed"/g)).toHaveLength(1);
+      expect(result.stderr).toContain('issue_id="1" issue_identifier="GH-1" session_id=');
+      expect(result.stderr).not.toContain("fixture-secret");
+      const transcript = readFileSync(path.join(workspace, "transcript.jsonl"), "utf8");
+      expect(transcript).toContain('"method":"turn/start"');
+    } finally { await writeFile(release, "release"); await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
+  }, 20000);
+
+  it("interrupts startup at a real HTTPS request barrier without scheduling work", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-startup-"));
+    const tracker = await httpsTracker(); tracker.holdStartup(); tracker.enableIssue();
+    const root = path.join(dir, "work");
+    await writeFile(path.join(dir, "WORKFLOW.md"), workflow(root, tracker.url, { command: command(), afterRun: hook() }));
+    const proc = startProcess([], dir);
+    try {
+      await tracker.waitForRequest((url) => url.searchParams.get("state") === "closed");
+      proc.child.kill("SIGTERM");
+      await proc.waitForOutput('event="shutdown" outcome="started"');
+      proc.child.kill("SIGINT"); tracker.releaseStartup();
+      const result = await proc.result;
+      expect(result.code).toBe(0); expect(result.signal).toBeNull();
+      expect(result.stderr).not.toContain('event="startup" outcome="completed"');
+      expect(tracker.requests.some((url) => url.searchParams.get("state") === "open")).toBe(false);
+      expect(existsSync(path.join(root, "GH-1", "world.json"))).toBe(false);
+    } finally { tracker.releaseStartup(); await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
-  it("fails with exit code 1 on unsupported tracker kind", async () => {
-    const temp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-badtracker-"));
-    const workflowPath = path.join(temp, "WORKFLOW.md");
-
+  it("keeps live invalid reload recoverable, applies valid reload to a new real agent, and stops both roots", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-reload-"));
+    const tracker = await httpsTracker(); tracker.enableIssue();
+    const rootA = path.join(dir, "root-a"); const rootB = path.join(dir, "root-b");
+    const file = path.join(dir, "WORKFLOW.md");
+    await writeFile(file, workflow(rootA, tracker.url, { command: command(), afterRun: hook() }));
+    const proc = startProcess([], dir);
     try {
-      await writeFile(workflowPath, `---\ntracker:\n  kind: unknown_tracker\nworkspace:\n  root: ${temp}\ncodex:\n  command: "echo test"\n---\nPrompt\n`);
-      const { code, stderr } = await runToExit([workflowPath]);
-      expect(code).toBe(1);
-      expect(stderr).toContain("unsupported_tracker_kind");
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+      await proc.waitForOutput('event="session_started"');
+      const worldA = readJson<{ pid: number; cwd: string }>(path.join(rootA, "GH-1", "world.json"));
+      await writeFile(file, "---\n[invalid-yaml\n---\nRejected secret prompt");
+      await proc.waitForOutput('event="workflow_reload" outcome="failed"');
+      const previous = tracker.requests.length;
+      await tracker.waitForRequest(() => true, previous);
+      expect(proc.child.exitCode).toBeNull();
+      expect(() => process.kill(worldA.pid, 0)).not.toThrow();
+      await writeFile(file, workflow(rootB, tracker.url, { command: command(), prompt: "Reloaded {{ issue.identifier }}", afterRun: hook() }));
+      tracker.enableIssue(2);
+      await waitFile(path.join(rootB, "GH-2", "prompt.txt"));
+      expect(readFileSync(path.join(rootB, "GH-2", "prompt.txt"), "utf8")).toContain("Reloaded GH-2");
+      expect(() => process.kill(worldA.pid, 0)).not.toThrow();
+      proc.child.kill("SIGTERM");
+      const result = await proc.result;
+      expect(result.code).toBe(0); expect(result.signal).toBeNull();
+      assertStopped(path.join(rootA, "GH-1")); assertStopped(path.join(rootB, "GH-2"));
+      expect(result.stderr).toContain('event="workflow_reload" outcome="completed"');
+      expect(result.stderr).not.toContain("Rejected secret prompt");
+    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
-  it("fails with exit code 1 on invalid workflow config syntax", async () => {
-    const temp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-badconfig-"));
-    const workflowPath = path.join(temp, "WORKFLOW.md");
-
+  it("classifies SIGKILL only as abnormal termination", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-kill-"));
+    const tracker = await httpsTracker();
+    await writeFile(path.join(dir, "WORKFLOW.md"), workflow(path.join(dir, "work"), tracker.url));
+    const proc = startProcess([], dir);
     try {
-      await writeFile(workflowPath, `---\n[invalid-yaml-structure\n---\nPrompt\n`);
-      const { code, stderr } = await runToExit([workflowPath]);
-      expect(code).toBe(1);
-      expect(stderr).toContain("config_validation");
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+      await proc.waitForOutput('event="startup" outcome="completed"');
+      proc.child.kill("SIGKILL");
+      const result = await proc.result;
+      expect(result.code).toBeNull(); expect(result.signal).toBe("SIGKILL");
+      expect(result.stderr).not.toContain('event="shutdown" outcome="completed"');
+    } finally { await proc.close(); await tracker.close(); await rm(dir, { recursive: true, force: true }); }
   });
+});
 
-  it("stops gracefully on SIGTERM signal", async () => {
-    const temp = await mkdtemp(path.join(os.tmpdir(), "sym-bin-sigterm-"));
-    const workflowPath = path.join(temp, "WORKFLOW.md");
-
+describe("supplemental production runner shell fault harness", () => {
+  it.each(["startup", "shutdown", "fatal", "uncaught", "rejection"])("naturally exits nonzero after %s failure", async (phase) => {
+    const proc = startProcess([harness, phase], undefined, process.execPath);
     try {
-      await writeFile(workflowPath, createSampleWorkflow(temp));
-      const { code, stderr } = await runUntilStartupAndStop([workflowPath], { signal: "SIGTERM" });
-      expect(code).toBe(0);
-      expect(stderr).toContain('event="shutdown" outcome="completed"');
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
+      await proc.waitForOutput("harness-ready");
+      if (phase === "shutdown") proc.child.kill("SIGTERM");
+      const result = await proc.result;
+      expect(result.code).toBe(1); expect(result.signal).toBeNull();
+      expect(result.stderr).toContain("failed");
+    } finally { await proc.close(); }
   });
 });

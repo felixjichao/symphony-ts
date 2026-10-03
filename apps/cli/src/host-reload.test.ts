@@ -562,7 +562,9 @@ Prompt
         now: () => simulatedNow,
         monotonicNow: () => simulatedMonotonic,
         watcherIntervalMs: 50,
+        scheduler: { schedule: () => ({}), cancel: () => {} },
       });
+      await host.start();
 
       // Dispatch STALL-01
       host.authority.dispatchIssue(issues[0]!);
@@ -865,9 +867,11 @@ Prompt
         workflowPath,
         trackerProfiles: [profile],
         watcherIntervalMs: 50,
+        scheduler: { schedule: () => ({}), cancel: () => {} },
       });
+      await host.start();
 
-      expect(adapterInstances).toEqual(["adapter-v1"]);
+      expect(adapterInstances).toEqual(["adapter-v1", "adapter-v1"]);
 
       // Call tracker proxy: routes to adapter v1
       const issuesV1 = await host.tracker.fetchIssuesByStates(["open"]);
@@ -956,7 +960,9 @@ Good prompt
         workflowPath,
         trackerProfiles: [profile],
         watcherIntervalMs: 50,
+        scheduler: { schedule: () => ({}), cancel: () => {} },
       });
+      await host.start();
 
       const initialEffective = host.effective;
       expect(initialEffective.serviceConfig.polling.intervalMs).toBe(5000);
@@ -1200,7 +1206,9 @@ Prompt v1
         workflowPath,
         trackerProfiles: [profile],
         watcherIntervalMs: 50,
+        scheduler: { schedule: () => ({}), cancel: () => {} },
       });
+      await host.start();
 
       const v1 = host.effective;
       expect(v1.serviceConfig.polling.intervalMs).toBe(7000);
