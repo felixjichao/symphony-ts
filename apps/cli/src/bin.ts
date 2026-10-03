@@ -1,3 +1,4 @@
+import pkg from "../package.json";
 import { parseCliArgs } from "./args";
 import { createHost } from "./host";
 
@@ -11,7 +12,7 @@ Options:
 }
 
 function printVersion(): void {
-  process.stdout.write("0.1.0\n");
+  process.stdout.write(`${pkg.version}\n`);
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {

@@ -8,7 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cliRoot = path.resolve(__dirname, "..");
-const pkg = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8")) as { bin: { symphony: string } };
+const pkg = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8")) as { version: string; bin: { symphony: string } };
 const binPath = path.resolve(cliRoot, pkg.bin.symphony);
 
 beforeAll(() => {
@@ -92,7 +92,15 @@ describe("CLI binary child process execution (§17.7 / §18.1)", () => {
   it("prints version and exits with 0 on --version", async () => {
     const { code, stdout } = await runToExit(["--version"]);
     expect(code).toBe(0);
-    expect(stdout.trim()).toBe("0.1.0");
+    expect(stdout.trim()).toBe(pkg.version);
+  });
+
+  it("executes through canonical node_modules/.bin/symphony link", () => {
+    const repoRoot = path.resolve(cliRoot, "../..");
+    const nodeModulesBin = path.join(repoRoot, "node_modules", ".bin", "symphony");
+    expect(existsSync(nodeModulesBin)).toBe(true);
+    const output = execSync(`${nodeModulesBin} --version`, { encoding: "utf8" });
+    expect(output.trim()).toBe(pkg.version);
   });
 
   it("launches and stops gracefully with explicit workflow path", async () => {

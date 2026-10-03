@@ -1,7 +1,15 @@
 import { runAgentAttempt } from "@symphony/agent";
 import { loadEffectiveWorkflow, type EffectiveWorkflow } from "@symphony/config";
 import type { OrchestratorRuntimeState } from "@symphony/domain";
-import { createStructuredLogger, type StructuredLogger } from "@symphony/observability";
+import {
+  createStructuredLogger,
+  projectObservabilitySnapshot,
+  tryProjectObservabilitySnapshot,
+  type ObservabilitySnapshot,
+  type SnapshotClock,
+  type SnapshotResult,
+  type StructuredLogger,
+} from "@symphony/observability";
 import {
   createOrchestratorRuntimeState,
   OrchestratorAuthority,
@@ -30,6 +38,9 @@ export interface SymphonyHost {
   readonly authority: OrchestratorAuthority;
   readonly loop: OrchestratorLoop;
   readonly logger: StructuredLogger;
+  readonly clock: SnapshotClock;
+  getSnapshot(): ObservabilitySnapshot;
+  tryGetSnapshot(): SnapshotResult;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -118,6 +129,15 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   const state = createOrchestratorRuntimeState(initialEffective);
 
+  const cleanupWorkspace = observers.observeCleanup(manager, () => effective.serviceConfig.hooks);
+
+  const now = options.now ?? (() => Date.now());
+  const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  const clock: SnapshotClock = {
+    wallNow: () => now(),
+    monotonicNow: () => monotonicNow(),
+  };
+
   const authority = new OrchestratorAuthority({
     state,
     policy,
@@ -133,10 +153,16 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     onEvent: observers.onEvent,
     onOutcome: observers.onOutcome,
     onCleanupDiagnostic: observers.onCleanupDiagnostic,
-    cleanupWorkspace: observers.observeCleanup(manager, () => effective.serviceConfig.hooks),
-    ...(options.retryScheduler !== undefined ? { scheduler: options.retryScheduler } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
-    ...(options.monotonicNow !== undefined ? { monotonicNow: options.monotonicNow } : {}),
+    cleanupWorkspace,
+    stallTimeoutMs: () => effective.serviceConfig.codex.stallTimeoutMs,
+    retry: {
+      ...(options.retryScheduler !== undefined ? { scheduler: options.retryScheduler } : {}),
+      maxRetryBackoffMs: () => effective.serviceConfig.agent.maxRetryBackoffMs,
+      cleanupWorkspace,
+      onDiagnostic: observers.onCleanupDiagnostic,
+    },
+    now,
+    monotonicNow,
   });
 
   const loop = new OrchestratorLoop({
@@ -154,6 +180,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     authority,
     loop,
     logger,
+    clock,
+    getSnapshot: () => projectObservabilitySnapshot(state, clock),
+    tryGetSnapshot: () => tryProjectObservabilitySnapshot(state, clock),
     async start() {
       observers.lifecycle({ event: "startup", outcome: "started" });
       try {
@@ -175,3 +204,4 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     },
   };
 }
+
