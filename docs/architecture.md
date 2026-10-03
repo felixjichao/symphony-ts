@@ -65,3 +65,7 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 - [conformance.md](conformance.md) 矩阵的持续更新纪律（每个 milestone PR 必须更新对应行）；
 - 测试分层落地（unit → 组件集成 → 端到端 loop，见 [testing.md](testing.md)）；
 - CI lane 化（当前单 lane：`npm ci && npm run gate`）。
+
+## M6.1 read-only snapshot
+
+`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。logging/HTTP/CLI host 仍分别属于后续工作。

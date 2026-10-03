@@ -40,3 +40,7 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 宿主接线示例见 `src/workflow.test-helpers.ts`：使用 registry 的 extension 加载 effective workflow，校验非空 codex.command，成功才提交整套配置与 adapter；profile 默认 states 由注册表 profile 提供，不要求 config 层回写。candidate/refresh/startup sweep 共享同一 adapter；attempt 使用真实 `runAgentAttempt`；路径与删除经真实 `WorkspaceManager`。M6 应消费这些既有 public ports，不重写 scheduler semantics。配置与生命周期 policy 见 [Agent Note](../../notes/accepted/architecture/2026-10-03-orchestrator-core-conformance.md)。
 
 运行 `npm test -w @symphony/orchestrator`；13 项 §17.4 映射见 [conformance](../../docs/conformance.md#174-orchestrator-core-conformance)。两项 conditional snapshot API 尚未实现。
+
+## M6.1 snapshot metadata
+
+`RetryScheduleRequest.issueUrl?: string | null` 最小透传到 retry；worker outcome 用最新 running issue URL，refresh 失败保留原值，slot/dispatch 失败重排用 refreshed URL（含显式 null）。不保存完整 Issue、不增加 metadata cache、不改变 M5 policy/timer ownership。snapshot 从当前 state 读取，monotonic clock 必须与 authority 同源；observability 仅作为 devDependency 用于 `src/observability-integration.test.ts`。见 [snapshot Note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。

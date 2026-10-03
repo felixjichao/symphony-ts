@@ -80,3 +80,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 - [superseded/architecture/2026-09-25-m0-scaffold.md](superseded/architecture/2026-09-25-m0-scaffold.md) — M0 脚手架：8-workspace 边界先行（被 align-with-upstream-spec 取代）
 - [superseded/architecture/2026-09-26-ctl-gateway-access.md](superseded/architecture/2026-09-26-ctl-gateway-access.md) — symctl 访问网关的路径（被 align-with-upstream-spec 取代，ctl / gateway 已删除）
+
+- [accepted/architecture/2026-10-03-observability-snapshot.md](accepted/architecture/2026-10-03-observability-snapshot.md) — M6.1 snapshot、双时钟与 retry URL 最小跨包透传。

@@ -13,6 +13,9 @@
 
 | SPEC | Capability | Owner | Status | Test |
 |---|---|---|---|---|
+| §13.3 | 同步 running/retry snapshot、稳定排序、复制隔离与 unavailable | `packages/observability` + `packages/domain` | implemented | Core — `npm test -w @symphony/observability`（`snapshot.test.ts` / `snapshot-boundaries.test.ts`）；retry URL：`npm test -w @symphony/orchestrator -- src/observability-integration.test.ts` |
+| §13.3 | snapshot 获取层 timeout（conditional） | future acquisition layer | planned（本地同步入口不适用） | 未实现；不以 timer 模拟同步中断，timeout/unavailable 合并项未全部完成 |
+| §13.5 | live seconds、absolute tokens 与 latest rate-limit 深复制 | `packages/observability` | implemented | `snapshot.test.ts`；真实 authority 去重/结束核算：`observability-integration.test.ts` |
 | §4 | Issue / WorkflowDefinition / ServiceConfig 等领域类型 | `packages/domain` | implemented | Core Conformance — `npm test -w @symphony/domain`（`src/issue.test.ts`、`src/contracts.test.ts`：§4.1.1–§4.1.3 字段 / 缺值语义，§11.3 在场性约束；§6.4 cheat-sheet 形状） |
 | §4 | Workspace / RunAttempt / LiveSession / RetryEntry / RuntimeState 类型 | `packages/domain` | implemented | Core Conformance — `npm test -w @symphony/domain`（`src/workspace.test.ts`、`src/session.test.ts`、`src/contracts.test.ts`：§4.1.4–§4.1.8 + §4.2 归一化纯函数；workspace-key 净化 / 防碰撞为 §17.2 的纯函数层预覆盖，provisioning 行为仍见 §9 行） |
 | §5 | `WORKFLOW.md` 发现与加载（解析优先级） | `packages/config` | implemented | Core Conformance — `npm test -w @symphony/config`（`src/workflow-loader.test.ts`：§17.1 explicit/default path 优先级、missing file 与 read failure 的 typed error、无 front matter、合法 YAML、unknown keys 原样保留、malformed YAML、非 map 根、prompt trim；端到端链路 `src/integration.test.ts`） |
@@ -110,12 +113,23 @@ M1 的 config / domain 行落地时，以 **§17.1（Workflow and Config Parsing
 | normal exit → short continuation attempt 1 | `workflow-integration.test.ts` — `normal exit → complete RetryEntry → continuation attempt 1 with a new process and preserved workspace` |
 | abnormal exit → 10s-base exponential retry | `workflow-integration.test.ts` — `real abnormal exit backs off exponentially and file reload applies the current cap / prompt`；`backoff.test.ts` / `retry-queue.test.ts` |
 | 配置 retry cap | 同上（文件 reload 后新失败 12000ms；已挂 timer 不改期） |
-| RetryEntry attempt / due / identifier / error | normal exit 测试精确核对 issueId、identifier、attempt、dueAtMs、timerHandle、error 六字段 |
+| RetryEntry attempt / due / identifier / error | normal exit 测试精确核对 issueId、identifier、attempt、dueAtMs、timerHandle、error 六字段及 M6.1 可选 issueUrl metadata |
 | stall stop + retry | `workflow-integration.test.ts` — `stall uses the event UTC clock and creates exactly one failure retry after real process shutdown`；`reconciliation.test.ts` 补 disabled / 等于阈值 |
 | slot exhaustion 显式重排原因 | `workflow-integration.test.ts` — `slot exhaustion requeues with the explicit reason after config downshift`，error 精确等于 `no available orchestrator slots` |
 
-conditional snapshot running/retry/token/rate-limit 输出与 timeout/unavailable 两项：**未实现，留 M6**。现有 runtime telemetry 归约不是 snapshot API，不把 conditional 行计入以上闭环。
+conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented**，见下方 §13.3 / §13.5 和 §17.6 分项证据。timeout/unavailable 合并项仅完成同步 unavailable；timeout 获取层 **未实现 / 本地同步入口不适用**，不宣称该合并项全部完成。
 
 额外证据：`workflow-integration.test.ts` 验证 claimed/running duplicate guard、completed 非永久 gating、retry missing/inactive/unroutable release、tracker failure 恢复、startup cleanup、文件级 config re-apply（含 `file per-state override reload changes dispatch while global downshift preserves current workers`、`file reload changes the running worker continuation policy and subsequent stall getter`、startup unsupported tracker / empty command fail-fast）与 AgentEvent token/rate-limit 归约；`workflow-shutdown.test.ts` 覆盖真实 worker 的 candidate fetch / retry refresh / terminal cleanup / startup cleanup 在途 stop；`loop-config.test.ts` 补 per-state reload 与运行中 continuation 动态 policy；`loop-shutdown.test.ts` 补自然退出/迟到 callback 竞态；`retry-workspace.test.ts` / `startup-cleanup.test.ts` 补 unsafe cleanup refusal；`boundaries.test.ts` 守住 public API、反向 import 和 runtime dependency 方向。
 
 §18.1 本次 implemented 的 orchestration core：single-authority polling、continuation / exponential retry 与 configurable cap、terminal/non-active reconciliation、startup 与 active-transition workspace cleanup；动态 config/prompt re-apply 的 loop 接线亦有文件级证据。structured logs、operator-visible logging sink 与 CLI host lifecycle 仍未实现，不宣称 §18.1 全表完成。M6 直接消费既有 loop/authority/AgentEvent 契约。长期接线 policy 见 [Agent Note](../notes/accepted/architecture/2026-10-03-orchestrator-core-conformance.md)。
+
+## §17.6 分项证据（M6.1）
+
+| 验收部分 | 状态 | 可复跑证据 |
+|---|---|---|
+| token/rate-limit aggregation 经 snapshot 保持正确 | implemented | `npm test -w @symphony/orchestrator -- src/observability-integration.test.ts` — real telemetry 测试；`npm test -w @symphony/observability` — session/totals/nested payload 测试 |
+| snapshot 只读、不影响 scheduler correctness | implemented | 同上 — 重复观察不入账、深层双向复制隔离、失败观察后 claim/重派、normal/shutdown ended duration；`snapshot-boundaries.test.ts` — 同步/import/I/O/timer 边界 |
+| validation operator visibility、issue/session log context、sink failure isolation | planned M6.2 | 本任务不提供 logging 证据 |
+| host/status surface 最终闭环 | planned M6.3–M6.5 | HTTP 为 optional extension，不由本任务完成 |
+
+上述仅闭环 snapshot 分项，不宣称整个 §17.6 完成。
