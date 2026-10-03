@@ -143,7 +143,7 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | package dependency direction, observability never scheduler input | implemented | `npm test -w @symphony/orchestrator -- src/boundaries.test.ts`；`logger-boundaries.test.ts` + `snapshot-boundaries.test.ts` |
 | host/status surface 最终闭环 | host implemented（M6.3–M6.5），HTTP deferred extension | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP status surface 为 optional extension |
 
-上述为 snapshot/logging Core 证据；HTTP 与 richer humanization 为未实现的 optional/conditional 项，同步 projector 没有获取层 timeout。M6 完成仍待 M6.5 合入和 main CI 验收。
+上述为 snapshot/logging Core 证据；HTTP 与 richer humanization 为未实现的 optional/conditional 项，同步 projector 没有获取层 timeout。M6 Core 已完成并通过验收（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 保持为范围外 extension。
 
 ## §17.7 / §18.1 分项证据（M6.3 CLI host 与可执行契约）
 
@@ -170,7 +170,7 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 
 ## M6.5 Core 证据索引
 
-M6.1–M6.5 Core 实现与本地测试已齐备；M6.5 PR 合入、对应测试及 main CI 全绿之前，**M6 Core 仍待最终验收**。PR/local gate 不替代 main CI。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 不属于本轮；M7 不承担 M6 host 返工。本地 HTTPS tracker + app-server subprocess 只证明 Core，不代表 §17.8 外部 GitHub/Codex Real Integration。
+**M6 Core 已完成并通过验收**（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）。PR/local gate 不替代 main CI。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 不属于本轮；M7 不承担 M6 host 返工。本地 HTTPS tracker + app-server subprocess 只证明 Core，不代表 §17.8 外部 GitHub/Codex Real Integration。
 
 | M6 Core 项 | 文件与用例名 | 可复跑命令 |
 |---|---|---|

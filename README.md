@@ -75,7 +75,7 @@ startup/preflight、致命生命周期或 shutdown 失败退出 1。CLI 自然�
 | M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定随 M4.2 落地） | ✅ 已完成 |
 | M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | ✅ 已完成（M4.1–M4.5 各层实现，以及 WORKFLOW.md → config → workspace → runner → fake app-server 端到端 Core Conformance 与 §17.2 / §17.5 / §10 / §12 收口） |
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | ✅ 已完成（M5.1–M5.6；§17.4 非 conditional 条目已收口） |
-| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | 进行中：Core 实现及本地证据已齐备（M6.1–M6.5）；M6.5 待合入与 main CI 验收，尚不标为完成。HTTP/dashboard 为 optional extension |
+| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | ✅ 已完成（Core）：M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿。HTTP §13.7 / provider-native tools §11.5 / durable recovery / SSH 保持为范围外 extension |
 | M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
 
 里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 [docs/conformance.md](docs/conformance.md) 矩阵为准。
