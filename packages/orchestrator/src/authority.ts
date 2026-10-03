@@ -14,8 +14,10 @@
  * - 取消经 `WorkerControl.signal` 传给 `runAgentAttempt()`；
  * - terminal refresh / reconciliation / startup sweep 的破坏性清理只经注入的
  *   `cleanupWorkspace` 端口（workspace 包），本类不做删除 fallback；
- * - poll loop / reload（M5.5）不在此实现，但本类提供它们需要的
- *   `reconcileRunningIssues` / `runStartupTerminalCleanup` / `stopWorker` 控制契约。
+ * - poll loop 的编排（startup / tick 顺序 / per-tick 降级）在 `loop.ts`；本类为它
+ *   提供 `reconcileRunningIssues` / `runStartupTerminalCleanup` / `dispatchIssue` /
+ *   `applyEffectiveSchedulingConfig`（live config re-apply）与 `shutdown`（全局关停）
+ *   控制契约。
  */
 import type {
   AgentAttemptOptions,
@@ -195,7 +197,12 @@ interface DispatchOptions {
  */
 export class OrchestratorAuthority {
   private readonly state: OrchestratorRuntimeState;
-  private readonly policy: DispatchPolicy;
+  /**
+   * 当前 effective 调度策略。M5.5 起经 {@link applyEffectiveSchedulingConfig} 在
+   * 每次 tick 更新（workflow reload 后生效）；dispatch / retry / reconciliation /
+   * startup sweep / continuation 每次都读取现值，不缓存构造时快照。
+   */
+  private policy: DispatchPolicy;
   private readonly runner: AgentAttemptRunner;
   private readonly createAttemptOptions: AttemptOptionsFactory;
   private readonly tracker: TrackerRefreshSource;
@@ -242,6 +249,19 @@ export class OrchestratorAuthority {
   private tokenCounter = 0;
   private retryTokenCounter = 0;
   private reconcileEpochCounter = 0;
+  /**
+   * 全局关停标记（M5.5 shutdown）：同步置位后拒绝新 dispatch / retry，使在途
+   * retry refresh 的迟到结果失效，并停止全部 worker。幂等由 {@link shutdownPromise}
+   * 保证。
+   */
+  private stopping = false;
+  private shutdownPromise: Promise<void> | null = null;
+  /**
+   * 已开始的 workspace 删除（startup sweep / reconciliation / retry terminal cleanup）
+   * 的全局在途登记。`shutdown()` 等待它们真正结束，避免调用方以为已关停后旧生命周期
+   * 仍迟到删除目录；`removeWorkspaceFor` 在 stopping 后拒绝**开启**新的删除。
+   */
+  private readonly inFlightCleanups = new Set<Promise<unknown>>();
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.state = options.state;
@@ -278,6 +298,89 @@ export class OrchestratorAuthority {
     return this.active.get(issueId)?.worker;
   }
 
+  /** 当前 effective poll interval（M5.5 loop 用它安排下一次 tick）。 */
+  public get pollIntervalMs(): number {
+    return this.state.pollIntervalMs;
+  }
+
+  /** 是否仍有全局 dispatch slot（M5.5 loop 的 dispatch-until-slots-exhausted）。 */
+  public hasAvailableGlobalSlot(): boolean {
+    return globalAvailableSlots(this.state) > 0;
+  }
+
+  /** 是否已进入全局关停（M5.5 诊断 / 测试观察）。 */
+  public get isStopping(): boolean {
+    return this.stopping;
+  }
+
+  /**
+   * 原子应用一次 effective 调度配置（M5.5 live config re-apply，SPEC §6.2）。
+   *
+   * 只写入两个"当前生效"标量（`pollIntervalMs` / `maxConcurrentAgents`）与
+   * `policy`；retry cap / stall timeout 继续由构造时注入的 getter 从同一 effective
+   * 配置读取，因此本接口无需触碰它们。并发上限**下调不主动终止**已运行 worker：
+   * 新值只影响之后的 slot 判定与 dispatch。
+   */
+  public applyEffectiveSchedulingConfig(update: {
+    readonly pollIntervalMs: number;
+    readonly maxConcurrentAgents: number;
+    readonly policy: DispatchPolicy;
+  }): void {
+    this.state.pollIntervalMs = update.pollIntervalMs;
+    this.state.maxConcurrentAgents = update.maxConcurrentAgents;
+    this.policy = update.policy;
+  }
+
+  /**
+   * **同步**关闭调度权限（M5.5 lifecycle，SPEC §14.3）：置 stopping、使全部 retry
+   * ownership 失效（含已 pop entry、仍在 `fetchIssuesByIds` 的 refresh）、取消并清空
+   * 排队 retry timer，并拒绝之后**开启**新的 workspace 删除。幂等。
+   *
+   * 调用方（loop.stop）必须在等待任何在途 tick / startup **之前**调用它，确保关停
+   * 窗口内不再产生新 dispatch / retry / cleanup。
+   */
+  public beginShutdown(): void {
+    if (this.stopping) {
+      return;
+    }
+    this.stopping = true;
+    this.retryOwners.clear();
+    if (this.scheduler !== undefined) {
+      for (const entry of this.state.retryAttempts.values()) {
+        this.scheduler.cancel(entry.timerHandle);
+      }
+    }
+    this.state.retryAttempts.clear();
+  }
+
+  /**
+   * 全局关停（M5.5 lifecycle，SPEC §14.3）：先同步 {@link beginShutdown}（拒绝新
+   * dispatch / retry、失效 ownership、取消 retry timer），再以 `{ kind: "shutdown" }`
+   * 停止全部 worker，并等待**全部收尾**真正结束——worker 生命周期以及已开始的
+   * workspace cleanup。
+   *
+   * - **同步前缀**：`beginShutdown()` 在返回 Promise 前执行，因此调用方能立即阻止
+   *   新工作，无需等待异步收尾；
+   * - 幂等：重复调用共享同一完成 Promise；
+   * - 不删除正常 workspace（cleanup 只处理 terminal 收尾，且停止后不再开启新删除）。
+   */
+  public shutdown(): Promise<void> {
+    if (this.shutdownPromise !== null) {
+      return this.shutdownPromise;
+    }
+    this.beginShutdown();
+
+    const records = [...this.active.values()];
+    this.shutdownPromise = (async () => {
+      await Promise.allSettled(
+        records.map((record) => record.worker.stop({ kind: "shutdown" })),
+      );
+      await this.waitForIdle();
+      await this.waitForCleanups();
+    })();
+    return this.shutdownPromise;
+  }
+
   /**
    * 派发一个 issue（§7.4 dispatch）。
    *
@@ -294,6 +397,10 @@ export class OrchestratorAuthority {
    * {@link dispatchRetry} 消费自己持有的 claim，普通 `dispatchIssue` 绝不抢占它。
    */
   public dispatchIssue(issue: Issue, options: DispatchOptions = {}): DispatchResult {
+    // 0. 关停后拒绝新 dispatch（M5.5）。
+    if (this.stopping) {
+      return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    }
     // 1. 双检查：claimed / running 任一占用即跳过；同 issue cleanup 在途也跳过
     //    （cleanup 会删除 workspace，必须等它结束后由下一次 tick 重新评估）。
     if (
@@ -337,13 +444,21 @@ export class OrchestratorAuthority {
     }
   }
 
+  /** 等待所有已开始的 workspace 删除真正结束（含 shutdown 前已在途的删除）。 */
+  public async waitForCleanups(): Promise<void> {
+    while (this.inFlightCleanups.size > 0) {
+      await Promise.allSettled([...this.inFlightCleanups]);
+    }
+  }
+
   /**
    * 入队 / 替换一次 retry（SPEC §8.4 / §16.6 `schedule_retry`）：先取消同 issue 旧
    * timer（若在排），写入完整 {@link RetryEntry} 并保留 claim。返回新 entry；未启用
    * retry 控制面时返回 `null`。
    */
   public scheduleRetry(request: RetryScheduleRequest): RetryEntry | null {
-    if (this.retry === undefined || this.scheduler === undefined) {
+    // 关停后不再建立 / 替换 retry timer（M5.5）。
+    if (this.stopping || this.retry === undefined || this.scheduler === undefined) {
       return null;
     }
 
@@ -712,7 +827,8 @@ export class OrchestratorAuthority {
 
     const continuationDecider = createTrackerRefreshContinuationDecider({
       tracker: this.tracker,
-      policy: this.policy,
+      // getter：continuation 判定读取当前 effective policy，reload 后立即生效。
+      policy: () => this.policy,
       isCurrent,
       onRefreshed: (refreshed) => {
         if (isCurrent()) {
@@ -876,6 +992,10 @@ export class OrchestratorAuthority {
 
   /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
   private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome): void {
+    // 关停期间自然退出的 worker 不得重建 retry / timer（M5.5）。
+    if (this.stopping) {
+      return;
+    }
     if (terminal.retryKind === "continuation") {
       this.scheduleRetry({
         issueId: terminal.issueId,
@@ -915,7 +1035,8 @@ export class OrchestratorAuthority {
    * 一次。
    */
   private async handleRetryTimerFired(issueId: string, token: string): Promise<void> {
-    if (this.retry === undefined || this.scheduler === undefined) {
+    // 关停后不再处理到期 retry（同步校验；shutdown 已 clear ownership）。
+    if (this.stopping || this.retry === undefined || this.scheduler === undefined) {
       return;
     }
     // 1. stale / canceled timer：token 已被替换或删除。
@@ -1110,8 +1231,13 @@ export class OrchestratorAuthority {
     if (cleanup === undefined) {
       return null;
     }
+    // 关停后不再**开启**新的删除（§14.3）：已开始的删除由 inFlightCleanups 跟踪，
+    // 并由 shutdown() 等待其真正结束。
+    if (this.stopping) {
+      return null;
+    }
     try {
-      const result = await cleanup.removeWorkspace(identifier);
+      const result = await this.trackCleanup(cleanup.removeWorkspace(identifier));
       if (result.status === "removed" || result.status === "missing") {
         return result.status;
       }
@@ -1150,5 +1276,14 @@ export class OrchestratorAuthority {
     } catch {
       /* 诊断 sink 异常隔离，不破坏 authority */
     }
+  }
+
+  /** 登记一个已开始的删除，settle 后自动移除；供 shutdown 等待真实收尾。 */
+  private trackCleanup<T>(operation: Promise<T>): Promise<T> {
+    const tracked: Promise<T> = operation.finally(() => {
+      this.inFlightCleanups.delete(tracked);
+    });
+    this.inFlightCleanups.add(tracked);
+    return tracked;
   }
 }
