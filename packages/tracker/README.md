@@ -39,6 +39,20 @@ const snapshots = await adapter.fetchIssuesByIds(["opaque-dispatch-id"]);
 - 失败以 `TrackerError` 抛出；`fetchIssuesByIds` 中"已不在配置 scope 内的 ID 被省略"
   是 provider adapter 的责任（orchestrator 视省略为"不再可见"，不伪造 state）。
 
+### GitHub Delivery Primitives（§11.5 / MVP.3）
+
+提供独立于 tracker read kernel 的 GitHub 交付原语与自动合并能力（`GitHubDeliveryService`）：
+
+- `ensurePr(context, options)`：幂等创建或精确复用 PR。以机器可读 marker（`<!-- symphony-delivery-marker: ... -->`）与 `Fixes` 关联做所有权与仓库边界严格校验，拒绝外国 PR、歧义候选与 closed-unmerged。
+- `readPr(context, options)`：读取 PR 详情并复验所有权与 head 仓库身份。
+- `readChecks(context, options)`：拉取绑定当前 head SHA 的 required 与 current checks（包含 GraphQL 分支保护规则与 REST ruleset 分页拉取），执行严格 CI 策略判定；无法确认有效 required 规则时 fail-closed 返回 `checks_unknown`。
+  - 分支保护规则只有明确 `app: null` 才表示不限来源；缺失 App 或没有有效身份的 App 返回 `checks_unknown`，不发送 merge 请求。
+  - 当前使用 `gh pr view --json statusCheckRollup,headRefOid` 读取 current checks。若 gh 输出不提供 CheckRun 的 App 身份（如 gh 2.45.0），指定 App 的 required check 无法匹配，保持 pending 并拒绝自动合并；带 App 身份的 mock 不代表该真实入口支持正常放行。后续需通过带来源身份、完整分页的 API 查询补齐能力。
+- `diagnoseFailedChecks(report)`：产出脱敏的失败/等待检查可行动诊断摘要。
+- `landPr(context, options)`：显式 opt-in（`--opt-in`）下验证 PR open、non-draft、mergeable 与 checks 严格通过，通过 REST API 执行直接条件 squash merge（带 `sha: expectedHeadSha` 条件头，拒绝 merge queue 与 deferred auto-merge），并在合并后重读事实确认最终 `MERGED`、`mergeCommitSha` 与 `mergedAt` 终态。
+- `verifyMerged(context, options)`：校验 PR 是否已合入，严格核验 merge commit SHA 与 mergedAt 终态（缺失时返回 `verification_unknown`）。
+- 安全边界：通过 `DefaultGhRunner` 执行 `gh` 命令，采用白名单安全错误消息杜绝 Token/OAuth/URL 凭据泄露，有界超时并终止子进程树，保证 stdout 结构完整。
+
 ### Adapter profile（§11.2）
 
 `TrackerAdapterProfile` 声明一个 `tracker.kind` 拥有的全部配置语义：

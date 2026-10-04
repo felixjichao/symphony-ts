@@ -1,16 +1,16 @@
 import {
-  evaluateCiChecksPolicy,
+  evaluateChecksAutoMergePolicy,
   formatDeliveryHandoffMarkdown,
   formatPrBody,
-  parsePrOwnershipMarker,
   validatePrOwnership,
-  type CiCheckItem,
-  type CiCheckStatus,
+  type CheckConclusion,
+  type CheckState,
   type DeliveryContext,
   type DeliveryHandoff,
   type DeliverySkillConfig,
   type DeliverySkillResult,
   type PersistedDeliveryState,
+  type PrCheck,
 } from "@symphony/domain";
 
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
@@ -91,7 +91,7 @@ export async function fetchCiFailureDiagnostics(
   runner: DeliveryGitGhRunner,
   repo: string,
   headSha: string,
-  failedChecks: readonly CiCheckItem[],
+  failedChecks: readonly PrCheck[],
   cwd: string,
 ): Promise<CiDiagnosticsResult> {
   const isPermissionOrInfraText = (text: string): boolean => {
@@ -579,13 +579,12 @@ export async function runDeliverySkill(
 
   if (existingPrs.length === 1) {
     const candidate = existingPrs[0]!;
-    const marker = parsePrOwnershipMarker(candidate.body);
     // 严格所有权校验：绝不以普通 body 包含 issue 引用绕过 marker！
-    const isOwner = validatePrOwnership(marker, context);
-    if (!isOwner) {
+    const ownership = validatePrOwnership(candidate.body, context);
+    if (!ownership.valid) {
       return haltDispatch(
         "foreign_pr_conflict",
-        `Existing PR #${candidate.number} does not match ownership marker for issue #${context.issueNumber} and workspace '${context.workspaceKey}'. Foreign PR rejected.`,
+        `Existing PR #${candidate.number} failed ownership validation for issue #${context.issueNumber} and workspace '${context.workspaceKey}' (${ownership.reason}). Foreign PR rejected.`,
       );
     }
 
@@ -705,12 +704,8 @@ export async function runDeliverySkill(
     log("[delivery-skill] Phase 5: Creating Pull Request...");
     const prTitle = options.prTitle ?? `feat: delivery for #${context.issueNumber} (${context.workspaceKey})`;
     const prBody = formatPrBody({
-      description: `Automated delivery for issue #${context.issueNumber}`,
-      issueNumber: context.issueNumber,
-      repo: context.repo,
-      workspaceKey: context.workspaceKey,
-      headBranch: context.headBranch,
-      baseBranch: context.baseBranch,
+      body: `Automated delivery for issue #${context.issueNumber}`,
+      context,
     });
 
     const createRes = await runner.gh(
@@ -920,53 +915,52 @@ export async function runDeliverySkill(
     }
 
     const rawRollup = Array.isArray(prViewData.statusCheckRollup) ? prViewData.statusCheckRollup : [];
-    const parsedChecks: CiCheckItem[] = rawRollup.map((rc) => {
+    const parsedChecks: PrCheck[] = rawRollup.map((rc) => {
       const name = String(rc["name"] || rc["context"] || "unnamed");
       const typename = String(rc["__typename"] || "");
       const detailsUrl = (rc["detailsUrl"] || rc["targetUrl"] || null) as string | null;
 
-      let status: CiCheckStatus = "unknown";
-      let conclusion: string | null = null;
+      let state: CheckState = "PENDING";
+      let conclusion: CheckConclusion | null = null;
 
       if (typename === "StatusContext" || (!rc["status"] && rc["state"])) {
         const stateStr = String(rc["state"] || "").toUpperCase();
         if (stateStr === "SUCCESS") {
-          status = "success";
+          state = "COMPLETED";
           conclusion = "SUCCESS";
         } else if (stateStr === "FAILURE" || stateStr === "ERROR") {
-          status = "failure";
+          state = "COMPLETED";
           conclusion = "FAILURE";
         } else if (stateStr === "PENDING") {
-          status = "pending";
+          state = "PENDING";
           conclusion = null;
         }
       } else {
         const rawStatus = String(rc["status"] || "").toUpperCase();
         const rawConclusion = String(rc["conclusion"] || "").toUpperCase();
-        conclusion = rc["conclusion"] ? String(rc["conclusion"]) : null;
 
         if (rawStatus === "COMPLETED") {
+          state = "COMPLETED";
           if (rawConclusion === "SUCCESS") {
-            status = "success";
+            conclusion = "SUCCESS";
           } else if (
             rawConclusion === "FAILURE" ||
             rawConclusion === "TIMED_OUT" ||
             rawConclusion === "ACTION_REQUIRED"
           ) {
-            status = "failure";
+            conclusion = "FAILURE";
           } else if (rawConclusion === "CANCELLED") {
-            status = "cancelled";
-          } else if (rawConclusion === "SKIPPED" || rawConclusion === "NEUTRAL") {
-            status = "neutral";
+            conclusion = "CANCELLED";
+          } else if (rawConclusion === "SKIPPED") {
+            conclusion = "SKIPPED";
+          } else if (rawConclusion === "NEUTRAL") {
+            conclusion = "NEUTRAL";
+          } else {
+            conclusion = "UNKNOWN";
           }
-        } else if (
-          rawStatus === "IN_PROGRESS" ||
-          rawStatus === "QUEUED" ||
-          rawStatus === "PENDING" ||
-          rawStatus === "WAITING" ||
-          rawStatus === ""
-        ) {
-          status = "pending";
+        } else {
+          state = "PENDING";
+          conclusion = null;
         }
       }
 
@@ -976,28 +970,55 @@ export async function runDeliverySkill(
 
       return {
         name,
-        status,
+        workflowName: (rc["workflowName"] as string | null | undefined) ?? null,
+        state,
         conclusion,
-        detailsUrl,
         isRequired,
+        detailsUrl,
       };
     });
 
-    const evaluation = evaluateCiChecksPolicy(parsedChecks, { requiredChecks: effectiveRequiredChecks });
+    // 使用 canonical MVP.3 策略（required + observed checks 均须严格全 green）。
+    // 已配置但尚未出现在 rollup 的 required check 以 PENDING 合成，确保 fail-closed 等待。
+    const requiredPrChecks: PrCheck[] = (effectiveRequiredChecks ?? []).map((requiredName) => {
+      const observed = parsedChecks.find((c) => c.name === requiredName);
+      return (
+        observed ?? {
+          name: requiredName,
+          state: "PENDING",
+          conclusion: null,
+          isRequired: true,
+          detailsUrl: null,
+        }
+      );
+    });
+
+    const evaluation = evaluateChecksAutoMergePolicy(requiredPrChecks, parsedChecks);
 
     // 6a. Checks Green -> 进入 Land 阶段
-    if (evaluation.canLand) {
+    if (evaluation.canAutoMerge) {
       log(`[delivery-skill] CI checks green! (${evaluation.reason})`);
       break;
     }
 
     // 6b. Checks Failed -> 进入 Repair Loop
-    if (evaluation.failedChecks.length > 0) {
-      log(`[delivery-skill] CI checks failed: ${evaluation.failedChecks.map((c) => c.name).join(", ")}`);
+    if (evaluation.status === "failing") {
+      const failedChecks = evaluation.failedOrPendingChecks.filter(
+        (c) =>
+          c.state === "COMPLETED" &&
+          (c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "UNKNOWN"),
+      );
+      if (failedChecks.length === 0) {
+        return haltDispatch(
+          "manual_intervention_required",
+          `CI checks block landing but no actionable failure is present: ${evaluation.reason}. Manual intervention required.`,
+        );
+      }
+      log(`[delivery-skill] CI checks failed: ${failedChecks.map((c) => c.name).join(", ")}`);
       if (spentRepairs >= maxRepairs) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `CI failed on checks [${evaluation.failedChecks.map((c) => c.name).join(", ")}] and reached max repair attempts (${spentRepairs}/${maxRepairs}).`,
+          `CI failed on checks [${failedChecks.map((c) => c.name).join(", ")}] and reached max repair attempts (${spentRepairs}/${maxRepairs}).`,
         );
       }
 
@@ -1006,7 +1027,7 @@ export async function runDeliverySkill(
         runner,
         context.repo,
         currentHeadSha ?? "",
-        evaluation.failedChecks,
+        failedChecks,
         options.cwd,
       );
 
@@ -1014,7 +1035,7 @@ export async function runDeliverySkill(
       if (diagResult.status === "permission_or_infra_failure") {
         return haltDispatch(
           "manual_intervention_required",
-          `CI failed or diagnostics retrieval blocked by permission/infrastructure error: ${diagResult.failureReason ?? diagResult.diagnostics.slice(0, 300)}. Check URLs: ${evaluation.failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}`,
+          `CI failed or diagnostics retrieval blocked by permission/infrastructure error: ${diagResult.failureReason ?? diagResult.diagnostics.slice(0, 300)}. Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}`,
         );
       }
 
@@ -1022,7 +1043,7 @@ export async function runDeliverySkill(
       if (diagResult.status === "unavailable") {
         return haltDispatch(
           "manual_intervention_required",
-          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but failure diagnostics could not be retrieved (${diagResult.failureReason ?? "unknown"}). Check URLs: ${evaluation.failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}. Halting for operator intervention.`,
+          `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but failure diagnostics could not be retrieved (${diagResult.failureReason ?? "unknown"}). Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}. Halting for operator intervention.`,
         );
       }
 
@@ -1030,7 +1051,7 @@ export async function runDeliverySkill(
       if (!options.repairFn && !options.repairCommand) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
+          `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
         );
       }
 

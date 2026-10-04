@@ -6,7 +6,7 @@ import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-run
 const context = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80", headBranch: "symphony/GH-80", baseBranch: "main" };
 const ok = (value: unknown): DeliverySubprocessResult => ({ stdout: JSON.stringify(value), stderr: "", exitCode: 0 });
 const fail = (stderr: string): DeliverySubprocessResult => ({ stdout: "", stderr, exitCode: 1 });
-const check = { name: "test-job", status: "failure" as const, conclusion: "FAILURE", isRequired: false, detailsUrl: "https://github.com/owner/repo/actions/runs/2/job/3" };
+const check = { name: "test-job", state: "COMPLETED" as const, conclusion: "FAILURE" as const, isRequired: false, detailsUrl: "https://github.com/owner/repo/actions/runs/2/job/3" };
 
 function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", conclusion: "SUCCESS" }]) {
   const calls: string[][] = [];
@@ -25,7 +25,7 @@ function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", c
       if (args[0] === "api") return api(args);
       if (args[0] === "run") return diagnostics(args);
       if (args[0] === "issue") return ok({ state: "OPEN", labels: [] });
-      if (args[1] === "list") return ok([{ number: 86, url: "https://github.com/owner/repo/pull/86", state: "OPEN", headRefOid: "sha", body: formatPrBody({ description: "test", ...context }) }]);
+      if (args[1] === "list") return ok([{ number: 86, url: "https://github.com/owner/repo/pull/86", state: "OPEN", headRefOid: "sha", body: formatPrBody({ body: "test", context }) }]);
       if (args[1] === "view") return ok({ state: "OPEN", headRefOid: "sha", mergeable: "MERGEABLE", statusCheckRollup: checks });
       return ok({});
     },

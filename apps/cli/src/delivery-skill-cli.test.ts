@@ -200,7 +200,7 @@ describe("delivery-skill CLI", () => {
           title: "feat: delivery",
           state: "OPEN",
           headRefOid: "sha123",
-          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
         },
       ]),
       stderr: "",
@@ -331,7 +331,7 @@ it("restores the pending deadline from a real state file after interrupted waiti
       },
       async gh(args) {
         const payload = args[0] === "issue" ? { state: "OPEN", labels: [] }
-          : args[1] === "list" ? [{ number: 86, url: "https://github.com/owner/repo/pull/86", state: "OPEN", body: formatPrBody({ ...context, description: "fixture" }), headRefOid: "sha" }]
+          : args[1] === "list" ? [{ number: 86, url: "https://github.com/owner/repo/pull/86", state: "OPEN", body: formatPrBody({ body: "fixture", context }), headRefOid: "sha" }]
           : { state: "OPEN", headRefOid: "sha", statusCheckRollup: [{ name: "gate", status: "IN_PROGRESS" }] };
         return { stdout: JSON.stringify(payload), stderr: "", exitCode: 0 };
       },

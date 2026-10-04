@@ -26,7 +26,7 @@ it.skipIf(!repo)("discovers active rules through the installed gh and reaches CI
       let payload: unknown;
       if (args[0] === "api") payload = { contexts: [], checks: [] };
       else if (args[0] === "issue" && args[1] === "view") payload = { state: "OPEN", labels: [] };
-      else if (args[0] === "pr" && args[1] === "list") payload = [{ number: 86, url: `https://github.com/${context.repo}/pull/86`, state: "OPEN", headRefOid: "sha", body: formatPrBody({ ...context, description: "fixture" }) }];
+      else if (args[0] === "pr" && args[1] === "list") payload = [{ number: 86, url: `https://github.com/${context.repo}/pull/86`, state: "OPEN", headRefOid: "sha", body: formatPrBody({ body: "fixture", context }) }];
       else if (args[0] === "pr" && args[1] === "view") {
         sawCi = true;
         payload = { state: "OPEN", headRefOid: "sha", statusCheckRollup: [{ name: "gate", status: "COMPLETED", conclusion: "SUCCESS" }] };

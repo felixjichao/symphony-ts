@@ -35,7 +35,6 @@ symphony repo-bootstrap --repo <url> [--target <path>] [--branch <name>] [--work
 ```text
 symphony delivery-skill [run|halt] --repo <owner/repo> --issue <number> [options]
 ```
-- 别名支持：`delivery skill`；
 - `run` 动作：执行 inspect → validate → commit → push → create/reuse PR → inspect CI → fix failures loop → land 闭环；
 - `halt` 动作：显式触发交接中断，自动移除 Issue 上的 `symphony-ready` 标签以停止派发，并在控制台与 Issue 上输出交接报告；
 - 常用选项：
@@ -49,6 +48,19 @@ symphony delivery-skill [run|halt] --repo <owner/repo> --issue <number> [options
   - `--ready-label <label>`：就绪调度标签（默认 `symphony-ready`）；
   - `--no-land`：通过 CI 后仅标记 ready，不自动执行 squash merge。
 
+GitHub 交付原语子命令契约（NEST-92 / #81）：
+```text
+symphony pr <action> --repo <owner/repo> --issue <number> --workspace-key <key> [options]
+```
+- 别名支持：`symphony delivery <action>`；
+- Actions：
+  - `ensure`：创建或复用 PR（精确保留机器可读所有权 marker 与 `Fixes` 关联，严格核验 head 仓库身份，拒绝外国 fork/PR、歧义候选与 closed-unmerged）；
+  - `read`：读取 PR 详情、合入状态与 mergeability；
+  - `checks`：拉取 head commit 绑定的 CI checks（支持 rulesets 分页与 GraphQL 分支保护规则）并执行严格门禁策略判定，未知保护规则 fail-closed；
+  - `diagnostics`：打印失败/等待中的 CI 检查脱敏诊断信息；
+  - `land`：显式 opt-in（`--opt-in`）下以直接条件 squash 合并（带 `sha: expectedHeadSha` 条件头，拒绝 merge queue 与 deferred auto-merge），并在合并后重读事实确认最终 `MERGED`、`mergeCommitSha` 与 `mergedAt` 终态；
+  - `verify`：验证 PR 是否已合入，严格核验 merge commit SHA 与 mergedAt 事实（缺失时返回 `verification_unknown`）；
+- 支持 `--json` 选项输出纯 JSON，便于自动化工具或 Codex 消费。
 
 ## Extension points
 

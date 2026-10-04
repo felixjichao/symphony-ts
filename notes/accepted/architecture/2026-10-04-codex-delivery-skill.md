@@ -14,11 +14,9 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 我们在 `@symphony/domain`、`@symphony/agent`、`apps/cli` 与 `skills/github-delivery/` 落地交付闭环与有界预算控制：
 
 1. **领域模型与所属校验 (`@symphony/domain`)**：
-   - `DeliveryContext`：定义交付上下文（仓库、Issue 编号、WorkspaceKey、Head/Base 分支）。
-   - `PrOwnershipMarker`：以 HTML 注释规范 `<!-- symphony-delivery-marker: {...} -->` 嵌入 PR 正文底部，提供机器可读的归属校验。严禁使用普通文本关键字绕过该标记。
-   - `evaluateCiChecksPolicy`：纯函数评估 CI 策略。要求所有 required checks 成功且所有 observed checks 也必须严格为 success（不允许 neutral/skipped 绕过）；0 checks、pending、failed 均拒绝合入。
-   - `formatDeliveryHandoffMarkdown`：格式化 Operator 可见交接报告，诚实展示标签移除与评论发表结果。
-   - `PersistedDeliveryState`：定义跨尝试预算与暂停状态持久化契约。
+   - `DeliveryContext`、`PrOwnershipMarker`、`validatePrOwnership`、`formatPrBody`、`evaluateChecksAutoMergePolicy`：共享 PR 所属标记（`schemaVersion: 1` 的 `<!-- symphony-delivery-marker: {...} -->` HTML 注释）与 CI 门禁策略以 MVP.3（NEST-92 / #81）的 canonical 领域契约为唯一权威，本任务只复用、不复制。严禁使用普通文本关键字绕过该标记。
+   - `evaluateChecksAutoMergePolicy`：纯函数评估 CI 策略。要求所有 required checks 成功且所有 observed checks 也必须严格为 success（不允许 neutral/skipped 绕过）；0 checks、pending、failed 均拒绝合入。交付 runner 将有效 required 名单与观测 checks 映射为 canonical `PrCheck` 后调用。
+   - `formatDeliveryHandoffMarkdown`、`DeliverySkillConfig` / `DeliverySkillResult`、`PersistedDeliveryState`：NEST-91 独有的 skill 参数、预算状态与 Operator 可见交接报告契约。
 
 2. **交付闭环执行器 (`@symphony/agent`)**：
    - `runDeliverySkill`：按 `pre-mutation inspection → validate → commit → push → ensure PR → inspect CI → repair loop → opt-in land` 协议执行。
@@ -68,3 +66,13 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 ## GitHub CLI compatibility (2026-10-04)
 
 `gh api --slurp` is unavailable on the current gh 2.45 host. Use `--paginate --jq '@json'` to emit one compact JSON array per page, then parse each line and validate every page/rule. Empty output, malformed later pages, command errors and partial policy remain fail closed. This avoids either upgrading the host as a delivery prerequisite or treating unsupported flags as empty rules. The opt-in `delivery-gh-compatibility.test.ts` drives production rule discovery through the installed gh with only the read-only query live; delivery mutations stay isolated. Default gate skips that external test explicitly.
+
+## Merge reconciliation with MVP.3 (2026-10-04)
+
+NEST-91 与并行的 NEST-92（MVP.3，已合入 `main`）在同一基线 `932798d` 上各自独立实现了 `@symphony/domain` 的交付契约，导致功能分支出现语义冲突。按本任务需求分析已确认的边界——“并行 #81 负责 PR/checks/merge primitives，本任务不重复实现它们”——采用以下收口：
+
+- **单一权威**：`DeliveryContext`、`PrOwnershipMarker`（含 `schemaVersion: 1`）、`serializePrOwnershipMarker` / `parsePrOwnershipMarker`、`validatePrOwnership(body, expected)`、`formatPrBody({ body, context })`、`PrRecord` / `PrCheck` / `evaluateChecksAutoMergePolicy` 全部采用 NEST-92 的 canonical 定义；删除 NEST-91 的重复实现（旧 `CiCheckItem` / `CiCheckStatus` / `evaluateCiChecksPolicy`、旧 `validatePrOwnership(marker, context)`、旧 `formatPrBody(FormatPrBodyOptions)`）。
+- **保留 NEST-91 独有契约**：`DeliveryHandoff` / `formatDeliveryHandoffMarkdown` / `PersistedDeliveryState` / `DeliverySkillConfig` / `DeliverySkillResult`，因为这些概念不与 MVP.3 重叠。
+- **执行器适配**：`runDeliverySkill` 改用 canonical 所有权校验与运行期 `formatPrBody`；CI 观测 rollup 映射为 `PrCheck`，有效 required 名单中尚未出现的 check 以 `PENDING` 合成，统一交给 `evaluateChecksAutoMergePolicy` 判定，fail-closed 语义不变。
+- **包边界不变**：`agent` 仍不依赖 `tracker`，交付 skill 继续经 `DeliveryGitGhRunner` 端口访问 git/gh；MVP.3 的 `GitHubDeliveryService` 负责 CLI `symphony pr` 原语，二者在 `@symphony/domain` 契约层汇合。
+- CLI 保留两个子命令：`symphony delivery-skill [run|halt]`（NEST-91）与 `symphony pr <action>` / `symphony delivery <action>`（NEST-92）；NEST-91 原先的 `delivery skill` 别名与 MVP.3 的 `delivery` 别名冲突，故移除 `delivery skill` 别名。

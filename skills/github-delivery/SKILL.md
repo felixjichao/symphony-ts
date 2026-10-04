@@ -71,11 +71,11 @@ inspect issue/context
    - 标题：`feat: <需求简述> (<workspaceKey>)`
    - 正文：去除前导空白后的首行为关联工单关键字，末尾附带机器所属标记：
      ```markdown
-     Fixes #80
+     Fixes felixjichao/symphony-ts#80
 
      Automated delivery for issue #80.
 
-     <!-- symphony-delivery-marker: {"workspaceKey":"GH-80","issueNumber":80,"repo":"felixjichao/symphony-ts","headBranch":"symphony/GH-80","baseBranch":"main"} -->
+     <!-- symphony-delivery-marker: {"schemaVersion":1,"repo":"felixjichao/symphony-ts","issueNumber":80,"workspaceKey":"GH-80","headBranch":"symphony/GH-80","baseBranch":"main"} -->
      ```
    - 执行创建：
      ```bash

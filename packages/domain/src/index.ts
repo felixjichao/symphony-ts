@@ -69,26 +69,31 @@ export type {
 export type { StructuredLogEvent } from "./logging";
 
 export type {
-  CiCheckItem,
-  CiCheckStatus,
-  CiPolicyEvaluation,
+  CheckConclusion,
+  CheckState,
+  ChecksEvaluationResult,
+  ChecksSummaryStatus,
   DeliveryContext,
+  DeliveryErrorCode,
+  DeliveryErrorOptions,
   DeliveryHandoff,
   DeliveryHandoffReason,
   DeliverySkillConfig,
   DeliverySkillResult,
   DeliverySkillStatus,
-  EvaluateCiChecksOptions,
-  FormatPrBodyOptions,
   PersistedDeliveryState,
+  PrCheck,
+  PrMergeability,
   PrOwnershipMarker,
+  PrRecord,
+  PrState,
 } from "./delivery";
 export {
-  evaluateCiChecksPolicy,
+  DeliveryError,
+  evaluateChecksAutoMergePolicy,
   formatDeliveryHandoffMarkdown,
   formatPrBody,
   parsePrOwnershipMarker,
   serializePrOwnershipMarker,
   validatePrOwnership,
 } from "./delivery";
-

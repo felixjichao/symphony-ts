@@ -46,9 +46,20 @@ describe("parseCliArgs", () => {
       subcommand: "delivery-skill",
       subcommandArgs: ["run", "--repo", "org/repo", "--issue", "80"],
     });
-    expect(parseCliArgs(["delivery", "skill", "halt", "--repo", "org/repo", "--issue", "80"])).toEqual({
+    expect(parseCliArgs(["delivery-skill", "halt", "--repo", "org/repo", "--issue", "80"])).toEqual({
       subcommand: "delivery-skill",
       subcommandArgs: ["halt", "--repo", "org/repo", "--issue", "80"],
+    });
+  });
+
+  it("recognizes pr and delivery subcommands and arguments", () => {
+    expect(parseCliArgs(["pr", "ensure", "--repo", "org/repo", "--issue", "81"])).toEqual({
+      subcommand: "delivery",
+      subcommandArgs: ["ensure", "--repo", "org/repo", "--issue", "81"],
+    });
+    expect(parseCliArgs(["delivery", "land", "--opt-in"])).toEqual({
+      subcommand: "delivery",
+      subcommandArgs: ["land", "--opt-in"],
     });
   });
 });

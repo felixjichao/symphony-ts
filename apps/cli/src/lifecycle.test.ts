@@ -245,4 +245,18 @@ describe("shell lifecycle (§17.7 exit matrix)", () => {
     expect(code).toBe(1);
     expect(port.output.join("")).toContain("missing required repository URL");
   });
+
+  it("executes pr subcommand and returns its status", async () => {
+    const port = shell();
+    const code = await runCli(["pr", "--help"], { process: port });
+    expect(code).toBe(0);
+    expect(port.output.join("")).toContain("Usage: symphony pr <action>");
+  });
+
+  it("fails pr subcommand when missing required flags", async () => {
+    const port = shell();
+    const code = await runCli(["pr", "ensure"], { process: port });
+    expect(code).toBe(1);
+    expect(port.output.join("")).toContain("missing required options");
+  });
 });
