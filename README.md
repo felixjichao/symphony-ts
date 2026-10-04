@@ -62,6 +62,7 @@ startup/preflight、致命生命周期或 shutdown 失败退出 1。CLI 自然�
 | [docs/architecture.md](docs/architecture.md) | 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑 |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
 | [docs/testing.md](docs/testing.md) | 测试分层（对齐 SPEC §17 profiles）与三条测试哲学 |
+| [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) | GitHub 自动交付闭环（start / run / stop、GitHub lifecycle 与安全边界） |
 | [notes/](notes/README.md) | 架构 / 选型决策记录（Agent Notes） |
 
 ## 里程碑
