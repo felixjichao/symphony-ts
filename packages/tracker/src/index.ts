@@ -87,6 +87,8 @@ export {
   GitHubDeliveryService,
   DefaultGhRunner,
   classifyGhError,
+  extractAppId,
+  matchesAppConstraint,
   parseJsonStream,
   sanitizeCredentials,
   type EnsurePrOptions,
@@ -98,5 +100,6 @@ export {
   type PrChecksReport,
   type ReadChecksOptions,
   type ReadPrOptions,
+  type RequiredCheckSpec,
   type VerifyMergedResult,
 } from "./github/delivery";

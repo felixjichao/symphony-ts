@@ -93,6 +93,11 @@ interface RawPrJson {
   readonly statusCheckRollup?: readonly RawStatusCheckItem[] | undefined;
 }
 
+export interface RequiredCheckSpec {
+  readonly context: string;
+  readonly appId?: number | string | null | undefined;
+}
+
 interface RawCheckRunItem {
   readonly __typename: "CheckRun";
   readonly name: string;
@@ -102,6 +107,24 @@ interface RawCheckRunItem {
   readonly detailsUrl?: string | null | undefined;
   readonly startedAt?: string | null | undefined;
   readonly completedAt?: string | null | undefined;
+  readonly app?: {
+    readonly id?: number | string | undefined;
+    readonly databaseId?: number | null | undefined;
+    readonly slug?: string | null | undefined;
+    readonly name?: string | null | undefined;
+  } | null | undefined;
+  readonly checkSuite?: {
+    readonly app?: {
+      readonly id?: number | string | undefined;
+      readonly databaseId?: number | null | undefined;
+      readonly slug?: string | null | undefined;
+      readonly name?: string | null | undefined;
+    } | null | undefined;
+  } | null | undefined;
+  readonly integration_id?: number | null | undefined;
+  readonly integrationId?: number | null | undefined;
+  readonly app_id?: number | null | undefined;
+  readonly appId?: number | string | null | undefined;
 }
 
 interface RawStatusContextItem {
@@ -109,9 +132,80 @@ interface RawStatusContextItem {
   readonly context: string;
   readonly state: string;
   readonly targetUrl?: string | null | undefined;
+  readonly app?: {
+    readonly id?: number | string | undefined;
+    readonly databaseId?: number | null | undefined;
+    readonly slug?: string | null | undefined;
+    readonly name?: string | null | undefined;
+  } | null | undefined;
+  readonly creator?: {
+    readonly id?: number | string | undefined;
+    readonly databaseId?: number | null | undefined;
+    readonly login?: string | null | undefined;
+  } | null | undefined;
+  readonly integration_id?: number | null | undefined;
+  readonly integrationId?: number | null | undefined;
+  readonly app_id?: number | null | undefined;
+  readonly appId?: number | string | null | undefined;
 }
 
 type RawStatusCheckItem = RawCheckRunItem | RawStatusContextItem;
+
+export function extractAppId(item: RawStatusCheckItem): number | string | null {
+  if (!item || typeof item !== "object") return null;
+  const itemRecord = item as unknown as Record<string, unknown>;
+
+  if (typeof itemRecord.integration_id === "number") return itemRecord.integration_id;
+  if (typeof itemRecord.integrationId === "number") return itemRecord.integrationId;
+  if (typeof itemRecord.app_id === "number") return itemRecord.app_id;
+  if (typeof itemRecord.appId === "number") return itemRecord.appId;
+  if (typeof itemRecord.appId === "string" && itemRecord.appId.trim()) {
+    const num = Number(itemRecord.appId);
+    return !Number.isNaN(num) && String(num) === itemRecord.appId.trim() ? num : itemRecord.appId.trim();
+  }
+
+  const checkSuite = itemRecord.checkSuite as Record<string, unknown> | undefined;
+  const app = (itemRecord.app ?? checkSuite?.app) as Record<string, unknown> | undefined;
+  if (app && typeof app === "object") {
+    if (typeof app.databaseId === "number") return app.databaseId;
+    if (typeof app.id === "number") return app.id;
+    if (typeof app.id === "string" && app.id.trim()) {
+      const parsed = Number(app.id);
+      if (!Number.isNaN(parsed) && String(parsed) === app.id.trim()) {
+        return parsed;
+      }
+      return app.id.trim();
+    }
+    if (typeof app.slug === "string" && app.slug.trim()) return app.slug.trim();
+    if (typeof app.name === "string" && app.name.trim()) return app.name.trim();
+  }
+
+  const creator = itemRecord.creator as Record<string, unknown> | undefined;
+  if (creator && typeof creator === "object") {
+    if (typeof creator.databaseId === "number") return creator.databaseId;
+    if (typeof creator.id === "number") return creator.id;
+  }
+
+  return null;
+}
+
+export function matchesAppConstraint(
+  actualAppId: number | string | null | undefined,
+  expectedAppId: number | string | null | undefined,
+): boolean {
+  if (expectedAppId === null || expectedAppId === undefined) {
+    return true;
+  }
+  if (actualAppId === null || actualAppId === undefined) {
+    return false;
+  }
+  const actualNum = typeof actualAppId === "number" ? actualAppId : Number(actualAppId);
+  const expectedNum = typeof expectedAppId === "number" ? expectedAppId : Number(expectedAppId);
+  if (!Number.isNaN(actualNum) && !Number.isNaN(expectedNum)) {
+    return actualNum === expectedNum;
+  }
+  return String(actualAppId).toLowerCase() === String(expectedAppId).toLowerCase();
+}
 
 export class GitHubDeliveryService {
   private readonly runner: GhRunner;
@@ -267,7 +361,7 @@ export class GitHubDeliveryService {
     }
 
     // 1. Fetch authoritative required checks configuration
-    const requiredCheckNames = await this.fetchRequiredCheckNames(
+    const requiredCheckSpecs = await this.fetchRequiredCheckSpecs(
       context.repo,
       pr.number,
       context.baseBranch,
@@ -313,28 +407,30 @@ export class GitHubDeliveryService {
     }
 
     const currentChecks: PrCheck[] = [];
-    const seenNames = new Set<string>();
 
     if (rawView.statusCheckRollup && Array.isArray(rawView.statusCheckRollup)) {
       for (const item of rawView.statusCheckRollup) {
-        const check = this.normalizeCheckItem(item, requiredCheckNames);
+        const check = this.normalizeCheckItem(item, requiredCheckSpecs);
         currentChecks.push(check);
-        seenNames.add(check.name);
       }
     }
 
     // If required checks are configured but not yet reported in rollup, represent as PENDING
     const requiredChecks: PrCheck[] = [];
-    for (const reqName of requiredCheckNames) {
-      const existing = currentChecks.find(c => c.name === reqName);
+    for (const spec of requiredCheckSpecs) {
+      const existing = currentChecks.find(c => {
+        if (c.name !== spec.context) return false;
+        return matchesAppConstraint(c.appId, spec.appId);
+      });
       if (existing) {
         requiredChecks.push(existing);
       } else {
         const pendingPlaceholder: PrCheck = {
-          name: reqName,
+          name: spec.context,
           state: "PENDING",
           conclusion: null,
           isRequired: true,
+          appId: spec.appId,
         };
         requiredChecks.push(pendingPlaceholder);
         currentChecks.push(pendingPlaceholder);
@@ -778,8 +874,8 @@ export class GitHubDeliveryService {
     };
   }
 
-  private async fetchRequiredCheckNames(repo: string, prNumber: number, baseBranch: string): Promise<Set<string>> {
-    const requiredNames = new Set<string>();
+  private async fetchRequiredCheckSpecs(repo: string, prNumber: number, baseBranch: string): Promise<RequiredCheckSpec[]> {
+    const rawSpecs: RequiredCheckSpec[] = [];
     const [owner, repoName] = repo.split("/");
     if (!owner || !repoName) {
       throw new DeliveryError(`Invalid repository slug '${repo}'`, { code: "invalid_context" });
@@ -792,7 +888,14 @@ export class GitHubDeliveryService {
           baseRef {
             branchProtectionRule {
               requiredStatusCheckContexts
-              requiredStatusChecks { context }
+              requiredStatusChecks {
+                context
+                app {
+                  id
+                  databaseId
+                  slug
+                }
+              }
             }
           }
         }
@@ -820,7 +923,14 @@ export class GitHubDeliveryService {
               readonly baseRef?: {
                 readonly branchProtectionRule?: {
                   readonly requiredStatusCheckContexts?: readonly string[] | null;
-                  readonly requiredStatusChecks?: ReadonlyArray<{ readonly context: string }> | null;
+                  readonly requiredStatusChecks?: ReadonlyArray<{
+                    readonly context: string;
+                    readonly app?: {
+                      readonly id?: number | string | null | undefined;
+                      readonly databaseId?: number | null | undefined;
+                      readonly slug?: string | null | undefined;
+                    } | null | undefined;
+                  }> | null;
                 } | null;
               } | null;
             } | null;
@@ -917,7 +1027,7 @@ export class GitHubDeliveryService {
                 { code: "checks_unknown" },
               );
             }
-            requiredNames.add(ctx.trim());
+            rawSpecs.push({ context: ctx.trim(), appId: null });
           }
         }
 
@@ -935,7 +1045,29 @@ export class GitHubDeliveryService {
                 { code: "checks_unknown" },
               );
             }
-            requiredNames.add(check.context.trim());
+            let appId: number | string | null = null;
+            if (check.app !== undefined && check.app !== null) {
+              if (typeof check.app !== "object") {
+                throw new DeliveryError(
+                  `Malformed app in requiredStatusChecks entry in GraphQL response`,
+                  { code: "checks_unknown" },
+                );
+              }
+              const dbId = check.app.databaseId;
+              const appIdVal = check.app.id;
+              const slug = check.app.slug;
+              if (typeof dbId === "number") {
+                appId = dbId;
+              } else if (typeof appIdVal === "number") {
+                appId = appIdVal;
+              } else if (typeof appIdVal === "string" && appIdVal.trim()) {
+                const num = Number(appIdVal);
+                appId = !Number.isNaN(num) && String(num) === appIdVal.trim() ? num : appIdVal.trim();
+              } else if (typeof slug === "string" && slug.trim()) {
+                appId = slug.trim();
+              }
+            }
+            rawSpecs.push({ context: check.context.trim(), appId });
           }
         }
       }
@@ -963,7 +1095,10 @@ export class GitHubDeliveryService {
       interface RulesetItem {
         readonly type?: string;
         readonly parameters?: {
-          readonly required_status_checks?: ReadonlyArray<{ readonly context?: string }>;
+          readonly required_status_checks?: ReadonlyArray<{
+            readonly context?: string;
+            readonly integration_id?: number | null | undefined;
+          }>;
         };
       }
 
@@ -1012,7 +1147,29 @@ export class GitHubDeliveryService {
                 { code: "checks_unknown" },
               );
             }
-            requiredNames.add(item.context.trim());
+            let integrationId: number | string | null = null;
+            const itemRecord = item as Record<string, unknown>;
+            const rawId = itemRecord.integration_id ?? itemRecord.integrationId ?? itemRecord.app_id ?? itemRecord.appId;
+            if (typeof rawId === "number") {
+              if (rawId < 0) {
+                throw new DeliveryError(
+                  `Malformed integration_id in required_status_checks: negative value`,
+                  { code: "checks_unknown" },
+                );
+              }
+              integrationId = rawId > 0 ? rawId : null;
+            } else if (typeof rawId === "string" && rawId.trim()) {
+              const num = Number(rawId);
+              integrationId = !Number.isNaN(num) && String(num) === rawId.trim() ? num : rawId.trim();
+            } else if (rawId === null || rawId === undefined) {
+              integrationId = null;
+            } else {
+              throw new DeliveryError(
+                `Malformed integration_id in required_status_checks: expected number or null`,
+                { code: "checks_unknown" },
+              );
+            }
+            rawSpecs.push({ context: item.context.trim(), appId: integrationId });
           }
         }
       }
@@ -1026,18 +1183,31 @@ export class GitHubDeliveryService {
       );
     }
 
-    return requiredNames;
+    const specKey = (s: RequiredCheckSpec) => `${s.context}::${s.appId ?? "*"}`;
+    const seenKeys = new Set<string>();
+    const uniqueSpecs: RequiredCheckSpec[] = [];
+    for (const spec of rawSpecs) {
+      const key = specKey(spec);
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        uniqueSpecs.push(spec);
+      }
+    }
+
+    return uniqueSpecs;
   }
 
   private normalizeCheckItem(
     item: RawStatusCheckItem,
-    requiredNames: ReadonlySet<string>,
+    requiredSpecs: readonly RequiredCheckSpec[],
   ): PrCheck {
     if (!item || typeof item !== "object") {
       throw new DeliveryError("Malformed item in statusCheckRollup", {
         code: "checks_unknown",
       });
     }
+
+    const appId = extractAppId(item);
 
     if (item.__typename === "CheckRun") {
       if (!item.name || typeof item.name !== "string") {
@@ -1081,15 +1251,21 @@ export class GitHubDeliveryService {
         }
       }
 
+      const isRequired = requiredSpecs.some(spec => {
+        if (spec.context !== name) return false;
+        return matchesAppConstraint(appId, spec.appId);
+      });
+
       return {
         name,
         workflowName: item.workflowName ?? null,
         state,
         conclusion,
-        isRequired: requiredNames.has(name),
+        isRequired,
         detailsUrl: item.detailsUrl ?? null,
         startedAt: item.startedAt ?? null,
         completedAt: item.completedAt ?? null,
+        appId,
       };
     }
 
@@ -1110,12 +1286,18 @@ export class GitHubDeliveryService {
         conclusion = stateUpper === "SUCCESS" ? "SUCCESS" : "FAILURE";
       }
 
+      const isRequired = requiredSpecs.some(spec => {
+        if (spec.context !== name) return false;
+        return matchesAppConstraint(appId, spec.appId);
+      });
+
       return {
         name,
         state,
         conclusion,
-        isRequired: requiredNames.has(name),
+        isRequired,
         detailsUrl: item.targetUrl ?? null,
+        appId,
       };
     }
 

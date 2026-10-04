@@ -1,5 +1,7 @@
 export {
   GitHubDeliveryService,
+  extractAppId,
+  matchesAppConstraint,
   parseJsonStream,
   type EnsurePrOptions,
   type LandPrOptions,
@@ -7,6 +9,7 @@ export {
   type PrChecksReport,
   type ReadChecksOptions,
   type ReadPrOptions,
+  type RequiredCheckSpec,
   type VerifyMergedResult,
 } from "./delivery-service";
 

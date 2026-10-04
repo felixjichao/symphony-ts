@@ -5,7 +5,12 @@ import {
   type PrOwnershipMarker,
   DeliveryError,
 } from "@symphony/domain";
-import { GitHubDeliveryService, parseJsonStream } from "./delivery-service";
+import {
+  GitHubDeliveryService,
+  parseJsonStream,
+  extractAppId,
+  matchesAppConstraint,
+} from "./delivery-service";
 import type { GhExecOptions, GhExecResult, GhRunner } from "./gh-cli";
 
 describe("GitHubDeliveryService", () => {
@@ -1200,6 +1205,257 @@ describe("GitHubDeliveryService", () => {
     it("successfully parses concatenated JSON arrays with whitespace", () => {
       const input = '[{"type":"a"}]\n\n[{"type":"b"}]';
       expect(parseJsonStream(input)).toEqual([{ type: "a" }, { type: "b" }]);
+    });
+  });
+
+  describe("Required check source App constraints (SPEC §11.5 / Blockers)", () => {
+    const makeRunnerForAppTest = (options: {
+      requiredIntegrationId?: number | null;
+      checkAppId?: number | null;
+      checkConclusion?: string;
+    }) => {
+      let mergedCalled = false;
+      let prState = "OPEN";
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return {
+            stdout: JSON.stringify([defaultMockPr({ number: 81 })]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              state: prState,
+              mergedAt: prState === "MERGED" ? "2026-10-04T10:00:00Z" : null,
+              mergeCommit: prState === "MERGED" ? { oid: "sha-merge-123" } : null,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "lint",
+                  status: "COMPLETED",
+                  conclusion: options.checkConclusion ?? "SUCCESS",
+                  app: options.checkAppId !== null && options.checkAppId !== undefined ? { id: options.checkAppId } : null,
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: null },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                type: "required_status_checks",
+                parameters: {
+                  required_status_checks: [
+                    {
+                      context: "lint",
+                      integration_id: options.requiredIntegrationId ?? null,
+                    },
+                  ],
+                },
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          prState = "MERGED";
+          return {
+            stdout: JSON.stringify({
+              merged: true,
+              sha: "sha-merge-123",
+              message: "Merged successfully",
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      return { runner, getMergedCalled: () => mergedCalled };
+    };
+
+    it("正确来源成功：检查来自指定 App integration_id 且 SUCCESS 时，readChecks 允许合并且 landPr 发送 merge 请求", async () => {
+      const { runner, getMergedCalled } = makeRunnerForAppTest({
+        requiredIntegrationId: 123,
+        checkAppId: 123,
+        checkConclusion: "SUCCESS",
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+
+      expect(report.canAutoMerge).toBe(true);
+      expect(report.status).toBe("passed");
+      expect(report.requiredChecks).toHaveLength(1);
+      expect(report.requiredChecks[0]!.appId).toBe(123);
+      expect(report.requiredChecks[0]!.isRequired).toBe(true);
+
+      // landPr should proceed and call merge API
+      const landResult = await service.landPr(context, { optIn: true, prNumber: 81 });
+      expect(landResult.merged).toBe(true);
+      expect(getMergedCalled()).toBe(true);
+    });
+
+    it("错误来源同名成功：配置要求 App 123，而仅 App 999 的同名检查成功时，readChecks 返回 pending 并阻止 landPr 合并", async () => {
+      const { runner, getMergedCalled } = makeRunnerForAppTest({
+        requiredIntegrationId: 123,
+        checkAppId: 999, // wrong app!
+        checkConclusion: "SUCCESS",
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+
+      // Auto-merge must be REFUSED because App 123 is missing/pending
+      expect(report.canAutoMerge).toBe(false);
+      expect(report.status).toBe("pending");
+      expect(report.reason).toContain("Required check(s) pending: lint");
+
+      // landPr must throw checks_waiting and MUST NOT invoke merge API
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_waiting",
+      });
+      expect(getMergedCalled()).toBe(false);
+    });
+
+    it("来源缺失：配置要求 App 123，而同名检查缺少 App 来源时，readChecks 返回 pending 并阻止 landPr 合并", async () => {
+      const { runner, getMergedCalled } = makeRunnerForAppTest({
+        requiredIntegrationId: 123,
+        checkAppId: null, // missing source!
+        checkConclusion: "SUCCESS",
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+
+      expect(report.canAutoMerge).toBe(false);
+      expect(report.status).toBe("pending");
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_waiting",
+      });
+      expect(getMergedCalled()).toBe(false);
+    });
+
+    it("GraphQL branchProtectionRule 包含 App 约束时正确区分来源", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusCheckContexts: [],
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            app: { databaseId: 456, id: "app-456", slug: "custom-builder" },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  checkSuite: { app: { databaseId: 456 } },
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+      expect(report.canAutoMerge).toBe(true);
+      expect(report.status).toBe("passed");
+      expect(report.requiredChecks[0]!.appId).toBe(456);
+    });
+  });
+
+  describe("matchesAppConstraint & extractAppId unit tests", () => {
+    it("extractAppId extracts from various GitHub API schema variants", () => {
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", integration_id: 123 })).toBe(123);
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", integrationId: 456 })).toBe(456);
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", app: { databaseId: 789 } })).toBe(789);
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", app: { id: "101" } })).toBe(101);
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", app: { slug: "my-app" } })).toBe("my-app");
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED", checkSuite: { app: { databaseId: 202 } } })).toBe(202);
+      expect(extractAppId({ __typename: "StatusContext", context: "test", state: "SUCCESS", creator: { databaseId: 303 } })).toBe(303);
+      expect(extractAppId({ __typename: "CheckRun", name: "test", status: "COMPLETED" })).toBeNull();
+    });
+
+    it("matchesAppConstraint behaves correctly with null, number, and string representations", () => {
+      expect(matchesAppConstraint(123, null)).toBe(true);
+      expect(matchesAppConstraint(null, null)).toBe(true);
+      expect(matchesAppConstraint(null, 123)).toBe(false);
+      expect(matchesAppConstraint(123, 123)).toBe(true);
+      expect(matchesAppConstraint("123", 123)).toBe(true);
+      expect(matchesAppConstraint(123, "123")).toBe(true);
+      expect(matchesAppConstraint(999, 123)).toBe(false);
+      expect(matchesAppConstraint("slug-a", "slug-a")).toBe(true);
+      expect(matchesAppConstraint("slug-a", "slug-b")).toBe(false);
     });
   });
 });

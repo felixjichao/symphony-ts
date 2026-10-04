@@ -184,6 +184,7 @@ export interface PrCheck {
   readonly detailsUrl?: string | null | undefined;
   readonly startedAt?: string | null | undefined;
   readonly completedAt?: string | null | undefined;
+  readonly appId?: number | string | null | undefined;
 }
 
 export type ChecksSummaryStatus = "passed" | "failing" | "pending" | "none" | "unknown";
@@ -211,7 +212,7 @@ export function evaluateChecksAutoMergePolicy(
   const allChecks = [...currentChecks];
   // Ensure required checks are included in allChecks if not already present
   for (const req of requiredChecks) {
-    if (!allChecks.some(c => c.name === req.name)) {
+    if (!allChecks.some(c => c.name === req.name && (req.appId == null || c.appId === req.appId))) {
       allChecks.push(req);
     }
   }
