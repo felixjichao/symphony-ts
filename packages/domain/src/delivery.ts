@@ -354,3 +354,136 @@ export class DeliveryError extends Error {
     this.details = options.details;
   }
 }
+
+/**
+ * @symphony/domain — GitHub Delivery MVP.2: Codex Delivery + Land Workflow Skill Contracts (SPEC §11.5 / MVP.2).
+ *
+ * NEST-91 独有的 skill 运行参数、可见交接报告与预算状态类型。共享的 PR 所属标记、
+ * PR/checks 记录与 CI 门禁策略以本文件上方的 canonical 定义（MVP.3 / NEST-92）为唯一权威。
+ */
+
+export type DeliveryHandoffReason =
+  | "budget_exhausted"
+  | "ci_failed_max_repairs"
+  | "ci_wait_timeout"
+  | "unmergeable"
+  | "manual_intervention_required"
+  | "foreign_pr_conflict"
+  | "reconciliation_needed";
+
+export interface DeliveryHandoff {
+  readonly reason: DeliveryHandoffReason;
+  readonly details: string;
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly headBranch: string;
+  readonly prNumber: number | null;
+  readonly prUrl: string | null;
+  readonly headSha: string | null;
+  readonly spentRepairs: number;
+  readonly maxRepairs: number;
+  readonly spentWaitSeconds: number;
+  readonly maxWaitSeconds: number;
+  readonly readyLabel: string;
+  readonly readyLabelRemoved?: boolean | undefined;
+  readonly commentPosted?: boolean | undefined;
+}
+
+export interface PersistedDeliveryState {
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly workspaceKey: string;
+  readonly spentRepairs: number;
+  readonly spentWaitSeconds: number;
+  readonly deadlineTimestampMs?: number | undefined;
+  readonly isPaused: boolean;
+  readonly pauseReason?: string | undefined;
+  readonly lastUpdated: string;
+}
+
+/**
+ * 格式化 Blocker / 预算耗尽时的可见交接报告（Operator-Visible Handoff Report）。
+ *
+ * 核心设计决策（用户确认）：
+ * - GitHub issue 保持 open，不误关任务；
+ * - 尝试移除 symphony-ready 标签，停止 continuation 与后续派发；若移除失败，诚实记录告警；
+ * - 明确列出已消耗预算与恢复指南，由 Operator 处理后重新加回标签。
+ */
+export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string {
+  const prDisplay = handoff.prUrl
+    ? `[#${handoff.prNumber}](${handoff.prUrl})`
+    : handoff.prNumber
+      ? `#${handoff.prNumber}`
+      : "无 (尚未创建)";
+  const headDisplay = handoff.headSha ? `\`${handoff.headSha.slice(0, 10)}\`` : "未知";
+
+  const labelStatusText =
+    handoff.readyLabelRemoved === false
+      ? `⚠️ **从 Issue #${handoff.issueNumber} 移除 \`${handoff.readyLabel}\` 标签失败**（可能缺乏写权限或 GitHub API 异常），**自动停止派发未成功**，请 Operator 立即人工介入移除标签！`
+      : `已从 Issue #${handoff.issueNumber} 移除 \`${handoff.readyLabel}\` 标签，**已自动停止当前任务派发与 Continuation 循环**。`;
+
+  const commentStatusText =
+    handoff.commentPosted === false
+      ? `\n- **评论状态**: ⚠️ 交接评论发表失败，请通过命令行日志核对原因。`
+      : "";
+
+  return `## 🚨 Symphony Delivery Handoff Report
+
+**触发原因**：\`${handoff.reason}\`
+**详细信息**：${handoff.details}
+
+---
+
+### 1. 任务与交付状态
+- **Repository**: \`${handoff.repo}\`
+- **Issue**: #${handoff.issueNumber}
+- **Branch**: \`${handoff.headBranch}\`
+- **PR**: ${prDisplay}
+- **Head SHA**: ${headDisplay}
+
+### 2. 预算消耗情况
+- **修复重试消耗**: ${handoff.spentRepairs} / ${handoff.maxRepairs} 次上限
+- **CI 等待时间消耗**: ${handoff.spentWaitSeconds}s / ${handoff.maxWaitSeconds}s 上限
+
+### 3. 调度控制与交接说明
+- **Issue 状态保持**: Open（未完成，绝不误关闭）
+- **标签操作**: ${labelStatusText}${commentStatusText}
+- **恢复操作指引**:
+  1. 人工排查上述详情或 CI 日志中的 blocker / 失败项；
+  2. 修复问题后，在 GitHub Issue #${handoff.issueNumber} 上重新添加 \`${handoff.readyLabel}\` 标签以恢复 Symphony 自动调度。
+`;
+}
+
+export interface DeliverySkillConfig {
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly workspaceKey: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly validationCommand?: string | undefined;
+  readonly repairCommand?: string | undefined;
+  readonly maxRepairAttempts?: number | undefined;
+  readonly maxWaitSeconds?: number | undefined;
+  readonly pollIntervalSeconds?: number | undefined;
+  readonly readyLabel?: string | undefined;
+  readonly commitType?: string | undefined;
+  readonly commitMessage?: string | undefined;
+  readonly prTitle?: string | undefined;
+  readonly optInLand?: boolean | undefined;
+  readonly resume?: boolean | undefined;
+  readonly requiredChecks?: readonly string[] | undefined;
+}
+
+export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";
+
+export interface DeliverySkillResult {
+  readonly status: DeliverySkillStatus;
+  readonly prNumber: number | null;
+  readonly prUrl: string | null;
+  readonly headSha: string | null;
+  readonly mergeSha?: string | null | undefined;
+  readonly spentRepairs: number;
+  readonly spentWaitSeconds: number;
+  readonly reason: string;
+  readonly handoffMarkdown?: string | undefined;
+}

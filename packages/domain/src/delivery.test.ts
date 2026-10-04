@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateChecksAutoMergePolicy,
+  formatDeliveryHandoffMarkdown,
   formatPrBody,
   parsePrOwnershipMarker,
   serializePrOwnershipMarker,
   validatePrOwnership,
   type DeliveryContext,
+  type DeliveryHandoff,
   type PrCheck,
   type PrOwnershipMarker,
 } from "./delivery";
@@ -255,6 +257,35 @@ describe("delivery domain contracts", () => {
         expect(result.status).toBe("failing");
         expect(result.reason).toContain("deploy-preview");
       });
+    });
+  });
+
+  describe("formatDeliveryHandoffMarkdown", () => {
+    it("formats operator-visible handoff report with label removal notice", () => {
+      const handoff: DeliveryHandoff = {
+        reason: "ci_failed_max_repairs",
+        details: "Test suite 'gate' failed on head commit abcdef1234",
+        repo: "felixjichao/symphony-ts",
+        issueNumber: 80,
+        headBranch: "symphony/GH-80",
+        prNumber: 85,
+        prUrl: "https://github.com/felixjichao/symphony-ts/pull/85",
+        headSha: "abcdef1234567890",
+        spentRepairs: 3,
+        maxRepairs: 3,
+        spentWaitSeconds: 120,
+        maxWaitSeconds: 600,
+        readyLabel: "symphony-ready",
+      };
+
+      const markdown = formatDeliveryHandoffMarkdown(handoff);
+      expect(markdown).toContain("Symphony Delivery Handoff Report");
+      expect(markdown).toContain("ci_failed_max_repairs");
+      expect(markdown).toContain("[#85](https://github.com/felixjichao/symphony-ts/pull/85)");
+      expect(markdown).toContain("3 / 3 次上限");
+      expect(markdown).toContain("移除 `symphony-ready` 标签");
+      expect(markdown).toContain("已自动停止当前任务派发与 Continuation 循环");
+      expect(markdown).toContain("重新添加 `symphony-ready` 标签以恢复 Symphony 自动调度");
     });
   });
 });

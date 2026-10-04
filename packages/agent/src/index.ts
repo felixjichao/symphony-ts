@@ -92,3 +92,19 @@ export type {
   AppServerSessionOptions,
   TurnCompletedOutcome,
 } from "./app-server-session";
+
+/**
+ * Codex Delivery + Land Workflow Skill 契约与执行器（SPEC §11.5 / MVP.2）。
+ */
+export {
+  sanitizeCredentials,
+} from "./delivery/git-gh-runner";
+export type {
+  DeliveryGitGhRunner,
+  DeliverySubprocessResult,
+} from "./delivery/git-gh-runner";
+
+export { runDeliverySkill } from "./delivery/delivery-skill-runner";
+export type { DeliveryStateStorage, RunDeliverySkillOptions } from "./delivery/delivery-skill-runner";
+
+

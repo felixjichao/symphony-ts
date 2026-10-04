@@ -41,6 +41,17 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("recognizes delivery-skill subcommand and arguments", () => {
+    expect(parseCliArgs(["delivery-skill", "run", "--repo", "org/repo", "--issue", "80"])).toEqual({
+      subcommand: "delivery-skill",
+      subcommandArgs: ["run", "--repo", "org/repo", "--issue", "80"],
+    });
+    expect(parseCliArgs(["delivery-skill", "halt", "--repo", "org/repo", "--issue", "80"])).toEqual({
+      subcommand: "delivery-skill",
+      subcommandArgs: ["halt", "--repo", "org/repo", "--issue", "80"],
+    });
+  });
+
   it("recognizes pr and delivery subcommands and arguments", () => {
     expect(parseCliArgs(["pr", "ensure", "--repo", "org/repo", "--issue", "81"])).toEqual({
       subcommand: "delivery",
@@ -52,6 +63,7 @@ describe("parseCliArgs", () => {
     });
   });
 });
+
 
 describe("resolveWorkflowPath", () => {
   it("resolves explicit path against specified cwd", () => {

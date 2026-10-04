@@ -3,6 +3,7 @@ import pkg from "../package.json";
 import { runRepositoryBootstrapCli } from "@symphony/workspace";
 import { runDeliveryCli } from "./delivery-cli";
 import { parseCliArgs, resolveWorkflowPath } from "./args";
+import { runDeliverySkillCli } from "./delivery-skill-cli";
 import { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
 
 export interface LifecycleProcess {
@@ -37,6 +38,12 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         stderr: shell.stderr,
       });
     }
+    if (args.subcommand === "delivery-skill") {
+      return await runDeliverySkillCli(args.subcommandArgs ?? [], {
+        stdout: shell.stdout,
+        stderr: shell.stderr,
+      });
+    }
     if (args.subcommand === "delivery") {
       return await runDeliveryCli(args.subcommandArgs ?? [], {
         stdout: shell.stdout,
@@ -48,10 +55,12 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "Usage: symphony [workflow-path]\n" +
         "       symphony repo-bootstrap --repo <url> [options]\n" +
         "       symphony workspace bootstrap --repo <url> [options]\n" +
+        "       symphony delivery-skill [run|halt] [options]\n" +
         "       symphony pr <action> [options]\n\n" +
         "Commands:\n" +
         "  repo-bootstrap       Bootstrap git repository in workspace and create issue branch\n" +
         "  workspace bootstrap  Alias for repo-bootstrap\n" +
+        "  delivery-skill       Execute delivery + land workflow skill or halt dispatch\n" +
         "  pr                   GitHub delivery primitives (ensure, read, checks, land, verify)\n\n" +
         "Options:\n" +
         "  -h, --help           Show this help message\n" +
@@ -59,6 +68,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
       );
       return 0;
     }
+
     if (args.version) {
       shell.stdout.write(`${pkg.version}\n`);
       return 0;

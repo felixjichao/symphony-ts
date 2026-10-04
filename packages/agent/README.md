@@ -139,6 +139,15 @@ transport 面按**方案 A** 收敛：`src/index.ts` 只 re-export transport 的
 
 `AgentAttemptOptions.signal?: AbortSignal` 是 orchestrator 拥有的 attempt 取消入口：abort 后本包不再启动新 turn、终止进行中的 session（含**握手期**已 launch 的 transport），并把 attempt 以 `AgentError("turn_cancelled")` 收敛；取消覆盖 launch 前 / workspace·hook 后 / 握手中 / turn 等待 / continuation 等待 / finally 收尾。`AgentAttemptOptions.onPhase?: (phase: RunAttemptStatus) => void` 上报稳定非终态阶段（`preparing_workspace` / `building_prompt` / `launching_agent_process` / `initializing_session` / `streaming_turn` / `finishing`），只报执行事实、不携带调度状态。二者都是**可选**：旧调用不传时行为不变。scheduler / retry policy 仍不属本包。
 
+### Codex Delivery + Land Workflow Skill（SPEC §11.5 / MVP.2，NEST-91 / #80）
+
+提供可复用的 GitHub 交付与合入闭环引擎：
+- `runDeliverySkill(options)`：支持 inspect → validate → commit → push → ensure PR → inspect CI → fix failures loop → land 全链路。
+- `DeliveryGitGhRunner`：定义安全的 Git / GitHub CLI 子进程接口；提供 `sanitizeCredentials` 对输出与错误中的 PAT、Bearer token 及 URL 凭据进行脱敏。
+- 预算控制与调度暂停：在 CI 修复次数超限或等待超时时，保持 GitHub Issue Open，自动调用 `gh issue edit --remove-label symphony-ready` 移除就绪标签以停止继续派发，并输出 Operator 可见交接报告。
+- 规范文档与参考实现位于 `skills/github-delivery/SKILL.md`。
+
+
 ## Configuration
 
 daemon 启动命令、并发 / 沙箱限制等由 `@symphony/config` 产出的 typed config 提供；模板变量注入契约见 SPEC §5（渲染在 config）与 §12（组装在本包）。`codex.approval_policy` / `thread_sandbox` / `turn_sandbox_policy` 是 **JSON-safe pass-through**：类型只约束 string ∪ JSON object 这一层形状（`CodexPassThroughValue`），合法性由 Codex 在 wire 边界判定，详见 [packages/config/README.md](../config/README.md)。
