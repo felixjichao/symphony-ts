@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { deriveWorkspaceKey } from "@symphony/domain";
@@ -188,18 +189,100 @@ interface GitExecResult {
   readonly stderr: string;
 }
 
-function killProcessGroup(pid: number | undefined): void {
+/**
+ * 递归查询指定进程的所有存活子孙 PID。
+ * 优先读取 Linux /proc 文件系统；不可用时降级为 pgrep -P。
+ */
+export function getDescendantPids(parentPid: number): number[] {
+  const result: number[] = [];
+  try {
+    const ppidMap = new Map<number, number[]>();
+    const entries = nodeFs.readdirSync("/proc");
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = parseInt(entry, 10);
+      try {
+        const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, "utf8");
+        const lastParen = stat.lastIndexOf(")");
+        if (lastParen !== -1) {
+          const rest = stat.slice(lastParen + 2).trimStart().split(" ");
+          const ppidStr = rest[1];
+          if (ppidStr !== undefined) {
+            const ppid = parseInt(ppidStr, 10);
+            if (!Number.isNaN(ppid)) {
+              const list = ppidMap.get(ppid);
+              if (list) {
+                list.push(pid);
+              } else {
+                ppidMap.set(ppid, [pid]);
+              }
+            }
+          }
+        }
+      } catch {
+        // 进程可能在读取期间退出
+      }
+    }
+    const queue = [parentPid];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      const children = ppidMap.get(curr);
+      if (children) {
+        for (const child of children) {
+          result.push(child);
+          queue.push(child);
+        }
+      }
+    }
+    return result;
+  } catch {
+    // /proc 不可用时的备选方案（例如 BSD/macOS）
+    try {
+      const output = execFileSync("pgrep", ["-P", String(parentPid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const pids = output
+        .split("\n")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !Number.isNaN(n));
+      for (const p of pids) {
+        result.push(p);
+        result.push(...getDescendantPids(p));
+      }
+    } catch {
+      // 忽略
+    }
+    return result;
+  }
+}
+
+/**
+ * 递归终止指定进程及其所有子孙进程。
+ * 不脱离调用方进程组，但在自身有界超时触发时确保不残留孤儿孙进程。
+ */
+export function killProcessTree(pid: number | undefined): void {
   if (pid === undefined) {
     return;
   }
+  // 先清理子孙进程，避免孤儿孙进程存活
   try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // 忽略已退出
+    const descendants = getDescendantPids(pid);
+    for (const dPid of descendants) {
+      try {
+        process.kill(dPid, "SIGKILL");
+      } catch {
+        // 忽略
+      }
     }
+  } catch {
+    // 忽略
+  }
+  // 最后终止目标进程本身
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 忽略已退出
   }
 }
 
@@ -215,9 +298,10 @@ async function execGit(
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
 
+    // 不使用 detached: true，使 Git 子树继承外层 hook 进程组（SPEC §9.4 / §17.2），
+    // 从而在外层 hook 超时或取消时能被整体杀死，不留孤儿子树。
     const child = spawn("git", args, {
       cwd,
-      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -250,7 +334,7 @@ async function execGit(
     };
 
     timer = setTimeout(() => {
-      killProcessGroup(child.pid);
+      killProcessTree(child.pid);
       fail(
         new RepositoryBootstrapError(
           "git_command_timeout",

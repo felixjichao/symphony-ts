@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bootstrapRepository,
+  createWorkspaceManager,
   normalizeGitUrl,
   parseRepositoryBootstrapArgs,
   RepositoryBootstrapError,
@@ -868,6 +869,149 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       );
       expect(code).toBe(0);
       expect(out).toContain("repo-bootstrap: ready on branch symphony/GH-79");
+    });
+  });
+
+  describe("进程生命周期与超时清理 (Blocker 回归)", () => {
+    it("外层 hook 超时终止时清理 Git 子树，不残留孤儿子进程", async () => {
+      // 1. 初始化 workspace 为已 bootstrap 的本地仓库
+      await bootstrapRepository({
+        cwd: workspaceDir,
+        repoUrl: remoteRepoDir,
+        workspaceKey: "GH-79",
+      });
+
+      // 2. 构造会 sleep 20s 并记录 PID 的 upload-pack 脚本
+      const pidFile = path.join(tmpBase, "upload-pack-hook.pid");
+      const scriptFile = path.join(tmpBase, "upload-pack-hook.sh");
+      await fs.writeFile(
+        scriptFile,
+        `#!/bin/sh\necho $$ > "${pidFile}"\nexec sleep 20\n`,
+        { mode: 0o755 },
+      );
+
+      execSync(`git config remote.origin.uploadpack "${scriptFile}"`, {
+        cwd: workspaceDir,
+      });
+
+      // 3. 通过 WorkspaceManager.runBeforeRunHook 执行 bootstrap，设置 hook timeout 为 1000ms
+      const manager = createWorkspaceManager({
+        workspace: { root: tmpBase },
+      });
+      const ws = {
+        path: workspaceDir,
+        workspaceKey: "workspace-GH-79",
+        createdNow: false,
+      };
+
+      const cliDist = path.resolve(__dirname, "../../../apps/cli/dist/bin/symphony.js");
+      const cliCmd = (await fs.stat(cliDist).catch(() => null))
+        ? `node "${cliDist}" repo-bootstrap --repo "${remoteRepoDir}" --target "${workspaceDir}"`
+        : `node -e 'import("@symphony/workspace").then(m => m.runRepositoryBootstrapCli(["--repo", process.argv[1], "--target", process.argv[2]]))' "${remoteRepoDir}" "${workspaceDir}"`;
+
+      let hookTimedOut = false;
+      try {
+        await manager.runBeforeRunHook(ws, {
+          hooks: {
+            afterCreate: null,
+            beforeRun: cliCmd,
+            afterRun: null,
+            beforeRemove: null,
+            timeoutMs: 1000,
+          },
+          identifier: "GH-79",
+        });
+      } catch {
+        hookTimedOut = true;
+      }
+
+      expect(hookTimedOut).toBe(true);
+
+      // 4. 读取 upload-pack PID 并验证其已被终止
+      let pid: number | undefined;
+      for (let i = 0; i < 20; i++) {
+        try {
+          const content = (await fs.readFile(pidFile, "utf8")).trim();
+          pid = parseInt(content, 10);
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+
+      expect(pid).toBeDefined();
+      await new Promise((r) => setTimeout(r, 100));
+
+      let isAlive = false;
+      try {
+        process.kill(pid!, 0);
+        isAlive = true;
+      } catch {
+        isAlive = false;
+      }
+      expect(isAlive).toBe(false);
+    });
+
+    it("直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理子孙进程", async () => {
+      // 1. 初始化 workspace 为已 bootstrap 的本地仓库
+      await bootstrapRepository({
+        cwd: workspaceDir,
+        repoUrl: remoteRepoDir,
+        workspaceKey: "GH-79",
+      });
+
+      // 2. 构造会 sleep 20s 并记录 PID 的 upload-pack 脚本
+      const pidFile = path.join(tmpBase, "upload-pack-standalone.pid");
+      const scriptFile = path.join(tmpBase, "upload-pack-standalone.sh");
+      await fs.writeFile(
+        scriptFile,
+        `#!/bin/sh\necho $$ > "${pidFile}"\nexec sleep 20\n`,
+        { mode: 0o755 },
+      );
+
+      execSync(`git config remote.origin.uploadpack "${scriptFile}"`, {
+        cwd: workspaceDir,
+      });
+
+      let timeoutThrown = false;
+      try {
+        await bootstrapRepository({
+          cwd: workspaceDir,
+          repoUrl: remoteRepoDir,
+          workspaceKey: "GH-79",
+          timeoutMs: 800,
+        });
+      } catch (err: unknown) {
+        if (err instanceof RepositoryBootstrapError && err.code === "git_command_timeout") {
+          timeoutThrown = true;
+        }
+      }
+
+      expect(timeoutThrown).toBe(true);
+
+      // 3. 读取 upload-pack PID 并验证其已被 killProcessTree 终止
+      let pid: number | undefined;
+      for (let i = 0; i < 20; i++) {
+        try {
+          const content = (await fs.readFile(pidFile, "utf8")).trim();
+          pid = parseInt(content, 10);
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+
+      expect(pid).toBeDefined();
+      await new Promise((r) => setTimeout(r, 100));
+
+      let isAlive = false;
+      try {
+        process.kill(pid!, 0);
+        isAlive = true;
+      } catch {
+        isAlive = false;
+      }
+      expect(isAlive).toBe(false);
     });
   });
 });
