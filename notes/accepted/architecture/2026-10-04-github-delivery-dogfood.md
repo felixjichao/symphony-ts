@@ -60,10 +60,15 @@ harness drives existing real entry points but never performs delivery itself.
    restart and requires the persisted absolute CI-wait deadline to be unchanged,
    proving resume rather than a budget reset. One resolved credential is pinned
    into the environment of every GitHub operation (harness `gh` and host); a
-   conflicting token is a hard error, and only a missing credential skips. The
-   `reuse` restart hold reads, applies and exactly restores the target's branch
-   protection (requiring Administration write), `SIGINT`/`SIGTERM` stop the whole
-   host/Codex process group, and failed runs retain their workspace, persisted
+   conflicting token is a hard error, and only a genuinely missing credential
+   skips (a missing `gh` binary or an unexpected `gh auth token` failure is a
+   non-zero tool failure). The `reuse` restart hold reads the current branch
+   protection, converts the GET body into a valid PUT payload (boolean wrappers,
+   login/slug mappings, preserved app bindings and null semantics) and exactly
+   restores it with a read-back check (requiring Administration write);
+   `SIGINT`/`SIGTERM` request cancellation that stops the host/Codex process
+   group and lets the scenario's own `finally` finish (restore + log capture)
+   before returning 130/143, and failed runs retain their workspace, persisted
    delivery state and sanitized logs for recovery.
 
 ## Alternatives considered

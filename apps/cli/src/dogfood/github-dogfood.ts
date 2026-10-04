@@ -68,6 +68,8 @@ export interface DogfoodDeps {
   readonly env: Record<string, string | undefined>;
   readonly cwd: string;
   readonly workspaceKeyOf: (identifier: string) => string;
+  /** Optional test seam: install signal handlers, returning an uninstall function. */
+  readonly installSignals?: ((handler: (signal: NodeJS.Signals) => void) => () => void) | undefined;
 }
 
 const deliveryRunner = new DefaultDeliveryGitGhRunner();
@@ -119,10 +121,19 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
     pathExists: async (target) => { try { await stat(target); return true; } catch { return false; } },
     rawAuthToken: async () => {
       const result = spawnSync("gh", ["auth", "token"], { encoding: "utf8" });
-      if (result.error || result.status !== 0) {
-        throw new DogfoodError("no GitHub credential: set GITHUB_TOKEN or run 'gh auth login'");
+      if (result.error) {
+        throw new DogfoodError("gh CLI is not available (tool/infrastructure failure)", "tool_missing");
       }
-      return (result.stdout ?? "").trim();
+      if (result.status !== 0) {
+        const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+        if (/auth login|not logged|not authenticated|no oauth|authentication/i.test(detail)) {
+          throw new DogfoodError("no GitHub credential: run 'gh auth login' or export GITHUB_TOKEN", "missing_credential");
+        }
+        throw new DogfoodError(`failed to read GitHub credential from gh: ${sanitizeCredentials(detail.trim())}`, "tool_error");
+      }
+      const token = (result.stdout ?? "").trim();
+      if (token === "") throw new DogfoodError("gh returned an empty token", "missing_credential");
+      return token;
     },
     env,
     cwd: process.cwd(),
@@ -183,7 +194,7 @@ interface RunContext {
   readonly io: DogfoodIo;
   readonly artifacts: Record<string, string>;
   readonly hosts: HostTracker;
-  cancelled: boolean;
+  readonly cancellation: { cancelled: boolean; exitCode: number; promise: Promise<void>; resolve: () => void };
 }
 
 function log(ctx: RunContext, text: string): void {
@@ -219,12 +230,13 @@ async function waitFor(
 ): Promise<void> {
   const deadline = ctx.deps.now() + timeoutSeconds * 1000;
   while (ctx.deps.now() < deadline) {
-    if (ctx.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
+    if (ctx.cancellation.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
     if (await predicate()) return;
     log(ctx, `dogfood: waiting for ${label}...`);
-    await ctx.deps.sleep(intervalMs);
+    // Wake promptly on cancellation instead of waiting out the full interval.
+    await Promise.race([ctx.deps.sleep(intervalMs), ctx.cancellation.promise]);
   }
-  if (ctx.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
+  if (ctx.cancellation.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
   throw new DogfoodError(`timed out waiting for ${label}`, "dogfood_timeout");
 }
 
@@ -621,15 +633,97 @@ async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<Dogf
   };
 }
 
-const PROTECTION_KEYS = [
-  "required_status_checks", "enforce_admins", "required_pull_request_reviews", "restrictions",
-  "required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
-  "required_conversation_resolution", "lock_branch", "allow_fork_syncing",
+const PROTECTION_BOOLEAN_KEYS = [
+  "enforce_admins", "required_linear_history", "allow_force_pushes", "allow_deletions",
+  "block_creations", "required_conversation_resolution", "lock_branch", "allow_fork_syncing",
 ] as const;
 
 interface ProtectionSnapshot {
   readonly existed: boolean;
   readonly body: string | null;
+}
+
+function asEnabled(value: unknown): boolean {
+  if (value !== null && typeof value === "object" && "enabled" in value) {
+    return Boolean((value as { enabled?: unknown }).enabled);
+  }
+  return Boolean(value);
+}
+
+/** Map GET `users`/`teams`/`apps` objects to the login/slug form PUT expects. */
+function convertRestrictions(value: unknown): { users: string[]; teams: string[]; apps?: string[] } | null {
+  if (value === null || value === undefined) return null;
+  const record = value as { users?: unknown; teams?: unknown; apps?: unknown };
+  const logins = (input: unknown, key: string): string[] =>
+    Array.isArray(input) ? input.map((entry) => (typeof entry === "string" ? entry : String((entry as Record<string, unknown>)[key] ?? ""))).filter(Boolean) : [];
+  const result: { users: string[]; teams: string[]; apps?: string[] } = {
+    users: logins(record.users, "login"),
+    teams: logins(record.teams, "slug"),
+  };
+  const apps = logins(record.apps, "slug");
+  if (apps.length > 0) result.apps = apps;
+  return result;
+}
+
+function convertRequiredStatusChecks(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null;
+  const record = value as { strict?: unknown; contexts?: unknown; checks?: unknown };
+  if (Array.isArray(record.checks)) {
+    const checks = record.checks.map((entry) => {
+      const check = entry as { context?: unknown; app_id?: unknown };
+      const mapped: Record<string, unknown> = { context: String(check.context ?? "") };
+      // Preserve the app binding so an app-scoped required check survives restore.
+      if (check.app_id !== undefined && check.app_id !== null) mapped["app_id"] = check.app_id;
+      return mapped;
+    });
+    return { strict: Boolean(record.strict), checks, contexts: checks.map((c) => c["context"]) };
+  }
+  const contexts = Array.isArray(record.contexts) ? record.contexts.map(String) : [];
+  return { strict: Boolean(record.strict), contexts };
+}
+
+function convertRequiredReviews(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null;
+  const record = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {
+    dismiss_stale_reviews: Boolean(record["dismiss_stale_reviews"]),
+    require_code_owner_reviews: Boolean(record["require_code_owner_reviews"]),
+    required_approving_review_count: Number(record["required_approving_review_count"] ?? 0),
+  };
+  if (record["dismissal_restrictions"] !== undefined) result["dismissal_restrictions"] = convertRestrictions(record["dismissal_restrictions"]);
+  if (record["bypass_pull_request_allowances"] !== undefined) result["bypass_pull_request_allowances"] = convertRestrictions(record["bypass_pull_request_allowances"]);
+  if (record["require_last_push_approval"] !== undefined) result["require_last_push_approval"] = Boolean(record["require_last_push_approval"]);
+  return result;
+}
+
+/**
+ * Convert a branch-protection GET body into a valid PUT payload, preserving
+ * null semantics and app bindings. `extraContext` adds a required check (used
+ * for the restart hold); pass null to restore the original exactly.
+ */
+export function buildProtectionPutPayload(getBody: string | null, extraContext: string | null): string {
+  let body: Record<string, unknown> = {};
+  if (getBody !== null && getBody.trim() !== "") {
+    body = JSON.parse(getBody) as Record<string, unknown>;
+  }
+  const payload: Record<string, unknown> = {
+    required_status_checks: convertRequiredStatusChecks(body["required_status_checks"] ?? null),
+    enforce_admins: body["enforce_admins"] !== undefined ? asEnabled(body["enforce_admins"]) : false,
+    required_pull_request_reviews: convertRequiredReviews(body["required_pull_request_reviews"] ?? null),
+    restrictions: convertRestrictions(body["restrictions"] ?? null),
+  };
+  for (const key of PROTECTION_BOOLEAN_KEYS) {
+    if (key in body) payload[key] = asEnabled(body[key]);
+  }
+  if (extraContext !== null) {
+    const current = payload["required_status_checks"] as { strict?: boolean; contexts?: string[]; checks?: Array<Record<string, unknown>> } | null;
+    const contexts = [...(current?.contexts ?? [])];
+    const checks = [...(current?.checks ?? [])];
+    if (!contexts.includes(extraContext)) contexts.push(extraContext);
+    if (!checks.some((c) => c["context"] === extraContext)) checks.push({ context: extraContext });
+    payload["required_status_checks"] = { strict: current?.strict ?? false, contexts, checks };
+  }
+  return JSON.stringify(payload);
 }
 
 /** Read the current branch protection so the hold can restore it exactly. */
@@ -640,25 +734,6 @@ async function readProtection(ctx: RunContext): Promise<ProtectionSnapshot> {
   throw new DogfoodError(`failed to read branch protection: ${res.stderr}`);
 }
 
-/** Build a valid protection payload, preserving supported existing settings. */
-function protectionPayload(snapshot: ProtectionSnapshot, extraContext: string | null): string {
-  const payload: Record<string, unknown> = {};
-  if (snapshot.body !== null) {
-    const parsed = JSON.parse(snapshot.body) as Record<string, unknown>;
-    for (const key of PROTECTION_KEYS) {
-      if (key in parsed) payload[key] = parsed[key] ?? null;
-    }
-  }
-  const existing = (payload["required_status_checks"] as { strict?: boolean; contexts?: string[] } | null | undefined) ?? null;
-  const contexts = [...(existing?.contexts ?? [])];
-  if (extraContext !== null && !contexts.includes(extraContext)) contexts.push(extraContext);
-  payload["required_status_checks"] = { strict: existing?.strict ?? false, contexts };
-  payload["enforce_admins"] = payload["enforce_admins"] ?? false;
-  payload["required_pull_request_reviews"] = payload["required_pull_request_reviews"] ?? null;
-  payload["restrictions"] = payload["restrictions"] ?? null;
-  return JSON.stringify(payload);
-}
-
 async function putProtection(ctx: RunContext, payload: string, label: string): Promise<void> {
   await ctx.deps.writeText(path.join(ctx.workRoot, "protection.json"), payload);
   const res = await ctx.deps.runner.exec(
@@ -666,26 +741,37 @@ async function putProtection(ctx: RunContext, payload: string, label: string): P
     ctx.workRoot, 60_000, {},
   );
   if (res.exitCode !== 0) throw new DogfoodError(`failed to ${label}: ${res.stderr}`);
-  await writeArtifact(ctx, "reuse-protection.json", `${label}\n${res.stdout}`);
+  // Evidence capture is best-effort: the PUT side effect already happened and
+  // must never be un-restorable because an artifact write failed.
+  await writeArtifact(ctx, "reuse-protection.json", `${label}\n${res.stdout}`).catch(() => undefined);
 }
 
 /** Add a required check that cannot be satisfied until the harness removes it. */
 async function applyRestartHold(ctx: RunContext, snapshot: ProtectionSnapshot): Promise<void> {
-  await putProtection(ctx, protectionPayload(snapshot, HOLD_CONTEXT), "apply restart hold");
+  await putProtection(ctx, buildProtectionPutPayload(snapshot.body, HOLD_CONTEXT), "apply restart hold");
 }
 
 /** Restore the exact prior protection (or delete ours when none existed). */
 async function restoreProtection(ctx: RunContext, snapshot: ProtectionSnapshot): Promise<void> {
+  const expected = buildProtectionPutPayload(snapshot.body, null);
   if (snapshot.existed) {
-    await putProtection(ctx, protectionPayload(snapshot, null), "restore branch protection");
-    return;
+    await putProtection(ctx, expected, "restore branch protection");
+  } else {
+    const res = await ctx.deps.runner.exec(
+      `gh api -X DELETE repos/${ctx.repo}/branches/${ctx.baseBranch}/protection`,
+      ctx.workRoot, 60_000, {},
+    );
+    if (res.exitCode !== 0 && !/404|not found/i.test(`${res.stderr}${res.stdout}`)) {
+      throw new DogfoodError(`failed to remove restart hold: ${res.stderr}`);
+    }
   }
-  const res = await ctx.deps.runner.exec(
-    `gh api -X DELETE repos/${ctx.repo}/branches/${ctx.baseBranch}/protection`,
-    ctx.workRoot, 60_000, {},
-  );
-  if (res.exitCode !== 0 && !/404|not found/i.test(`${res.stderr}${res.stdout}`)) {
-    throw new DogfoodError(`failed to remove restart hold: ${res.stderr}`);
+  // Read back and confirm the restored shape matches the snapshot.
+  const after = await readProtection(ctx);
+  if (after.existed !== snapshot.existed) {
+    throw new DogfoodError(`branch protection restore mismatch: existed ${after.existed}, expected ${snapshot.existed}`);
+  }
+  if (snapshot.existed && buildProtectionPutPayload(after.body, null) !== expected) {
+    throw new DogfoodError("branch protection restore mismatch: restored payload differs from snapshot");
   }
 }
 
@@ -922,11 +1008,17 @@ export async function runGithubDogfoodCli(
   deps.env["GH_TOKEN"] = token;
   deps.env["GITHUB_TOKEN"] = token;
 
+  const cancellation: RunContext["cancellation"] = (() => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { cancelled: false, exitCode: 0, promise, resolve };
+  })();
+
   const ctx: RunContext = {
     args, deps, repo: gate.repo, runId, evidenceDir, workRoot,
     workspaceRoot: path.join(workRoot, "workspaces"),
     token, tokenExplicit, baseBranch: "main", io, artifacts: {}, hosts: new HostTracker(),
-    cancelled: false,
+    cancellation,
   };
 
   const startedAtMs = deps.now();
@@ -939,23 +1031,21 @@ export async function runGithubDogfoodCli(
     if (args.json) io.stdout.write(`${serializeEvidence(manifest, sanitizeCredentials)}\n`);
   };
 
-  // SIGINT/SIGTERM enter the shared shutdown: terminate the whole host/Codex
-  // subtree, record the outcome, then exit with the conventional signal code.
+  // SIGINT/SIGTERM request cancellation of the main chain: stop the whole
+  // host/Codex subtree, wake any wait, and let the scenario's own finally
+  // (branch-protection restore, log capture) run before the exit code is
+  // returned. Never call process.exit from here — that would bypass cleanup.
   const onSignal = (signal: NodeJS.Signals): void => {
-    if (ctx.cancelled) return;
-    ctx.cancelled = true;
-    void (async () => {
-      await ctx.hosts.stopAll();
-      await finalize("failed", `cancelled by ${signal}`, null).catch(() => undefined);
-      process.exit(signal === "SIGINT" ? 130 : 143);
-    })();
+    if (cancellation.cancelled) return;
+    cancellation.cancelled = true;
+    cancellation.exitCode = signal === "SIGINT" ? 130 : 143;
+    cancellation.resolve();
+    void ctx.hosts.stopAll();
   };
-  const sigint = (): void => onSignal("SIGINT");
-  const sigterm = (): void => onSignal("SIGTERM");
-  process.once("SIGINT", sigint);
-  process.once("SIGTERM", sigterm);
+  const uninstallSignals = (deps.installSignals ?? defaultInstallSignals)(onSignal);
 
   let passed = false;
+  let result = 1;
   try {
     await preflight(ctx, templateDir);
     log(ctx, `dogfood: run ${runId} scenario=${args.scenario} target=${gate.repo}`);
@@ -979,15 +1069,14 @@ export async function runGithubDogfoodCli(
     await finalize(verdict.status, verdict.reason, facts);
     if (!args.json) io.stdout.write(`dogfood: ${verdict.status} (${verdict.reason})\n`);
     passed = verdict.status === "passed";
-    return passed ? 0 : 1;
+    result = passed ? 0 : 1;
   } catch (err) {
     const message = sanitizeCredentials(String(err));
     await finalize("failed", message, null).catch(() => undefined);
     io.stderr.write(`symphony dogfood: failed: ${message}\n`);
-    return 1;
+    result = 1;
   } finally {
-    process.removeListener("SIGINT", sigint);
-    process.removeListener("SIGTERM", sigterm);
+    uninstallSignals();
     // Every started host is stopped on success, failure and cancellation.
     await ctx.hosts.stopAll();
     // Only a clean success removes the run working directory. Failed or
@@ -995,4 +1084,16 @@ export async function runGithubDogfoodCli(
     // flow can be resumed, and keep the captured failure evidence.
     if (passed) await deps.removeDir(workRoot).catch(() => undefined);
   }
+  return cancellation.cancelled ? cancellation.exitCode : result;
+}
+
+function defaultInstallSignals(handler: (signal: NodeJS.Signals) => void): () => void {
+  const onInt = (): void => handler("SIGINT");
+  const onTerm = (): void => handler("SIGTERM");
+  process.once("SIGINT", onInt);
+  process.once("SIGTERM", onTerm);
+  return () => {
+    process.removeListener("SIGINT", onInt);
+    process.removeListener("SIGTERM", onTerm);
+  };
 }

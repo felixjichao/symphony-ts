@@ -290,7 +290,7 @@ export function classifyDogfoodOutcome(scenario: DogfoodScenario, facts: Dogfood
       return verdict(
         facts.conflicting && facts.ownedPrState !== "merged" && !facts.issueClosed &&
           facts.safetyRefusalCode === CONFLICT_REFUSAL_CODE,
-        "real land entry refused the conflicting PR as unmergeable and left it unmerged",
+        "real land entry refused the conflicting PR as merge_rejected with a verified CONFLICTING state",
         `conflict safety not proven (conflicting=${facts.conflicting}, merged=${facts.ownedPrState === "merged"}, refusalCode=${facts.safetyRefusalCode ?? "none"})`,
       );
   }

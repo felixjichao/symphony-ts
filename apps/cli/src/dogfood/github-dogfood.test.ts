@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { DeliveryError } from "@symphony/domain";
@@ -6,6 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import { runDeliveryCli } from "../delivery-cli";
 import {
+  buildProtectionPutPayload,
+  createRealDogfoodDeps,
   DogfoodError,
   hasCleanupCompletedFor,
   parseStructuredErrorCode,
@@ -32,6 +36,8 @@ interface FakeState {
   stopped: boolean;
   hostOutput: string;
   existingWorkspace: boolean;
+  signalHandler: ((signal: NodeJS.Signals) => void) | null;
+  cancelOnSleep: boolean;
 }
 
 interface FakeOptions {
@@ -39,6 +45,7 @@ interface FakeOptions {
   exec: (command: string, state: FakeState) => DogfoodProcessResult;
   hostOutput?: string;
   rawAuthToken?: () => Promise<string>;
+  installSignals?: (handler: (signal: NodeJS.Signals) => void) => () => void;
 }
 
 function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState } {
@@ -50,6 +57,8 @@ function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState }
     stopped: false,
     hostOutput: options.hostOutput ?? "",
     existingWorkspace: false,
+    signalHandler: null,
+    cancelOnSleep: false,
   };
   const host: DogfoodHostHandle = {
     output: () => state.hostOutput,
@@ -61,7 +70,13 @@ function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState }
       exec: async (command) => options.exec(command, state),
     },
     startHost: () => { state.existingWorkspace = true; return host; },
-    sleep: async (ms) => { state.nowMs += ms; },
+    sleep: async (ms) => {
+      state.nowMs += ms;
+      if (state.cancelOnSleep && state.signalHandler !== null) {
+        state.cancelOnSleep = false;
+        state.signalHandler("SIGTERM");
+      }
+    },
     now: () => state.nowMs,
     writeText: async (file, text) => { state.files.set(file, text); },
     readText: async (file) => {
@@ -79,6 +94,9 @@ function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState }
     env: {},
     cwd: "/work",
     workspaceKeyOf: (identifier) => identifier,
+    ...(options.installSignals !== undefined
+      ? { installSignals: (handler: (signal: NodeJS.Signals) => void) => { state.signalHandler = handler; return () => { state.signalHandler = null; }; } }
+      : {}),
   };
   return { deps, state };
 }
@@ -359,5 +377,105 @@ describe("real service to CLI to harness contract", () => {
     });
     expect(code).toBe(1);
     expect(parseStructuredErrorCode(out, errOut)).toBe("merge_rejected");
+  });
+});
+
+describe("branch protection GET to PUT conversion", () => {
+  it("maps GET shapes (enabled/user/team/app objects, app_id) into a valid PUT payload", () => {
+    const get = JSON.stringify({
+      required_status_checks: { strict: true, contexts: ["ci"], checks: [{ context: "build", app_id: 15368 }] },
+      enforce_admins: { enabled: true },
+      required_linear_history: { enabled: true },
+      allow_force_pushes: { enabled: false },
+      required_pull_request_reviews: {
+        dismissal_restrictions: { users: [{ login: "alice" }], teams: [{ slug: "core" }] },
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        required_approving_review_count: 2,
+      },
+      restrictions: { users: [{ login: "bob" }], teams: [], apps: [{ slug: "actions" }] },
+    });
+    const payload = JSON.parse(buildProtectionPutPayload(get, null)) as Record<string, unknown>;
+    expect(payload["enforce_admins"]).toBe(true);
+    expect(payload["required_linear_history"]).toBe(true);
+    expect(payload["allow_force_pushes"]).toBe(false);
+    const rsc = payload["required_status_checks"] as { strict: boolean; contexts: string[]; checks: Array<{ context: string; app_id?: number }> };
+    expect(rsc.strict).toBe(true);
+    expect(rsc.checks).toEqual([{ context: "build", app_id: 15368 }]);
+    const rpr = payload["required_pull_request_reviews"] as { required_approving_review_count: number; dismissal_restrictions: { users: string[]; teams: string[] } };
+    expect(rpr.required_approving_review_count).toBe(2);
+    expect(rpr.dismissal_restrictions).toEqual({ users: ["alice"], teams: ["core"] });
+    expect(payload["restrictions"]).toEqual({ users: ["bob"], teams: [], apps: ["actions"] });
+  });
+
+  it("preserves null semantics and adds the hold context without dropping bindings", () => {
+    expect(JSON.parse(buildProtectionPutPayload(null, null))["required_status_checks"]).toBeNull();
+    expect(JSON.parse(buildProtectionPutPayload(null, null))["enforce_admins"]).toBe(false);
+    const hold = JSON.parse(buildProtectionPutPayload(null, "symphony-dogfood-hold")) as Record<string, unknown>;
+    const rsc = hold["required_status_checks"] as { contexts: string[]; checks: Array<{ context: string }> };
+    expect(rsc.contexts).toContain("symphony-dogfood-hold");
+    expect(rsc.checks.some((c) => c.context === "symphony-dogfood-hold")).toBe(true);
+  });
+});
+
+describe("cancellation unwinds the scenario and restores policy", () => {
+  it("restores existing branch protection and captures the phase-1 log on SIGTERM", async () => {
+    const protectionBody = JSON.stringify({
+      required_status_checks: { strict: false, contexts: ["ci"], checks: [{ context: "ci", app_id: 15368 }] },
+      enforce_admins: { enabled: true },
+      required_pull_request_reviews: null,
+      restrictions: null,
+    });
+    const execCommands: string[] = [];
+    const { deps, state } = makeDeps({
+      installSignals: () => () => { /* captured via makeDeps state */ },
+      gh: (args) => {
+        if (args[0] === "label") return res();
+        if (args[0] === "issue" && args[1] === "create") return res(0, `https://github.com/${TARGET}/issues/7\n`);
+        if (args[0] === "issue" && args[1] === "view") return res(0, '{"number":7,"state":"OPEN","url":"u"}');
+        if (args[0] === "pr" && args[1] === "list") return res(0, "[]");
+        if (args[0] === "api" && args[1] !== undefined && args[1].includes("/protection")) return res(0, protectionBody);
+        return res(0, "{}");
+      },
+      exec: (command) => { execCommands.push(command); return res(); },
+    });
+    state.cancelOnSleep = true;
+
+    const code = await runGithubDogfoodCli(["github", "--yes", "--target", TARGET, "--scenario", "reuse", "--run-id", RUN_ID, "--evidence-dir", "/ev", "--json"], io(), deps);
+    expect(code).toBe(143);
+    // Apply hold + restore both went through PUT because protection already existed.
+    expect(execCommands.filter((c) => c.includes("-X PUT")).length).toBeGreaterThanOrEqual(2);
+    expect(execCommands.filter((c) => c.includes("-X DELETE")).length).toBe(0);
+    // The scenario finally captured phase-1 logs despite cancellation.
+    expect([...state.files.keys()].some((f) => f.endsWith("host-reuse-phase1.log"))).toBe(true);
+    // Cancelled runs retain their workspace/state.
+    expect(state.removed).toEqual([]);
+  });
+});
+
+describe("real credential adapter classification (subprocess)", () => {
+  it("classifies a logged-out gh as missing_credential (skip)", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dogfood-gh-"));
+    const oldPath = process.env["PATH"];
+    try {
+      const ghPath = path.join(tmp, "gh");
+      fs.writeFileSync(ghPath, "#!/bin/sh\necho 'To get started with GitHub CLI, please run: gh auth login' >&2\nexit 1\n");
+      fs.chmodSync(ghPath, 0o755);
+      process.env["PATH"] = `${tmp}:${oldPath ?? ""}`;
+      await expect(resolveToken(createRealDogfoodDeps({}))).rejects.toMatchObject({ code: "missing_credential" });
+    } finally {
+      if (oldPath === undefined) delete process.env["PATH"]; else process.env["PATH"] = oldPath;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a missing gh binary as a tool failure, not a skip", async () => {
+    const oldPath = process.env["PATH"];
+    process.env["PATH"] = "/nonexistent-dogfood-bin";
+    try {
+      await expect(resolveToken(createRealDogfoodDeps({}))).rejects.toMatchObject({ code: "tool_missing" });
+    } finally {
+      if (oldPath === undefined) delete process.env["PATH"]; else process.env["PATH"] = oldPath;
+    }
   });
 });
