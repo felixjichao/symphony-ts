@@ -64,8 +64,9 @@ Body:
 Work autonomously to completion. A human does not merge for you.
 
 1. Inspect the repository and implement the change the issue asks for.
-2. Run the project validation gate (`npm run gate`) until it passes. Do not
-   commit, push, or merge while validation fails.
+2. Run the project's validation gate — the same command the delivery skill is
+   configured with through `--validate` below — until it passes. Do not commit,
+   push, or merge while validation fails.
 3. Deliver the change end to end with the delivery skill. It commits, pushes,
    creates or reuses the pull request, watches CI, repairs failures within a
    bounded budget, and squash-merges only when every required check is green:

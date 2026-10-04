@@ -123,9 +123,14 @@ A handoff is explicit, not a dead end:
 
 `--resume` deliberately preserves the already-spent repair count and the absolute
 CI-wait deadline — it does not grant a new budget, so repeatedly resuming cannot
-extend an exhausted budget. When the handoff was `ci_failed_max_repairs` or a
-wait timeout, an operator must explicitly start a new budget round by clearing
-the persisted state before re-adding the label:
+extend an exhausted budget. Decide whether a new budget round is needed from the
+**persisted budget and deadline at recovery time, not only from the original
+handoff reason**: even a handoff caused by `unmergeable` or a
+permission/infrastructure blocker can outlast the deadline while a human resolves
+it, and because `--resume` keeps that deadline the next run would time out
+immediately. Whenever the persisted repair count is already at its maximum or the
+absolute deadline has passed, an operator must explicitly start a new budget round
+by clearing the persisted state before re-adding the label:
 
 ```sh
 rm <workspace>/.symphony/delivery-state.json
