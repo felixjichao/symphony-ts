@@ -367,6 +367,94 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(pushCalls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("repairCommand (reference profile): CI 失败 → 执行 --repair-cmd → 新 SHA → green → land", async () => {
+    const cwd = createTempCwd();
+    const runner = new MockDeliveryRunner();
+    setupPreMutationSuccess(runner);
+
+    // gh pr list (existing PR #90)
+    runner.ghResponses.push({
+      stdout: JSON.stringify([
+        {
+          number: 90,
+          url: "https://github.com/felixjichao/symphony-ts/pull/90",
+          title: "feat: delivery",
+          state: "OPEN",
+          headRefOid: "sha-head-1",
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+        },
+      ]),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // initial validation
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+    runner.gitResponses.push({ stdout: "sha-head-1\n", stderr: "", exitCode: 0 }); // rev-parse
+
+    // 第一次 checks: 失败！
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "sha-head-1",
+        mergeable: "MERGEABLE",
+        state: "OPEN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" },
+        ],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    // 修复阶段：先执行 --repair-cmd，再重新运行 validation
+    runner.execResponses.push({ stdout: "repaired", stderr: "", exitCode: 0 }); // repair command
+    runner.execResponses.push({ stdout: "validation after fix ok", stderr: "", exitCode: 0 }); // validation re-run
+    runner.gitResponses.push({ stdout: " M src/index.ts\n", stderr: "", exitCode: 0 }); // git status (dirty)
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git add -A
+    runner.gitResponses.push({ stdout: "[symphony/GH-80 555] fix(ci)", stderr: "", exitCode: 0 }); // git commit
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git push
+    runner.gitResponses.push({ stdout: "sha-head-repaired\n", stderr: "", exitCode: 0 }); // rev-parse (new SHA)
+
+    // 第二次 checks: 成功 (Green)!
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "sha-head-repaired",
+        mergeable: "MERGEABLE",
+        state: "OPEN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    // merge & verify
+    runner.ghResponses.push({ stdout: JSON.stringify({ mergeable: "MERGEABLE", state: "OPEN" }), stderr: "", exitCode: 0 });
+    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // merge
+    runner.ghResponses.push({
+      stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "mergedsha-repair-cmd" } }),
+      stderr: "",
+      exitCode: 0,
+    });
+    runner.ghResponses.push({ stdout: JSON.stringify({ state: "CLOSED" }), stderr: "", exitCode: 0 });
+
+    const result = await runDeliverySkill({
+      ...getBaseOptions(cwd),
+      runner,
+      repairCommand: "npm run ci:fix",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.spentRepairs).toBe(1);
+    expect(result.mergeSha).toBe("mergedsha-repair-cmd");
+    // 修复入口确实被执行，且不是凭空成功：修复后产生了新的 SHA 并再次 push。
+    expect(runner.execCalls.map((c) => c.command)).toContain("npm run ci:fix");
+    const pushCalls = runner.gitCalls.filter((c) => c.args[0] === "push");
+    expect(pushCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("验收 5 & 6: 修复次数超限终止，输出 Blocker 交接报告并移除 symphony-ready 标签停止派发", async () => {
     const cwd = createTempCwd();
     const runner = new MockDeliveryRunner();

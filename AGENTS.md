@@ -72,5 +72,6 @@ apps/cli            → config + tracker + workspace + agent + orchestrator + ob
 - [docs/architecture.md](docs/architecture.md) — 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑
 - [docs/development.md](docs/development.md) — 环境搭建、日常命令、TS 布局与依赖约定
 - [docs/testing.md](docs/testing.md) — 测试分层（对齐 SPEC §17 profiles）与三条测试哲学
+- [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) — GitHub 自动交付闭环（start / run / stop、GitHub lifecycle 与安全边界）
 - [notes/README.md](notes/README.md) — 决策记录（Agent Notes）契约
 - 各包 `README.md` — 该包 purpose / configuration / extension points / known limitations
