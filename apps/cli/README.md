@@ -31,6 +31,25 @@ symphony repo-bootstrap --repo <url> [--target <path>] [--branch <name>] [--work
       symphony repo-bootstrap --repo https://github.com/org/repo.git
   ```
 
+交付与自动合入工作流 Skill 子命令契约（NEST-91 / #80）：
+```text
+symphony delivery-skill [run|halt] --repo <owner/repo> --issue <number> [options]
+```
+- 别名支持：`delivery skill`；
+- `run` 动作：执行 inspect → validate → commit → push → create/reuse PR → inspect CI → fix failures loop → land 闭环；
+- `halt` 动作：显式触发交接中断，自动移除 Issue 上的 `symphony-ready` 标签以停止派发，并在控制台与 Issue 上输出交接报告；
+- 常用选项：
+  - `--repo <owner/repo>`：目标 GitHub 仓库；
+  - `--issue <number>`：当前 Issue 编号；
+  - `--head <branch>`：Issue 功能分支名（默认 `symphony/GH-<issue>`）；
+  - `--base <branch>`：目标合并分支（默认 `main`）；
+  - `--validate <command>`：本地验证命令（如 `"npm test"`）；
+  - `--max-repairs <N>`：CI 失败最大修复尝试次数（默认 3）；
+  - `--max-wait <seconds>`：CI 等待超时秒数（默认 300）；
+  - `--ready-label <label>`：就绪调度标签（默认 `symphony-ready`）；
+  - `--no-land`：通过 CI 后仅标记 ready，不自动执行 squash merge。
+
+
 ## Extension points
 
 - 新子命令：在本 app 内注册，业务逻辑一律下沉到对应 owner 包；

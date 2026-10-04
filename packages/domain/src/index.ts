@@ -67,3 +67,26 @@ export type {
   ObservabilityRetryRow, SnapshotClock, SnapshotTokens, SnapshotValue, SnapshotResult,
 } from "./observability";
 export type { StructuredLogEvent } from "./logging";
+
+export type {
+  CiCheckItem,
+  CiCheckStatus,
+  CiPolicyEvaluation,
+  DeliveryContext,
+  DeliveryHandoff,
+  DeliveryHandoffReason,
+  DeliverySkillConfig,
+  DeliverySkillResult,
+  DeliverySkillStatus,
+  FormatPrBodyOptions,
+  PrOwnershipMarker,
+} from "./delivery";
+export {
+  evaluateCiChecksPolicy,
+  formatDeliveryHandoffMarkdown,
+  formatPrBody,
+  parsePrOwnershipMarker,
+  serializePrOwnershipMarker,
+  validatePrOwnership,
+} from "./delivery";
+

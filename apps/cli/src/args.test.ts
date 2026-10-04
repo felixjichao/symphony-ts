@@ -40,7 +40,19 @@ describe("parseCliArgs", () => {
       subcommandArgs: ["--repo", "https://github.com/org/repo.git"],
     });
   });
+
+  it("recognizes delivery-skill subcommand and arguments", () => {
+    expect(parseCliArgs(["delivery-skill", "run", "--repo", "org/repo", "--issue", "80"])).toEqual({
+      subcommand: "delivery-skill",
+      subcommandArgs: ["run", "--repo", "org/repo", "--issue", "80"],
+    });
+    expect(parseCliArgs(["delivery", "skill", "halt", "--repo", "org/repo", "--issue", "80"])).toEqual({
+      subcommand: "delivery-skill",
+      subcommandArgs: ["halt", "--repo", "org/repo", "--issue", "80"],
+    });
+  });
 });
+
 
 describe("resolveWorkflowPath", () => {
   it("resolves explicit path against specified cwd", () => {
