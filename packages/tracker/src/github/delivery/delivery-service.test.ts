@@ -1432,6 +1432,434 @@ describe("GitHubDeliveryService", () => {
       expect(report.status).toBe("passed");
       expect(report.requiredChecks[0]!.appId).toBe(456);
     });
+
+    it.each([null, { databaseId: 123 }])("GraphQL branchProtectionRule 明确 app: %j 时匹配成功检查并允许合并", async (app) => {
+      let mergedCalled = false;
+      let prState = "OPEN";
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return { stdout: JSON.stringify([defaultMockPr({ number: 81 })]), stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            app,
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              state: prState,
+              mergedAt: prState === "MERGED" ? "2026-10-04T10:00:00Z" : null,
+              mergeCommit: prState === "MERGED" ? { oid: "sha-merge-123" } : null,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  ...(app === null ? {} : { checkSuite: { app } }),
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          prState = "MERGED";
+          return {
+            stdout: JSON.stringify({
+              merged: true,
+              sha: "sha-merge-123",
+              message: "Merged successfully",
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+      expect(report.canAutoMerge).toBe(true);
+      expect(report.status).toBe("passed");
+      expect(report.requiredChecks[0]!.appId).toBe(app?.databaseId ?? null);
+
+      const landResult = await service.landPr(context, { optIn: true, prNumber: 81 });
+      expect(landResult.merged).toBe(true);
+      expect(mergedCalled).toBe(true);
+    });
+
+    it("GraphQL branchProtectionRule 缺失 app 字段时返回 checks_unknown 且阻止合并", async () => {
+      let mergedCalled = false;
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return { stdout: JSON.stringify([defaultMockPr({ number: 81 })]), stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            // app field is completely omitted!
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          return {
+            stdout: JSON.stringify({ merged: true, sha: "sha-1", message: "Merged" }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+      expect(mergedCalled).toBe(false);
+    });
+
+    it.each([
+      {},
+      [],
+      "invalid-app",
+      { databaseId: 0 },
+      { databaseId: -1 },
+      { databaseId: 1.5 },
+      { id: "0" },
+      { id: "-1" },
+      { id: "1.5" },
+      { id: " ", slug: " " },
+    ])("GraphQL branchProtectionRule 中无有效身份 app: %j 时返回 checks_unknown 且阻止合并", async (app) => {
+      let mergedCalled = false;
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return { stdout: JSON.stringify([defaultMockPr({ number: 81 })]), stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            app,
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          return {
+            stdout: JSON.stringify({ merged: true, sha: "sha-1", message: "Merged" }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+      expect(mergedCalled).toBe(false);
+    });
+
+    it("GraphQL branchProtectionRule 中 app: { databaseId: null, id: null } 时返回 checks_unknown 且阻止合并", async () => {
+      let mergedCalled = false;
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return { stdout: JSON.stringify([defaultMockPr({ number: 81 })]), stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            app: { databaseId: null, id: null, slug: "" },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          return {
+            stdout: JSON.stringify({ merged: true, sha: "sha-1", message: "Merged" }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+      expect(mergedCalled).toBe(false);
+    });
+
+    it("真实 gh pr view 常见输出（CheckRun 缺失 app 字段）在要求特定 App 时保持 pending 并阻止合并", async () => {
+      let mergedCalled = false;
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "list") {
+          return { stdout: JSON.stringify([defaultMockPr({ number: 81 })]), stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusChecks: [
+                          {
+                            context: "ci/build",
+                            app: { databaseId: 123 },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        // Standard gh pr view output from gh 2.45.0 (no app information in CheckRun)
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "ci/build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  workflowName: "CI",
+                  // Notice: no checkSuite.app or app field
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+          mergedCalled = true;
+          return {
+            stdout: JSON.stringify({ merged: true, sha: "sha-1", message: "Merged" }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+      // Missing app on check run cannot satisfy App 123 requirement -> stays pending
+      expect(report.canAutoMerge).toBe(false);
+      expect(report.status).toBe("pending");
+      expect(report.requiredChecks).toHaveLength(1);
+      expect(report.requiredChecks[0]!.appId).toBe(123);
+      expect(report.requiredChecks[0]!.state).toBe("PENDING");
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_waiting",
+      });
+      expect(mergedCalled).toBe(false);
+    });
   });
 
   describe("matchesAppConstraint & extractAppId unit tests", () => {

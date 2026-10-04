@@ -368,6 +368,11 @@ export class GitHubDeliveryService {
     );
 
     // 2. Fetch all current checks from statusCheckRollup (from pr view)
+    // Note: Standard `gh pr view --json statusCheckRollup` (e.g. gh 2.45.0) queries status rollup
+    // without returning App identity on CheckRun items. Therefore, checks obtained via this command
+    // have `appId = null`. If branch protection or rulesets specify a required check from a specific App,
+    // the check will not match the App constraint and will safely remain PENDING (fail-closed, preventing
+    // automated merge). Subsequent enhancements can supplement this with provider-native GraphQL/REST check suite queries.
     const viewFields = "statusCheckRollup,headRefOid";
     const res = await this.runner.exec([
       "pr",
@@ -1046,26 +1051,43 @@ export class GitHubDeliveryService {
               );
             }
             let appId: number | string | null = null;
-            if (check.app !== undefined && check.app !== null) {
-              if (typeof check.app !== "object") {
-                throw new DeliveryError(
-                  `Malformed app in requiredStatusChecks entry in GraphQL response`,
-                  { code: "checks_unknown" },
-                );
-              }
+            if (check.app === null) {
+              appId = null;
+            } else if (check.app === undefined) {
+              throw new DeliveryError(
+                `Missing app field in requiredStatusChecks entry in GraphQL response`,
+                { code: "checks_unknown" },
+              );
+            } else if (typeof check.app === "object" && !Array.isArray(check.app)) {
               const dbId = check.app.databaseId;
               const appIdVal = check.app.id;
               const slug = check.app.slug;
-              if (typeof dbId === "number") {
+              if (typeof dbId === "number" && Number.isSafeInteger(dbId) && dbId > 0) {
                 appId = dbId;
-              } else if (typeof appIdVal === "number") {
+              } else if (typeof appIdVal === "number" && Number.isSafeInteger(appIdVal) && appIdVal > 0) {
                 appId = appIdVal;
               } else if (typeof appIdVal === "string" && appIdVal.trim()) {
                 const num = Number(appIdVal);
-                appId = !Number.isNaN(num) && String(num) === appIdVal.trim() ? num : appIdVal.trim();
+                if (Number.isNaN(num)) {
+                  appId = appIdVal.trim();
+                } else if (Number.isSafeInteger(num) && num > 0) {
+                  appId = num;
+                }
               } else if (typeof slug === "string" && slug.trim()) {
                 appId = slug.trim();
               }
+
+              if (appId === null || appId === undefined) {
+                throw new DeliveryError(
+                  `Malformed app in requiredStatusChecks entry in GraphQL response: missing valid app identifier (databaseId, id, or slug)`,
+                  { code: "checks_unknown" },
+                );
+              }
+            } else {
+              throw new DeliveryError(
+                `Malformed app in requiredStatusChecks entry in GraphQL response`,
+                { code: "checks_unknown" },
+              );
             }
             rawSpecs.push({ context: check.context.trim(), appId });
           }
