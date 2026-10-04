@@ -228,10 +228,21 @@ Follow the standard delivery protocol:
 
 该 YAML 是 WORKFLOW.md 的 front matter（放在 `---` 分隔符之间）；5.2 的 Prompt 放在第二个分隔符之后。主机需先构建并把包含 `repo-bootstrap` / `delivery-skill` 的 `symphony` CLI 放入 PATH。Bootstrap 默认生成 `symphony/<workspaceKey>`，Prompt 从当前 Git 分支取得同一 key，不依赖 GitHub 的空 `branch_name` 或不存在的 hook 环境变量。`after_create` 在 bootstrap 成功后复制 skill；现有 workspace 需按相同步骤安装一次。
 
-未提供 `--required-checks` 时，工具必须成功发现 active rulesets（含分页）及 classic protection，或确认后者明确返回 Branch not protected；普通 404、权限失败、畸形响应均交接。Operator 可提供完整的 `--required-checks "gate,lint"`（包含所有规则来源）作为明确策略；空字符串代表明确无 required，仍要求 observed checks 成功。
+未提供 `--required-checks` 时，工具必须成功发现 active rulesets（使用兼容 gh 2.45 的 `--paginate --jq '@json'`，逐页输出 JSON 数组并严格聚合）及 classic protection，或确认后者明确返回 Branch not protected；普通 404、权限失败、畸形响应均交接。Operator 可提供完整的 `--required-checks "gate,lint"`（包含所有规则来源）作为明确策略；空字符串代表明确无 required，仍要求 observed checks 成功。
 
 ### 5.3 凭据信任边界与子进程 Secret 隔离 (Credentials & Child Isolation)
 
 - **主机与子进程 Secret 隔离**：遵循 `@symphony/agent` 的环境隔离原则，宿主 Orchestrator 配置的敏感 Provider Secret（如 `GITHUB_TOKEN`）应加入 `excludeEnvNames`（如 `["GITHUB_TOKEN", "GH_TOKEN"]`），禁止不受信任的子进程直接读取宿主长效 Token。
 - **主机预配置凭据助手 (Git Credential Helper)**：通过主机级 `gh auth setup-git` 或系统级凭据缓存为子进程执行的 Git/gh 命令提供身份认证，子进程执行 `git push` 或 `gh pr view` 时直接走系统凭据流，无需将原始 Token 写入子进程环境变量中。
 - **输出脱敏 (Credential Sanitization)**：`DeliveryGitGhRunner` 会自动对所有执行输出中的 URL Token、GitHub PAT、Fine-grained PAT 以及 Bearer 头部进行脱敏掩码（`sanitizeCredentials`），杜绝任何凭据意外写入 Issue 评论或终端日志。
+
+
+### 5.4 可选真实 gh 兼容验证
+
+默认 gate 不访问 GitHub。需要验证宿主 gh 与真实规则查询时，可显式执行：
+
+```sh
+SYMPHONY_TEST_GH_RULES_REPO=felixjichao/symphony-ts npm test -w @symphony/cli -- --run src/delivery-gh-compatibility.test.ts
+```
+
+该测试由生产 `runDeliverySkill` / `DefaultDeliveryGitGhRunner` 发出真实 active-rules 只读查询；Git、classic protection、PR/checks 与所有 mutation 使用隔离 fixture。它证明命令兼容与进入 CI 判定，不代表完整保护配置发现或真实交付 dogfood。测试目标需为 `main` 上无额外 required checks（或仅 `gate`）的受控仓库；未设置 opt-in 环境变量时显式 skipped。

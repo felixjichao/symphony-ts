@@ -25,7 +25,7 @@ class MockCliRunner implements DeliveryGitGhRunner {
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
     if (args[0] === "api" && args[1]?.includes("rules/branches")) {
-      return { stdout: "[[]]", stderr: "", exitCode: 0 };
+      return { stdout: "[]", stderr: "", exitCode: 0 };
     }
     if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("required_status_checks")) {
       return { stdout: "{}", stderr: "404 Branch not protected", exitCode: 1 };

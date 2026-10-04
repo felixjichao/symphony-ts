@@ -779,13 +779,17 @@ export async function runDeliverySkill(
     let rulesetError: string | null = null;
 
     const rulesRes = await runner.gh(
-      ["api", `repos/${context.repo}/rules/branches/${encodeURIComponent(context.baseBranch)}?per_page=100`, "--paginate", "--slurp"],
+      ["api", `repos/${context.repo}/rules/branches/${encodeURIComponent(context.baseBranch)}?per_page=100`, "--paginate", "--jq", "@json"],
       options.cwd,
     );
 
     if (rulesRes.exitCode === 0) {
       try {
-        const pages: unknown = JSON.parse(rulesRes.stdout);
+        // gh 2.45 supports --jq but not --slurp. @json emits one compact
+        // JSON array per page, so strings containing brackets/newlines remain safe.
+        const pages: unknown = rulesRes.stdout.trim()
+          ? rulesRes.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))
+          : [];
         if (Array.isArray(pages) && pages.length > 0 && pages.every(Array.isArray)) {
           const parsedRules = pages.flat();
           for (const rule of parsedRules) {

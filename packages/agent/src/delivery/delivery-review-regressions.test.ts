@@ -10,7 +10,7 @@ const check = { name: "test-job", status: "failure" as const, conclusion: "FAILU
 
 function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", conclusion: "SUCCESS" }]) {
   const calls: string[][] = [];
-  let api = (args: readonly string[]) => args[1]?.includes("rules/branches") ? ok([[]]) : ok({ contexts: [], checks: [] });
+  let api = (args: readonly string[]) => args[1]?.includes("rules/branches") ? ok([]) : ok({ contexts: [], checks: [] });
   let diagnostics = (args: readonly string[]) => args[1] === "list"
     ? ok([{ databaseId: 1, conclusion: "FAILURE", name: "unrelated" }, { databaseId: 2, conclusion: "FAILURE", name: "CI" }])
     : { stdout: "test-job assertion failed", stderr: "", exitCode: 0 };
@@ -57,7 +57,7 @@ describe("third-review delivery regressions", () => {
 
   it.each(["Not Found (HTTP 404)", "Resource not accessible (HTTP 403)"])("unknown classic rules fail closed even with a ruleset: %s", async (error) => {
     const f = fixture();
-    f.setApi((args) => args[1]?.includes("rules/branches") ? ok([[{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "optional" }] } }]]) : fail(error));
+    f.setApi((args) => args[1]?.includes("rules/branches") ? ok([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "optional" }] } }]) : fail(error));
     const result = await runDeliverySkill({ ...options, runner: f.runner });
     expect(result.status).toBe("blocked");
     expect(result.handoffMarkdown).toContain(error);
@@ -65,22 +65,32 @@ describe("third-review delivery regressions", () => {
 
   it.each([{}, { contexts: [42] }, { checks: [{}] }])("rejects malformed classic protection: %j", async (payload) => {
     const f = fixture();
-    f.setApi((args) => args[1]?.includes("rules/branches") ? ok([[]]) : ok(payload));
+    f.setApi((args) => args[1]?.includes("rules/branches") ? ok([]) : ok(payload));
     expect((await runDeliverySkill({ ...options, runner: f.runner })).status).toBe("blocked");
   });
 
   it("consumes required checks from every active-rules page", async () => {
     const f = fixture();
-    f.setApi((args) => args[1]?.includes("rules/branches") ? ok([[], [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "gate" }] } }]]) : ok({ contexts: [], checks: [] }));
+    f.setApi((args) => args[1]?.includes("rules/branches") ? { stdout: "[]\n" + JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "gate" }] } }]), stderr: "", exitCode: 0 } : ok({ contexts: [], checks: [] }));
     let clock = 100_000;
     const result = await runDeliverySkill({ ...options, runner: f.runner, nowFn: () => clock, sleepFn: async () => { clock += 1000; } });
     expect(result.reason).toBe("ci_wait_timeout");
-    expect(f.calls.find((args) => args[0] === "api" && args[1]?.includes("rules/branches"))).toContain("--paginate");
+    const args = f.calls.find((args) => args[0] === "api" && args[1]?.includes("rules/branches"));
+    expect(args).toContain("--paginate");
+    expect(args).toContain("--jq");
+    expect(args).toContain("@json");
+    expect(args).not.toContain("--slurp");
   });
 
-  it.each([{}, [[{ type: "required_status_checks", parameters: {} }]], [[{ type: "required_status_checks", parameters: { required_status_checks: [{}] } }]]])("rejects malformed active rules: %j", async (payload) => {
+  it.each([{}, [{ type: "required_status_checks", parameters: {} }], [{ type: "required_status_checks", parameters: { required_status_checks: [{}] } }]])("rejects malformed active rules: %j", async (payload) => {
     const f = fixture();
     f.setApi((args) => args[1]?.includes("rules/branches") ? ok(payload) : ok({ contexts: [], checks: [] }));
+    expect((await runDeliverySkill({ ...options, runner: f.runner })).status).toBe("blocked");
+  });
+
+  it.each(["", "[]\n{bad json", "[]\n{}", "[]\nnull", "[]\n[{}]"])("fails closed on empty or malformed paginated output: %j", async (stdout) => {
+    const f = fixture();
+    f.setApi((args) => args[1]?.includes("rules/branches") ? { stdout, stderr: "", exitCode: 0 } : ok({ contexts: [], checks: [] }));
     expect((await runDeliverySkill({ ...options, runner: f.runner })).status).toBe("blocked");
   });
 

@@ -63,3 +63,8 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 - Match failed jobs to their Actions run URLs for the pushed commit. Every failed check must have usable diagnostics; inaccessible, empty or partial logs stop before spending repair budget. External check providers without Actions logs require operator handoff in this MVP.
 - Bootstrap examples use the existing `repo-bootstrap` command and actual hook workspace key. Delivery derives the key from the current `symphony/<key>` branch rather than GitHub's null `branchName`.
 - Rejected alternatives: treating any 404 as no protection, using only one successful rules source, matching workflow/job names by substring, or extending the wait deadline on restart. Each can lose safety or budget guarantees. Local fixture regressions verify these paths; real Codex/GitHub delivery remains #83's external dogfood.
+
+
+## GitHub CLI compatibility (2026-10-04)
+
+`gh api --slurp` is unavailable on the current gh 2.45 host. Use `--paginate --jq '@json'` to emit one compact JSON array per page, then parse each line and validate every page/rule. Empty output, malformed later pages, command errors and partial policy remain fail closed. This avoids either upgrading the host as a delivery prerequisite or treating unsupported flags as empty rules. The opt-in `delivery-gh-compatibility.test.ts` drives production rule discovery through the installed gh with only the read-only query live; delivery mutations stay isolated. Default gate skips that external test explicitly.
