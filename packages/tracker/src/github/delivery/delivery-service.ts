@@ -846,24 +846,64 @@ export class GitHubDeliveryService {
         );
       }
 
-      const pr = json.data?.repository?.pullRequest;
-      const baseRef = pr?.baseRef;
-      if (!pr || baseRef === undefined || baseRef === null) {
+      if (!json || typeof json !== "object" || !json.data || typeof json.data !== "object") {
         throw new DeliveryError(
-          `Malformed GraphQL response when querying branch protection: missing pullRequest or baseRef`,
+          `Malformed GraphQL response when querying branch protection: missing data`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      const repoData = json.data.repository;
+      if (!repoData || typeof repoData !== "object") {
+        throw new DeliveryError(
+          `Malformed GraphQL response when querying branch protection: missing repository`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      const pr = repoData.pullRequest;
+      if (!pr || typeof pr !== "object") {
+        throw new DeliveryError(
+          `Malformed GraphQL response when querying branch protection: missing pullRequest`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      if (!("baseRef" in pr) || pr.baseRef === undefined || pr.baseRef === null) {
+        throw new DeliveryError(
+          `Malformed GraphQL response when querying branch protection: missing or null baseRef`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      const baseRef = pr.baseRef;
+      if (typeof baseRef !== "object" || !("branchProtectionRule" in baseRef) || baseRef.branchProtectionRule === undefined) {
+        throw new DeliveryError(
+          `Malformed GraphQL response when querying branch protection: missing branchProtectionRule on baseRef`,
           { code: "checks_unknown" },
         );
       }
 
       const bpr = baseRef.branchProtectionRule;
-      if (bpr !== null && bpr !== undefined) {
+      if (bpr !== null) {
         if (typeof bpr !== "object") {
           throw new DeliveryError(
             `Malformed branchProtectionRule in GraphQL response`,
             { code: "checks_unknown" },
           );
         }
-        if (bpr.requiredStatusCheckContexts !== undefined && bpr.requiredStatusCheckContexts !== null) {
+
+        const hasContexts = "requiredStatusCheckContexts" in bpr && bpr.requiredStatusCheckContexts !== undefined;
+        const hasChecks = "requiredStatusChecks" in bpr && bpr.requiredStatusChecks !== undefined;
+
+        if (!hasContexts && !hasChecks) {
+          throw new DeliveryError(
+            `Malformed branchProtectionRule in GraphQL response: missing check fields`,
+            { code: "checks_unknown" },
+          );
+        }
+
+        if (hasContexts && bpr.requiredStatusCheckContexts !== null) {
           if (!Array.isArray(bpr.requiredStatusCheckContexts)) {
             throw new DeliveryError(
               `Malformed requiredStatusCheckContexts in GraphQL response`,
@@ -871,12 +911,17 @@ export class GitHubDeliveryService {
             );
           }
           for (const ctx of bpr.requiredStatusCheckContexts) {
-            if (typeof ctx === "string" && ctx.trim()) {
-              requiredNames.add(ctx.trim());
+            if (typeof ctx !== "string" || !ctx.trim()) {
+              throw new DeliveryError(
+                `Invalid requiredStatusCheckContexts entry in GraphQL response`,
+                { code: "checks_unknown" },
+              );
             }
+            requiredNames.add(ctx.trim());
           }
         }
-        if (bpr.requiredStatusChecks !== undefined && bpr.requiredStatusChecks !== null) {
+
+        if (hasChecks && bpr.requiredStatusChecks !== null) {
           if (!Array.isArray(bpr.requiredStatusChecks)) {
             throw new DeliveryError(
               `Malformed requiredStatusChecks in GraphQL response`,
@@ -884,9 +929,13 @@ export class GitHubDeliveryService {
             );
           }
           for (const check of bpr.requiredStatusChecks) {
-            if (check && typeof check.context === "string" && check.context.trim()) {
-              requiredNames.add(check.context.trim());
+            if (!check || typeof check !== "object" || typeof check.context !== "string" || !check.context.trim()) {
+              throw new DeliveryError(
+                `Invalid requiredStatusChecks entry in GraphQL response`,
+                { code: "checks_unknown" },
+              );
             }
+            requiredNames.add(check.context.trim());
           }
         }
       }
@@ -914,7 +963,7 @@ export class GitHubDeliveryService {
       interface RulesetItem {
         readonly type?: string;
         readonly parameters?: {
-          readonly required_status_checks?: ReadonlyArray<{ readonly context: string }>;
+          readonly required_status_checks?: ReadonlyArray<{ readonly context?: string }>;
         };
       }
 
@@ -943,17 +992,27 @@ export class GitHubDeliveryService {
           );
         }
         const r = rule as RulesetItem;
+        if (!r.type || typeof r.type !== "string" || !r.type.trim()) {
+          throw new DeliveryError(
+            `Malformed rule type in branch rulesets API`,
+            { code: "checks_unknown" },
+          );
+        }
         if (r.type === "required_status_checks") {
-          if (!r.parameters || !Array.isArray(r.parameters.required_status_checks)) {
+          if (!r.parameters || typeof r.parameters !== "object" || !Array.isArray(r.parameters.required_status_checks)) {
             throw new DeliveryError(
               `Malformed required_status_checks parameters in branch rulesets API`,
               { code: "checks_unknown" },
             );
           }
           for (const item of r.parameters.required_status_checks) {
-            if (item?.context && typeof item.context === "string" && item.context.trim()) {
-              requiredNames.add(item.context.trim());
+            if (!item || typeof item !== "object" || typeof item.context !== "string" || !item.context.trim()) {
+              throw new DeliveryError(
+                `Malformed required_status_checks entry in branch rulesets API`,
+                { code: "checks_unknown" },
+              );
             }
+            requiredNames.add(item.context.trim());
           }
         }
       }
@@ -961,16 +1020,10 @@ export class GitHubDeliveryService {
       if (err instanceof DeliveryError && err.code === "checks_unknown") {
         throw err;
       }
-      // Check if this error is an HTTP 404 (endpoint not supported or branch has no rules)
-      const is404 =
-        (err instanceof DeliveryError && err.details?.["httpStatus"] === 404) ||
-        (err instanceof Error && /\bHTTP 404\b|Not Found/i.test(err.message));
-      if (!is404) {
-        throw new DeliveryError(
-          `Failed to query branch rulesets for required checks: ${(err as Error).message}`,
-          { code: "checks_unknown", cause: err },
-        );
-      }
+      throw new DeliveryError(
+        `Failed to query branch rulesets for required checks: ${(err as Error).message}`,
+        { code: "checks_unknown", cause: err },
+      );
     }
 
     return requiredNames;
@@ -1073,9 +1126,11 @@ export class GitHubDeliveryService {
   }
 }
 
-function parseJsonStream(text: string): unknown[] {
+export function parseJsonStream(text: string): unknown[] {
   const trimmed = text.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    throw new Error("Empty response from branch rulesets API");
+  }
   try {
     const single = JSON.parse(trimmed);
     if (!Array.isArray(single)) {
@@ -1087,49 +1142,62 @@ function parseJsonStream(text: string): unknown[] {
       throw err;
     }
     // Handle concatenated JSON arrays produced by gh api --paginate
-    const results: unknown[] = [];
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let startIndex = -1;
-
-    for (let i = 0; i < trimmed.length; i++) {
-      const char = trimmed[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-
-      if (char === "[") {
-        if (depth === 0) {
-          startIndex = i;
-        }
-        depth++;
-      } else if (char === "]") {
-        depth--;
-        if (depth === 0 && startIndex !== -1) {
-          const chunk = trimmed.slice(startIndex, i + 1);
-          const parsed = JSON.parse(chunk);
-          if (!Array.isArray(parsed)) {
-            throw new Error(`Expected chunk to be JSON array`);
-          }
-          results.push(...parsed);
-          startIndex = -1;
-        }
-      }
-    }
-    if (depth !== 0 || startIndex !== -1 || results.length === 0) {
-      throw new Error("Malformed JSON stream in response");
-    }
-    return results;
   }
+
+  const results: unknown[] = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let startIndex = -1;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+
+    if (depth === 0) {
+      if (char === " " || char === "\t" || char === "\n" || char === "\r") {
+        continue;
+      }
+      if (char !== "[") {
+        throw new Error(`Unexpected character '${char}' outside of JSON array at index ${i}`);
+      }
+    }
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === "[") {
+      if (depth === 0) {
+        startIndex = i;
+      }
+      depth++;
+    } else if (char === "]") {
+      depth--;
+      if (depth === 0 && startIndex !== -1) {
+        const chunk = trimmed.slice(startIndex, i + 1);
+        const parsed = JSON.parse(chunk);
+        if (!Array.isArray(parsed)) {
+          throw new Error("Expected chunk to be JSON array");
+        }
+        results.push(...parsed);
+        startIndex = -1;
+      }
+    }
+  }
+
+  if (inString || depth !== 0 || startIndex !== -1 || results.length === 0) {
+    throw new Error("Malformed JSON stream in response");
+  }
+
+  return results;
 }

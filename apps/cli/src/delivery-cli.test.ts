@@ -334,5 +334,29 @@ describe("delivery-cli", () => {
       const parsedOptIn = JSON.parse(stderrOptIn);
       expect(parsedOptIn.error).toBe("opt_in_required");
     });
+
+    it("sanitizes PAT credentials inside PR title / diagnostic fields in JSON output", async () => {
+      let stdout = "";
+      const patToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+      const prWithToken: PrRecord = {
+        ...mockPr,
+        title: `Fix delivery with ${patToken}`,
+        body: `Token in body: ${patToken}`,
+      };
+      const service = createServiceMock({ readPr: vi.fn(async () => prWithToken) });
+      const code = await runDeliveryCli(
+        ["read", "--repo", "org/repo", "--issue", "81", "--workspace-key", "ws-81", "--pr-number", "81", "--json"],
+        {
+          stdout: { write: (t) => { stdout += t; } },
+          service,
+        },
+      );
+      expect(code).toBe(0);
+      expect(stdout).not.toContain(patToken);
+      expect(stdout).toContain("***");
+      const parsed = JSON.parse(stdout);
+      expect(parsed.title).toContain("***");
+      expect(parsed.body).toContain("***");
+    });
   });
 });

@@ -1,5 +1,6 @@
 export {
   GitHubDeliveryService,
+  parseJsonStream,
   type EnsurePrOptions,
   type LandPrOptions,
   type LandPrResult,

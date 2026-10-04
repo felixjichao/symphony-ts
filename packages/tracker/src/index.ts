@@ -87,6 +87,7 @@ export {
   GitHubDeliveryService,
   DefaultGhRunner,
   classifyGhError,
+  parseJsonStream,
   sanitizeCredentials,
   type EnsurePrOptions,
   type GhExecOptions,

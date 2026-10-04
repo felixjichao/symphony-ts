@@ -5,7 +5,7 @@ import {
   type PrOwnershipMarker,
   DeliveryError,
 } from "@symphony/domain";
-import { GitHubDeliveryService } from "./delivery-service";
+import { GitHubDeliveryService, parseJsonStream } from "./delivery-service";
 import type { GhExecOptions, GhExecResult, GhRunner } from "./gh-cli";
 
 describe("GitHubDeliveryService", () => {
@@ -942,6 +942,264 @@ describe("GitHubDeliveryService", () => {
       await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
         code: "checks_unknown",
       });
+    });
+
+    it("fails closed with checks_unknown when rulesets API returns HTTP 404", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: null,
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          throw new DeliveryError("gh: HTTP 404: Not Found (https://api.github.com/repos/org/repo/rules/branches/main)", {
+            code: "cli_malformed_response",
+            details: { httpStatus: 404 },
+          });
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "lint",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when GraphQL baseRef is missing branchProtectionRule", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {},
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({ number: 81 })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when GraphQL branchProtectionRule is empty object {}", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: {} },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({ number: 81 })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when GraphQL requiredStatusChecks has entry missing context", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusCheckContexts: [],
+                        requiredStatusChecks: [{}],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({ number: 81 })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when REST ruleset has required_status_checks entry missing context", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusCheckContexts: [],
+                        requiredStatusChecks: [],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                type: "required_status_checks",
+                parameters: {
+                  required_status_checks: [{}],
+                },
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({ number: 81 })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+  });
+
+  describe("parseJsonStream", () => {
+    it("rejects empty or whitespace-only stdout", () => {
+      expect(() => parseJsonStream("")).toThrow("Empty response");
+      expect(() => parseJsonStream("   \n\t  ")).toThrow("Empty response");
+    });
+
+    it("rejects trailing garbage after JSON array", () => {
+      expect(() => parseJsonStream('[{"type":"required_signatures"}] trailing-garbage')).toThrow("Unexpected character");
+    });
+
+    it("rejects leading garbage before JSON array", () => {
+      expect(() => parseJsonStream('leading-garbage [{"type":"required_signatures"}]')).toThrow("Unexpected character");
+    });
+
+    it("rejects non-array JSON chunk", () => {
+      expect(() => parseJsonStream('{"type":"required_signatures"}')).toThrow("Expected JSON array");
+    });
+
+    it("successfully parses concatenated JSON arrays with whitespace", () => {
+      const input = '[{"type":"a"}]\n\n[{"type":"b"}]';
+      expect(parseJsonStream(input)).toEqual([{ type: "a" }, { type: "b" }]);
     });
   });
 });

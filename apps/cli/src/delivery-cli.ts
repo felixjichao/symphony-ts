@@ -16,6 +16,26 @@ import {
   sanitizeCredentials,
 } from "@symphony/tracker";
 
+/**
+ * Recursively sanitizes sensitive credentials in all string fields of a data structure.
+ */
+export function sanitizeData<T>(val: T): T {
+  if (typeof val === "string") {
+    return sanitizeCredentials(val) as unknown as T;
+  }
+  if (val === null || val === undefined || typeof val !== "object") {
+    return val;
+  }
+  if (Array.isArray(val)) {
+    return val.map(item => sanitizeData(item)) as unknown as T;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(val)) {
+    result[k] = sanitizeData(v);
+  }
+  return result as T;
+}
+
 export interface DeliveryCliOutput {
   readonly write: (text: string) => unknown;
 }
@@ -198,7 +218,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           draft: args.draft,
         });
         if (args.json) {
-          stdout.write(`${JSON.stringify(pr, null, 2)}\n`);
+          stdout.write(`${JSON.stringify(sanitizeData(pr), null, 2)}\n`);
         } else {
           stdout.write(sanitizeCredentials(`PR #${pr.number} ensured: ${pr.url} [state: ${pr.state}, mergeable: ${pr.mergeable}]\n`));
         }
@@ -208,7 +228,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
       case "read": {
         const pr = await service.readPr(context, { prNumber: args.prNumber });
         if (args.json) {
-          stdout.write(`${JSON.stringify(pr, null, 2)}\n`);
+          stdout.write(`${JSON.stringify(sanitizeData(pr), null, 2)}\n`);
         } else {
           stdout.write(
             sanitizeCredentials(
@@ -230,7 +250,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           expectedHeadSha: args.expectedHeadSha,
         });
         if (args.json) {
-          stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+          stdout.write(`${JSON.stringify(sanitizeData(report), null, 2)}\n`);
         } else {
           stdout.write(
             sanitizeCredentials(
@@ -252,7 +272,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
         });
         const diagnostics = service.diagnoseFailedChecks(report);
         if (args.json) {
-          stdout.write(`${JSON.stringify({
+          stdout.write(`${JSON.stringify(sanitizeData({
             prNumber: report.prNumber,
             headSha: report.headSha,
             status: report.status,
@@ -260,7 +280,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
             reason: report.reason,
             failedOrPendingChecks: report.failedOrPendingChecks,
             diagnostics,
-          }, null, 2)}\n`);
+          }), null, 2)}\n`);
         } else {
           stdout.write(sanitizeCredentials(`${diagnostics}\n`));
         }
@@ -270,7 +290,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
       case "land": {
         if (!args.optIn) {
           if (args.json) {
-            stderr.write(`${JSON.stringify({ error: "opt_in_required", message: "land requires explicit opt-in (--opt-in)" })}\n`);
+            stderr.write(`${JSON.stringify(sanitizeData({ error: "opt_in_required", message: "land requires explicit opt-in (--opt-in)" }))}\n`);
           } else {
             stderr.write("symphony pr error: land requires explicit opt-in (--opt-in)\n");
           }
@@ -283,7 +303,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           deleteBranch: args.deleteBranch,
         });
         if (args.json) {
-          stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          stdout.write(`${JSON.stringify(sanitizeData(result), null, 2)}\n`);
         } else {
           stdout.write(
             sanitizeCredentials(
@@ -299,7 +319,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
       case "verify": {
         const result = await service.verifyMerged(context, { prNumber: args.prNumber });
         if (args.json) {
-          stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          stdout.write(`${JSON.stringify(sanitizeData(result), null, 2)}\n`);
         } else {
           stdout.write(
             sanitizeCredentials(
@@ -315,7 +335,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
       default: {
         const errText = sanitizeCredentials(`symphony pr error: unrecognized action '${args.action}'`);
         if (args.json) {
-          stderr.write(`${JSON.stringify({ error: "unrecognized_action", message: errText })}\n`);
+          stderr.write(`${JSON.stringify(sanitizeData({ error: "unrecognized_action", message: errText }))}\n`);
         } else {
           stderr.write(`${errText}\n`);
         }
@@ -327,7 +347,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
     const cleanMessage = sanitizeCredentials(message);
     const code = err instanceof DeliveryError ? err.code : "delivery_error";
     if (args.json) {
-      stderr.write(`${JSON.stringify({ error: code, message: cleanMessage })}\n`);
+      stderr.write(`${JSON.stringify(sanitizeData({ error: code, message: cleanMessage }))}\n`);
     } else {
       stderr.write(sanitizeCredentials(`symphony pr error [${code}]: ${cleanMessage}\n`));
     }
