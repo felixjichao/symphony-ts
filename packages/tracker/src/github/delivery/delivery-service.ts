@@ -296,7 +296,13 @@ export class GitHubDeliveryService {
     }
 
     // Verify checks belong to the expected head SHA
-    if (rawView.headRefOid && rawView.headRefOid !== pr.headSha) {
+    if (!rawView.headRefOid || typeof rawView.headRefOid !== "string") {
+      throw new DeliveryError(
+        `PR checks query response missing headRefOid for PR #${pr.number}`,
+        { code: "checks_unknown" },
+      );
+    }
+    if (rawView.headRefOid !== pr.headSha) {
       throw new DeliveryError(
         `PR head commit changed during checks query: expected ${pr.headSha}, observed ${rawView.headRefOid}`,
         {
@@ -312,10 +318,8 @@ export class GitHubDeliveryService {
     if (rawView.statusCheckRollup && Array.isArray(rawView.statusCheckRollup)) {
       for (const item of rawView.statusCheckRollup) {
         const check = this.normalizeCheckItem(item, requiredCheckNames);
-        if (check) {
-          currentChecks.push(check);
-          seenNames.add(check.name);
-        }
+        currentChecks.push(check);
+        seenNames.add(check.name);
       }
     }
 
@@ -573,12 +577,34 @@ export class GitHubDeliveryService {
    */
   async verifyMerged(context: DeliveryContext, options: ReadPrOptions = {}): Promise<VerifyMergedResult> {
     const pr = await this.readPr(context, options);
+    if (pr.state === "MERGED") {
+      if (!pr.mergeCommitSha || !pr.mergedAt) {
+        throw new DeliveryError(
+          `PR #${pr.number} is reported as MERGED, but mergeCommitSha or mergedAt is missing from GitHub API response`,
+          {
+            code: "verification_unknown",
+            details: {
+              prNumber: pr.number,
+              mergeCommitSha: pr.mergeCommitSha,
+              mergedAt: pr.mergedAt,
+            },
+          },
+        );
+      }
+      return {
+        merged: true,
+        prNumber: pr.number,
+        headSha: pr.headSha,
+        mergeCommitSha: pr.mergeCommitSha,
+        mergedAt: pr.mergedAt,
+      };
+    }
     return {
-      merged: pr.state === "MERGED",
+      merged: false,
       prNumber: pr.number,
       headSha: pr.headSha,
-      mergeCommitSha: pr.mergeCommitSha,
-      mergedAt: pr.mergedAt,
+      mergeCommitSha: null,
+      mergedAt: null,
     };
   }
 
@@ -663,23 +689,27 @@ export class GitHubDeliveryService {
       );
     }
 
-    // 2. Reject fork / cross-repository PRs
-    if (candidate.isCrossRepository) {
+    // 2. Reject fork / cross-repository PRs - strictly verify candidate.isCrossRepository === false
+    if (candidate.isCrossRepository !== false) {
       throw new DeliveryError(
-        `PR #${candidate.number} is from a cross-repository fork; refusal to prevent foreign takeover`,
+        `PR #${candidate.number} is from a cross-repository fork or has unverified repository boundary; refusal to prevent foreign takeover`,
         { code: "ownership_refusal" },
       );
     }
 
-    // 3. Verify head repository matches target repository
-    if (candidate.headRepositoryOwner?.login && candidate.headRepository?.name) {
-      const headRepoSlug = `${candidate.headRepositoryOwner.login}/${candidate.headRepository.name}`.toLowerCase();
-      if (headRepoSlug !== context.repo.toLowerCase()) {
-        throw new DeliveryError(
-          `PR #${candidate.number} head repository mismatch: expected '${context.repo}', got '${headRepoSlug}'`,
-          { code: "ownership_refusal" },
-        );
-      }
+    // 3. Verify head repository strictly matches target repository
+    if (!candidate.headRepositoryOwner?.login || !candidate.headRepository?.name) {
+      throw new DeliveryError(
+        `PR #${candidate.number} has missing head repository identity; refusal to prevent foreign takeover`,
+        { code: "ownership_refusal" },
+      );
+    }
+    const headRepoSlug = `${candidate.headRepositoryOwner.login}/${candidate.headRepository.name}`.toLowerCase();
+    if (headRepoSlug !== context.repo.toLowerCase()) {
+      throw new DeliveryError(
+        `PR #${candidate.number} head repository mismatch: expected '${context.repo}', got '${headRepoSlug}'`,
+        { code: "ownership_refusal" },
+      );
     }
 
     // 4. Verify base branch matches
@@ -687,6 +717,14 @@ export class GitHubDeliveryService {
       throw new DeliveryError(
         `PR #${candidate.number} base branch mismatch: expected '${context.baseBranch}', got '${candidate.baseRefName}'`,
         { code: "ownership_refusal" },
+      );
+    }
+
+    // 5. Verify headRefOid exists and is valid string
+    if (!candidate.headRefOid || typeof candidate.headRefOid !== "string") {
+      throw new DeliveryError(
+        `PR #${candidate.number} is missing headRefOid`,
+        { code: "cli_malformed_response" },
       );
     }
 
@@ -808,16 +846,43 @@ export class GitHubDeliveryService {
         );
       }
 
-      const bpr = json.data?.repository?.pullRequest?.baseRef?.branchProtectionRule;
-      if (bpr) {
-        if (Array.isArray(bpr.requiredStatusCheckContexts)) {
+      const pr = json.data?.repository?.pullRequest;
+      const baseRef = pr?.baseRef;
+      if (!pr || baseRef === undefined || baseRef === null) {
+        throw new DeliveryError(
+          `Malformed GraphQL response when querying branch protection: missing pullRequest or baseRef`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      const bpr = baseRef.branchProtectionRule;
+      if (bpr !== null && bpr !== undefined) {
+        if (typeof bpr !== "object") {
+          throw new DeliveryError(
+            `Malformed branchProtectionRule in GraphQL response`,
+            { code: "checks_unknown" },
+          );
+        }
+        if (bpr.requiredStatusCheckContexts !== undefined && bpr.requiredStatusCheckContexts !== null) {
+          if (!Array.isArray(bpr.requiredStatusCheckContexts)) {
+            throw new DeliveryError(
+              `Malformed requiredStatusCheckContexts in GraphQL response`,
+              { code: "checks_unknown" },
+            );
+          }
           for (const ctx of bpr.requiredStatusCheckContexts) {
             if (typeof ctx === "string" && ctx.trim()) {
               requiredNames.add(ctx.trim());
             }
           }
         }
-        if (Array.isArray(bpr.requiredStatusChecks)) {
+        if (bpr.requiredStatusChecks !== undefined && bpr.requiredStatusChecks !== null) {
+          if (!Array.isArray(bpr.requiredStatusChecks)) {
+            throw new DeliveryError(
+              `Malformed requiredStatusChecks in GraphQL response`,
+              { code: "checks_unknown" },
+            );
+          }
           for (const check of bpr.requiredStatusChecks) {
             if (check && typeof check.context === "string" && check.context.trim()) {
               requiredNames.add(check.context.trim());
@@ -838,12 +903,13 @@ export class GitHubDeliveryService {
       );
     }
 
-    // 2. Query repository branch rulesets (REST)
+    // 2. Query repository branch rulesets (REST) with pagination
     try {
       const rulesRes = await this.runner.exec([
         "api",
         `repos/${repo}/rules/branches/${encodeURIComponent(baseBranch)}`,
-      ], { allowedExitCodes: [0, 404] });
+        "--paginate",
+      ]);
 
       interface RulesetItem {
         readonly type?: string;
@@ -852,23 +918,58 @@ export class GitHubDeliveryService {
         };
       }
 
-      if (rulesRes.exitCode === 0 && rulesRes.stdout.trim().startsWith("[")) {
-        const rules = JSON.parse(rulesRes.stdout) as readonly RulesetItem[];
-        if (Array.isArray(rules)) {
-          for (const rule of rules) {
-            if (rule?.type === "required_status_checks" && rule.parameters?.required_status_checks) {
-              for (const item of rule.parameters.required_status_checks) {
-                if (item?.context && typeof item.context === "string" && item.context.trim()) {
-                  requiredNames.add(item.context.trim());
-                }
-              }
+      let rules: unknown[];
+      try {
+        rules = parseJsonStream(rulesRes.stdout);
+      } catch (err) {
+        throw new DeliveryError(
+          `Failed to parse ruleset response: ${(err as Error).message}`,
+          { code: "checks_unknown", cause: err },
+        );
+      }
+
+      if (!Array.isArray(rules)) {
+        throw new DeliveryError(
+          `Expected array response from branch rulesets API, got ${typeof rules}`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      for (const rule of rules) {
+        if (!rule || typeof rule !== "object") {
+          throw new DeliveryError(
+            `Malformed ruleset item in branch rulesets API`,
+            { code: "checks_unknown" },
+          );
+        }
+        const r = rule as RulesetItem;
+        if (r.type === "required_status_checks") {
+          if (!r.parameters || !Array.isArray(r.parameters.required_status_checks)) {
+            throw new DeliveryError(
+              `Malformed required_status_checks parameters in branch rulesets API`,
+              { code: "checks_unknown" },
+            );
+          }
+          for (const item of r.parameters.required_status_checks) {
+            if (item?.context && typeof item.context === "string" && item.context.trim()) {
+              requiredNames.add(item.context.trim());
             }
           }
         }
       }
     } catch (err) {
-      if (err instanceof DeliveryError && err.code === "auth_failure") {
+      if (err instanceof DeliveryError && err.code === "checks_unknown") {
         throw err;
+      }
+      // Check if this error is an HTTP 404 (endpoint not supported or branch has no rules)
+      const is404 =
+        (err instanceof DeliveryError && err.details?.["httpStatus"] === 404) ||
+        (err instanceof Error && /\bHTTP 404\b|Not Found/i.test(err.message));
+      if (!is404) {
+        throw new DeliveryError(
+          `Failed to query branch rulesets for required checks: ${(err as Error).message}`,
+          { code: "checks_unknown", cause: err },
+        );
       }
     }
 
@@ -878,9 +979,20 @@ export class GitHubDeliveryService {
   private normalizeCheckItem(
     item: RawStatusCheckItem,
     requiredNames: ReadonlySet<string>,
-  ): PrCheck | null {
+  ): PrCheck {
+    if (!item || typeof item !== "object") {
+      throw new DeliveryError("Malformed item in statusCheckRollup", {
+        code: "checks_unknown",
+      });
+    }
+
     if (item.__typename === "CheckRun") {
-      const name = item.name;
+      if (!item.name || typeof item.name !== "string") {
+        throw new DeliveryError("CheckRun item missing name in statusCheckRollup", {
+          code: "checks_unknown",
+        });
+      }
+      const name = item.name.trim();
       const statusUpper = (item.status || "").toUpperCase();
       const conclusionUpper = (item.conclusion || "").toUpperCase();
 
@@ -929,7 +1041,12 @@ export class GitHubDeliveryService {
     }
 
     if (item.__typename === "StatusContext") {
-      const name = item.context;
+      if (!item.context || typeof item.context !== "string") {
+        throw new DeliveryError("StatusContext item missing context in statusCheckRollup", {
+          code: "checks_unknown",
+        });
+      }
+      const name = item.context.trim();
       const stateUpper = (item.state || "").toUpperCase();
 
       const isPending = stateUpper === "PENDING";
@@ -949,6 +1066,70 @@ export class GitHubDeliveryService {
       };
     }
 
-    return null;
+    throw new DeliveryError(
+      `Unknown status check item __typename '${(item as { readonly __typename?: string }).__typename}' in statusCheckRollup`,
+      { code: "checks_unknown" },
+    );
+  }
+}
+
+function parseJsonStream(text: string): unknown[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  try {
+    const single = JSON.parse(trimmed);
+    if (!Array.isArray(single)) {
+      throw new Error(`Expected JSON array, got ${typeof single}`);
+    }
+    return single;
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("Expected JSON array")) {
+      throw err;
+    }
+    // Handle concatenated JSON arrays produced by gh api --paginate
+    const results: unknown[] = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let startIndex = -1;
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (char === "[") {
+        if (depth === 0) {
+          startIndex = i;
+        }
+        depth++;
+      } else if (char === "]") {
+        depth--;
+        if (depth === 0 && startIndex !== -1) {
+          const chunk = trimmed.slice(startIndex, i + 1);
+          const parsed = JSON.parse(chunk);
+          if (!Array.isArray(parsed)) {
+            throw new Error(`Expected chunk to be JSON array`);
+          }
+          results.push(...parsed);
+          startIndex = -1;
+        }
+      }
+    }
+    if (depth !== 0 || startIndex !== -1 || results.length === 0) {
+      throw new Error("Malformed JSON stream in response");
+    }
+    return results;
   }
 }

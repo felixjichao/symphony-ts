@@ -106,7 +106,7 @@ describe("gh-cli transport & safety", () => {
       }
     });
 
-    it("sanitizes stderr output on command failure", async () => {
+    it("ensures zero token leakage in Error.message on command failure with fixed safe message", async () => {
       const runner = new DefaultGhRunner("sh");
       const secret = "ghp_supersecretvalue123456789012345";
       try {
@@ -115,8 +115,35 @@ describe("gh-cli transport & safety", () => {
       } catch (err) {
         const delErr = err as DeliveryError;
         expect(delErr.message).not.toContain(secret);
-        expect(delErr.message).toContain("***");
+        expect(delErr.message).toBe("GitHub CLI failed with exit code 1 on gh -c");
       }
+    });
+
+    it("extracts HTTP status code and maps to fixed safe message", async () => {
+      const runner = new DefaultGhRunner("sh");
+      const secretToken = "40_char_token_abcdef1234567890abcdef1234567890";
+      try {
+        await runner.exec(["-c", `echo "HTTP 403: token ${secretToken} permission denied" >&2; exit 1`]);
+        expect.fail("Should have failed");
+      } catch (err) {
+        const delErr = err as DeliveryError;
+        expect(delErr.message).toBe("GitHub CLI command failed with HTTP 403 (exit code 1)");
+        expect(delErr.message).not.toContain(secretToken);
+        expect(delErr.details?.["httpStatus"]).toBe(403);
+        expect(delErr.code).toBe("auth_failure");
+      }
+    });
+
+    it("preserves JSON payload structure in stdout when field contains KEY=value", async () => {
+      const runner = new DefaultGhRunner("echo");
+      const jsonPayload = JSON.stringify({
+        title: "Configure API_KEY=some_value",
+        body: "<!-- symphony-delivery-marker: test -->",
+      });
+      const res = await runner.exec([jsonPayload]);
+      const parsed = JSON.parse(res.stdout.trim());
+      expect(parsed.title).toBe("Configure API_KEY=some_value");
+      expect(parsed.body).toBe("<!-- symphony-delivery-marker: test -->");
     });
   });
 });

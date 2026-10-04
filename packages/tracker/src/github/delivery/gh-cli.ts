@@ -34,7 +34,7 @@ export function sanitizeCredentials(text: string): string {
   if (!text) return "";
   return text
     // Redact tokens/passwords in env var assignments (e.g., GITHUB_TOKEN=xyz, TOKEN=xyz)
-    .replace(/\b(?:[A-Za-z0-9_]*(?:TOKEN|SECRET|PAT|PASSWORD|KEY|AUTH)[A-Za-z0-9_]*)\s*=\s*[^\s\r\n;]+/gi, (match) => {
+    .replace(/\b(?:[A-Za-z0-9_]*(?:TOKEN|SECRET|PAT|PASSWORD|KEY|AUTH)[A-Za-z0-9_]*)\s*=\s*([^\s\r\n;",]+)/gi, (match) => {
       const eqIdx = match.indexOf("=");
       return eqIdx !== -1 ? `${match.slice(0, eqIdx + 1)}***` : "***";
     })
@@ -62,7 +62,14 @@ export function classifyGhError(exitCode: number, stderr: string, timeout = fals
     lower.includes("authentication token") ||
     lower.includes("bad credentials") ||
     lower.includes("could not authenticate") ||
-    lower.includes("401 unauthorized")
+    lower.includes("401 unauthorized") ||
+    lower.includes("http 401") ||
+    lower.includes("http 403") ||
+    lower.includes("403 forbidden") ||
+    lower.includes("resource not accessible by integration") ||
+    lower.includes("permission to") ||
+    lower.includes("permission denied") ||
+    lower.includes("must have push access")
   ) {
     return "auth_failure";
   }
@@ -70,7 +77,8 @@ export function classifyGhError(exitCode: number, stderr: string, timeout = fals
   if (
     lower.includes("rate limit exceeded") ||
     lower.includes("secondary rate limit") ||
-    lower.includes("429 too many requests")
+    lower.includes("429 too many requests") ||
+    lower.includes("http 429")
   ) {
     return "rate_limited";
   }
@@ -204,7 +212,6 @@ export class DefaultGhRunner implements GhRunner {
       child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null) => {
         cleanup();
         const code = exitCode ?? (signal ? 128 : 1);
-        const cleanStdout = sanitizeCredentials(stdout);
         const cleanStderr = sanitizeCredentials(stderr);
 
         if (timedOut) {
@@ -218,7 +225,7 @@ export class DefaultGhRunner implements GhRunner {
 
         if (allowedCodes.has(code)) {
           return resolve({
-            stdout: cleanStdout,
+            stdout, // Return raw stdout intact to avoid corrupting structured JSON responses
             stderr: cleanStderr,
             exitCode: code,
           });
@@ -226,12 +233,15 @@ export class DefaultGhRunner implements GhRunner {
 
         const errorCode = classifyGhError(code, cleanStderr);
         const safeMessage = buildSafeErrorMessage(code, cleanStderr, args[0]);
+        const httpMatch = cleanStderr.match(/\bHTTP\s+(\d{3})\b/i);
+        const httpStatus = httpMatch && httpMatch[1] ? parseInt(httpMatch[1], 10) : undefined;
         return reject(
           new DeliveryError(safeMessage, {
             code: errorCode,
             details: {
               exitCode: code,
               action: args[0] ?? "gh",
+              ...(httpStatus !== undefined ? { httpStatus } : {}),
             },
           }),
         );
@@ -241,18 +251,23 @@ export class DefaultGhRunner implements GhRunner {
 }
 
 function buildSafeErrorMessage(exitCode: number, cleanStderr: string, action?: string): string {
-  const firstLine = cleanStderr.split("\n").map(l => l.trim()).find(l => l.length > 0) ?? "";
-  if (
-    /token|secret|password|pat|auth|key/i.test(firstLine) &&
-    !firstLine.startsWith("GraphQL:") &&
-    !firstLine.startsWith("HTTP ")
-  ) {
-    return `GitHub CLI failed with exit code ${exitCode}`;
+  const httpMatch = cleanStderr.match(/\bHTTP\s+(\d{3})\b/i);
+  if (httpMatch && httpMatch[1]) {
+    return `GitHub CLI command failed with HTTP ${httpMatch[1]} (exit code ${exitCode})`;
   }
-  if (firstLine.length > 0 && firstLine.length <= 200) {
-    return `GitHub CLI failed with exit code ${exitCode}: ${firstLine}`;
+  const category = classifyGhError(exitCode, cleanStderr);
+  switch (category) {
+    case "auth_failure":
+      return `GitHub CLI authentication failed (exit code ${exitCode})`;
+    case "rate_limited":
+      return `GitHub CLI rate limit exceeded (exit code ${exitCode})`;
+    case "network_failure":
+      return `GitHub CLI network request failed (exit code ${exitCode})`;
+    case "timeout":
+      return `GitHub CLI operation timed out (exit code ${exitCode})`;
+    default:
+      return `GitHub CLI failed with exit code ${exitCode}${action ? ` on gh ${action}` : ""}`;
   }
-  return `GitHub CLI failed with exit code ${exitCode}${action ? ` on gh ${action}` : ""}`;
 }
 
 export function getDescendantPids(parentPid: number): number[] {

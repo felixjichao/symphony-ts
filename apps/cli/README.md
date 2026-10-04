@@ -37,12 +37,12 @@ symphony pr <action> --repo <owner/repo> --issue <number> --workspace-key <key> 
 ```
 - 别名支持：`symphony delivery <action>`；
 - Actions：
-  - `ensure`：创建或复用 PR（精确保留机器可读所有权 marker 与 `Fixes` 关联，拒绝外国 PR、歧义候选与 closed-unmerged）；
+  - `ensure`：创建或复用 PR（精确保留机器可读所有权 marker 与 `Fixes` 关联，严格核验 head 仓库身份，拒绝外国 fork/PR、歧义候选与 closed-unmerged）；
   - `read`：读取 PR 详情、合入状态与 mergeability；
-  - `checks`：拉取 head commit 绑定的 CI checks 并执行门禁策略判定；
+  - `checks`：拉取 head commit 绑定的 CI checks（支持 rulesets 分页与 GraphQL 分支保护规则）并执行严格门禁策略判定，未知保护规则 fail-closed；
   - `diagnostics`：打印失败/等待中的 CI 检查脱敏诊断信息；
-  - `land`：显式 opt-in（`--opt-in`）下以 squash 自动合并，使用 `--match-head-commit` 并在合并后重读事实确认最终 `MERGED` 状态；
-  - `verify`：验证 PR 是否已合入并提取 merge commit SHA；
+  - `land`：显式 opt-in（`--opt-in`）下以直接条件 squash 合并（带 `sha: expectedHeadSha` 条件头，拒绝 merge queue 与 deferred auto-merge），并在合并后重读事实确认最终 `MERGED`、`mergeCommitSha` 与 `mergedAt` 终态；
+  - `verify`：验证 PR 是否已合入，严格核验 merge commit SHA 与 mergedAt 事实（缺失时返回 `verification_unknown`）；
 - 支持 `--json` 选项输出纯 JSON，便于自动化工具或 Codex 消费。
 
 ## Extension points

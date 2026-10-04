@@ -31,6 +31,25 @@ describe("GitHubDeliveryService", () => {
     context,
   });
 
+  const defaultMockPr = (overrides: Record<string, unknown> = {}) => ({
+    number: 81,
+    title: "PR Title",
+    body: validBody,
+    state: "OPEN",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    headRefName: context.headBranch,
+    headRefOid: "sha81",
+    baseRefName: context.baseBranch,
+    url: "https://github.com/felixjichao/symphony-ts/pull/81",
+    mergedAt: null,
+    mergeCommit: null,
+    isCrossRepository: false,
+    headRepositoryOwner: { login: "felixjichao" },
+    headRepository: { name: "symphony-ts" },
+    ...overrides,
+  });
+
   const createMockRunner = (handler: (args: readonly string[], options?: GhExecOptions) => Promise<GhExecResult>): GhRunner => ({
     exec: vi.fn(handler),
   });
@@ -48,20 +67,12 @@ describe("GitHubDeliveryService", () => {
           }
           return {
             stdout: JSON.stringify([
-              {
+              defaultMockPr({
                 number: 101,
                 title: "PR Title",
-                body: validBody,
-                state: "OPEN",
-                isDraft: false,
-                mergeable: "MERGEABLE",
-                headRefName: context.headBranch,
                 headRefOid: "sha101",
-                baseRefName: context.baseBranch,
                 url: "https://github.com/felixjichao/symphony-ts/pull/101",
-                mergedAt: null,
-                mergeCommit: null,
-              },
+              }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -92,20 +103,12 @@ describe("GitHubDeliveryService", () => {
         if (args[0] === "pr" && args[1] === "list") {
           return {
             stdout: JSON.stringify([
-              {
+              defaultMockPr({
                 number: 99,
                 title: "Existing PR",
-                body: validBody,
-                state: "OPEN",
-                isDraft: false,
-                mergeable: "MERGEABLE",
-                headRefName: context.headBranch,
                 headRefOid: "sha99",
-                baseRefName: context.baseBranch,
                 url: "https://github.com/felixjichao/symphony-ts/pull/99",
-                mergedAt: null,
-                mergeCommit: null,
-              },
+              }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -126,18 +129,13 @@ describe("GitHubDeliveryService", () => {
         if (args[0] === "pr" && args[1] === "list") {
           return {
             stdout: JSON.stringify([
-              {
+              defaultMockPr({
                 number: 99,
                 title: "Foreign PR",
                 body: "Hand-crafted PR without marker Fixes #81",
-                state: "OPEN",
-                isDraft: false,
-                mergeable: "MERGEABLE",
-                headRefName: context.headBranch,
                 headRefOid: "sha99",
-                baseRefName: context.baseBranch,
                 url: "https://github.com/felixjichao/symphony-ts/pull/99",
-              },
+              }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -160,18 +158,13 @@ describe("GitHubDeliveryService", () => {
         if (args[0] === "pr" && args[1] === "list") {
           return {
             stdout: JSON.stringify([
-              {
+              defaultMockPr({
                 number: 99,
                 title: "PR on dev",
-                body: validBody,
-                state: "OPEN",
-                isDraft: false,
-                mergeable: "MERGEABLE",
-                headRefName: context.headBranch,
-                headRefOid: "sha99",
                 baseRefName: "development",
+                headRefOid: "sha99",
                 url: "https://github.com/felixjichao/symphony-ts/pull/99",
-              },
+              }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -194,20 +187,13 @@ describe("GitHubDeliveryService", () => {
         if (args[0] === "pr" && args[1] === "list") {
           return {
             stdout: JSON.stringify([
-              {
+              defaultMockPr({
                 number: 99,
                 title: "Closed PR",
-                body: validBody,
                 state: "CLOSED",
-                isDraft: false,
-                mergeable: "MERGEABLE",
-                headRefName: context.headBranch,
                 headRefOid: "sha99",
-                baseRefName: context.baseBranch,
                 url: "https://github.com/felixjichao/symphony-ts/pull/99",
-                mergedAt: null,
-                mergeCommit: null,
-              },
+              }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -230,8 +216,8 @@ describe("GitHubDeliveryService", () => {
         if (args[0] === "pr" && args[1] === "list") {
           return {
             stdout: JSON.stringify([
-              { number: 98, headRefName: context.headBranch, baseRefName: context.baseBranch },
-              { number: 99, headRefName: context.headBranch, baseRefName: context.baseBranch },
+              defaultMockPr({ number: 98, headRefOid: "sha98" }),
+              defaultMockPr({ number: 99, headRefOid: "sha99" }),
             ]),
             stderr: "",
             exitCode: 0,
@@ -255,20 +241,15 @@ describe("GitHubDeliveryService", () => {
       const runner = createMockRunner(async (args) => {
         if (args[0] === "pr" && args[1] === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 84,
               title: "PR 84",
-              body: validBody,
               state: "MERGED",
-              isDraft: false,
-              mergeable: "MERGEABLE",
-              headRefName: context.headBranch,
               headRefOid: "sha84",
-              baseRefName: context.baseBranch,
               url: "https://github.com/felixjichao/symphony-ts/pull/84",
               mergedAt: "2026-10-04T09:00:00Z",
               mergeCommit: { oid: "commit84" },
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
@@ -294,17 +275,10 @@ describe("GitHubDeliveryService", () => {
 
         if (cmd === "pr" && sub === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 81,
               title: "PR 81",
-              body: validBody,
-              state: "OPEN",
-              isDraft: false,
-              mergeable: "MERGEABLE",
-              headRefName: context.headBranch,
               headRefOid: "sha81",
-              baseRefName: context.baseBranch,
-              url: "https://github.com/felixjichao/symphony-ts/pull/81",
               statusCheckRollup: [
                 {
                   __typename: "CheckRun",
@@ -315,7 +289,7 @@ describe("GitHubDeliveryService", () => {
                   workflowName: "CI",
                 },
               ],
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
@@ -389,17 +363,10 @@ describe("GitHubDeliveryService", () => {
 
         if (cmd === "pr" && sub === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 81,
               title: "PR 81",
-              body: validBody,
-              state: "OPEN",
-              isDraft: false,
-              mergeable: "MERGEABLE",
-              headRefName: context.headBranch,
               headRefOid: "sha81",
-              baseRefName: context.baseBranch,
-              url: "https://github.com/felixjichao/symphony-ts/pull/81",
               statusCheckRollup: [
                 {
                   __typename: "CheckRun",
@@ -410,7 +377,7 @@ describe("GitHubDeliveryService", () => {
                   workflowName: "CI",
                 },
               ],
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
@@ -434,16 +401,11 @@ describe("GitHubDeliveryService", () => {
 
     it("throws head_changed when expected head SHA does not match PR head", async () => {
       const runner = createMockRunner(async () => ({
-        stdout: JSON.stringify({
+        stdout: JSON.stringify(defaultMockPr({
           number: 81,
           title: "PR 81",
-          body: validBody,
-          state: "OPEN",
-          headRefName: context.headBranch,
           headRefOid: "freshHeadSha",
-          baseRefName: context.baseBranch,
-          url: "https://github.com/felixjichao/symphony-ts/pull/81",
-        }),
+        })),
         stderr: "",
         exitCode: 0,
       }));
@@ -455,6 +417,275 @@ describe("GitHubDeliveryService", () => {
       } catch (err) {
         expect((err as DeliveryError).code).toBe("head_changed");
       }
+    });
+
+    it("throws checks_unknown when statusCheckRollup item has unknown __typename", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: null },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "UnknownCheckType",
+                  name: "unexpected",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("paginates branch rulesets API and accumulates required checks across pages", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: null },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          expect(args).toContain("--paginate");
+          // Return concatenated JSON arrays simulating gh api --paginate multi-page response
+          const page1 = [
+            {
+              type: "required_status_checks",
+              parameters: {
+                required_status_checks: [{ context: "build" }],
+              },
+            },
+          ];
+          const page2 = [
+            {
+              type: "required_status_checks",
+              parameters: {
+                required_status_checks: [{ context: "test" }],
+              },
+            },
+          ];
+          return {
+            stdout: `${JSON.stringify(page1)}${JSON.stringify(page2)}`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "build",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+                {
+                  __typename: "CheckRun",
+                  name: "test",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const report = await service.readChecks(context, { prNumber: 81 });
+
+      expect(report.canAutoMerge).toBe(true);
+      expect(report.requiredChecks).toHaveLength(2);
+      expect(report.requiredChecks.map(c => c.name).sort()).toEqual(["build", "test"]);
+    });
+
+    it("fails closed with checks_unknown when rulesets API returns malformed non-array JSON", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: null },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "{}", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "lint",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when rulesets API encounters 403 or network failure", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: { branchProtectionRule: null },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          throw new DeliveryError("GitHub CLI command failed with HTTP 403 (exit code 1)", {
+            code: "auth_failure",
+            details: { httpStatus: 403 },
+          });
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "lint",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
+    });
+
+    it("fails closed with checks_unknown when GraphQL branch protection response is missing baseRef", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({ data: {} }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({ number: 81 })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
     });
   });
 
@@ -475,18 +706,11 @@ describe("GitHubDeliveryService", () => {
       const runner = createMockRunner(async (args) => {
         if (args[0] === "pr" && args[1] === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 81,
               title: "PR 81",
-              body: validBody,
-              state: "OPEN",
-              isDraft: false,
               mergeable: "CONFLICTING",
-              headRefName: context.headBranch,
-              headRefOid: "sha81",
-              baseRefName: context.baseBranch,
-              url: "https://github.com/felixjichao/symphony-ts/pull/81",
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
@@ -511,17 +735,10 @@ describe("GitHubDeliveryService", () => {
 
         if (cmd === "pr" && sub === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 81,
               title: "PR 81",
-              body: validBody,
               state: mergedState ? "MERGED" : "OPEN",
-              isDraft: false,
-              mergeable: "MERGEABLE",
-              headRefName: context.headBranch,
-              headRefOid: "sha81",
-              baseRefName: context.baseBranch,
-              url: "https://github.com/felixjichao/symphony-ts/pull/81",
               mergedAt: mergedState ? "2026-10-04T09:10:00Z" : null,
               mergeCommit: mergedState ? { oid: "squashcommit81" } : null,
               statusCheckRollup: [
@@ -532,7 +749,7 @@ describe("GitHubDeliveryService", () => {
                   conclusion: "SUCCESS",
                 },
               ],
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
@@ -583,20 +800,13 @@ describe("GitHubDeliveryService", () => {
   describe("verifyMerged", () => {
     it("reports whether PR is merged", async () => {
       const runner = createMockRunner(async () => ({
-        stdout: JSON.stringify({
+        stdout: JSON.stringify(defaultMockPr({
           number: 81,
           title: "PR 81",
-          body: validBody,
           state: "MERGED",
-          isDraft: false,
-          mergeable: "MERGEABLE",
-          headRefName: context.headBranch,
-          headRefOid: "sha81",
-          baseRefName: context.baseBranch,
-          url: "https://github.com/felixjichao/symphony-ts/pull/81",
           mergedAt: "2026-10-04T09:10:00Z",
           mergeCommit: { oid: "squashcommit81" },
-        }),
+        })),
         stderr: "",
         exitCode: 0,
       }));
@@ -608,22 +818,15 @@ describe("GitHubDeliveryService", () => {
       expect(result.mergeCommitSha).toBe("squashcommit81");
     });
 
-    it("throws verification_unknown when merged PR lacks mergeCommitSha or mergedAt", async () => {
+    it("throws verification_unknown when merged PR lacks mergeCommitSha or mergedAt in verifyMerged and landPr", async () => {
       const runner = createMockRunner(async () => ({
-        stdout: JSON.stringify({
+        stdout: JSON.stringify(defaultMockPr({
           number: 81,
           title: "PR 81",
-          body: validBody,
           state: "MERGED",
-          isDraft: false,
-          mergeable: "MERGEABLE",
-          headRefName: context.headBranch,
-          headRefOid: "sha81",
-          baseRefName: context.baseBranch,
-          url: "https://github.com/felixjichao/symphony-ts/pull/81",
           mergedAt: null,
           mergeCommit: null,
-        }),
+        })),
         stderr: "",
         exitCode: 0,
       }));
@@ -632,25 +835,51 @@ describe("GitHubDeliveryService", () => {
       await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
         code: "verification_unknown",
       });
+      await expect(service.verifyMerged(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "verification_unknown",
+      });
     });
   });
 
   describe("security boundaries and regression guards", () => {
     it("refuses PR from a cross-repository fork", async () => {
       const runner = createMockRunner(async () => ({
-        stdout: JSON.stringify({
+        stdout: JSON.stringify(defaultMockPr({
           number: 81,
-          title: "PR 81",
-          body: validBody,
-          state: "OPEN",
-          isDraft: false,
-          mergeable: "MERGEABLE",
-          headRefName: context.headBranch,
-          headRefOid: "sha81",
-          baseRefName: context.baseBranch,
-          url: "https://github.com/felixjichao/symphony-ts/pull/81",
           isCrossRepository: true,
-        }),
+        })),
+        stderr: "",
+        exitCode: 0,
+      }));
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readPr(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "ownership_refusal",
+      });
+    });
+
+    it("refuses OPEN PR with unverified/missing crossRepository identity", async () => {
+      const runner = createMockRunner(async () => ({
+        stdout: JSON.stringify(defaultMockPr({
+          number: 81,
+          isCrossRepository: null,
+        })),
+        stderr: "",
+        exitCode: 0,
+      }));
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readPr(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "ownership_refusal",
+      });
+    });
+
+    it("refuses PR with mismatched head repository identity", async () => {
+      const runner = createMockRunner(async () => ({
+        stdout: JSON.stringify(defaultMockPr({
+          number: 81,
+          headRepositoryOwner: { login: "attacker" },
+        })),
         stderr: "",
         exitCode: 0,
       }));
@@ -663,19 +892,10 @@ describe("GitHubDeliveryService", () => {
 
     it("refuses PR with mismatched head branch", async () => {
       const runner = createMockRunner(async () => ({
-        stdout: JSON.stringify({
+        stdout: JSON.stringify(defaultMockPr({
           number: 81,
-          title: "PR 81",
-          body: validBody,
-          state: "OPEN",
-          isDraft: false,
-          mergeable: "MERGEABLE",
           headRefName: "unrelated-branch",
-          headRefOid: "sha81",
-          baseRefName: context.baseBranch,
-          url: "https://github.com/felixjichao/symphony-ts/pull/81",
-          isCrossRepository: false,
-        }),
+        })),
         stderr: "",
         exitCode: 0,
       }));
@@ -693,17 +913,8 @@ describe("GitHubDeliveryService", () => {
 
         if (cmd === "pr" && sub === "view") {
           return {
-            stdout: JSON.stringify({
+            stdout: JSON.stringify(defaultMockPr({
               number: 81,
-              title: "PR 81",
-              body: validBody,
-              state: "OPEN",
-              isDraft: false,
-              mergeable: "MERGEABLE",
-              headRefName: context.headBranch,
-              headRefOid: "sha81",
-              baseRefName: context.baseBranch,
-              url: "https://github.com/felixjichao/symphony-ts/pull/81",
               statusCheckRollup: [
                 {
                   __typename: "CheckRun",
@@ -712,7 +923,7 @@ describe("GitHubDeliveryService", () => {
                   conclusion: "SUCCESS",
                 },
               ],
-            }),
+            })),
             stderr: "",
             exitCode: 0,
           };
