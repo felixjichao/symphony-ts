@@ -46,6 +46,8 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       rec["spentRepairs"] < 0 ||
       typeof rec["spentWaitSeconds"] !== "number" ||
       rec["spentWaitSeconds"] < 0 ||
+      (rec["deadlineTimestampMs"] !== undefined &&
+        (typeof rec["deadlineTimestampMs"] !== "number" || !Number.isFinite(rec["deadlineTimestampMs"]) || rec["deadlineTimestampMs"] < 0)) ||
       typeof rec["isPaused"] !== "boolean"
     ) {
       throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);

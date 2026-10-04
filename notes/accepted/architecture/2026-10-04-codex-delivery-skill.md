@@ -55,3 +55,11 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 - 预算耗尽或 Blocker 发生时具备清晰的 Operator-visible 输出与自动停止派发保障，防止死循环与算力浪费。
 - 彻底解决了 PR 伪造所有权、CI 版本兼容性、命令空转与未授权合入等安全隐患。
 - 符合 SPEC §11.5 / MVP.2 要求与 AGENTS.md 依赖方向规范。
+
+## Review hardening (2026-10-04)
+
+- Persist the absolute wait deadline before delivery operations and pending sleeps. Restart and `--resume` preserve that deadline and spent repairs; resume does not grant a fresh budget. State write failures stop before further delivery operations.
+- Discover required checks from both paginated active branch rules and classic protection. A generic 404, permission error or malformed response is unknown policy, requiring handoff or an explicit complete `requiredChecks` configuration. A ruleset success cannot mask a classic-protection failure. See [active branch rules API](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch) and [authentication errors](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api).
+- Match failed jobs to their Actions run URLs for the pushed commit. Every failed check must have usable diagnostics; inaccessible, empty or partial logs stop before spending repair budget. External check providers without Actions logs require operator handoff in this MVP.
+- Bootstrap examples use the existing `repo-bootstrap` command and actual hook workspace key. Delivery derives the key from the current `symphony/<key>` branch rather than GitHub's null `branchName`.
+- Rejected alternatives: treating any 404 as no protection, using only one successful rules source, matching workflow/job names by substring, or extending the wait deadline on restart. Each can lose safety or budget guarantees. Local fixture regressions verify these paths; real Codex/GitHub delivery remains #83's external dogfood.

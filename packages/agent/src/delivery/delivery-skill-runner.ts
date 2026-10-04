@@ -51,6 +51,11 @@ export function parseGitHubRepoFromRemote(remoteUrl: string): { host: string; re
   // 2. URL format: https://github.com/owner/repo.git
   try {
     const url = new URL(trimmed);
+    const protocol = url.protocol.toLowerCase();
+    // 严格限制合法网络传输协议，拒绝 file:、javascript: 等本地或非标准协议
+    if (protocol !== "https:" && protocol !== "http:" && protocol !== "ssh:" && protocol !== "git:") {
+      return null;
+    }
     const host = url.hostname.toLowerCase();
     const cleanPath = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "");
     const parts = cleanPath.split("/").filter(Boolean);
@@ -74,66 +79,172 @@ function repoOriginMatches(remoteUrl: string, expectedRepo: string): boolean {
   return parsed.repo.toLowerCase() === expectedRepo.trim().toLowerCase();
 }
 
-async function fetchCiFailureDiagnostics(
+export type CiDiagnosticStatus = "success" | "permission_or_infra_failure" | "unavailable";
+
+export interface CiDiagnosticsResult {
+  readonly status: CiDiagnosticStatus;
+  readonly diagnostics: string;
+  readonly failureReason?: string | undefined;
+}
+
+export async function fetchCiFailureDiagnostics(
   runner: DeliveryGitGhRunner,
   repo: string,
   headSha: string,
   failedChecks: readonly CiCheckItem[],
   cwd: string,
-): Promise<{ diagnostics: string; isInfraOrPermissionFailure: boolean }> {
-  let logExcerpt = "";
-  let isInfraOrPermission = false;
+): Promise<CiDiagnosticsResult> {
+  const isPermissionOrInfraText = (text: string): boolean => {
+    const lower = text.toLowerCase();
+    return (
+      lower.includes("resource not accessible by integration") ||
+      lower.includes("permission denied") ||
+      lower.includes("bad credentials") ||
+      lower.includes("http 403") ||
+      lower.includes("http 401") ||
+      lower.includes("must have admin rights") ||
+      lower.includes("runner system failure") ||
+      lower.includes("no space left on device") ||
+      lower.includes("billing")
+    );
+  };
 
   try {
     const runListRes = await runner.gh(
-      ["run", "list", "--repo", repo, "--commit", headSha, "--json", "databaseId,name,status,conclusion"],
+      ["run", "list", "--repo", repo, "--commit", headSha, "--json", "databaseId,name,status,conclusion,url"],
       cwd,
     );
-    if (runListRes.exitCode === 0) {
-      const runs = JSON.parse(runListRes.stdout || "[]");
-      const failedRun = Array.isArray(runs)
-        ? runs.find((r: { conclusion?: string }) => {
-            const c = String(r.conclusion || "").toUpperCase();
-            return c === "FAILURE" || c === "TIMED_OUT" || c === "STARTUP_FAILURE";
-          })
-        : undefined;
-      if (failedRun && failedRun.databaseId) {
-        const runLogRes = await runner.gh(
-          ["run", "view", String(failedRun.databaseId), "--repo", repo, "--log-failed"],
-          cwd,
-        );
-        if (runLogRes.exitCode === 0 && runLogRes.stdout.trim()) {
-          const lines = runLogRes.stdout.split("\n");
-          logExcerpt = lines.slice(-100).join("\n");
+
+    if (runListRes.exitCode !== 0) {
+      const err = runListRes.stderr || runListRes.stdout;
+      if (isPermissionOrInfraText(err)) {
+        return {
+          status: "permission_or_infra_failure",
+          diagnostics: err,
+          failureReason: `Permission/infrastructure failure listing CI workflow runs: ${err.trim()}`,
+        };
+      }
+      return {
+        status: "unavailable",
+        diagnostics: "",
+        failureReason: `Failed to list CI workflow runs (${runListRes.exitCode}): ${err.trim()}`,
+      };
+    }
+
+    let runs: Array<{ databaseId?: number; name?: string; status?: string; conclusion?: string; url?: string }> = [];
+    try {
+      runs = JSON.parse(runListRes.stdout || "[]");
+      if (!Array.isArray(runs)) runs = [];
+    } catch (parseErr) {
+      return {
+        status: "unavailable",
+        diagnostics: "",
+        failureReason: `Failed to parse workflow runs JSON: ${String(parseErr)}`,
+      };
+    }
+
+    if (runs.length === 0) {
+      return {
+        status: "unavailable",
+        diagnostics: "",
+        failureReason: `No CI workflow runs found for commit ${headSha}`,
+      };
+    }
+
+    // CheckRun names are job names, not workflow names. Bind every failed check
+    // to its Actions run URL rather than guessing from a substring or first run.
+    const runsToDiagnose = new Map<number, typeof runs[number]>();
+    for (const check of failedChecks) {
+      let runId: number | undefined;
+      try {
+        const url = new URL(check.detailsUrl ?? "");
+        const match = url.pathname.match(/^\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/|$)/);
+        if (url.hostname === "github.com" && match?.[1]?.toLowerCase() === repo.toLowerCase()) {
+          runId = Number(match[2]);
         }
+      } catch {
+        // External checks without accessible Actions logs require operator handoff.
+      }
+      const run = runs.find((r) => r.databaseId === runId && runId !== undefined);
+      if (!run || !["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"].includes(String(run.conclusion).toUpperCase())) {
+        return {
+          status: "unavailable",
+          diagnostics: "",
+          failureReason: `Cannot identify failed Actions run for check '${check.name}' (${check.detailsUrl ?? "no URL"}) on commit ${headSha}`,
+        };
+      }
+      runsToDiagnose.set(runId!, run);
+    }
+
+    const collectedLogs: string[] = [];
+
+    for (const failedRun of runsToDiagnose.values()) {
+      if (!failedRun.databaseId) continue;
+      const runLogRes = await runner.gh(
+        ["run", "view", String(failedRun.databaseId), "--repo", repo, "--log-failed"],
+        cwd,
+      );
+
+      const err = runLogRes.stderr || runLogRes.stdout;
+      if (runLogRes.exitCode !== 0) {
+        if (isPermissionOrInfraText(err)) {
+          return {
+            status: "permission_or_infra_failure",
+            diagnostics: err,
+            failureReason: `Permission/infrastructure failure fetching log for run ${failedRun.databaseId} (${failedRun.name ?? "unnamed"}): ${err.trim()}`,
+          };
+        }
+        return {
+          status: "unavailable",
+          diagnostics: "",
+          failureReason: `Failed to fetch log for run ${failedRun.databaseId} (${failedRun.url ?? "no URL"}), exit ${runLogRes.exitCode}: ${err.trim()}`,
+        };
+      }
+
+      const out = runLogRes.stdout.trim();
+      if (!out) {
+        return { status: "unavailable", diagnostics: "", failureReason: `Empty failure log for run ${failedRun.databaseId} (${failedRun.url ?? "no URL"})` };
+      }
+      if (out) {
+        if (isPermissionOrInfraText(out)) {
+          return {
+            status: "permission_or_infra_failure",
+            diagnostics: out,
+            failureReason: `Infrastructure/permission failure detected in run ${failedRun.databaseId} log: ${out.slice(-1000)}`,
+          };
+        }
+        const lines = out.split("\n");
+        collectedLogs.push(`=== Run ${failedRun.databaseId} (${failedRun.name ?? "unnamed"}) ===\n` + lines.slice(-100).join("\n"));
       }
     }
-  } catch {
-    // ignore
+
+    if (collectedLogs.length > 0) {
+      return {
+        status: "success",
+        diagnostics: collectedLogs.join("\n\n"),
+      };
+    }
+
+    return {
+      status: "unavailable",
+      diagnostics: "",
+      failureReason: `No log content retrieved for failed CI runs [${[...runsToDiagnose.keys()].join(", ")}]`,
+    };
+  } catch (err) {
+    const msg = String(err);
+    if (isPermissionOrInfraText(msg)) {
+      return {
+        status: "permission_or_infra_failure",
+        diagnostics: msg,
+        failureReason: `Exception during CI failure diagnostics (permission/infra): ${msg}`,
+      };
+    }
+    return {
+      status: "unavailable",
+      diagnostics: "",
+      failureReason: `Exception during CI failure diagnostics: ${msg}`,
+    };
   }
-
-  const combinedText =
-    logExcerpt ||
-    failedChecks
-      .map((c) => `${c.name}: status=${c.status}, conclusion=${c.conclusion ?? "none"}, url=${c.detailsUrl ?? "none"}`)
-      .join("; ");
-
-  const lower = combinedText.toLowerCase();
-  if (
-    lower.includes("resource not accessible by integration") ||
-    lower.includes("permission denied") ||
-    lower.includes("bad credentials") ||
-    lower.includes("runner system failure") ||
-    lower.includes("no space left on device") ||
-    lower.includes("billing")
-  ) {
-    isInfraOrPermission = true;
-  }
-
-  return {
-    diagnostics: combinedText,
-    isInfraOrPermissionFailure: isInfraOrPermission,
-  };
 }
 
 /**
@@ -200,6 +311,9 @@ export async function runDeliverySkill(
   let spentRepairs = 0;
   let initialSpentWaitSeconds = 0;
   let deadlineTimestampMs: number | undefined;
+  let prNumber: number | null = null;
+  let prUrl: string | null = null;
+  let currentHeadSha: string | null = null;
 
   if (persisted && persisted.repo === context.repo && persisted.issueNumber === context.issueNumber) {
     if (persisted.isPaused && !options.resume) {
@@ -222,17 +336,38 @@ export async function runDeliverySkill(
 
   const now = options.nowFn ?? Date.now;
   const startTimeMs = now();
-  if (!deadlineTimestampMs || options.resume) {
+  if (deadlineTimestampMs === undefined) {
     deadlineTimestampMs = startTimeMs + Math.max(0, maxWaitSeconds - initialSpentWaitSeconds) * 1000;
   }
 
   const getElapsedWaitSeconds = (): number => {
+    if (deadlineTimestampMs !== undefined) {
+      const originalStartTimeMs = deadlineTimestampMs - maxWaitSeconds * 1000;
+      const elapsed = Math.floor((now() - originalStartTimeMs) / 1000);
+      return Math.max(initialSpentWaitSeconds, elapsed);
+    }
     return initialSpentWaitSeconds + Math.floor((now() - startTimeMs) / 1000);
   };
 
-  let prNumber: number | null = null;
-  let prUrl: string | null = null;
-  let currentHeadSha: string | null = null;
+  const persistCurrentState = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
+    if (!stateStorage) return;
+    try {
+      await stateStorage.writeState({
+        repo: context.repo,
+        issueNumber: context.issueNumber,
+        workspaceKey: context.workspaceKey,
+        spentRepairs,
+        spentWaitSeconds: getElapsedWaitSeconds(),
+        deadlineTimestampMs,
+        isPaused: false,
+        lastUpdated: new Date(now()).toISOString(),
+        ...overrides,
+      });
+    } catch (err) {
+      log(`[delivery-skill] Error persisting delivery state: ${String(err)}`);
+      throw err;
+    }
+  };
 
   // 辅助函数：触发 Blocker / 预算耗尽处理并移除 ready 标签停止派发
   const haltDispatch = async (
@@ -328,19 +463,7 @@ export async function runDeliverySkill(
     const handoffMarkdown = formatDeliveryHandoffMarkdown({ ...handoffForRemote, commentPosted });
 
     // 持久化 paused 状态
-    if (stateStorage) {
-      await stateStorage.writeState({
-        repo: context.repo,
-        issueNumber: context.issueNumber,
-        workspaceKey: context.workspaceKey,
-        spentRepairs,
-        spentWaitSeconds,
-        deadlineTimestampMs,
-        isPaused: true,
-        pauseReason: reason,
-        lastUpdated: new Date().toISOString(),
-      });
-    }
+    await persistCurrentState({ isPaused: true, pauseReason: reason });
 
     return {
       status: "blocked",
@@ -353,6 +476,9 @@ export async function runDeliverySkill(
       handoffMarkdown,
     };
   };
+
+  // 必须在开始任何 delivery 动作或前置检查前立即持久化初始状态与绝对 deadline
+  await persistCurrentState();
 
   // ==========================================
   // Phase 1: Pre-mutation Inspection
@@ -462,6 +588,10 @@ export async function runDeliverySkill(
         `Existing PR #${candidate.number} does not match ownership marker for issue #${context.issueNumber} and workspace '${context.workspaceKey}'. Foreign PR rejected.`,
       );
     }
+
+    prNumber = candidate.number;
+    prUrl = candidate.url;
+    currentHeadSha = candidate.headRefOid ?? null;
 
     if (candidate.state === "MERGED") {
       // 重新从 PR 查询真实 merge commit SHA
@@ -641,44 +771,95 @@ export async function runDeliverySkill(
   // ==========================================
   log("[delivery-skill] Phase 6: Monitoring CI checks and executing repair loop...");
 
-  // 权威确定 requiredChecks（若调用方未显式提供，向 GitHub 保护分支 API 查询）
+  // 权威确定 requiredChecks（若调用方未显式提供，向 GitHub rulesets 和 classic protection API 权威查询）
   let effectiveRequiredChecks = options.requiredChecks ? [...options.requiredChecks] : undefined;
   if (effectiveRequiredChecks === undefined) {
-    const checksRes = await runner.gh(
-      ["api", `repos/${context.repo}/branches/${context.baseBranch}/protection/required_status_checks`],
+    const rulesetChecks: string[] = [];
+    let rulesetsDetermined = false;
+    let rulesetError: string | null = null;
+
+    const rulesRes = await runner.gh(
+      ["api", `repos/${context.repo}/rules/branches/${encodeURIComponent(context.baseBranch)}?per_page=100`, "--paginate", "--slurp"],
       options.cwd,
     );
+
+    if (rulesRes.exitCode === 0) {
+      try {
+        const pages: unknown = JSON.parse(rulesRes.stdout);
+        if (Array.isArray(pages) && pages.length > 0 && pages.every(Array.isArray)) {
+          const parsedRules = pages.flat();
+          for (const rule of parsedRules) {
+            if (!rule || typeof rule.type !== "string") throw new Error("Invalid rule structure");
+            if (rule.type === "required_status_checks") {
+              const checks = rule.parameters?.required_status_checks;
+              if (!Array.isArray(checks)) throw new Error("Missing ruleset required_status_checks array");
+              for (const c of checks) {
+                if (!c || typeof c.context !== "string" || !c.context.trim()) throw new Error("Invalid ruleset check context");
+                rulesetChecks.push(c.context);
+              }
+            }
+          }
+          rulesetsDetermined = true;
+        } else {
+          rulesetError = "Invalid rulesets API response: expected array";
+        }
+      } catch (err) {
+        rulesetError = `Failed to parse rulesets JSON: ${String(err)}`;
+      }
+    } else {
+      rulesetError = (rulesRes.stderr || rulesRes.stdout).trim();
+    }
+
+    const classicChecks: string[] = [];
+    let classicDetermined = false;
+    let classicError: string | null = null;
+
+    const checksRes = await runner.gh(
+      ["api", `repos/${context.repo}/branches/${encodeURIComponent(context.baseBranch)}/protection/required_status_checks`],
+      options.cwd,
+    );
+
     if (checksRes.exitCode === 0) {
       try {
         const parsedChecks = JSON.parse(checksRes.stdout || "{}");
-        const list: string[] = [];
-        if (Array.isArray(parsedChecks.contexts)) {
-          list.push(...parsedChecks.contexts.map(String));
-        }
-        if (Array.isArray(parsedChecks.checks)) {
-          for (const c of parsedChecks.checks) {
-            if (c && typeof c.context === "string") {
-              list.push(c.context);
+        const hasContexts = Array.isArray(parsedChecks.contexts);
+        const hasChecks = Array.isArray(parsedChecks.checks);
+        if (hasContexts || hasChecks) {
+          if ((parsedChecks.contexts !== undefined && !hasContexts) || (parsedChecks.checks !== undefined && !hasChecks)) throw new Error("Invalid classic protection arrays");
+          if (hasContexts) {
+            if (!parsedChecks.contexts.every((c: unknown) => typeof c === "string" && c.trim())) throw new Error("Invalid classic check context");
+            classicChecks.push(...parsedChecks.contexts);
+          }
+          if (hasChecks) {
+            for (const c of parsedChecks.checks) {
+              if (!c || typeof c.context !== "string" || !c.context.trim()) throw new Error("Invalid classic check context");
+              classicChecks.push(c.context);
             }
           }
+          classicDetermined = true;
+        } else {
+          classicError = "Invalid classic protection response structure: missing contexts/checks array";
         }
-        effectiveRequiredChecks = list;
       } catch (err) {
-        return haltDispatch(
-          "manual_intervention_required",
-          `Failed to parse authoritative required status checks: ${String(err)}`,
-        );
+        classicError = `Failed to parse classic protection JSON: ${String(err)}`;
       }
     } else {
       const errOut = (checksRes.stderr + " " + checksRes.stdout).toLowerCase();
-      if (errOut.includes("404") || errOut.includes("branch not protected") || errOut.includes("not found")) {
-        effectiveRequiredChecks = [];
+      // 只有明确包含 "branch not protected" 才证明经典分支保护未开启
+      if (errOut.includes("branch not protected")) {
+        classicDetermined = true;
       } else {
-        return haltDispatch(
-          "manual_intervention_required",
-          `Failed to determine authoritative required status checks for base branch '${context.baseBranch}': ${checksRes.stderr}`,
-        );
+        classicError = (checksRes.stderr || checksRes.stdout).trim();
       }
+    }
+
+    if (rulesetsDetermined && classicDetermined) {
+      effectiveRequiredChecks = Array.from(new Set([...rulesetChecks, ...classicChecks]));
+    } else {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Unable to authoritatively determine required status checks for base branch '${context.baseBranch}' (rulesets: ${rulesetError ?? (rulesetsDetermined ? "none" : "unknown")}, classic: ${classicError ?? (classicDetermined ? "none" : "unknown")}). Configuration is unknown or credentials lack branch rules permissions. Specify requiredChecks explicitly to proceed.`,
+      );
     }
   }
 
@@ -691,6 +872,9 @@ export async function runDeliverySkill(
       );
     }
 
+    // 在进入等待/轮询检查前立即持久化当前等待状态与绝对截止时间
+    await persistCurrentState();
+
     // 采用 gh pr view --json statusCheckRollup,headRefOid,mergeable,state
     // 兼容所有 gh 版本并绑定 headRefOid 与当前 head SHA
     const prViewRes = await runner.gh(
@@ -700,6 +884,7 @@ export async function runDeliverySkill(
 
     if (prViewRes.exitCode !== 0) {
       log(`[delivery-skill] Warning: Failed to fetch PR view for checks: ${prViewRes.stderr}. Retrying in ${pollInterval}s...`);
+      await persistCurrentState();
       await sleep(pollInterval);
       continue;
     }
@@ -715,6 +900,7 @@ export async function runDeliverySkill(
       prViewData = JSON.parse(prViewRes.stdout || "{}");
     } catch (err) {
       log(`[delivery-skill] Warning: Failed to parse PR view response: ${String(err)}`);
+      await persistCurrentState();
       await sleep(pollInterval);
       continue;
     }
@@ -724,6 +910,7 @@ export async function runDeliverySkill(
       log(
         `[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid ?? "missing"}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`,
       );
+      await persistCurrentState();
       await sleep(pollInterval);
       continue;
     }
@@ -811,7 +998,7 @@ export async function runDeliverySkill(
       }
 
       // 提取真实失败日志诊断
-      const { diagnostics, isInfraOrPermissionFailure } = await fetchCiFailureDiagnostics(
+      const diagResult = await fetchCiFailureDiagnostics(
         runner,
         context.repo,
         currentHeadSha ?? "",
@@ -820,10 +1007,18 @@ export async function runDeliverySkill(
       );
 
       // 区分 infra/permission 失败，避免无效消耗代码修复预算
-      if (isInfraOrPermissionFailure) {
+      if (diagResult.status === "permission_or_infra_failure") {
         return haltDispatch(
           "manual_intervention_required",
-          `CI failed with infrastructure or permission error (requires operator intervention): ${diagnostics.slice(0, 300)}`,
+          `CI failed or diagnostics retrieval blocked by permission/infrastructure error: ${diagResult.failureReason ?? diagResult.diagnostics.slice(0, 300)}. Check URLs: ${evaluation.failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}`,
+        );
+      }
+
+      // 诊断不可获取时，带真实原因与 check URLs 安全交接，避免无日志盲修
+      if (diagResult.status === "unavailable") {
+        return haltDispatch(
+          "manual_intervention_required",
+          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but failure diagnostics could not be retrieved (${diagResult.failureReason ?? "unknown"}). Check URLs: ${evaluation.failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}. Halting for operator intervention.`,
         );
       }
 
@@ -831,7 +1026,7 @@ export async function runDeliverySkill(
       if (!options.repairFn && !options.repairCommand) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagnostics.slice(0, 300)}. Halting dispatch.`,
+          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
         );
       }
 
@@ -839,30 +1034,19 @@ export async function runDeliverySkill(
       log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
 
       // 在修复副作用执行前立即持久化预算消耗
-      if (stateStorage) {
-        await stateStorage.writeState({
-          repo: context.repo,
-          issueNumber: context.issueNumber,
-          workspaceKey: context.workspaceKey,
-          spentRepairs,
-          spentWaitSeconds: getElapsedWaitSeconds(),
-          deadlineTimestampMs,
-          isPaused: false,
-          lastUpdated: new Date().toISOString(),
-        });
-      }
+      await persistCurrentState({ spentRepairs });
 
       let repairSuccess = false;
       try {
         if (options.repairFn) {
-          repairSuccess = await options.repairFn(diagnostics);
+          repairSuccess = await options.repairFn(diagResult.diagnostics);
         } else if (options.repairCommand) {
           log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
           const repairRes = await runner.exec(
             options.repairCommand,
             options.cwd,
             undefined,
-            { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagnostics },
+            { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagResult.diagnostics },
           );
           repairSuccess = repairRes.exitCode === 0;
           if (!repairSuccess) {
@@ -879,7 +1063,7 @@ export async function runDeliverySkill(
       if (!repairSuccess) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagnostics.slice(0, 300)}`,
+          `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagResult.diagnostics.slice(0, 300)}`,
         );
       }
 
@@ -927,18 +1111,7 @@ export async function runDeliverySkill(
       log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Waiting for new CI run to start...`);
 
       // 刷新持久化状态中的预算消耗
-      if (stateStorage) {
-        await stateStorage.writeState({
-          repo: context.repo,
-          issueNumber: context.issueNumber,
-          workspaceKey: context.workspaceKey,
-          spentRepairs,
-          spentWaitSeconds: getElapsedWaitSeconds(),
-          deadlineTimestampMs,
-          isPaused: false,
-          lastUpdated: new Date().toISOString(),
-        });
-      }
+      await persistCurrentState({ spentRepairs });
 
       await sleep(pollInterval);
       continue;
@@ -946,6 +1119,7 @@ export async function runDeliverySkill(
 
     // 6c. Checks Pending -> 等待下一次轮询
     log(`[delivery-skill] CI checks pending (${evaluation.reason}). Waiting ${pollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
+    await persistCurrentState();
     await sleep(pollInterval);
   }
 
@@ -1036,18 +1210,7 @@ export async function runDeliverySkill(
   }
 
   // 记录完成状态
-  if (stateStorage) {
-    await stateStorage.writeState({
-      repo: context.repo,
-      issueNumber: context.issueNumber,
-      workspaceKey: context.workspaceKey,
-      spentRepairs,
-      spentWaitSeconds: getElapsedWaitSeconds(),
-      deadlineTimestampMs,
-      isPaused: false,
-      lastUpdated: new Date().toISOString(),
-    });
-  }
+  await persistCurrentState({ isPaused: false });
 
   if (!issueClosed) {
     log(`[delivery-skill] Warning: PR #${prNumber} is merged, but issue #${context.issueNumber} remains open. Halting dispatch for reconciliation...`);

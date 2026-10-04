@@ -119,6 +119,8 @@ inspect issue/context
 
 ---
 
+首次交付动作前即保存绝对等待 deadline；pending 中断、restart 和 `--resume` 均保留 deadline 与已耗修复次数。`--resume` 仅解除暂停，不授予新预算。新的预算轮次需 operator 明确批准并归档旧状态后初始化，不能通过重复 resume 延长等待。
+
 ## 3. 预算耗尽与调度暂停机制 (Handoff & Halting Dispatch)
 
 当任务遇到以下情况时，**严禁猜测、严禁无限重试**：
@@ -191,22 +193,21 @@ tracker:
 
 agent:
   max_turns: 20
-  timeout_ms: 1800000
 
 hooks:
   # 新建工作区时先执行仓库拉取，切到工单分支，并就绪 Codex 技能定义
   after_create: |
-    git clone https://github.com/felixjichao/symphony-ts.git .
-    git checkout -B "$SYMPHONY_ISSUE_BRANCH"
+    set -eu
+    symphony repo-bootstrap --repo https://github.com/felixjichao/symphony-ts.git --workspace-key "$SYMPHONY_WORKSPACE_KEY"
     mkdir -p .agents/skills/github-delivery
     cp skills/github-delivery/SKILL.md .agents/skills/github-delivery/SKILL.md
 ```
 
 ### 5.2 Agent Prompt 中显式调用示例
 
-在 Prompt 中通过严格的 Liquid 变量（基于 `renderPrompt` 支持的规范字段 `issue.native_ref` 与 `issue.branch_name`）引导 Agent 完成编码后调用 Delivery 技能：
+在 Prompt 中通过严格的 Liquid 变量（基于 `renderPrompt` 支持的规范字段 `issue.native_ref`）引导 Agent 完成编码后调用 Delivery 技能：
 
-```liquid
+````liquid
 You are working on issue #{{ issue.native_ref.number }} ({{ issue.identifier }}).
 Task Title: {{ issue.title }}
 Task Description: {{ issue.description }}
@@ -215,9 +216,19 @@ Follow the standard delivery protocol:
 1. Implement requested changes in the worktree.
 2. Run project verification: `npm run gate`.
 3. Deliver the Pull Request and handle CI/Land:
-   `symphony delivery-skill run --repo {{ issue.native_ref.repo }} --issue {{ issue.native_ref.number }} --head {{ issue.branch_name }} --validate "npm run gate" --opt-in`
+   ```sh
+   set -eu
+   delivery_branch="$(git branch --show-current)"
+   delivery_key="${delivery_branch#symphony/}"
+   test -n "$delivery_key" && test "$delivery_branch" != "$delivery_key"
+   symphony delivery-skill run --repo {{ issue.native_ref.repo }} --issue {{ issue.native_ref.number }} --workspace-key "$delivery_key" --head "$delivery_branch" --validate "npm run gate" --opt-in
+   ```
 4. If halted with a handoff report, summarize the outcome and stop.
-```
+````
+
+该 YAML 是 WORKFLOW.md 的 front matter（放在 `---` 分隔符之间）；5.2 的 Prompt 放在第二个分隔符之后。主机需先构建并把包含 `repo-bootstrap` / `delivery-skill` 的 `symphony` CLI 放入 PATH。Bootstrap 默认生成 `symphony/<workspaceKey>`，Prompt 从当前 Git 分支取得同一 key，不依赖 GitHub 的空 `branch_name` 或不存在的 hook 环境变量。`after_create` 在 bootstrap 成功后复制 skill；现有 workspace 需按相同步骤安装一次。
+
+未提供 `--required-checks` 时，工具必须成功发现 active rulesets（含分页）及 classic protection，或确认后者明确返回 Branch not protected；普通 404、权限失败、畸形响应均交接。Operator 可提供完整的 `--required-checks "gate,lint"`（包含所有规则来源）作为明确策略；空字符串代表明确无 required，仍要求 observed checks 成功。
 
 ### 5.3 凭据信任边界与子进程 Secret 隔离 (Credentials & Child Isolation)
 

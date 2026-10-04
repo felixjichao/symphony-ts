@@ -27,11 +27,16 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
 
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
+    if (args[0] === "api" && args[1]?.includes("rules/branches")) {
+      return { stdout: "[[]]", stderr: "", exitCode: 0 };
+    }
     if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("required_status_checks")) {
       return { stdout: "{}", stderr: "404 Branch not protected", exitCode: 1 };
     }
     if (args[0] === "run") {
-      return { stdout: "[]", stderr: "", exitCode: 0 };
+      return args[1] === "list"
+        ? { stdout: JSON.stringify([{ databaseId: 12345, name: "CI", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }]), stderr: "", exitCode: 0 }
+        : { stdout: "test: assertion failed", stderr: "", exitCode: 0 };
     }
     const next = this.ghResponses.shift();
     if (typeof next === "function") {
@@ -297,7 +302,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
         mergeable: "MERGEABLE",
         state: "OPEN",
         statusCheckRollup: [
-          { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://ci/fail" },
+          { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" },
         ],
       }),
       stderr: "",
@@ -392,7 +397,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const failChecks = {
       stdout: JSON.stringify({
         headRefOid: "sha-head-err",
-        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
       }),
       stderr: "",
       exitCode: 0,
@@ -409,7 +414,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const failChecks2 = {
       stdout: JSON.stringify({
         headRefOid: "sha-head-rep1",
-        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
       }),
       stderr: "",
       exitCode: 0,
@@ -426,7 +431,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const failChecks3 = {
       stdout: JSON.stringify({
         headRefOid: "sha-head-rep2",
-        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
       }),
       stderr: "",
       exitCode: 0,
@@ -805,12 +810,13 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     // Provide infra failure log in MockDeliveryRunner
     runner.gh = async (args: readonly string[], dir: string) => {
       runner.ghCalls.push({ args, cwd: dir });
+      if (args[0] === "api" && args[1]?.includes("rules/branches")) return { stdout: "[[]]", stderr: "", exitCode: 0 };
       if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("required_status_checks")) {
         return { stdout: "{}", stderr: "404 Branch not protected", exitCode: 1 };
       }
       if (args[0] === "run" && args[1] === "list") {
         return {
-          stdout: JSON.stringify([{ databaseId: 12345, conclusion: "FAILURE" }]),
+          stdout: JSON.stringify([{ databaseId: 12345, conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }]),
           stderr: "",
           exitCode: 0,
         };
@@ -885,7 +891,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
         headRefOid: "headSha93",
         mergeable: "MERGEABLE",
         state: "OPEN",
-        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
       }),
       stderr: "",
       exitCode: 0,

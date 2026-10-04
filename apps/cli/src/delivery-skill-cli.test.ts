@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "@symphony/agent";
+import { runDeliverySkill, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
+import { formatPrBody } from "@symphony/domain";
 
 import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
@@ -23,6 +24,9 @@ class MockCliRunner implements DeliveryGitGhRunner {
 
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
+    if (args[0] === "api" && args[1]?.includes("rules/branches")) {
+      return { stdout: "[[]]", stderr: "", exitCode: 0 };
+    }
     if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("required_status_checks")) {
       return { stdout: "{}", stderr: "404 Branch not protected", exitCode: 1 };
     }
@@ -309,4 +313,41 @@ describe("delivery-skill CLI", () => {
       expect(res.stderr).toContain("Timed out");
     });
   });
+});
+
+
+it("restores the pending deadline from a real state file after interrupted waiting", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-restart-"));
+  try {
+    const context = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80", headBranch: "symphony/GH-80", baseBranch: "main" };
+    const stateFile = path.join(dir, ".symphony/delivery-state.json");
+    let clock = 100_000;
+    let pushes = 0;
+    const runner: DeliveryGitGhRunner = {
+      async exec() { return { stdout: "", stderr: "", exitCode: 0 }; },
+      async git(args) {
+        if (args[0] === "push") pushes++;
+        return { stdout: args[0] === "branch" ? context.headBranch : args[0] === "remote" ? "https://github.com/owner/repo.git" : args[0] === "rev-parse" ? "sha" : "", stderr: "", exitCode: 0 };
+      },
+      async gh(args) {
+        const payload = args[0] === "issue" ? { state: "OPEN", labels: [] }
+          : args[1] === "list" ? [{ number: 86, url: "https://github.com/owner/repo/pull/86", state: "OPEN", body: formatPrBody({ ...context, description: "fixture" }), headRefOid: "sha" }]
+          : { state: "OPEN", headRefOid: "sha", statusCheckRollup: [{ name: "gate", status: "IN_PROGRESS" }] };
+        return { stdout: JSON.stringify(payload), stderr: "", exitCode: 0 };
+      },
+    };
+    const options = { ...context, cwd: dir, runner, requiredChecks: [], maxWaitSeconds: 5, nowFn: () => clock };
+    await expect(runDeliverySkill({ ...options, stateStorage: new FileDeliveryStateStorage(stateFile), sleepFn: async () => { clock += 4000; throw new Error("interrupt"); } })).rejects.toThrow("interrupt");
+    const restartedStorage = new FileDeliveryStateStorage(stateFile);
+    expect(restartedStorage.readState()?.deadlineTimestampMs).toBe(105_000);
+    clock += 24_000;
+    const result = await runDeliverySkill({ ...options, stateStorage: restartedStorage });
+    expect(result.reason).toBe("ci_wait_timeout");
+    expect(result.spentRepairs).toBe(0);
+    expect(restartedStorage.readState()?.deadlineTimestampMs).toBe(105_000);
+    expect(restartedStorage.readState()?.isPaused).toBe(true);
+    expect(pushes).toBeGreaterThan(0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
