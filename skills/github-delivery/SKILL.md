@@ -174,14 +174,16 @@ symphony delivery-skill halt \
 
 ## 5. Codex 集成与 WORKFLOW.md 配置参考示例
 
-独立 `skills/` 目录文件不会被 Codex 自动载入，需通过项目 bootstrap 脚本安装到 Codex 可发现的技能目录，并在 `WORKFLOW.md` 中声明标签路由和调用规则。
+独立 `skills/` 目录文件不会被 Codex 自动载入，需通过项目 bootstrap 挂载到 Codex 可发现的技能目录（如 `.agents/skills/github-delivery`），并在 `WORKFLOW.md` 中声明标签路由和调用规则。
 
-### 5.1 工作流配置文件 (`WORKFLOW.md`) 最小示例
+### 5.1 工作流配置文件 (`WORKFLOW.md`) 最小完整示例
 
 ```yaml
 tracker:
   kind: github
-  repo: felixjichao/symphony-ts
+  provider:
+    repo: felixjichao/symphony-ts
+    token: $GITHUB_TOKEN
   # 关键配置：只有携带 symphony-ready 标签的工单才会被调度
   # 当 delivery-skill 移除该标签后，Symphony 将自动停止派发与重试
   required_labels:
@@ -192,26 +194,33 @@ agent:
   timeout_ms: 1800000
 
 hooks:
-  # 初始化时将 delivery skill 安装到工作区的 Codex 技能目录
+  # 新建工作区时先执行仓库拉取，切到工单分支，并就绪 Codex 技能定义
   after_create: |
+    git clone https://github.com/felixjichao/symphony-ts.git .
+    git checkout -B "$SYMPHONY_ISSUE_BRANCH"
     mkdir -p .agents/skills/github-delivery
     cp skills/github-delivery/SKILL.md .agents/skills/github-delivery/SKILL.md
 ```
 
 ### 5.2 Agent Prompt 中显式调用示例
 
-在 Prompt 中引导 Agent 完成编码后调用 Delivery 技能：
+在 Prompt 中通过严格的 Liquid 变量（基于 `renderPrompt` 支持的规范字段 `issue.native_ref` 与 `issue.branch_name`）引导 Agent 完成编码后调用 Delivery 技能：
 
-```markdown
-You are working on issue #{{issue.number}}.
+```liquid
+You are working on issue #{{ issue.native_ref.number }} ({{ issue.identifier }}).
+Task Title: {{ issue.title }}
+Task Description: {{ issue.description }}
+
 Follow the standard delivery protocol:
-1. Implement requested changes.
+1. Implement requested changes in the worktree.
 2. Run project verification: `npm run gate`.
 3. Deliver the Pull Request and handle CI/Land:
-   `symphony delivery-skill run --repo {{tracker.repo}} --issue {{issue.number}} --validate "npm run gate" --opt-in`
-4. If halted with a handoff report, leave your final summary and stop.
+   `symphony delivery-skill run --repo {{ issue.native_ref.repo }} --issue {{ issue.native_ref.number }} --head {{ issue.branch_name }} --validate "npm run gate" --opt-in`
+4. If halted with a handoff report, summarize the outcome and stop.
 ```
 
-### 5.3 凭据信任边界 (Credentials & Security)
-- **Token 隔离**：使用环境变量（如 `GITHUB_TOKEN` 或 `GH_TOKEN`）注入 GitHub 凭据，本地 Git 自动通过 `gh auth setup-git` 进行凭据映射。
-- **敏感信息脱敏**：`DeliveryGitGhRunner` 会自动对所有命令输出中的 URL token、GitHub PAT、Bearer 凭据进行掩码处理，防止敏感信息泄漏到 Issue 评论或执行日志中。
+### 5.3 凭据信任边界与子进程 Secret 隔离 (Credentials & Child Isolation)
+
+- **主机与子进程 Secret 隔离**：遵循 `@symphony/agent` 的环境隔离原则，宿主 Orchestrator 配置的敏感 Provider Secret（如 `GITHUB_TOKEN`）应加入 `excludeEnvNames`（如 `["GITHUB_TOKEN", "GH_TOKEN"]`），禁止不受信任的子进程直接读取宿主长效 Token。
+- **主机预配置凭据助手 (Git Credential Helper)**：通过主机级 `gh auth setup-git` 或系统级凭据缓存为子进程执行的 Git/gh 命令提供身份认证，子进程执行 `git push` 或 `gh pr view` 时直接走系统凭据流，无需将原始 Token 写入子进程环境变量中。
+- **输出脱敏 (Credential Sanitization)**：`DeliveryGitGhRunner` 会自动对所有执行输出中的 URL Token、GitHub PAT、Fine-grained PAT 以及 Bearer 头部进行脱敏掩码（`sanitizeCredentials`），杜绝任何凭据意外写入 Issue 评论或终端日志。

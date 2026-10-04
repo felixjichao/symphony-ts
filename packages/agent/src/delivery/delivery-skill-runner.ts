@@ -26,6 +26,7 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly stateStorage?: DeliveryStateStorage | undefined;
   readonly repairFn?: (failureContext: string) => Promise<boolean> | boolean;
   readonly sleepFn?: (seconds: number) => Promise<void>;
+  readonly nowFn?: (() => number) | undefined;
   readonly log?: (msg: string) => void;
 }
 
@@ -34,15 +35,105 @@ const DEFAULT_MAX_REPAIRS = 3;
 const DEFAULT_MAX_WAIT_SECONDS = 300;
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 
-function repoMatches(remoteUrl: string, expectedRepo: string): boolean {
-  const normalizedUrl = remoteUrl.trim().toLowerCase();
-  const normalizedExpected = expectedRepo.trim().toLowerCase();
-  return (
-    normalizedUrl.endsWith(`/${normalizedExpected}`) ||
-    normalizedUrl.endsWith(`/${normalizedExpected}.git`) ||
-    normalizedUrl.endsWith(`:${normalizedExpected}`) ||
-    normalizedUrl.endsWith(`:${normalizedExpected}.git`)
-  );
+export function parseGitHubRepoFromRemote(remoteUrl: string): { host: string; repo: string } | null {
+  const trimmed = remoteUrl.trim();
+  if (!trimmed) return null;
+
+  // 1. SSH format: git@github.com:owner/repo.git
+  const scpMatch = trimmed.match(/^(?:[\w.-]+@)?([^:/]+):([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/);
+  if (scpMatch) {
+    return {
+      host: scpMatch[1]!.toLowerCase(),
+      repo: scpMatch[2]!,
+    };
+  }
+
+  // 2. URL format: https://github.com/owner/repo.git
+  try {
+    const url = new URL(trimmed);
+    const host = url.hostname.toLowerCase();
+    const cleanPath = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "");
+    const parts = cleanPath.split("/").filter(Boolean);
+    if (parts.length === 2) {
+      return {
+        host,
+        repo: `${parts[0]}/${parts[1]}`,
+      };
+    }
+  } catch {
+    // invalid URL or local directory
+  }
+
+  return null;
+}
+
+function repoOriginMatches(remoteUrl: string, expectedRepo: string): boolean {
+  const parsed = parseGitHubRepoFromRemote(remoteUrl);
+  if (!parsed) return false;
+  if (parsed.host !== "github.com") return false;
+  return parsed.repo.toLowerCase() === expectedRepo.trim().toLowerCase();
+}
+
+async function fetchCiFailureDiagnostics(
+  runner: DeliveryGitGhRunner,
+  repo: string,
+  headSha: string,
+  failedChecks: readonly CiCheckItem[],
+  cwd: string,
+): Promise<{ diagnostics: string; isInfraOrPermissionFailure: boolean }> {
+  let logExcerpt = "";
+  let isInfraOrPermission = false;
+
+  try {
+    const runListRes = await runner.gh(
+      ["run", "list", "--repo", repo, "--commit", headSha, "--json", "databaseId,name,status,conclusion"],
+      cwd,
+    );
+    if (runListRes.exitCode === 0) {
+      const runs = JSON.parse(runListRes.stdout || "[]");
+      const failedRun = Array.isArray(runs)
+        ? runs.find((r: { conclusion?: string }) => {
+            const c = String(r.conclusion || "").toUpperCase();
+            return c === "FAILURE" || c === "TIMED_OUT" || c === "STARTUP_FAILURE";
+          })
+        : undefined;
+      if (failedRun && failedRun.databaseId) {
+        const runLogRes = await runner.gh(
+          ["run", "view", String(failedRun.databaseId), "--repo", repo, "--log-failed"],
+          cwd,
+        );
+        if (runLogRes.exitCode === 0 && runLogRes.stdout.trim()) {
+          const lines = runLogRes.stdout.split("\n");
+          logExcerpt = lines.slice(-100).join("\n");
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const combinedText =
+    logExcerpt ||
+    failedChecks
+      .map((c) => `${c.name}: status=${c.status}, conclusion=${c.conclusion ?? "none"}, url=${c.detailsUrl ?? "none"}`)
+      .join("; ");
+
+  const lower = combinedText.toLowerCase();
+  if (
+    lower.includes("resource not accessible by integration") ||
+    lower.includes("permission denied") ||
+    lower.includes("bad credentials") ||
+    lower.includes("runner system failure") ||
+    lower.includes("no space left on device") ||
+    lower.includes("billing")
+  ) {
+    isInfraOrPermission = true;
+  }
+
+  return {
+    diagnostics: combinedText,
+    isInfraOrPermissionFailure: isInfraOrPermission,
+  };
 }
 
 /**
@@ -87,10 +178,28 @@ export async function runDeliverySkill(
   };
 
   const stateStorage = options.stateStorage;
-  const persisted = stateStorage ? await stateStorage.readState() : null;
+  let persisted: PersistedDeliveryState | null = null;
+  if (stateStorage) {
+    try {
+      persisted = await stateStorage.readState();
+    } catch (err) {
+      log(`[delivery-skill] Error reading state storage: ${String(err)}`);
+      return {
+        status: "blocked",
+        prNumber: null,
+        prUrl: null,
+        headSha: null,
+        spentRepairs: 0,
+        spentWaitSeconds: 0,
+        reason: "manual_intervention_required",
+        handoffMarkdown: `Failed to read persisted delivery state: ${String(err)}`,
+      };
+    }
+  }
 
   let spentRepairs = 0;
   let initialSpentWaitSeconds = 0;
+  let deadlineTimestampMs: number | undefined;
 
   if (persisted && persisted.repo === context.repo && persisted.issueNumber === context.issueNumber) {
     if (persisted.isPaused && !options.resume) {
@@ -108,11 +217,17 @@ export async function runDeliverySkill(
     }
     spentRepairs = persisted.spentRepairs;
     initialSpentWaitSeconds = persisted.spentWaitSeconds;
+    deadlineTimestampMs = persisted.deadlineTimestampMs;
   }
 
-  const startTimeMs = Date.now();
+  const now = options.nowFn ?? Date.now;
+  const startTimeMs = now();
+  if (!deadlineTimestampMs || options.resume) {
+    deadlineTimestampMs = startTimeMs + Math.max(0, maxWaitSeconds - initialSpentWaitSeconds) * 1000;
+  }
+
   const getElapsedWaitSeconds = (): number => {
-    return initialSpentWaitSeconds + Math.floor((Date.now() - startTimeMs) / 1000);
+    return initialSpentWaitSeconds + Math.floor((now() - startTimeMs) / 1000);
   };
 
   let prNumber: number | null = null;
@@ -129,44 +244,54 @@ export async function runDeliverySkill(
 
     // 关键动作：从 GitHub Issue 尝试移除 symphony-ready 标签
     let readyLabelRemoved = false;
+    let labelVerifyError: string | null = null;
     try {
       const removeRes = await runner.gh(
         ["issue", "edit", String(context.issueNumber), "--repo", context.repo, "--remove-label", readyLabel],
         options.cwd,
       );
-      if (removeRes.exitCode === 0) {
-        readyLabelRemoved = true;
-      }
-      // 重读 Issue 标签事实以确认移除成功
-      const checkRes = await runner.gh(
-        ["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "labels"],
-        options.cwd,
-      );
-      if (checkRes.exitCode === 0) {
-        try {
-          const parsed = JSON.parse(checkRes.stdout || "{}");
-          const labels: Array<{ name: string } | string> = Array.isArray(parsed.labels) ? parsed.labels : [];
-          const hasLabel = labels.some((l) => (typeof l === "string" ? l : l.name) === readyLabel);
-          if (hasLabel) {
-            readyLabelRemoved = false;
+      if (removeRes.exitCode !== 0) {
+        labelVerifyError = `gh issue edit failed: ${removeRes.stderr}`;
+      } else {
+        // 重读 Issue 标签事实以确认移除成功
+        const checkRes = await runner.gh(
+          ["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "labels"],
+          options.cwd,
+        );
+        if (checkRes.exitCode !== 0) {
+          labelVerifyError = `gh issue view failed: ${checkRes.stderr}`;
+        } else {
+          try {
+            const parsed = JSON.parse(checkRes.stdout || "{}");
+            if (!Array.isArray(parsed.labels)) {
+              labelVerifyError = "Corrupted labels payload from gh issue view";
+            } else {
+              const labels: Array<{ name: string } | string> = parsed.labels;
+              const hasLabel = labels.some((l) => (typeof l === "string" ? l : l.name) === readyLabel);
+              if (hasLabel) {
+                labelVerifyError = `Label '${readyLabel}' still present on issue #${context.issueNumber}`;
+              } else {
+                readyLabelRemoved = true;
+              }
+            }
+          } catch (e) {
+            labelVerifyError = `Failed to parse issue labels: ${String(e)}`;
           }
-        } catch {
-          // ignore parse error
         }
       }
       if (readyLabelRemoved) {
         log(`[delivery-skill] Successfully verified removal of label '${readyLabel}' from issue #${context.issueNumber}`);
       } else {
-        log(`[delivery-skill] Warning: Label '${readyLabel}' could not be verified as removed from issue #${context.issueNumber}`);
+        log(`[delivery-skill] Warning: Label '${readyLabel}' could not be verified as removed (${labelVerifyError ?? "unverified"})`);
       }
     } catch (err) {
       log(`[delivery-skill] Warning: Exception while removing label '${readyLabel}': ${String(err)}`);
       readyLabelRemoved = false;
     }
 
-    // 发表交接评论
+    // 发表交接评论（发给 GitHub 时不带 commentPosted 字段，避免预先输出失败警告）
     let commentPosted = false;
-    const handoff: DeliveryHandoff = {
+    const handoffForRemote: DeliveryHandoff = {
       reason,
       details,
       repo: context.repo,
@@ -181,15 +306,14 @@ export async function runDeliverySkill(
       maxWaitSeconds,
       readyLabel,
       readyLabelRemoved,
-      commentPosted: false,
     };
 
-    let handoffMarkdown = formatDeliveryHandoffMarkdown(handoff);
+    const commentBody = formatDeliveryHandoffMarkdown(handoffForRemote);
 
     try {
       const commentTarget = prNumber !== null ? ["pr", "comment", String(prNumber)] : ["issue", "comment", String(context.issueNumber)];
       const commentRes = await runner.gh(
-        [...commentTarget, "--repo", context.repo, "--body", handoffMarkdown],
+        [...commentTarget, "--repo", context.repo, "--body", commentBody],
         options.cwd,
       );
       if (commentRes.exitCode === 0) {
@@ -200,8 +324,8 @@ export async function runDeliverySkill(
       commentPosted = false;
     }
 
-    // 更新包含真实 commentPosted 的 markdown
-    handoffMarkdown = formatDeliveryHandoffMarkdown({ ...handoff, commentPosted });
+    // 更新包含真实 commentPosted 的 markdown 供本地返回
+    const handoffMarkdown = formatDeliveryHandoffMarkdown({ ...handoffForRemote, commentPosted });
 
     // 持久化 paused 状态
     if (stateStorage) {
@@ -211,6 +335,7 @@ export async function runDeliverySkill(
         workspaceKey: context.workspaceKey,
         spentRepairs,
         spentWaitSeconds,
+        deadlineTimestampMs,
         isPaused: true,
         pauseReason: reason,
         lastUpdated: new Date().toISOString(),
@@ -243,12 +368,12 @@ export async function runDeliverySkill(
     );
   }
 
-  // 1b. 校验 remote origin
+  // 1b. 校验 remote origin（严格要求 host 为 github.com 且目标仓库完全一致）
   const remoteRes = await runner.git(["remote", "get-url", "origin"], options.cwd);
-  if (remoteRes.exitCode !== 0 || !repoMatches(remoteRes.stdout, context.repo)) {
+  if (remoteRes.exitCode !== 0 || !repoOriginMatches(remoteRes.stdout, context.repo)) {
     return haltDispatch(
       "manual_intervention_required",
-      `Working directory origin URL '${remoteRes.stdout.trim()}' does not match expected repo '${context.repo}'.`,
+      `Working directory origin URL '${remoteRes.stdout.trim()}' does not match expected GitHub repo '${context.repo}'.`,
     );
   }
 
@@ -263,14 +388,11 @@ export async function runDeliverySkill(
       `Failed to query GitHub issue #${context.issueNumber}: ${issueRes.stderr}`,
     );
   }
+
+  let issueState = "OPEN";
   try {
     const issueData = JSON.parse(issueRes.stdout || "{}");
-    if (issueData.state === "CLOSED") {
-      return haltDispatch(
-        "manual_intervention_required",
-        `Issue #${context.issueNumber} is already CLOSED on GitHub. Delivery aborted.`,
-      );
-    }
+    issueState = String(issueData.state || "OPEN").toUpperCase();
   } catch (err) {
     return haltDispatch(
       "manual_intervention_required",
@@ -342,17 +464,40 @@ export async function runDeliverySkill(
     }
 
     if (candidate.state === "MERGED") {
-      log(`[delivery-skill] Existing PR #${candidate.number} is already MERGED. Returning completed.`);
-      return {
-        status: "completed",
-        prNumber: candidate.number,
-        prUrl: candidate.url,
-        headSha: candidate.headRefOid ?? null,
-        mergeSha: candidate.headRefOid ?? null,
-        spentRepairs,
-        spentWaitSeconds: getElapsedWaitSeconds(),
-        reason: "already_merged",
-      };
+      // 重新从 PR 查询真实 merge commit SHA
+      const viewMerged = await runner.gh(
+        ["pr", "view", String(candidate.number), "--repo", context.repo, "--json", "state,mergeCommit"],
+        options.cwd,
+      );
+      let realMergeSha: string | null = null;
+      if (viewMerged.exitCode === 0) {
+        try {
+          const v = JSON.parse(viewMerged.stdout || "{}");
+          realMergeSha = (v.mergeCommit?.oid as string) ?? null;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (issueState === "CLOSED") {
+        log(`[delivery-skill] PR #${candidate.number} is MERGED and issue #${context.issueNumber} is CLOSED. Completed.`);
+        return {
+          status: "completed",
+          prNumber: candidate.number,
+          prUrl: candidate.url,
+          headSha: candidate.headRefOid ?? null,
+          mergeSha: realMergeSha,
+          spentRepairs,
+          spentWaitSeconds: getElapsedWaitSeconds(),
+          reason: "already_merged_and_closed",
+        };
+      }
+
+      // PR 已合入但 Issue 仍为 OPEN 或未知状态：输出明确 reconciliation 并停止派发
+      return haltDispatch(
+        "reconciliation_needed",
+        `PR #${candidate.number} is already MERGED (merge commit: ${realMergeSha ?? "unknown"}), but issue #${context.issueNumber} remains open. Requires reconciliation or manual closure.`,
+      );
     }
 
     if (candidate.state === "CLOSED") {
@@ -365,6 +510,14 @@ export async function runDeliverySkill(
     prNumber = candidate.number;
     prUrl = candidate.url;
     log(`[delivery-skill] Reusing verified existing open PR #${prNumber} (${prUrl})`);
+  }
+
+  // 若未曾被本分支合法合入，Issue 必须处于 OPEN 状态
+  if (issueState === "CLOSED") {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Issue #${context.issueNumber} is already CLOSED on GitHub without merged PR. Delivery aborted.`,
+    );
   }
 
   // ==========================================
@@ -488,9 +641,50 @@ export async function runDeliverySkill(
   // ==========================================
   log("[delivery-skill] Phase 6: Monitoring CI checks and executing repair loop...");
 
+  // 权威确定 requiredChecks（若调用方未显式提供，向 GitHub 保护分支 API 查询）
+  let effectiveRequiredChecks = options.requiredChecks ? [...options.requiredChecks] : undefined;
+  if (effectiveRequiredChecks === undefined) {
+    const checksRes = await runner.gh(
+      ["api", `repos/${context.repo}/branches/${context.baseBranch}/protection/required_status_checks`],
+      options.cwd,
+    );
+    if (checksRes.exitCode === 0) {
+      try {
+        const parsedChecks = JSON.parse(checksRes.stdout || "{}");
+        const list: string[] = [];
+        if (Array.isArray(parsedChecks.contexts)) {
+          list.push(...parsedChecks.contexts.map(String));
+        }
+        if (Array.isArray(parsedChecks.checks)) {
+          for (const c of parsedChecks.checks) {
+            if (c && typeof c.context === "string") {
+              list.push(c.context);
+            }
+          }
+        }
+        effectiveRequiredChecks = list;
+      } catch (err) {
+        return haltDispatch(
+          "manual_intervention_required",
+          `Failed to parse authoritative required status checks: ${String(err)}`,
+        );
+      }
+    } else {
+      const errOut = (checksRes.stderr + " " + checksRes.stdout).toLowerCase();
+      if (errOut.includes("404") || errOut.includes("branch not protected") || errOut.includes("not found")) {
+        effectiveRequiredChecks = [];
+      } else {
+        return haltDispatch(
+          "manual_intervention_required",
+          `Failed to determine authoritative required status checks for base branch '${context.baseBranch}': ${checksRes.stderr}`,
+        );
+      }
+    }
+  }
+
   while (true) {
     const elapsedWait = getElapsedWaitSeconds();
-    if (elapsedWait >= maxWaitSeconds) {
+    if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
       return haltDispatch(
         "ci_wait_timeout",
         `Timed out waiting for CI checks after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
@@ -525,9 +719,11 @@ export async function runDeliverySkill(
       continue;
     }
 
-    // 核对 PR 上的 headRefOid 是否已对应当前已推送的 head SHA
-    if (prViewData.headRefOid && prViewData.headRefOid !== currentHeadSha) {
-      log(`[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`);
+    // 严格核对 PR 上的 headRefOid 必须存在且与当前已推送 head SHA 完全一致
+    if (!prViewData.headRefOid || prViewData.headRefOid !== currentHeadSha) {
+      log(
+        `[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid ?? "missing"}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`,
+      );
       await sleep(pollInterval);
       continue;
     }
@@ -585,7 +781,7 @@ export async function runDeliverySkill(
 
       const isRequired =
         Boolean(rc["isRequired"]) ||
-        Boolean(options.requiredChecks && options.requiredChecks.includes(name));
+        Boolean(effectiveRequiredChecks && effectiveRequiredChecks.includes(name));
 
       return {
         name,
@@ -596,7 +792,7 @@ export async function runDeliverySkill(
       };
     });
 
-    const evaluation = evaluateCiChecksPolicy(parsedChecks, { requiredChecks: options.requiredChecks });
+    const evaluation = evaluateCiChecksPolicy(parsedChecks, { requiredChecks: effectiveRequiredChecks });
 
     // 6a. Checks Green -> 进入 Land 阶段
     if (evaluation.canLand) {
@@ -614,37 +810,76 @@ export async function runDeliverySkill(
         );
       }
 
+      // 提取真实失败日志诊断
+      const { diagnostics, isInfraOrPermissionFailure } = await fetchCiFailureDiagnostics(
+        runner,
+        context.repo,
+        currentHeadSha ?? "",
+        evaluation.failedChecks,
+        options.cwd,
+      );
+
+      // 区分 infra/permission 失败，避免无效消耗代码修复预算
+      if (isInfraOrPermissionFailure) {
+        return haltDispatch(
+          "manual_intervention_required",
+          `CI failed with infrastructure or permission error (requires operator intervention): ${diagnostics.slice(0, 300)}`,
+        );
+      }
+
       // 如果未配置 repairFn 也未配置 repairCommand，绝不凭空宣称 repair 成功并重复空提交！
       if (!options.repairFn && !options.repairCommand) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Halting dispatch.`,
+          `CI checks failed on [${evaluation.failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagnostics.slice(0, 300)}. Halting dispatch.`,
         );
       }
 
       spentRepairs++;
       log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
 
-      const failureDetails = evaluation.failedChecks
-        .map((c) => `${c.name}: status=${c.status}, conclusion=${c.conclusion ?? "none"}, url=${c.detailsUrl ?? "none"}`)
-        .join("; ");
+      // 在修复副作用执行前立即持久化预算消耗
+      if (stateStorage) {
+        await stateStorage.writeState({
+          repo: context.repo,
+          issueNumber: context.issueNumber,
+          workspaceKey: context.workspaceKey,
+          spentRepairs,
+          spentWaitSeconds: getElapsedWaitSeconds(),
+          deadlineTimestampMs,
+          isPaused: false,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
 
       let repairSuccess = false;
-      if (options.repairFn) {
-        repairSuccess = await options.repairFn(failureDetails);
-      } else if (options.repairCommand) {
-        log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
-        const repairRes = await runner.exec(options.repairCommand, options.cwd);
-        repairSuccess = repairRes.exitCode === 0;
-        if (!repairSuccess) {
-          log(`[delivery-skill] Repair command failed (${repairRes.exitCode}): ${repairRes.stderr || repairRes.stdout}`);
+      try {
+        if (options.repairFn) {
+          repairSuccess = await options.repairFn(diagnostics);
+        } else if (options.repairCommand) {
+          log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
+          const repairRes = await runner.exec(
+            options.repairCommand,
+            options.cwd,
+            undefined,
+            { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagnostics },
+          );
+          repairSuccess = repairRes.exitCode === 0;
+          if (!repairSuccess) {
+            log(`[delivery-skill] Repair command failed (${repairRes.exitCode}): ${repairRes.stderr || repairRes.stdout}`);
+          }
         }
+      } catch (err) {
+        return haltDispatch(
+          "ci_failed_max_repairs",
+          `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
+        );
       }
 
       if (!repairSuccess) {
         return haltDispatch(
           "ci_failed_max_repairs",
-          `Repair attempt ${spentRepairs} failed to fix CI failure: ${failureDetails}`,
+          `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagnostics.slice(0, 300)}`,
         );
       }
 
@@ -699,6 +934,7 @@ export async function runDeliverySkill(
           workspaceKey: context.workspaceKey,
           spentRepairs,
           spentWaitSeconds: getElapsedWaitSeconds(),
+          deadlineTimestampMs,
           isPaused: false,
           lastUpdated: new Date().toISOString(),
         });
@@ -807,23 +1043,18 @@ export async function runDeliverySkill(
       workspaceKey: context.workspaceKey,
       spentRepairs,
       spentWaitSeconds: getElapsedWaitSeconds(),
+      deadlineTimestampMs,
       isPaused: false,
       lastUpdated: new Date().toISOString(),
     });
   }
 
   if (!issueClosed) {
-    log(`[delivery-skill] Warning: PR #${prNumber} is merged, but issue #${context.issueNumber} remains open. Requires reconciliation or manual closure.`);
-    return {
-      status: "completed",
-      prNumber,
-      prUrl,
-      headSha: currentHeadSha,
-      mergeSha,
-      spentRepairs,
-      spentWaitSeconds: getElapsedWaitSeconds(),
-      reason: "merged_issue_open_reconciliation",
-    };
+    log(`[delivery-skill] Warning: PR #${prNumber} is merged, but issue #${context.issueNumber} remains open. Halting dispatch for reconciliation...`);
+    return haltDispatch(
+      "reconciliation_needed",
+      `PR #${prNumber} was successfully squash merged (merge commit: ${mergeSha ?? "unknown"}), but issue #${context.issueNumber} remains open or could not be verified as closed. Requires reconciliation or manual closure.`,
+    );
   }
 
   log(`[delivery-skill] Successfully landed PR #${prNumber}! Merge commit: ${mergeSha ?? "verified"}. Issue #${context.issueNumber} closed.`);

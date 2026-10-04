@@ -284,6 +284,7 @@ export interface PersistedDeliveryState {
   readonly workspaceKey: string;
   readonly spentRepairs: number;
   readonly spentWaitSeconds: number;
+  readonly deadlineTimestampMs?: number | undefined;
   readonly isPaused: boolean;
   readonly pauseReason?: string | undefined;
   readonly lastUpdated: string;

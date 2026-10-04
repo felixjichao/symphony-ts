@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "@symphony/agent";
 
-import { parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
+import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
 class MockCliRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
@@ -23,6 +23,12 @@ class MockCliRunner implements DeliveryGitGhRunner {
 
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
+    if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("required_status_checks")) {
+      return { stdout: "{}", stderr: "404 Branch not protected", exitCode: 1 };
+    }
+    if (args[0] === "run") {
+      return { stdout: "[]", stderr: "", exitCode: 0 };
+    }
     return this.ghResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
 
@@ -250,5 +256,57 @@ describe("delivery-skill CLI", () => {
 
     expect(code).toBe(0);
     expect(stdout).toContain("successfully completed and landed PR #80");
+  });
+
+  describe("FileDeliveryStateStorage", () => {
+    it("writes atomically and reads state correctly", () => {
+      const tempDir = createTempDir();
+      const storageFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(storageFile);
+
+      expect(storage.readState()).toBeNull();
+
+      const state = {
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        deadlineTimestampMs: 1700000000,
+        isPaused: true,
+        pauseReason: "budget_exhausted",
+        lastUpdated: new Date().toISOString(),
+      };
+
+      storage.writeState(state);
+      const read = storage.readState();
+      expect(read).toEqual(state);
+    });
+
+    it("throws on corrupted JSON or invalid schema", () => {
+      const tempDir = createTempDir();
+      const storageFile = path.join(tempDir, "corrupted.json");
+      fs.writeFileSync(storageFile, "{ bad json", "utf8");
+
+      const storage = new FileDeliveryStateStorage(storageFile);
+      expect(() => storage.readState()).toThrow("invalid JSON");
+
+      fs.writeFileSync(storageFile, JSON.stringify({ repo: "a", spentRepairs: -1 }), "utf8");
+      expect(() => storage.readState()).toThrow("invalid state schema");
+    });
+  });
+
+  describe("DefaultDeliveryGitGhRunner process group bounded timeout", () => {
+    it("terminates process group within timeout and does not hang on background sleep", async () => {
+      const { DefaultDeliveryGitGhRunner } = await import("./git-gh-runner");
+      const runner = new DefaultDeliveryGitGhRunner();
+      const start = Date.now();
+      const res = await runner.exec("sleep 1.2 & wait", process.cwd(), 80);
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeLessThan(500); // Definitely terminated before 1200ms
+      expect(res.exitCode).toBe(124);
+      expect(res.stderr).toContain("Timed out");
+    });
   });
 });

@@ -24,27 +24,46 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
   constructor(private readonly filePath: string) {}
 
   readState(): PersistedDeliveryState | null {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        const raw = fs.readFileSync(this.filePath, "utf8");
-        return JSON.parse(raw) as PersistedDeliveryState;
-      }
-    } catch {
-      // ignore
+    if (!fs.existsSync(this.filePath)) {
+      return null;
     }
-    return null;
+    const raw = fs.readFileSync(this.filePath, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid JSON (${String(err)})`);
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error(`Corrupted delivery state file at ${this.filePath}: expected object`);
+    }
+    const rec = parsed as Record<string, unknown>;
+    if (
+      typeof rec["repo"] !== "string" ||
+      typeof rec["issueNumber"] !== "number" ||
+      typeof rec["workspaceKey"] !== "string" ||
+      typeof rec["spentRepairs"] !== "number" ||
+      rec["spentRepairs"] < 0 ||
+      typeof rec["spentWaitSeconds"] !== "number" ||
+      rec["spentWaitSeconds"] < 0 ||
+      typeof rec["isPaused"] !== "boolean"
+    ) {
+      throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);
+    }
+    return rec as unknown as PersistedDeliveryState;
   }
 
   writeState(state: PersistedDeliveryState): void {
-    try {
-      const dir = path.dirname(this.filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(this.filePath, JSON.stringify(state, null, 2), "utf8");
-    } catch {
-      // ignore
+    const dir = path.dirname(this.filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
+    const tmpFile = path.join(
+      dir,
+      `.delivery-state.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+    );
+    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tmpFile, this.filePath);
   }
 }
 
@@ -188,33 +207,42 @@ export async function runDeliverySkillCli(
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
     let readyLabelRemoved = false;
+    let labelCheckError: string | null = null;
     try {
       const editRes = await runner.gh(
         ["issue", "edit", String(parsed.issueNumber), "--repo", parsed.repo, "--remove-label", readyLabel],
         cwd,
       );
-      if (editRes.exitCode === 0) {
-        readyLabelRemoved = true;
-      }
-      // 检查标签事实
-      const labelCheck = await runner.gh(
-        ["issue", "view", String(parsed.issueNumber), "--repo", parsed.repo, "--json", "labels"],
-        cwd,
-      );
-      if (labelCheck.exitCode === 0) {
-        try {
-          const parsedLabels = JSON.parse(labelCheck.stdout || "{}");
-          const labels: Array<{ name: string } | string> = Array.isArray(parsedLabels.labels) ? parsedLabels.labels : [];
-          if (labels.some((l) => (typeof l === "string" ? l : l.name) === readyLabel)) {
-            readyLabelRemoved = false;
+      if (editRes.exitCode !== 0) {
+        labelCheckError = `Failed to remove label '${readyLabel}': ${editRes.stderr}`;
+      } else {
+        // 检查标签事实
+        const labelCheck = await runner.gh(
+          ["issue", "view", String(parsed.issueNumber), "--repo", parsed.repo, "--json", "labels"],
+          cwd,
+        );
+        if (labelCheck.exitCode !== 0) {
+          labelCheckError = `Label removal executed, but failed to re-query issue labels: ${labelCheck.stderr}`;
+        } else {
+          try {
+            const parsedLabels = JSON.parse(labelCheck.stdout || "{}");
+            if (!Array.isArray(parsedLabels.labels)) {
+              labelCheckError = "Invalid issue labels JSON: missing labels array";
+            } else {
+              const labels: Array<{ name: string } | string> = parsedLabels.labels;
+              if (labels.some((l) => (typeof l === "string" ? l : l.name) === readyLabel)) {
+                labelCheckError = `Label '${readyLabel}' is still present on issue #${parsed.issueNumber}`;
+              } else {
+                readyLabelRemoved = true;
+              }
+            }
+          } catch (e) {
+            labelCheckError = `Failed to parse issue labels JSON: ${String(e)}`;
           }
-        } catch {
-          // ignore parse error
         }
       }
     } catch (err) {
-      io.stderr.write(`symphony delivery-skill: warning: failed to remove label: ${String(err)}\n`);
-      readyLabelRemoved = false;
+      labelCheckError = `Exception during label removal: ${String(err)}`;
     }
 
     let commentPosted = false;
@@ -233,7 +261,6 @@ export async function runDeliverySkillCli(
       maxWaitSeconds: parsed.maxWait ?? 300,
       readyLabel,
       readyLabelRemoved,
-      commentPosted: false,
     };
 
     let handoffMarkdown = formatDeliveryHandoffMarkdown(handoff);
@@ -245,6 +272,8 @@ export async function runDeliverySkillCli(
       );
       if (commentRes.exitCode === 0) {
         commentPosted = true;
+      } else {
+        io.stderr.write(`symphony delivery-skill: warning: failed to post comment: ${commentRes.stderr}\n`);
       }
     } catch (err) {
       io.stderr.write(`symphony delivery-skill: warning: failed to post comment: ${String(err)}\n`);
@@ -268,7 +297,14 @@ export async function runDeliverySkillCli(
 
     if (!readyLabelRemoved) {
       io.stderr.write(
-        `symphony delivery-skill: halt failed: could not remove label '${readyLabel}' from issue #${parsed.issueNumber}. Dispatch not halted.\n`,
+        `symphony delivery-skill: halt failed: could not remove label '${readyLabel}' from issue #${parsed.issueNumber} (${labelCheckError ?? "unverified"}). Dispatch not halted.\n`,
+      );
+      return 1;
+    }
+
+    if (!commentPosted) {
+      io.stderr.write(
+        `symphony delivery-skill: halt warning: label removed, but failed to post handoff comment.\n`,
       );
       return 1;
     }
