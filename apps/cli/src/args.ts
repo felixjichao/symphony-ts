@@ -1,12 +1,30 @@
 import path from "node:path";
 
 export interface ParsedCliArgs {
+  readonly subcommand?: "repo-bootstrap" | undefined;
+  readonly subcommandArgs?: readonly string[] | undefined;
   readonly workflowPath?: string | undefined;
   readonly help?: boolean | undefined;
   readonly version?: boolean | undefined;
 }
 
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
+  if (argv.length > 0) {
+    const first = argv[0];
+    if (first === "repo-bootstrap" || first === "bootstrap-repo") {
+      return {
+        subcommand: "repo-bootstrap",
+        subcommandArgs: argv.slice(1),
+      };
+    }
+    if (first === "workspace" && argv[1] === "bootstrap") {
+      return {
+        subcommand: "repo-bootstrap",
+        subcommandArgs: argv.slice(2),
+      };
+    }
+  }
+
   let workflowPath: string | undefined;
   let help = false;
   let version = false;

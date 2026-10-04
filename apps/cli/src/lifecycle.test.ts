@@ -231,4 +231,18 @@ describe("shell lifecycle (§17.7 exit matrix)", () => {
     expect(await run).toBe(1);
     expect(port.listenerCount(event)).toBe(0);
   });
+
+  it("executes repo-bootstrap subcommand and returns its status", async () => {
+    const port = shell();
+    const code = await runCli(["repo-bootstrap", "--help"], { process: port });
+    expect(code).toBe(0);
+    expect(port.output.join("")).toContain("Usage: symphony repo-bootstrap");
+  });
+
+  it("fails repo-bootstrap subcommand when missing required repo URL", async () => {
+    const port = shell();
+    const code = await runCli(["repo-bootstrap"], { process: port });
+    expect(code).toBe(1);
+    expect(port.output.join("")).toContain("missing required repository URL");
+  });
 });

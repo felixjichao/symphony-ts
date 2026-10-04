@@ -1,5 +1,6 @@
 /** Executable lifecycle (SPEC §17.7 / §18.1). Host owns resources; shell owns signals/status. */
 import pkg from "../package.json";
+import { runRepositoryBootstrapCli } from "@symphony/workspace";
 import { parseCliArgs, resolveWorkflowPath } from "./args";
 import { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
 
@@ -29,8 +30,24 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
   let host: Pick<SymphonyHost, "start" | "stop" | "failure">;
   try {
     const args = parseCliArgs(argv);
+    if (args.subcommand === "repo-bootstrap") {
+      return await runRepositoryBootstrapCli(args.subcommandArgs ?? [], {
+        stdout: shell.stdout,
+        stderr: shell.stderr,
+      });
+    }
     if (args.help) {
-      shell.stdout.write("Usage: symphony [workflow-path]\n\nOptions:\n  -h, --help     Show this help message\n  -v, --version  Show version information\n");
+      shell.stdout.write(
+        "Usage: symphony [workflow-path]\n" +
+        "       symphony repo-bootstrap --repo <url> [options]\n" +
+        "       symphony workspace bootstrap --repo <url> [options]\n\n" +
+        "Commands:\n" +
+        "  repo-bootstrap       Bootstrap git repository in workspace and create issue branch\n" +
+        "  workspace bootstrap  Alias for repo-bootstrap\n\n" +
+        "Options:\n" +
+        "  -h, --help           Show this help message\n" +
+        "  -v, --version        Show version information\n"
+      );
       return 0;
     }
     if (args.version) {

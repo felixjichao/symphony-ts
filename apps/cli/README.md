@@ -17,6 +17,20 @@ symphony [path-to-WORKFLOW.md]
 - 文件缺失或不可读触发类型化 `missing_workflow_file` 洁净失败（exit code 1）；
 - 支持 `--help` / `-h` 与 `--version` / `-v`。
 
+仓储工作区引导子命令契约（NEST-90 / #79）：
+```text
+symphony repo-bootstrap --repo <url> [--target <path>] [--branch <name>] [--workspace-key <key>] [--timeout-ms <ms>] [--user-name <name>] [--user-email <email>]
+```
+- 别名支持：`bootstrap-repo`、`workspace bootstrap`；
+- 直接运行 `runRepositoryBootstrapCli` 完成目标工作区 Git clone 与确定性 Issue 分支同步（默认分支 `symphony/<workspaceKey>`），不启动 Orchestrator 守护进程；
+- 目标目录缺省为当前工作目录（CWD），`workspace-key` 缺省从环境变量 `SYMPHONY_WORKSPACE_KEY` 或目标目录基名推导；
+- 适合在 `WORKFLOW.md` 的 `after_create` 或 `before_run` hook 脚本中直接调用：
+  ```yaml
+  hooks:
+    after_create: |
+      symphony repo-bootstrap --repo https://github.com/org/repo.git
+  ```
+
 ## Extension points
 
 - 新子命令：在本 app 内注册，业务逻辑一律下沉到对应 owner 包；
