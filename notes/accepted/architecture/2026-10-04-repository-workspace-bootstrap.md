@@ -22,9 +22,9 @@ We implement repository bootstrap and issue branch synchronization in `@symphony
      - Brand new branch created from latest remote default branch.
      - Clean tree + local HEAD ancestor of remote default branch: fast-forward to remote default branch.
      - Dirty working tree (uncommitted/untracked files) or branch with local commits: preserve working tree and branch HEAD untouched (no destructive merge or rebase).
-     - Non-empty directory without `.git`: safe failure with `unrecognized_workspace_content`.
-     - Repository origin URL mismatch: safe failure with `origin_url_mismatch`.
-     - In-progress git operations (`MERGE_HEAD`, `REBASE_HEAD`, etc.): safe failure with `git_in_progress`.
+     - Non-empty directory without `.git`: safe failure with `unrecognized_non_empty_directory`.
+     - Repository origin URL mismatch: safe failure with `repository_url_mismatch`.
+     - In-progress git operations (`MERGE_HEAD`, `REBASE_HEAD`, etc.): safe failure with `git_operation_in_progress`.
    - Credential sanitization: `sanitizeRepoUrl` replaces embedded user/token credentials with `***`.
    - Local git identity: Configures `user.name` and `user.email` locally if not set globally.
    - Subprocess safety: All git commands run with `GIT_TERMINAL_PROMPT=0`, bounded execution timeouts, and process-group `SIGKILL` on timeout.

@@ -132,32 +132,54 @@ export function normalizeGitUrl(url: string): string {
   return normalized;
 }
 
-function sanitizeText(text: string, repoUrl: string): string {
-  let result = text;
-  const credMatch = repoUrl.match(/https?:\/\/([^@\s/]+)@/i);
-  if (credMatch && credMatch[1]) {
-    const userinfo = credMatch[1];
-    result = result.split(userinfo).join("***");
-    try {
-      result = result.split(encodeURIComponent(userinfo)).join("***");
-    } catch {
-      // ignore URI decode error
-    }
-    if (userinfo.includes(":")) {
-      const parts = userinfo.split(":");
-      for (const part of parts) {
-        if (part.length > 0) {
-          result = result.split(part).join("***");
-          try {
-            result = result.split(encodeURIComponent(part)).join("***");
-          } catch {
-            // ignore
+/**
+ * 对诊断或错误信息进行脱敏，彻底消除任何 URL 中的 userinfo 凭据。
+ */
+export function sanitizeDiagnostics(
+  text: string,
+  context?: { repoUrl?: string | undefined; argv?: readonly string[] | undefined },
+): string {
+  let result = sanitizeRepoUrl(text);
+
+  const candidateUrls: string[] = [];
+  if (context?.repoUrl) {
+    candidateUrls.push(context.repoUrl);
+  }
+  if (context?.argv) {
+    candidateUrls.push(...context.argv);
+  }
+
+  for (const item of candidateUrls) {
+    const credMatch = item.match(/https?:\/\/([^@\s/]+)@/i);
+    if (credMatch && credMatch[1]) {
+      const userinfo = credMatch[1];
+      result = result.split(userinfo).join("***");
+      try {
+        result = result.split(encodeURIComponent(userinfo)).join("***");
+      } catch {
+        // ignore URI decode error
+      }
+      if (userinfo.includes(":")) {
+        const parts = userinfo.split(":");
+        for (const part of parts) {
+          if (part.length > 0) {
+            result = result.split(part).join("***");
+            try {
+              result = result.split(encodeURIComponent(part)).join("***");
+            } catch {
+              // ignore
+            }
           }
         }
       }
     }
   }
+
   return sanitizeRepoUrl(result);
+}
+
+function sanitizeText(text: string, repoUrl?: string): string {
+  return sanitizeDiagnostics(text, { repoUrl });
 }
 
 interface GitExecResult {
@@ -273,39 +295,53 @@ async function discoverDefaultBranch(
   repoUrl: string,
 ): Promise<string> {
   // 1. 尝试主动向远端刷新 origin/HEAD（覆盖远端默认分支变更场景）
-  await execGit(["remote", "set-head", "origin", "--auto"], cwd, timeoutMs);
-  let res = await execGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, timeoutMs);
-  if (res.exitCode === 0 && res.stdout) {
-    const prefix = "origin/";
-    if (res.stdout.startsWith(prefix)) {
-      return res.stdout.slice(prefix.length);
+  const autoRes = await execGit(["remote", "set-head", "origin", "--auto"], cwd, timeoutMs);
+  if (autoRes.exitCode === 0) {
+    const res = await execGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, timeoutMs);
+    if (res.exitCode === 0 && res.stdout) {
+      const prefix = "origin/";
+      if (res.stdout.startsWith(prefix)) {
+        return res.stdout.slice(prefix.length);
+      }
+      return res.stdout;
     }
-    return res.stdout;
   }
 
-  // 2. 尝试通过 git ls-remote --symref origin HEAD 实时查询远端 HEAD
+  // 2. 刷新失败或未建立，必须通过 git ls-remote --symref origin HEAD 实时查询远端 HEAD，严禁使用旧本地缓存
   const lsRes = await execGit(["ls-remote", "--symref", "origin", "HEAD"], cwd, timeoutMs);
   if (lsRes.exitCode === 0 && lsRes.stdout) {
     const match = lsRes.stdout.match(/ref:\s+refs\/heads\/([^\s]+)\s+HEAD/);
     if (match && match[1]) {
       const branch = match[1];
-      // 同步更新本地 origin/HEAD
-      await execGit(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`], cwd, timeoutMs);
+      // 检查引用写入结果，失败时抛出 typed failure，不得假装成功
+      const symRes = await execGit(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`], cwd, timeoutMs);
+      if (symRes.exitCode !== 0) {
+        throw new RepositoryBootstrapError(
+          "git_command_failed",
+          `Failed to set symbolic-ref refs/remotes/origin/HEAD to origin/${branch}: ${sanitizeText(symRes.stderr, repoUrl)}`,
+          { phase: "discover_default_branch", sanitizedUrl: sanitizeRepoUrl(repoUrl) },
+        );
+      }
       return branch;
     }
+    // 未匹配到 symbolic ref，说明远端 HEAD 不明确
+    throw new RepositoryBootstrapError(
+      "missing_remote_default_branch",
+      `Could not determine default branch for repository ${sanitizeRepoUrl(repoUrl)}: remote HEAD is not a symbolic ref`,
+      { phase: "discover_default_branch", sanitizedUrl: sanitizeRepoUrl(repoUrl) },
+    );
   }
 
-  // 3. 检查本地既有 refs/remotes/origin/HEAD（离线/网络受限下的安全降级）
-  res = await execGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, timeoutMs);
-  if (res.exitCode === 0 && res.stdout) {
-    const prefix = "origin/";
-    if (res.stdout.startsWith(prefix)) {
-      return res.stdout.slice(prefix.length);
-    }
-    return res.stdout;
+  // 若 ls-remote 执行失败，报告具体 git_command_failed
+  if (lsRes.exitCode !== 0) {
+    throw new RepositoryBootstrapError(
+      "git_command_failed",
+      `Failed to query remote default branch via ls-remote: ${sanitizeText(lsRes.stderr, repoUrl)}`,
+      { phase: "discover_default_branch", sanitizedUrl: sanitizeRepoUrl(repoUrl) },
+    );
   }
 
-  // 严禁以当前 issue branch 冒充远端默认分支！无法确定时明确失败
+  // 严禁以旧本地缓存或当前 issue branch 冒充远端默认分支！无法确定时明确失败
   throw new RepositoryBootstrapError(
     "missing_remote_default_branch",
     `Could not determine default branch for repository ${sanitizeRepoUrl(repoUrl)}`,
@@ -768,18 +804,18 @@ export function parseRepositoryBootstrapArgs(argv: readonly string[]): ParsedRep
       const val = argv[++i]!;
       const parsed = parseInt(val, 10);
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        error = `Invalid --timeout-ms value "${val}": must be a positive integer`;
+        error = sanitizeDiagnostics(`Invalid --timeout-ms value "${val}": must be a positive integer`, { argv });
         break;
       }
       timeoutMs = parsed;
     } else if (arg.startsWith("-")) {
-      error = `Unknown option: ${arg}`;
+      error = sanitizeDiagnostics(`Unknown option: ${arg}`, { argv });
       break;
     } else {
       if (repoUrl === undefined) {
         repoUrl = arg;
       } else {
-        error = `Unexpected positional argument: ${arg}`;
+        error = sanitizeDiagnostics(`Unexpected positional argument: ${arg}`, { argv });
         break;
       }
     }
@@ -826,7 +862,7 @@ export async function runRepositoryBootstrapCli(
   }
 
   if (parsed.error) {
-    io.stderr?.write(`repo-bootstrap: ${parsed.error}\n`);
+    io.stderr?.write(sanitizeDiagnostics(`repo-bootstrap: ${parsed.error}\n`, { repoUrl: parsed.repoUrl, argv }));
     return 1;
   }
 
@@ -858,7 +894,7 @@ export async function runRepositoryBootstrapCli(
       error instanceof RepositoryBootstrapError
         ? `repo-bootstrap failed (${error.code}): ${error.message}\n`
         : `repo-bootstrap failed: ${error instanceof Error ? error.message : String(error)}\n`;
-    io.stderr?.write(sanitizeText(rawMessage, repoUrl));
+    io.stderr?.write(sanitizeDiagnostics(rawMessage, { repoUrl, argv }));
     return 1;
   }
 }

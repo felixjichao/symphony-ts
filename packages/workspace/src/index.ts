@@ -86,6 +86,7 @@ export {
   normalizeGitUrl,
   parseRepositoryBootstrapArgs,
   runRepositoryBootstrapCli,
+  sanitizeDiagnostics,
   sanitizeRepoUrl,
 } from "./repository-bootstrap";
 export type {

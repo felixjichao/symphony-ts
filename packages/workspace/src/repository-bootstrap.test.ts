@@ -375,6 +375,58 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       expect(resyncResult.defaultBranch).toBe("trunk");
       expect(resyncResult.headCommit).toBe(trunkCommit);
     });
+
+    it("远端默认分支变更但本地 origin/HEAD 刷新失败时拒绝静默降级为旧缓存 (Blocker 1 回归)", async () => {
+      // 1. 首次 bootstrap，默认分支为 main
+      await bootstrapRepository({
+        cwd: workspaceDir,
+        repoUrl: remoteRepoDir,
+        workspaceKey: "GH-79",
+      });
+
+      // 2. 远端将默认分支由 main 改为带新提交的 trunk
+      const helper = path.join(tmpBase, "trunk-helper-fail");
+      execSync(`git clone ${remoteRepoDir} ${helper}`);
+      execSync("git checkout -b trunk", { cwd: helper });
+      execSync("git config user.name 'Trunk Dev'", { cwd: helper });
+      execSync("git config user.email 'trunk@example.com'", { cwd: helper });
+      await fs.writeFile(path.join(helper, "TRUNK_FAIL.md"), "trunk\n");
+      execSync("git add TRUNK_FAIL.md && git commit -m 'trunk commit'", { cwd: helper });
+      execSync("git push origin trunk", { cwd: helper });
+      const trunkCommit = execSync("git rev-parse HEAD", { cwd: helper }).toString().trim();
+      await fs.rm(helper, { recursive: true, force: true });
+      execSync("git symbolic-ref HEAD refs/heads/trunk", { cwd: remoteRepoDir });
+
+      // 3. 在工作区预置 .git/refs/remotes/origin/HEAD.lock 导致刷新失败
+      const headLock = path.join(workspaceDir, ".git", "refs", "remotes", "origin", "HEAD.lock");
+      await fs.writeFile(headLock, "lock\n");
+
+      // 4. 执行 bootstrap，必须失败，绝不能静默返回 defaultBranch=main 且 HEAD 保持旧提交
+      try {
+        await bootstrapRepository({
+          cwd: workspaceDir,
+          repoUrl: remoteRepoDir,
+          workspaceKey: "GH-79",
+        });
+        expect.fail("should have thrown due to default branch refresh failure");
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(RepositoryBootstrapError);
+        const e = err as RepositoryBootstrapError;
+        expect(e.code).toBe("git_command_failed");
+        expect(e.phase).toBe("discover_default_branch");
+      } finally {
+        await fs.rm(headLock, { force: true });
+      }
+
+      // 5. 解除锁后重试，必须正确识别 trunk 并推进 HEAD 到 trunkCommit
+      const recovered = await bootstrapRepository({
+        cwd: workspaceDir,
+        repoUrl: remoteRepoDir,
+        workspaceKey: "GH-79",
+      });
+      expect(recovered.defaultBranch).toBe("trunk");
+      expect(recovered.headCommit).toBe(trunkCommit);
+    });
   });
 
   describe("边界保护与安全错误分类 (AC #5)", () => {
@@ -689,6 +741,21 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
 
       const invalidTimeout = parseRepositoryBootstrapArgs(["--timeout-ms", "not-a-number"]);
       expect(invalidTimeout.error).toContain("Invalid --timeout-ms value");
+
+      const sensitivePositional = parseRepositoryBootstrapArgs([
+        "--repo",
+        "/unused/local/repo",
+        "https://REVIEW_FAKE_TOKEN@example.invalid/repo.git",
+      ]);
+      expect(sensitivePositional.error).not.toContain("REVIEW_FAKE_TOKEN");
+      expect(sensitivePositional.error).toContain("https://***@example.invalid/repo.git");
+
+      const sensitiveTimeout = parseRepositoryBootstrapArgs([
+        "--timeout-ms",
+        "https://REVIEW_FAKE_TOKEN@example.invalid/repo.git",
+      ]);
+      expect(sensitiveTimeout.error).not.toContain("REVIEW_FAKE_TOKEN");
+      expect(sensitiveTimeout.error).toContain("https://***@example.invalid/repo.git");
     });
 
     it("执行 --help 输出使用说明并返回 0", async () => {
@@ -771,6 +838,26 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       expect(code2).toBe(1);
       expect(err2).not.toContain("cli_pass");
       expect(err2).toContain("https://***:***@example.com/other.git");
+
+      // 多余位置参数包含 token 时，stderr 脱敏且不泄漏 token (Blocker 2 回归)
+      let errPos = "";
+      const codePos = await runRepositoryBootstrapCli(
+        ["--repo", "/unused/local/repo", "https://REVIEW_FAKE_TOKEN@example.invalid/repo.git"],
+        { stderr: { write: (msg) => (errPos += msg) } },
+      );
+      expect(codePos).toBe(1);
+      expect(errPos).not.toContain("REVIEW_FAKE_TOKEN");
+      expect(errPos).toContain("https://***@example.invalid/repo.git");
+
+      // 错误选项值包含 token 时，stderr 脱敏且不泄漏 token (Blocker 2 回归)
+      let errTimeout = "";
+      const codeTimeout = await runRepositoryBootstrapCli(
+        ["--timeout-ms", "https://REVIEW_FAKE_TOKEN@example.invalid/repo.git"],
+        { stderr: { write: (msg) => (errTimeout += msg) } },
+      );
+      expect(codeTimeout).toBe(1);
+      expect(errTimeout).not.toContain("REVIEW_FAKE_TOKEN");
+      expect(errTimeout).toContain("https://***@example.invalid/repo.git");
     });
 
     it("成功执行 bootstrap 输出摘要并返回 0", async () => {
