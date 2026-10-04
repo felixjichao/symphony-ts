@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { runDeliveryCli } from "../delivery-cli";
 import {
+  assertProtectionFidelity,
   buildProtectionPutPayload,
   createRealDogfoodDeps,
   DogfoodError,
@@ -408,13 +409,32 @@ describe("branch protection GET to PUT conversion", () => {
     expect(payload["restrictions"]).toEqual({ users: ["bob"], teams: [], apps: ["actions"] });
   });
 
+  it("preserves explicit app binding and maps null/absent app_id to any-source (-1)", () => {
+    const get = JSON.stringify({
+      required_status_checks: {
+        strict: false,
+        contexts: ["a", "b", "c"],
+        checks: [{ context: "a", app_id: 15368 }, { context: "b", app_id: null }, { context: "c" }],
+      },
+    });
+    const rsc = JSON.parse(buildProtectionPutPayload(get, null))["required_status_checks"] as { checks: Array<{ context: string; app_id: number }> };
+    expect(rsc.checks).toEqual([
+      { context: "a", app_id: 15368 },
+      { context: "b", app_id: -1 },
+      { context: "c", app_id: -1 },
+    ]);
+    // Every check keeps an explicit source; fallback is -1, never auto-select.
+    expect(rsc.checks.every((c) => typeof c.app_id === "number")).toBe(true);
+    expect(() => assertProtectionFidelity(get)).not.toThrow();
+  });
+
   it("preserves null semantics and adds the hold context without dropping bindings", () => {
     expect(JSON.parse(buildProtectionPutPayload(null, null))["required_status_checks"]).toBeNull();
     expect(JSON.parse(buildProtectionPutPayload(null, null))["enforce_admins"]).toBe(false);
     const hold = JSON.parse(buildProtectionPutPayload(null, "symphony-dogfood-hold")) as Record<string, unknown>;
-    const rsc = hold["required_status_checks"] as { contexts: string[]; checks: Array<{ context: string }> };
+    const rsc = hold["required_status_checks"] as { contexts: string[]; checks: Array<{ context: string; app_id: number }> };
     expect(rsc.contexts).toContain("symphony-dogfood-hold");
-    expect(rsc.checks.some((c) => c.context === "symphony-dogfood-hold")).toBe(true);
+    expect(rsc.checks).toContainEqual({ context: "symphony-dogfood-hold", app_id: -1 });
   });
 });
 

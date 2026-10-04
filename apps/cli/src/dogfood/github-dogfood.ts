@@ -103,12 +103,20 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
         async stop(): Promise<number> {
           if (child.exitCode !== null) return child.exitCode;
           signalProcessGroup(child.pid, "SIGINT");
-          const timed = await Promise.race([exited, new Promise<number>((r) => setTimeout(() => r(-1), 30_000))]);
-          if (timed === -1) {
+          let timer: NodeJS.Timeout | undefined;
+          const timedOut = new Promise<number>((resolve) => {
+            timer = setTimeout(() => resolve(-1), 30_000);
+            timer.unref();
+          });
+          const result = await Promise.race([exited, timedOut]);
+          // Clear the timer so a prompt host exit does not keep the CLI alive
+          // for the full 30s grace period.
+          if (timer !== undefined) clearTimeout(timer);
+          if (result === -1) {
             signalProcessGroup(child.pid, "SIGKILL");
             return await exited;
           }
-          return timed;
+          return result;
         },
       };
     },
@@ -665,16 +673,19 @@ function convertRestrictions(value: unknown): { users: string[]; teams: string[]
   return result;
 }
 
+/** GitHub sentinel meaning "any app may report this required check". */
+export const ANY_APP_ID = -1;
+
 function convertRequiredStatusChecks(value: unknown): Record<string, unknown> | null {
   if (value === null || value === undefined) return null;
   const record = value as { strict?: unknown; contexts?: unknown; checks?: unknown };
   if (Array.isArray(record.checks)) {
     const checks = record.checks.map((entry) => {
       const check = entry as { context?: unknown; app_id?: unknown };
-      const mapped: Record<string, unknown> = { context: String(check.context ?? "") };
-      // Preserve the app binding so an app-scoped required check survives restore.
-      if (check.app_id !== undefined && check.app_id !== null) mapped["app_id"] = check.app_id;
-      return mapped;
+      // Omitting app_id lets GitHub auto-select the most recent app; an explicit
+      // "any app" source requires app_id: -1. Preserve null as any-source.
+      const appId = typeof check.app_id === "number" && Number.isFinite(check.app_id) ? check.app_id : ANY_APP_ID;
+      return { context: String(check.context ?? ""), app_id: appId };
     });
     return { strict: Boolean(record.strict), checks, contexts: checks.map((c) => c["context"]) };
   }
@@ -720,10 +731,31 @@ export function buildProtectionPutPayload(getBody: string | null, extraContext: 
     const contexts = [...(current?.contexts ?? [])];
     const checks = [...(current?.checks ?? [])];
     if (!contexts.includes(extraContext)) contexts.push(extraContext);
-    if (!checks.some((c) => c["context"] === extraContext)) checks.push({ context: extraContext });
+    if (!checks.some((c) => c["context"] === extraContext)) checks.push({ context: extraContext, app_id: ANY_APP_ID });
     payload["required_status_checks"] = { strict: current?.strict ?? false, contexts, checks };
   }
   return JSON.stringify(payload);
+}
+
+/**
+ * Fail closed unless every original required check keeps an explicit app source
+ * after conversion, so apply/restore never rely on GitHub's auto app selection.
+ */
+export function assertProtectionFidelity(getBody: string | null): void {
+  if (getBody === null || getBody.trim() === "") return;
+  const body = JSON.parse(getBody) as { required_status_checks?: { checks?: unknown } | null };
+  const original = body.required_status_checks;
+  if (original === null || original === undefined || !Array.isArray(original.checks)) return;
+  const payload = JSON.parse(buildProtectionPutPayload(getBody, null)) as { required_status_checks?: { checks?: Array<{ context?: string; app_id?: unknown }> } | null };
+  const converted = payload.required_status_checks?.checks ?? [];
+  for (const check of converted) {
+    if (typeof check.app_id !== "number" || !Number.isFinite(check.app_id)) {
+      throw new DogfoodError(`branch protection conversion lost the explicit app source for context '${check.context ?? ""}'`);
+    }
+  }
+  if (converted.length !== original.checks.length) {
+    throw new DogfoodError("branch protection conversion changed the number of required checks");
+  }
 }
 
 /** Read the current branch protection so the hold can restore it exactly. */
@@ -748,6 +780,9 @@ async function putProtection(ctx: RunContext, payload: string, label: string): P
 
 /** Add a required check that cannot be satisfied until the harness removes it. */
 async function applyRestartHold(ctx: RunContext, snapshot: ProtectionSnapshot): Promise<void> {
+  // Verify (before mutating) that the conversion keeps every original check's
+  // explicit app source, so neither apply nor restore relies on auto-selection.
+  assertProtectionFidelity(snapshot.body);
   await putProtection(ctx, buildProtectionPutPayload(snapshot.body, HOLD_CONTEXT), "apply restart hold");
 }
 

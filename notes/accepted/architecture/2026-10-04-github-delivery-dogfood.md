@@ -64,8 +64,10 @@ harness drives existing real entry points but never performs delivery itself.
    skips (a missing `gh` binary or an unexpected `gh auth token` failure is a
    non-zero tool failure). The `reuse` restart hold reads the current branch
    protection, converts the GET body into a valid PUT payload (boolean wrappers,
-   login/slug mappings, preserved app bindings and null semantics) and exactly
-   restores it with a read-back check (requiring Administration write);
+   login/slug mappings, preserved app bindings, null semantics, and explicit
+   `app_id: -1` for any-source checks instead of auto-selection), verifies
+   conversion fidelity before mutating, and exactly restores it with a read-back
+   check (requiring Administration write);
    `SIGINT`/`SIGTERM` request cancellation that stops the host/Codex process
    group and lets the scenario's own `finally` finish (restore + log capture)
    before returning 130/143, and failed runs retain their workspace, persisted
