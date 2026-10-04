@@ -127,7 +127,7 @@ M5（orchestrator）。「谁在什么时候调用」见下方接缝表。
 - **operator-visible 事件**：failed / timeout 经 `WorkspaceHookEventSink` callback 暴露
   `WorkspaceHookEvent`（hook name、workspace path、identifier（可用时）、outcome、
   exit status / signal / truncated output）。**workspace 包不依赖 observability**——事件经
-  callback / 结构化返回暴露，落地到 structured logging sink 由 M6 / 组合根装配。success 不发事件。
+  callback / 结构化返回暴露，structured logging sink 已由 apps/cli 生产组合根装配。success 不发事件。
 
 ### 失败语义（§9.4 / 父任务决策 4）
 
@@ -164,7 +164,7 @@ SPEC §17.2 允许当目标 workspace 路径已存在非目录对象时，“rep
 
 - 生命周期脚本执行：四个 hook 共用底层 runner（`sh -lc` + cwd + timeout + 有界捕获 + 事件），执行语义遵循 SPEC §9.4；调用时机 / 调度属 M4 / M5，本包只提供 primitive；
 - execution-boundary 校验：M4 agent launch（cwd 绑定）与 cleanup / 半成品删除复用 `assertWorkspacePathSafe` / `validateWorkspacePath`，不另行实现 containment 判定；
-- operator 可见性：hook failed / timeout 经 `WorkspaceHookEventSink` callback 暴露，落地到 structured logging sink 由 M6 / 组合根装配（本包不依赖 observability）；
+- operator 可见性：hook failed / timeout 经 `WorkspaceHookEventSink` callback 暴露，structured logging sink 已由 apps/cli 生产组合根装配（本包不依赖 observability）；
 - 目录布局 / 净化规则调整属于跨包契约变更：附 Agent Note 并同步 `docs/conformance.md`。
 
 ## Known limitations
@@ -175,4 +175,4 @@ SPEC §17.2 允许当目标 workspace 路径已存在非目录对象时，“rep
 - **hook 完成判定用 `close`（stdio 关闭）而非 `exit`（进程退出）**：脚本本身秒退（退出码 0）但留下持有继承 stdout/stderr 的后台进程（如未重定向的 `daemon &`）时，`close` 被后台进程拖住，直到 `timeout_ms` 到期 SIGKILL 进程组，结果为 `hook_timeout` 而非 success（对 `after_create` 还会触发半成品清理）。此语义确定、有界（≤ timeout_ms）且与「孙进程不留孤儿」一致；确需 daemonize 的 hook 应自行重定向 stdio（如 `daemon >/dev/null 2>&1 &`）以免拖住 `close`。M4 / M5 operator 诊断「秒退脚本为何报 timeout」时先看这里；
 - hook 输出截断上限（捕获 1 MiB / 流、事件摘录 8 KiB）为诊断用途的实现约定常量，非 SPEC 规定值；
 - symlink 相关测试依赖 host 能力：不支持创建 symlink 的平台（如受限 Windows）上相关用例显式 skip（测试报告中可见，不静默 pass）；`removeWorkspace` 的 filesystem 删除失败（`status: "failed"`）路径在 root 运行时难以稳定触发（CAP_DAC_OVERRIDE 绕过权限位），由代码审查覆盖而非运行时用例；
-- M4（before_run / after_run 的实际调度与 agent launch cwd 绑定）与 M5（removeWorkspace 的 sweep / reconciliation 触发）接线随后续里程碑落地；端到端 conformance 已随 #30 收口（`src/config-integration.test.ts`：真实 `WORKFLOW.md` → resolved `ServiceConfig` → 本包公共 API → 真实临时 filesystem → 真实 `sh` hook 子进程，并在同一文件里守住 repo-wide 边界——运行期依赖 domain-only、运行期源码不 import config / orchestrator / agent / observability、不读 `WORKFLOW.md`、不复制 `deriveWorkspaceKey`）。
+- M4（before_run / after_run 的实际调度与 agent launch cwd 绑定）与 M5（removeWorkspace 的 sweep / reconciliation 触发）接线已落地；端到端 conformance 已随 #30 收口（`src/config-integration.test.ts`：真实 `WORKFLOW.md` → resolved `ServiceConfig` → 本包公共 API → 真实临时 filesystem → 真实 `sh` hook 子进程，并在同一文件里守住 repo-wide 边界——运行期依赖 domain-only、运行期源码不 import config / orchestrator / agent / observability、不读 `WORKFLOW.md`、不复制 `deriveWorkspaceKey`）。

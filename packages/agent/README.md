@@ -27,7 +27,7 @@ SPEC **§10 Agent Runner Protocol (Coding Agent Integration)** 与 **§12 Prompt
 | 建 thread | `thread/start` 的 params 接受 `cwd`、`approvalPolicy`、`sandbox`（`SandboxMode`）、`model`、`baseInstructions` 等可选覆盖；response 的 `thread.id` 就是 §4.1.6 的 `thread_id` |
 | 起 turn | `turn/start` 的 params 必填 `threadId` + `input`，可带 `cwd` / `approvalPolicy` / `sandboxPolicy`（`SandboxPolicy`）覆盖；response 的 `turn.id` 就是 `turn_id`，`session_id = composeSessionId(threadId, turnId)` |
 | turn 结束 | **本 baseline 没有 `turn/failed` / `turn/cancelled` notification method**。终止语义在 `turn/completed` 的 payload 里：`turn.status ∈ "completed" \| "interrupted" \| "failed" \| "inProgress"`，失败原因在 `turn.error`。因此"M4 只看 notification 方法名判断成败"在本基线是错的（SPEC §17.5 也要求按 targeted protocol 的实际状态判断） |
-| 用量 / 限流 | usage 走 `thread/tokenUsage/updated`，rate-limit 走 `RateLimitSnapshot` 一类 notification；本包只**抽取并转发快照**，delta 聚合归 M5 / M6 |
+| 用量 / 限流 | usage 走 `thread/tokenUsage/updated`，rate-limit 走 `RateLimitSnapshot` 一类 notification；本包只**抽取并转发快照**，delta 聚合已由 orchestrator 实现，observability 只读投影 |
 
 ### `codex.*` 配置到 wire 的映射
 
@@ -61,17 +61,17 @@ export type SandboxPolicy = { "type": "dangerFullAccess" }
 
 这三条表达式**只出现在文档里**，不构成代码契约：`packages/agent` 的结构性测试会断言 domain / config / agent 的运行期源码里不出现这些成员名或生成类型名。
 
-### Server request 与 headless policy（已定，实现随 M4.4）
+### Server request 与 headless policy（M4.4 已实现）
 
 pinned baseline 的 `ServerRequest` 联合包含：`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/tool/requestUserInput`、`item/permissions/requestApproval`、`item/tool/call`、`mcpServer/elicitation/request`、`account/chatgptAuthTokens/refresh`、`attestation/generate`，以及 legacy `applyPatchApproval` / `execCommandApproval`。
 
-headless worker 的确定策略（SPEC §10.5 允许 "fail the run according to its documented policy"；本小节就是那份文档，**M4.1 不实现**）：
+headless worker 的确定策略（SPEC §10.5 允许 "fail the run according to its documented policy"；本小节就是那份文档，M4.4 已实现）：
 
 - `approvalPolicy === "never"` 且 request 是可识别的 command / file-change approval → 返回 protocol-valid 批准，发 `approval_auto_approved` 事件；
 - 其余 approval-required request → typed `approval_required` 失败；
 - 真正需要人回答的 `item/tool/requestUserInput` → typed `turn_input_required` 失败；
 - 未实现 / 未广告的 `item/tool/call` → 返回 protocol-valid structured failure **并继续 session**，不悬挂 request；
-- 任何路径都不得无限等待 operator；provider-native tracker tools 不属 M4（§11.5 → M6+）。
+- 任何路径都不得无限等待 operator；provider-native tracker tools（§11.5）保持 deferred / optional extension，未随 M6 Core 实现。
 
 ## Transport 与 launch 内核（M4.2 / #38）
 
@@ -82,7 +82,7 @@ headless worker 的确定策略（SPEC §10.5 允许 "fail the run according to 
 
 错误面复用 M4.1 冻结的 `AgentError`，不新增码：`invalid_workspace_cwd`（保留 `WorkspaceError` 作为 `cause`）/ `launch_failed`（保留 spawn error 作为 `cause`）/ `response_timeout` / `response_error` / `port_exit` / `protocol_error`。
 
-env 面是**显式注入 `env` + 通用 `excludeEnvNames` 名单**（`excludeEnvNames` 只作用于继承自 `process.env` 的部分，显式 `env` 恒赢）：本包不知道任何 tracker provider 的 secret 变量名，哪些名字该从继承环境里剔除由调用方（组合根 / M5）决定。
+env 面是**显式注入 `env` + 通用 `excludeEnvNames` 名单**（`excludeEnvNames` 只作用于继承自 `process.env` 的部分，显式 `env` 恒赢）：本包不知道任何 tracker provider 的 secret 变量名，哪些名字该从继承环境里剔除由调用方（apps/cli 组合根）决定。
 
 验收用真实 fixture 子进程 `test-fixtures/echo-server.mjs`（由 `bash -lc` 启动，自行回报 `process.cwd()` / `argv` / `pid` / `$BASH_VERSION` / env），method 一律是虚构的 `test/*` —— **这个文件里出现真实 Codex method 就意味着分层被写穿了**。分层与备选见 [Agent Note](../../notes/accepted/architecture/2026-10-01-agent-transport-kernel-and-launch-boundary.md)。
 

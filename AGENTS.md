@@ -1,6 +1,6 @@
 # AGENTS.md — Standing Orders
 
-symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。M0–M4 已完成；**M5 Orchestrator Core 已完成**：authority 独占调度状态，loop 驱动 polling / dispatch / retry / reconciliation / shutdown；真实 WORKFLOW、tracker fixture、temp filesystem、WorkspaceManager 和 app-server subprocess 共同构成默认 CI 的 §17.4 Core Conformance。下一里程碑 M6 为 structured logging、status surface 与 CLI 装配；不宣称整个 SPEC 已完成。本文件只放 standing orders，详细契约见文末导航。
+symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。**M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance；当前 CLI host 已完成生产组件装配并可通过 executable 启动，提供 structured logging、只读 snapshot、live reload 与 signal / exit-code lifecycle。M7 §15 hardening 未开始；HTTP §13.7、provider-native tools §11.5、external Real Integration §17.8、durable recovery 与 SSH workers 保持 deferred / optional，snapshot acquisition timeout 未实现且不适用于本地同步 projector；不宣称整个 SPEC 已完成。本文件只放 standing orders，详细契约见文末导航。
 
 ## Command Matrix
 

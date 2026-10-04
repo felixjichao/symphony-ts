@@ -1,6 +1,6 @@
 # 架构
 
-> 当前 M1–M5 已实现：domain/config、tracker、workspace、agent 与 orchestrator core 均有默认 CI 可复跑的 Core Conformance。M5 的真实跨包入口为 `WORKFLOW.md → loadEffectiveWorkflow + tracker registry → OrchestratorLoop → WorkspaceManager / runAgentAttempt → fake app-server subprocess → events / outcome → retry / refresh / reconciliation / cleanup`。装配证据见 [testing.md](testing.md)，逐项范围见 [conformance.md](conformance.md)。M6.1 已实现 `packages/observability` 的同步只读 snapshot 输出与 unavailable；获取层 timeout 尚未实现，本地同步入口不适用。M6.2 已提供 structured logger、提交点事实事件与 `apps/cli` 日志接线 helpers（真实 subprocess 验证）；M6.3 已完成静态 initial effective runtime CLI host 与 bin executable 契约（真实子进程覆盖）；live reload 与 exit-code matrix 归 M6.4–M6.5，HTTP/dashboard 为可选扩展。
+> 当前 **M0–M6 Core 已完成**，M7 §15 hardening 未开始。当前 executable CLI host 已完成 config / tracker / workspace / agent / orchestrator / observability 的生产组件装配，提供 structured logging、同步只读 snapshot、live reload / EffectiveRuntime 与 signal / exit-code lifecycle；默认 CI 的 Core Conformance 包含真实 WORKFLOW、本地 tracker fixture、temp filesystem 与 app-server subprocess。装配证据见 [testing.md](testing.md)，逐项范围及 M6 完成验收见 [conformance.md](conformance.md)。HTTP §13.7 / dashboard、provider-native tools §11.5、durable recovery 与 SSH workers 为 deferred / optional extensions；external Real Integration §17.8 未验证。snapshot acquisition timeout 尚未实现且不适用于本地同步 projector。
 
 ## 产品模型
 
