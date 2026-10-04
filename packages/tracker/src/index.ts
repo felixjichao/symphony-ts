@@ -81,3 +81,21 @@ export type {
 export { createGitHubIssueTransport } from "./github/transport";
 export type { GitHubFetchImpl, GitHubFetchResponse, GitHubIssueTransportOptions } from "./github/transport";
 export { normalizeGitHubIssue } from "./github/normalize";
+
+// --- GitHub Delivery Primitives (SPEC §11.5 / MVP.3) -------------------------
+export {
+  GitHubDeliveryService,
+  DefaultGhRunner,
+  classifyGhError,
+  sanitizeCredentials,
+  type EnsurePrOptions,
+  type GhExecOptions,
+  type GhExecResult,
+  type GhRunner,
+  type LandPrOptions,
+  type LandPrResult,
+  type PrChecksReport,
+  type ReadChecksOptions,
+  type ReadPrOptions,
+  type VerifyMergedResult,
+} from "./github/delivery";

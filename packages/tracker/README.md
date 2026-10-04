@@ -39,6 +39,18 @@ const snapshots = await adapter.fetchIssuesByIds(["opaque-dispatch-id"]);
 - 失败以 `TrackerError` 抛出；`fetchIssuesByIds` 中"已不在配置 scope 内的 ID 被省略"
   是 provider adapter 的责任（orchestrator 视省略为"不再可见"，不伪造 state）。
 
+### GitHub Delivery Primitives（§11.5 / MVP.3）
+
+提供独立于 tracker read kernel 的 GitHub 交付原语与自动合并能力（`GitHubDeliveryService`）：
+
+- `ensurePr(context, options)`：幂等创建或精确复用 PR。以机器可读 marker（`<!-- symphony-delivery-marker: ... -->`）与 `Fixes` 关联做所有权校验，拒绝外国 PR、歧义候选与 closed-unmerged。
+- `readPr(context, options)`：读取 PR 详情并复验所有权。
+- `readChecks(context, options)`：拉取绑定当前 head SHA 的 required 与 current checks，执行严格 CI 策略判定。
+- `diagnoseFailedChecks(report)`：产出脱敏的失败/等待检查可行动诊断摘要。
+- `landPr(context, options)`：显式 opt-in（`--opt-in`）下验证 PR open、non-draft、mergeable 与 checks 通过，使用服务端 `--match-head-commit` 校验执行 squash merge，并在合并后重读事实确认最终 `MERGED` 状态。
+- `verifyMerged(context, options)`：校验 PR 是否已合入并提取 merge commit SHA。
+- 安全边界：通过 `DefaultGhRunner` 执行 `gh` 命令，严格脱敏 Token/OAuth/URL 凭据，有界超时并终止子进程树，兼容 `gh pr checks` 退出码 8。
+
 ### Adapter profile（§11.2）
 
 `TrackerAdapterProfile` 声明一个 `tracker.kind` 拥有的全部配置语义：

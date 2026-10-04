@@ -67,3 +67,26 @@ export type {
   ObservabilityRetryRow, SnapshotClock, SnapshotTokens, SnapshotValue, SnapshotResult,
 } from "./observability";
 export type { StructuredLogEvent } from "./logging";
+
+export type {
+  CheckConclusion,
+  CheckState,
+  ChecksEvaluationResult,
+  ChecksSummaryStatus,
+  DeliveryContext,
+  DeliveryErrorCode,
+  DeliveryErrorOptions,
+  PrCheck,
+  PrMergeability,
+  PrOwnershipMarker,
+  PrRecord,
+  PrState,
+} from "./delivery";
+export {
+  DeliveryError,
+  evaluateChecksAutoMergePolicy,
+  formatPrBody,
+  parsePrOwnershipMarker,
+  serializePrOwnershipMarker,
+  validatePrOwnership,
+} from "./delivery";
