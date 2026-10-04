@@ -105,6 +105,6 @@ export type {
 } from "./delivery/git-gh-runner";
 
 export { runDeliverySkill } from "./delivery/delivery-skill-runner";
-export type { RunDeliverySkillOptions } from "./delivery/delivery-skill-runner";
+export type { DeliveryStateStorage, RunDeliverySkillOptions } from "./delivery/delivery-skill-runner";
 
 

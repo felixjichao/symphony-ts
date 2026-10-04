@@ -14,6 +14,10 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
     return this.runProcess("gh", args, cwd, timeoutMs);
   }
 
+  async exec(command: string, cwd: string, timeoutMs = 60_000): Promise<DeliverySubprocessResult> {
+    return this.runProcess("/bin/sh", ["-c", command], cwd, timeoutMs);
+  }
+
   private runProcess(
     command: string,
     args: readonly string[],

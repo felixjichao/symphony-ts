@@ -155,13 +155,20 @@ export interface CiPolicyEvaluation {
   readonly pendingChecks: readonly CiCheckItem[];
 }
 
+export interface EvaluateCiChecksOptions {
+  readonly requiredChecks?: readonly string[] | undefined;
+}
+
 /**
  * 评估 CI checks 是否满足自动合入（squash merge）策略：
- * 1. 存在 required checks 时：所有 required checks 必须成功，且所有当前观测到的 checks 也必须成功。
+ * 1. 存在 required checks 时：所有 required checks 必须存在且成功，且所有当前观测到的 checks 也必须为 success。
  * 2. 不存在 required checks 时：至少存在 1 项 check，且所有 check 必须为 success。
- * 3. 0 个 checks、存在 pending checks、或存在任何失败/取消/非成功的 checks 均拒绝合入。
+ * 3. 0 个 checks、存在 pending checks、或存在任何 neutral/skipped/失败/取消/非成功 checks 均拒绝合入。
  */
-export function evaluateCiChecksPolicy(checks: readonly CiCheckItem[]): CiPolicyEvaluation {
+export function evaluateCiChecksPolicy(
+  checks: readonly CiCheckItem[],
+  options?: EvaluateCiChecksOptions,
+): CiPolicyEvaluation {
   if (checks.length === 0) {
     return {
       canLand: false,
@@ -194,42 +201,53 @@ export function evaluateCiChecksPolicy(checks: readonly CiCheckItem[]): CiPolicy
     };
   }
 
-  const requiredChecks = checks.filter((c) => c.isRequired);
-  if (requiredChecks.length > 0) {
-    const allRequiredSuccess = requiredChecks.every((c) => c.status === "success");
-    const allObservedSuccess = checks.every((c) => c.status === "success" || c.status === "neutral");
-    if (allRequiredSuccess && allObservedSuccess) {
+  // 1. 显式配置的 requiredChecks 检查
+  if (options?.requiredChecks && options.requiredChecks.length > 0) {
+    const missingRequired = options.requiredChecks.filter(
+      (reqName) => !checks.some((c) => c.name === reqName && c.status === "success"),
+    );
+    if (missingRequired.length > 0) {
       return {
-        canLand: true,
-        reason: "all_required_and_observed_checks_succeeded",
+        canLand: false,
+        reason: `missing_required_checks (${missingRequired.join(", ")})`,
         failedChecks: [],
         pendingChecks: [],
       };
     }
-    return {
-      canLand: false,
-      reason: "required_checks_not_all_successful",
-      failedChecks,
-      pendingChecks,
-    };
   }
 
-  // 无显式 required 规则：所有观测到的 checks 必须都是 success
-  const allSuccess = checks.every((c) => c.status === "success");
-  if (allSuccess) {
+  // 2. check item 自身标记为 isRequired 的检查
+  const requiredChecks = checks.filter((c) => c.isRequired);
+  if (requiredChecks.length > 0) {
+    const allRequiredSuccess = requiredChecks.every((c) => c.status === "success");
+    if (!allRequiredSuccess) {
+      return {
+        canLand: false,
+        reason: "required_checks_not_all_successful",
+        failedChecks: [],
+        pendingChecks: [],
+      };
+    }
+  }
+
+  // 3. 所有 observed checks 必须严格为 success（不允许 neutral 或 skipped 绕过）
+  const allObservedSuccess = checks.every((c) => c.status === "success");
+  if (!allObservedSuccess) {
+    const nonSuccess = checks.filter((c) => c.status !== "success");
     return {
-      canLand: true,
-      reason: "all_observed_checks_succeeded",
+      canLand: false,
+      reason: `non_successful_checks_present (${nonSuccess.map((c) => `${c.name}:${c.status}`).join(", ")})`,
       failedChecks: [],
       pendingChecks: [],
     };
   }
 
+  const hasRequired = (options?.requiredChecks && options.requiredChecks.length > 0) || requiredChecks.length > 0;
   return {
-    canLand: false,
-    reason: "non_successful_checks_present",
-    failedChecks,
-    pendingChecks,
+    canLand: true,
+    reason: hasRequired ? "all_required_and_observed_checks_succeeded" : "all_observed_checks_succeeded",
+    failedChecks: [],
+    pendingChecks: [],
   };
 }
 
@@ -239,7 +257,8 @@ export type DeliveryHandoffReason =
   | "ci_wait_timeout"
   | "unmergeable"
   | "manual_intervention_required"
-  | "foreign_pr_conflict";
+  | "foreign_pr_conflict"
+  | "reconciliation_needed";
 
 export interface DeliveryHandoff {
   readonly reason: DeliveryHandoffReason;
@@ -255,6 +274,19 @@ export interface DeliveryHandoff {
   readonly spentWaitSeconds: number;
   readonly maxWaitSeconds: number;
   readonly readyLabel: string;
+  readonly readyLabelRemoved?: boolean | undefined;
+  readonly commentPosted?: boolean | undefined;
+}
+
+export interface PersistedDeliveryState {
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly workspaceKey: string;
+  readonly spentRepairs: number;
+  readonly spentWaitSeconds: number;
+  readonly isPaused: boolean;
+  readonly pauseReason?: string | undefined;
+  readonly lastUpdated: string;
 }
 
 /**
@@ -262,7 +294,7 @@ export interface DeliveryHandoff {
  *
  * 核心设计决策（用户确认）：
  * - GitHub issue 保持 open，不误关任务；
- * - 移除 symphony-ready 标签，停止 continuation 与后续派发；
+ * - 尝试移除 symphony-ready 标签，停止 continuation 与后续派发；若移除失败，诚实记录告警；
  * - 明确列出已消耗预算与恢复指南，由 Operator 处理后重新加回标签。
  */
 export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string {
@@ -272,6 +304,16 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
       ? `#${handoff.prNumber}`
       : "无 (尚未创建)";
   const headDisplay = handoff.headSha ? `\`${handoff.headSha.slice(0, 10)}\`` : "未知";
+
+  const labelStatusText =
+    handoff.readyLabelRemoved === false
+      ? `⚠️ **从 Issue #${handoff.issueNumber} 移除 \`${handoff.readyLabel}\` 标签失败**（可能缺乏写权限或 GitHub API 异常），**自动停止派发未成功**，请 Operator 立即人工介入移除标签！`
+      : `已从 Issue #${handoff.issueNumber} 移除 \`${handoff.readyLabel}\` 标签，**已自动停止当前任务派发与 Continuation 循环**。`;
+
+  const commentStatusText =
+    handoff.commentPosted === false
+      ? `\n- **评论状态**: ⚠️ 交接评论发表失败，请通过命令行日志核对原因。`
+      : "";
 
   return `## 🚨 Symphony Delivery Handoff Report
 
@@ -293,7 +335,7 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
 
 ### 3. 调度控制与交接说明
 - **Issue 状态保持**: Open（未完成，绝不误关闭）
-- **标签操作**: 已从 Issue #${handoff.issueNumber} 移除 \`${handoff.readyLabel}\` 标签，**已自动停止当前任务派发与 Continuation 循环**。
+- **标签操作**: ${labelStatusText}${commentStatusText}
 - **恢复操作指引**:
   1. 人工排查上述详情或 CI 日志中的 blocker / 失败项；
   2. 修复问题后，在 GitHub Issue #${handoff.issueNumber} 上重新添加 \`${handoff.readyLabel}\` 标签以恢复 Symphony 自动调度。
@@ -307,6 +349,7 @@ export interface DeliverySkillConfig {
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly validationCommand?: string | undefined;
+  readonly repairCommand?: string | undefined;
   readonly maxRepairAttempts?: number | undefined;
   readonly maxWaitSeconds?: number | undefined;
   readonly pollIntervalSeconds?: number | undefined;
@@ -315,6 +358,8 @@ export interface DeliverySkillConfig {
   readonly commitMessage?: string | undefined;
   readonly prTitle?: string | undefined;
   readonly optInLand?: boolean | undefined;
+  readonly resume?: boolean | undefined;
+  readonly requiredChecks?: readonly string[] | undefined;
 }
 
 export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";

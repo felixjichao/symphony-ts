@@ -78,7 +78,9 @@ export type {
   DeliverySkillConfig,
   DeliverySkillResult,
   DeliverySkillStatus,
+  EvaluateCiChecksOptions,
   FormatPrBodyOptions,
+  PersistedDeliveryState,
   PrOwnershipMarker,
 } from "./delivery";
 export {

@@ -7,6 +7,7 @@ export interface DeliverySubprocessResult {
 export interface DeliveryGitGhRunner {
   git(args: readonly string[], cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult>;
   gh(args: readonly string[], cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult>;
+  exec(command: string, cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult>;
 }
 
 const TOKEN_PATTERNS = [

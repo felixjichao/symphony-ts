@@ -138,11 +138,30 @@ describe("Delivery Domain Contracts", () => {
       const checks: CiCheckItem[] = [
         { name: "build", status: "success", conclusion: "success", detailsUrl: null, isRequired: true },
         { name: "test", status: "success", conclusion: "success", detailsUrl: null, isRequired: true },
-        { name: "optional-doc", status: "neutral", conclusion: "neutral", detailsUrl: null, isRequired: false },
+        { name: "doc", status: "success", conclusion: "success", detailsUrl: null, isRequired: false },
       ];
       const res = evaluateCiChecksPolicy(checks);
       expect(res.canLand).toBe(true);
       expect(res.reason).toBe("all_required_and_observed_checks_succeeded");
+    });
+
+    it("rejects when non-successful (neutral or skipped) checks are present", () => {
+      const checks: CiCheckItem[] = [
+        { name: "build", status: "success", conclusion: "success", detailsUrl: null, isRequired: true },
+        { name: "optional-doc", status: "neutral", conclusion: "neutral", detailsUrl: null, isRequired: false },
+      ];
+      const res = evaluateCiChecksPolicy(checks);
+      expect(res.canLand).toBe(false);
+      expect(res.reason).toContain("non_successful_checks_present");
+    });
+
+    it("rejects when configured required check is missing", () => {
+      const checks: CiCheckItem[] = [
+        { name: "build", status: "success", conclusion: "success", detailsUrl: null, isRequired: false },
+      ];
+      const res = evaluateCiChecksPolicy(checks, { requiredChecks: ["gate"] });
+      expect(res.canLand).toBe(false);
+      expect(res.reason).toContain("missing_required_checks (gate)");
     });
   });
 

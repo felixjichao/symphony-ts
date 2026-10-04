@@ -5,9 +5,9 @@ Status: accepted
 
 Coding Agent 在完成代码修改与本地测试后，需要标准、可复用的流程推进 Pull Request 创建、CI 检查监控与自动合入（SPEC §11.5 / MVP.2）：
 1. **交付策略归属**：Orchestrator Core 必须保持调度与生命周期的最小职责，不应感知 PR、CI 或分支合并的业务逻辑；交付闭环策略应当归入 Agent Tooling 与 WORKFLOW 扩展层。
-2. **PR 归属与复用**：在重入运行或重试中，必须能够准确识别由当前工单/工作区创建的 PR，严禁重复创建重复 PR，严禁篡改或认领非当前工单所有的外部 PR。
-3. **CI 监控与有限修复循环**：CI 检查必须严格绑定最新 HEAD commit SHA 评估。当 CI 失败时，需提取失败上下文进入修复循环；但修复循环不能无限重试，必须受到确定性预算（`maxRepairAttempts`）与超时（`maxWaitSeconds`）约束。
-4. **预算耗尽后的调度控制（关键用户确认决策）**：当预算耗尽或遭遇 Blocker 时，若仅输出文本而不改变调度状态，Orchestrator 调度器会不断触发重派重试；若直接关闭工单，则会误报任务完成；若在 Core 中新建暂停状态机，则违背架构边界。
+2. **PR 归属与复用**：在重入运行或重试中，必须能够准确识别由当前工单/工作区创建的 PR，严禁重复创建重复 PR，严禁篡改或认领非当前工单所有的外部 PR（严格校验所属标记，拒绝以普通关闭引用绕过）。
+3. **CI 监控与有限修复循环**：CI 检查必须严格绑定最新 HEAD commit SHA 评估，使用跨版本兼容的 `gh pr view --json statusCheckRollup,headRefOid,mergeable,state` 读取结构化状态。当 CI 失败时，需提取失败上下文进入修复循环；但修复循环不能空转，未注入修复手段时必须立即停派，且受到持久化预算（`maxRepairAttempts`）与实际墙上时钟超时（`maxWaitSeconds`）约束。
+4. **预算耗尽后的调度控制（关键用户确认决策）**：当预算耗尽或遭遇 Blocker 时，若仅输出文本而不改变调度状态，Orchestrator 调度器会不断触发重派重试；若直接关闭工单，则会误报任务完成；若在 Core 中新建暂停状态机，则违背架构边界。必须在移除标签后真实重读标签状态核验，记录真实停派结果。
 
 ## Decision
 
@@ -15,25 +15,30 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 
 1. **领域模型与所属校验 (`@symphony/domain`)**：
    - `DeliveryContext`：定义交付上下文（仓库、Issue 编号、WorkspaceKey、Head/Base 分支）。
-   - `PrOwnershipMarker`：以 HTML 注释规范 `<!-- symphony-delivery-marker: {...} -->` 嵌入 PR 正文底部，搭配 `Fixes #<N>` 首行关联，提供机器可读的归属校验。
-   - `evaluateCiChecksPolicy`：纯函数评估 CI 策略。要求所有 required checks 和观测到的 checks 均成功；0 checks、pending、failed 均拒绝合入。
-   - `formatDeliveryHandoffMarkdown`：格式化 Operator 可见交接报告。
+   - `PrOwnershipMarker`：以 HTML 注释规范 `<!-- symphony-delivery-marker: {...} -->` 嵌入 PR 正文底部，提供机器可读的归属校验。严禁使用普通文本关键字绕过该标记。
+   - `evaluateCiChecksPolicy`：纯函数评估 CI 策略。要求所有 required checks 成功且所有 observed checks 也必须严格为 success（不允许 neutral/skipped 绕过）；0 checks、pending、failed 均拒绝合入。
+   - `formatDeliveryHandoffMarkdown`：格式化 Operator 可见交接报告，诚实展示标签移除与评论发表结果。
+   - `PersistedDeliveryState`：定义跨尝试预算与暂停状态持久化契约。
 
 2. **交付闭环执行器 (`@symphony/agent`)**：
-   - `runDeliverySkill`：按 `inspect → validate → commit → push → ensure PR → inspect CI → repair loop → land` 协议执行。
-   - 依赖注入接口 `DeliveryGitGhRunner`：定义 safe git/gh subprocess 契约，与平台解耦，并提供 `sanitizeCredentials` 防止 token 泄漏。
-   - 约束：`packages/agent` 源码内部严格遵循结构边界，不直接 import `node:child_process` 的 `spawn`，由 CLI 宿主或调用方注入执行器。
+   - `runDeliverySkill`：按 `pre-mutation inspection → validate → commit → push → ensure PR → inspect CI → repair loop → opt-in land` 协议执行。
+   - Pre-mutation 检查：在任何 Git/GitHub mutation 之前核对当前分支、origin 仓库、Issue 状态以及 `--state all` 的现有 PR（避免污染外来分支或重复交付已合并工单）。
+   - 项目验证真实执行：通过 `runner.exec(validationCommand)` 真正执行门禁命令，失败时禁止提交、推送或合入。
+   - 依赖注入接口 `DeliveryGitGhRunner`：定义 safe git/gh/exec subprocess 契约，与平台解耦，并提供 `sanitizeCredentials` 防止 token 泄漏。
+   - 严格修复循环：CI 失败时，若未配置 `repairFn` 或 `repairCommand`，直接输出诊断并停止派发；修复后必须重新验证并检查生成了新的 HEAD SHA。
+   - 跨尝试预算持久化：将执行状态保存至 `.symphony/delivery-state.json`，使用真实墙上时钟截止时间，中断或重启后未经 `--resume` 明确授权拒绝自动重派。
 
 3. **预算耗尽停派决策（用户确认）**：
    - 当修复次数耗尽（`ci_failed_max_repairs`）或 CI 等待超时（`ci_wait_timeout`）时：
      - 保持 GitHub Issue 处于 **Open** 状态（绝不误关闭）；
-     - 自动调用 `gh issue edit <issueNumber> --remove-label symphony-ready` 移除就绪标签；
+     - 自动调用 `gh issue edit <issueNumber> --remove-label symphony-ready` 移除就绪标签，并重新查询 Issue 标签事实核验；
      - Orchestrator 的 label 路由立即将该工单判定为不可调度，**停止 continuation 循环与未来派发**；
+     - 若移除标签失败，CLI 返回非零退出码并在报告中明确标警；
      - 在 Issue/PR 发表交接报告，说明已耗预算与人工排查后的恢复指引（加回标签恢复派发）。
 
 4. **CLI 工具集成与 Skill 标准文档**：
-   - `apps/cli` 提供 `symphony delivery-skill [run|halt]` 命令。
-   - `skills/github-delivery/SKILL.md` 提供完整步骤、约定规范与参考样例。
+   - `apps/cli` 提供 `symphony delivery-skill [run|halt]` 命令，支持 `--opt-in` 显式合入授权、`--repair-cmd`、`--resume` 与安全整数校验。
+   - `skills/github-delivery/SKILL.md` 提供完整步骤、约定规范、WORKFLOW.md 配置与 bootstrap 参考样例。
 
 ## Alternatives considered
 
@@ -48,4 +53,5 @@ Coding Agent 在完成代码修改与本地测试后，需要标准、可复用�
 
 - Symphony 获得了从代码验证到 PR Squash Merge 的可复用 GitHub 交付能力。
 - 预算耗尽或 Blocker 发生时具备清晰的 Operator-visible 输出与自动停止派发保障，防止死循环与算力浪费。
+- 彻底解决了 PR 伪造所有权、CI 版本兼容性、命令空转与未授权合入等安全隐患。
 - 符合 SPEC §11.5 / MVP.2 要求与 AGENTS.md 依赖方向规范。
