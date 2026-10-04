@@ -47,10 +47,17 @@ for every subcommand.
 | `tracker.provider.repo` | `<owner/repo>` | the target repository, e.g. `acme/widget` |
 | `tracker.provider.token` | `$GITHUB_TOKEN` | keep as-is, or point at your own env var |
 | `hooks.after_create` | `https://github.com/<owner/repo>.git` | the target clone URL |
+| prompt `--base` | `$SYMPHONY_DELIVERY_BASE` (default: the repo's default branch) | set only to override the discovered base branch |
+| prompt `--validate` | `$SYMPHONY_DELIVERY_VALIDATE` (default `npm run gate`) | the repository's own validation command |
+| prompt `--repair-cmd` | `$SYMPHONY_DELIVERY_REPAIR_CMD` (default `npm run ci:fix`) | a command that repairs the failure described in `SYMPHONY_CI_FAILURE_DIAGNOSTICS` |
 
-Everything else is a reasonable default. Adjust `polling.interval_ms`,
-`agent.max_turns`, `agent.max_concurrent_agents`, and the `codex.*` values to
-match the repository.
+Everything else is a reasonable default. The `--base`, `--validate`, and
+`--repair-cmd` values can be overridden through the `SYMPHONY_DELIVERY_*`
+environment variables shown above, so you usually do not need to edit the prompt.
+`--repair-cmd` must exit non-zero when it could not repair; the delivery skill
+never invents an empty repair and re-checks CI only after a new commit/SHA is
+produced. Adjust `polling.interval_ms`, `agent.max_turns`,
+`agent.max_concurrent_agents`, and the `codex.*` values to match the repository.
 
 ## Start / run / stop
 
@@ -67,6 +74,11 @@ GITHUB_TOKEN=... symphony /path/to/WORKFLOW.md
 - **Stop** — send `SIGINT` / `SIGTERM` to the host for a graceful shutdown. To
   pause a single issue without stopping the host, remove its `symphony-ready`
   label; the delivery skill does this itself when it hands a blocker back.
+- **Recover** — after a handoff, fix the root cause and re-add `symphony-ready`.
+  The delivery command detects the paused state and resumes. Note that resume
+  keeps the already-spent repair count and wait deadline; a budget-exhausted
+  handoff needs an operator to start a new budget round first. See
+  [docs/github-delivery-workflow.md](../../docs/github-delivery-workflow.md#stop-and-exit-paths).
 
 ## Safety
 

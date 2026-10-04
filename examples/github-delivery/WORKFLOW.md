@@ -75,14 +75,30 @@ Work autonomously to completion. A human does not merge for you.
    delivery_branch="$(git branch --show-current)"
    delivery_key="${delivery_branch#symphony/}"
    test -n "$delivery_key" && test "$delivery_branch" != "$delivery_key"
+   base_branch="${SYMPHONY_DELIVERY_BASE:-$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')}"
+   base_branch="${base_branch:-main}"
+   # A previous CI blocker pauses delivery; continue it instead of refusing to run.
+   resume_flag=""
+   if [ -f .symphony/delivery-state.json ] && grep -q '"isPaused"[[:space:]]*:[[:space:]]*true' .symphony/delivery-state.json; then
+     resume_flag="--resume"
+   fi
    symphony delivery-skill run \
      --repo {{ issue.native_ref.repo }} \
      --issue {{ issue.native_ref.number }} \
      --workspace-key "$delivery_key" \
      --head "$delivery_branch" \
-     --validate "npm run gate" \
+     --base "$base_branch" \
+     --validate "${SYMPHONY_DELIVERY_VALIDATE:-npm run gate}" \
+     --repair-cmd "${SYMPHONY_DELIVERY_REPAIR_CMD:-npm run ci:fix}" \
+     $resume_flag \
      --opt-in
    ```
+
+   `--repair-cmd` is the repair entry: on a CI failure the skill runs it with the
+   failure logs in `SYMPHONY_CI_FAILURE_DIAGNOSTICS`, re-runs `--validate`,
+   commits, pushes, and re-checks CI — up to `--max-repairs` attempts. `--base`,
+   `--validate`, and `--repair-cmd` are repo-specific; override them with the
+   `SYMPHONY_DELIVERY_*` environment variables or edit this command.
 
    The `--opt-in` flag is what authorizes the automatic squash merge, and it only
    applies to the pull request this workspace opened for the current issue.

@@ -59,6 +59,9 @@ it("loads the shipped profile, resolves it as a GitHub service config, and rende
     // AC-2: the prompt drives unattended delivery and must not ask a human to merge.
     expect(prompt).toContain("delivery-skill run");
     expect(prompt).toContain("--opt-in");
+    expect(prompt).toContain("--repair-cmd");
+    expect(prompt).toContain("--resume");
+    expect(prompt).toContain("delivery-state.json");
     expect(prompt).toContain("--repo example-org/example-repo");
     expect(prompt).toContain("--issue 80");
     expect(prompt).not.toMatch(/manual merge|please merge|review and merge/i);
@@ -119,16 +122,31 @@ it("documents a bootstrap hook that populates the workspace and a delivery comma
     expect(script).toBeDefined();
     const argvFile = path.join(temp, "argv");
     const capture = `symphony() { printf '%s\\n' "$@" > ${quote(argvFile)}; }\n`;
-    execFileSync("sh", ["-c", capture + script], { cwd: workspace });
-    const argv = fs.readFileSync(argvFile, "utf8").trimEnd().split("\n");
-    expect(argv.shift()).toBe("delivery-skill");
-    const parsed = parseDeliverySkillArgs(argv);
+    const runScript = () => {
+      execFileSync("sh", ["-c", capture + script], { cwd: workspace });
+      const argv = fs.readFileSync(argvFile, "utf8").trimEnd().split("\n");
+      expect(argv.shift()).toBe("delivery-skill");
+      return parseDeliverySkillArgs(argv);
+    };
+
+    const parsed = runScript();
     expect(parsed.headBranch).toBe("symphony/GH-80");
     expect(parsed.workspaceKey).toBe("GH-80");
     expect(parsed.repo).toBe("example-org/example-repo");
     expect(parsed.issueNumber).toBe(80);
     expect(parsed.validationCommand).toBe("npm run gate");
+    expect(parsed.repairCommand).toBe("npm run ci:fix");
+    expect(parsed.baseBranch).toBe("main");
     expect(parsed.optInLand).toBe(true);
+    expect(parsed.resume).toBe(false);
+
+    // A paused delivery (previous CI blocker) makes the same command resume.
+    fs.mkdirSync(path.join(workspace, ".symphony"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace, ".symphony/delivery-state.json"),
+      JSON.stringify({ isPaused: true }),
+    );
+    expect(runScript().resume).toBe(true);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

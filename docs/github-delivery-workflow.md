@@ -29,7 +29,7 @@ new orchestrator state or second state machine.
 | Discover dispatchable issues | Symphony (tracker polling) | `open` + `required_labels` (`symphony-ready`) |
 | Provision per-issue workspace | Symphony (`@symphony/workspace` hook) | `after_create` runs `symphony repo-bootstrap` |
 | Implement + run project validation | Codex | Local gate such as `npm run gate` |
-| Commit / push / create-or-reuse PR / read CI / repair / land | Codex (delivery skill) | `symphony delivery-skill run ... --opt-in` |
+| Commit / push / create-or-reuse PR / read CI / repair / land | Codex (delivery skill) | `symphony delivery-skill run ... --repair-cmd ... --opt-in` |
 | Auto squash-merge decision | Delivery skill, using `@symphony/domain` policy | Opt-in only; ownership-checked |
 | Issue closed | GitHub | PR body `Fixes #N` closes the issue on merge |
 | Observe terminal issue + cleanup | Symphony (tracker refresh + reconciliation) | Existing path; no new state machine |
@@ -64,7 +64,7 @@ open issue + symphony-ready
   → commit + push
   → create or reuse PR (ownership marker + Fixes #N)
   → CI inspect
-       ├─ failed → bounded repair → push again
+       ├─ failed → run --repair-cmd → re-validate → push again (bounded)
        └─ green + mergeable
   → squash merge (opt-in only)
   → Fixes #N closes the issue
@@ -88,10 +88,51 @@ The loop has exactly three outcomes:
    existing Symphony retry policy handles worker-level failures. A resumed run
    continues from GitHub's current facts rather than a remembered session.
 3. **Product blocker / handoff** — the requirements are ambiguous, the change is
-   destructive, the change cannot be merged safely, or a budget is exhausted. The
-   skill must not guess: it keeps the issue open, removes `symphony-ready` to stop
-   further dispatch, and posts an operator-visible handoff report. A human then
-   fixes the blocker and may re-add the label to resume.
+   destructive, the change cannot be merged safely, or a budget (repair attempts,
+   CI wait) is exhausted. The skill must not guess: it keeps the issue open,
+   removes `symphony-ready` to stop further dispatch, and posts an
+   operator-visible handoff report.
+
+### Repairing a CI failure
+
+The delivery skill does not guess its way through a failing build. On a CI
+failure it fetches the failure diagnostics, runs the configured repair entry
+(`--repair-cmd`, with the logs in `SYMPHONY_CI_FAILURE_DIAGNOSTICS`), re-runs
+`--validate`, commits and pushes the new changes, and only then re-checks CI.
+This repeats up to `--max-repairs` times. A repair command that exits non-zero,
+produces no working-tree changes, or pushes no new SHA ends the loop with a
+handoff instead of looping forever. The reference profile supplies the repair
+entry through `$SYMPHONY_DELIVERY_REPAIR_CMD` (default `npm run ci:fix`), so a
+repository that wants unattended repair must provide that command.
+
+### Recovering from a handoff
+
+A handoff is explicit, not a dead end:
+
+1. Fix the root cause the handoff describes.
+2. Re-add the `symphony-ready` label so Symphony dispatches the issue again:
+
+   ```sh
+   gh issue edit <number> --repo <owner/repo> --add-label symphony-ready
+   ```
+
+3. The delivery command detects the persisted paused state
+   (`<workspace>/.symphony/delivery-state.json` with `"isPaused": true`) and passes
+   `--resume` automatically, so the same workspace continues rather than refusing
+   to run.
+
+`--resume` deliberately preserves the already-spent repair count and the absolute
+CI-wait deadline — it does not grant a new budget, so repeatedly resuming cannot
+extend an exhausted budget. When the handoff was `ci_failed_max_repairs` or a
+wait timeout, an operator must explicitly start a new budget round by clearing
+the persisted state before re-adding the label:
+
+```sh
+rm <workspace>/.symphony/delivery-state.json
+```
+
+Treat that deletion as an operator action: it is the authorization for a fresh,
+bounded attempt, not something the agent should do on its own.
 
 Graceful host shutdown uses `SIGINT` / `SIGTERM`; the host closes workers and
 resources before exiting.
