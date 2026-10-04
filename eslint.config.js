@@ -27,6 +27,18 @@ export default tseslint.config(
     },
   },
   {
+    // dogfood 目标仓库模板：会被复制到隔离测试仓库的 Node ESM 脚本。
+    files: ["examples/github-delivery-dogfood/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        console: "readonly",
+        process: "readonly",
+      },
+    },
+  },
+  {
     // 包内测试 fixture subprocess（不进 tsc，由 eslint 守住基本卫生）：Node ESM。
     files: ["packages/*/test-fixtures/**/*.mjs", "apps/*/test-fixtures/**/*.mjs"],
     languageOptions: {

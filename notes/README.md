@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-10-04-github-delivery-dogfood.md](accepted/architecture/2026-10-04-github-delivery-dogfood.md) — GitHub Delivery 真实集成 dogfood harness（SPEC §17.8 Real Integration，NEST-94 / #83）：opt-in `symphony dogfood github` 子命令驱动真实 Symphony host / 真实 Codex / 真实 GitHub 闭环（happy / repair / reuse / foreign / conflict），harness 只准备场景、注入受控故障与读回断言，交付动作全部走既有真实入口；缺 `--yes` 或凭据显式 SKIP，默认 gate 保持 credential-free；隔离目标模板与脱敏证据 manifest 落在 workspace 之外。
 - [accepted/architecture/2026-10-04-codex-delivery-skill.md](accepted/architecture/2026-10-04-codex-delivery-skill.md) — Codex 交付与自动合入工作流 Skill（SPEC §11.5 / MVP.2，NEST-91 / #80）：`runDeliverySkill` 与 `symphony delivery-skill` CLI 支撑代码提交、分支推送、PR 创建与复用（`<!-- symphony-delivery-marker -->`）、HEAD 检查评估（复用 MVP.3 canonical `evaluateChecksAutoMergePolicy`）、有限修复循环（`maxRepairAttempts`）与自动 Squash Merge。落实用户确认决策：预算耗尽或 Blocker 时保持 Issue Open、自动移除 `symphony-ready` 标签停止调度派发，并输出 Operator 可见交接报告。
 - [accepted/architecture/2026-10-04-github-delivery-mvp.md](accepted/architecture/2026-10-04-github-delivery-mvp.md) — GitHub Delivery MVP.3 交付原语与自动合并能力（SPEC §11.5 / §17.3，NEST-92 / #81）：`GitHubDeliveryService` 与 `symphony pr` CLI 支撑创建/复用 PR（精确保留 Symphony 所有权 marker 与 closing 关联、拒绝外国 PR / 歧义候选 / closed-unmerged）、基于 head commit SHA 的 required 与 current checks 判定（确认用户决策：有 required 严格全 green，无 required 至少 1 条严格全 green，其余均拒绝）、严格 squash 自动合并（显式 opt-in、服务端 `--match-head-commit` 校验、合并后重读事实验证 final merged state）、全链路凭据脱敏（URL/Token/Headers 零泄露）与子进程超时孤儿子树清理。
 
