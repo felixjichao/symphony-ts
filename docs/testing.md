@@ -101,4 +101,4 @@ readiness 用真实 request/session/transcript/prompt/after_run marker，无固�
 
 `lifecycle.test.ts` 使用真实 config/host/loop，受控 watcher/poll/retry ports 核对资源归零；先制造真实 failed attempt 的 retry，停止后重放已捕获 callbacks 验证无 tracker request、新提交或 dispatch。startup 和 watcher-close 故障仍释放其他资源；shell tests 检查自己安装的 handlers、failure priority。M6.4 的回归装配保留，仅将依赖构造时自动 monitoring 的用例改为显式 start + 不自动执行 poll 的 scheduler。
 
-逐项文件、用例名、命令见 [M6 Core 索引](conformance.md#m65-core-证据索引)。本地 gate 不替代 M6.5 合入后的 main CI；M6.1–M6.5 全合入与 main CI success 前不标 M6 Core 完成。HTTP §13.7、tools §11.5、durable recovery、SSH 不在本轮范围。
+逐项文件、用例名、命令见 [M6 Core 索引](conformance.md#m65-core-证据索引)。M6 Core 已完成：M6.1–M6.5 已合入并通过 main CI，完成验收记录见上述索引；本地 gate 不替代 main CI。M7 §15 hardening 未开始。HTTP §13.7、tools §11.5、durable recovery、SSH 不在本轮范围。

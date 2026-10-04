@@ -43,7 +43,7 @@ symphony [path-to-WORKFLOW.md]
 
 ## Known limitations
 
-- M6.5 实现及本地证据已齐备；全合入与 main CI 验收之前 M6 Core 不标完成。
+- M0–M6 Core 已完成；当前 executable CLI host 已完成生产组件装配，M6.1–M6.5 已合入并通过 main CI，验收证据见 [conformance](../../docs/conformance.md#m65-core-证据索引)。M7 §15 hardening 未开始。
 - HTTP status surface 属可选扩展。
 
 ## Runtime log observers (M6.2)
