@@ -19,6 +19,12 @@ export default defineConfig({
     },
     emptyOutDir: true,
   },
+  // `bin.test.ts` rebuilds `dist/bin/symphony.js` (vite `emptyOutDir`) while
+  // sibling test files execute that same binary. Run CLI test files sequentially
+  // so the rebuild cannot delete the artifact mid-execution.
+  test: {
+    fileParallelism: false,
+  },
   plugins: [
     {
       name: "make-executable",

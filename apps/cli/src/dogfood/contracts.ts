@@ -194,7 +194,12 @@ export type PrState = "none" | "open" | "merged" | "closed";
 
 /** `symphony pr land` refusal codes that count as a genuine safety refusal. */
 export const FOREIGN_REFUSAL_CODE = "ownership_refusal";
-export const CONFLICT_REFUSAL_CODE = "unmergeable";
+/**
+ * `GitHubDeliveryService.landPr()` rejects a conflicting PR with the real
+ * `merge_rejected` code (it also uses the same code for draft/UNKNOWN, so the
+ * conflict scenario must additionally verify the PR is actually `CONFLICTING`).
+ */
+export const CONFLICT_REFUSAL_CODE = "merge_rejected";
 
 export interface DogfoodFacts {
   /** Issue was closed by the merge (terminal state observed after landing). */
@@ -232,6 +237,11 @@ export interface DogfoodFacts {
   readonly reuseVerified: boolean;
   /** Real squash-merge commit SHA read back after landing. */
   readonly mergeSha: string | null;
+  /**
+   * A recorded GitHub Actions run matches the merged PR head SHA with a
+   * successful conclusion (ties the CI evidence to the exact delivered head).
+   */
+  readonly ciRunMatched: boolean;
 }
 
 export type DogfoodVerdict =
@@ -252,16 +262,16 @@ export function classifyDogfoodOutcome(scenario: DogfoodScenario, facts: Dogfood
     case "happy":
       return verdict(
         facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" &&
-          facts.linkedPrCount === 1 && facts.workspaceCleanupObserved,
-        "issue closed by a single merged PR with green checks and terminal workspace cleanup",
-        `happy path incomplete (pr=${facts.ownedPrState}, issueClosed=${facts.issueClosed}, checks=${facts.checks}, linkedPrs=${facts.linkedPrCount}, cleanup=${facts.workspaceCleanupObserved})`,
+          facts.linkedPrCount === 1 && facts.workspaceCleanupObserved && facts.ciRunMatched,
+        "issue closed by a single merged PR with green checks tied to the head SHA and terminal workspace cleanup",
+        `happy path incomplete (pr=${facts.ownedPrState}, issueClosed=${facts.issueClosed}, checks=${facts.checks}, linkedPrs=${facts.linkedPrCount}, cleanup=${facts.workspaceCleanupObserved}, ciRunMatched=${facts.ciRunMatched})`,
       );
     case "repair":
       return verdict(
         facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" &&
-          facts.repairObserved && facts.workspaceCleanupObserved,
-        "CI failure observed and repaired by a later green run, then merged and cleaned up",
-        `repair path incomplete (repairObserved=${facts.repairObserved}, pr=${facts.ownedPrState}, checks=${facts.checks}, cleanup=${facts.workspaceCleanupObserved})`,
+          facts.repairObserved && facts.workspaceCleanupObserved && facts.ciRunMatched,
+        "CI failure observed and repaired by a later green run tied to the head SHA, then merged and cleaned up",
+        `repair path incomplete (repairObserved=${facts.repairObserved}, pr=${facts.ownedPrState}, checks=${facts.checks}, cleanup=${facts.workspaceCleanupObserved}, ciRunMatched=${facts.ciRunMatched})`,
       );
     case "reuse":
       return verdict(

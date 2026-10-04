@@ -29,6 +29,7 @@ function facts(overrides: Partial<DogfoodFacts> = {}): DogfoodFacts {
     safetyRefusalCode: null,
     reuseVerified: false,
     mergeSha: null,
+    ciRunMatched: false,
     ...overrides,
   };
 }
@@ -99,19 +100,22 @@ describe("decideDogfoodGate", () => {
 
 describe("classifyDogfoodOutcome", () => {
   it("passes a complete happy path and fails an incomplete one", () => {
-    const complete = { ownedPrState: "merged", issueClosed: true, checks: "success", linkedPrCount: 1, workspaceCleanupObserved: true } as const;
+    const complete = { ownedPrState: "merged", issueClosed: true, checks: "success", linkedPrCount: 1, workspaceCleanupObserved: true, ciRunMatched: true } as const;
     expect(classifyDogfoodOutcome("happy", facts(complete)).status).toBe("passed");
     expect(classifyDogfoodOutcome("happy", facts({ ...complete, ownedPrState: "open" })).status).toBe("failed");
     expect(classifyDogfoodOutcome("happy", facts({ ...complete, linkedPrCount: 2 })).status).toBe("failed");
     // Terminal workspace cleanup is mandatory for happy (acceptance 5).
     expect(classifyDogfoodOutcome("happy", facts({ ...complete, workspaceCleanupObserved: false })).status).toBe("failed");
+    // CI evidence must be tied to the delivered head SHA.
+    expect(classifyDogfoodOutcome("happy", facts({ ...complete, ciRunMatched: false })).status).toBe("failed");
   });
 
   it("requires an observed repair and cleanup for the repair scenario", () => {
-    const base = { ownedPrState: "merged", issueClosed: true, checks: "success", workspaceCleanupObserved: true } as const;
+    const base = { ownedPrState: "merged", issueClosed: true, checks: "success", workspaceCleanupObserved: true, ciRunMatched: true } as const;
     expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: false })).status).toBe("failed");
     expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: true })).status).toBe("passed");
     expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: true, workspaceCleanupObserved: false })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: true, ciRunMatched: false })).status).toBe("failed");
   });
 
   it("requires verified restart reuse of the same single PR", () => {
@@ -129,11 +133,14 @@ describe("classifyDogfoodOutcome", () => {
     expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, safetyRefusalCode: "ownership_refusal", ownedPrState: "merged", issueClosed: true })).status).toBe("failed");
   });
 
-  it("passes conflict only on a real unmergeable refusal", () => {
-    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: "unmergeable" })).status).toBe("passed");
+  it("passes conflict only on a real merge_rejected refusal with a verified conflict", () => {
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: "merge_rejected" })).status).toBe("passed");
+    // merge_rejected is also returned for draft/UNKNOWN; without the verified
+    // conflict fact it must not count.
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: false, ownedPrState: "open", safetyRefusalCode: "merge_rejected" })).status).toBe("failed");
     expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: null })).status).toBe("failed");
     expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: "timeout" })).status).toBe("failed");
-    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "merged", safetyRefusalCode: "unmergeable" })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "merged", safetyRefusalCode: "merge_rejected" })).status).toBe("failed");
   });
 });
 

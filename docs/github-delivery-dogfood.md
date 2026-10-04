@@ -50,9 +50,9 @@ The npm wrapper is `npm run dogfood:github -- --target <owner/repo> --scenario <
 
 | Scenario | What it drives | Pass condition |
 |---|---|---|
-| `happy` | Host + real Codex implement the run's task, PR, green CI, opt-in squash merge | single PR merged, issue closed, checks green, **and terminal workspace cleanup observed** |
-| `repair` | Same, but an injected CI-only lint fault makes the first head fail; real Codex `ci:fix` repairs it | a failing run is observed before a green run, then merged + cleaned up |
-| `reuse` | A bounded pre-merge hold is created, the host is stopped once a PR exists, then restarted after the hold is released | same PR number reused, persisted delivery state present, single PR, merged + cleaned up, no wait timed out |
+| `happy` | Host + real Codex implement the run's task, PR, green CI, opt-in squash merge | single PR merged, issue closed, checks green with a recorded CI run tied to the delivered head SHA, **and terminal workspace cleanup observed** |
+| `repair` | Same, but an injected CI-only lint fault makes the first head fail; real Codex `ci:fix` repairs it | a failing run is observed before a green run tied to the head SHA, then merged + cleaned up |
+| `reuse` | A bounded pre-merge hold is created, the host is stopped once a PR exists, then restarted after the hold is released | same PR number **and branch** reused, persisted delivery state's absolute deadline preserved across restart, single PR, merged + cleaned up, no wait timed out |
 | `foreign` | A non-Symphony PR exists; the real `pr land` entry is invoked | land returns the **`ownership_refusal`** code; foreign PR stays open, unmerged, issue open |
 | `conflict` | An owned PR is forced into a real conflict; `pr land` is invoked | land returns the **`unmergeable`** code; PR stays unmerged, issue open |
 
@@ -60,9 +60,12 @@ The safety scenarios are only considered proven when the real `pr land` entry re
 
 ### Harness safety properties
 
-- **Single pinned credential.** The harness resolves one credential (`SYMPHONY_DOGFOOD_TOKEN`, else `GITHUB_TOKEN`/`GH_TOKEN`) and refuses to run when both env vars disagree. The raw value is read through a non-redacting path and is never logged; the same value is exported to the host so tracker, `gh`, `git` and Codex delivery share one identity. Without an explicit env token it falls back to the ambient `gh auth` login and prints a warning.
-- **Every started host is stopped.** All host runs are tracked and shut down on success, failure and cancellation; a timeout or thrown error still stops the host before the run is recorded as failed.
-- **Terminal cleanup is mandatory** for `happy`/`repair`/`reuse`: the issue workspace directory must be observed, then removed, the workspace-root sentinel must survive, and the host must log `workspace_cleanup` `completed` for that exact issue.
+- **Single pinned credential.** The harness resolves one credential (`SYMPHONY_DOGFOOD_TOKEN`, else `GITHUB_TOKEN`/`GH_TOKEN`) and refuses to run when more than one distinct value is present. The raw value is read through a non-redacting path and never logged, and it is pinned as both `GH_TOKEN` and `GITHUB_TOKEN` in the environment used by **every** GitHub operation — harness `gh` calls (preflight, issue/PR setup, protection, land) and the host alike — so nothing falls back to another ambient identity. Without an explicit env token it falls back to the ambient `gh auth` login and prints a warning; a missing credential is the only case that skips.
+- **Non-destructive restart hold.** For `reuse`, the harness reads the current branch protection, adds an unsatisfiable required check, and then **restores the exact prior protection** (or deletes it when none existed). The mutation and its restore are inside the same `try/finally`, and the restore result is checked. This requires **Administration: write** on the target repository for the `reuse` scenario only.
+- **Signals enter the shared shutdown.** `SIGINT`/`SIGTERM` stop the whole host/Codex process group (the host is spawned in its own process group and signalled with `SIGINT` → `SIGKILL`), record a cancelled manifest, and exit `130`/`143`.
+- **Every started host is stopped** on success, failure and cancellation.
+- **Failed runs are retained.** A failed or cancelled run keeps the run working directory (workspace + persisted `.symphony/delivery-state.json`) and the sanitized host log so the flow can be resumed and the failure diagnosed; only a clean success removes the harness's run working directory (Symphony itself already cleans the issue workspace on the success path).
+- **Terminal cleanup is mandatory** for `happy`/`repair`/`reuse`: the issue workspace directory must be observed, then removed, the workspace-root sentinel must survive, and the host must log `workspace_cleanup` `completed` for that exact issue. `happy`/`repair` additionally require a recorded GitHub Actions run whose `headSha` equals the merged PR head and whose conclusion is success, so the CI evidence is tied to the delivered commit.
 - **Unique per-run task.** Each run asks for a distinct synthetic export name, so re-running a scenario on the same repository still exercises a real change.
 
 ### Exit status
@@ -87,7 +90,10 @@ headers and credential-bearing URLs never enter the artifacts.
 
 1. Node >= 20, `npm ci`, `npm run typecheck`; put `apps/cli/dist/bin` on `PATH`.
 2. Authenticate `gh` for an account with write access to the isolated target, and
-   a Codex login (`codex login status`) so `codex app-server` starts.
+   a Codex login (`codex login status`) so `codex app-server` starts. The
+   `reuse` scenario additionally needs **Administration: write** on the target to
+   set and restore the bounded restart hold. Prefer exporting a target-scoped
+   `GITHUB_TOKEN` so the identity is explicit and pinned.
 3. Create the target from the template and add the `symphony-ready` label.
 4. Export `GITHUB_TOKEN` and run the command above. No other machine state is
    needed; the harness renders `WORKFLOW.md` from the template and records a

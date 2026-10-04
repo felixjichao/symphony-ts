@@ -11,6 +11,7 @@
  * false-positive paths) without touching GitHub or Codex.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -60,6 +61,7 @@ export interface DogfoodDeps {
   readonly writeText: (file: string, text: string) => Promise<void>;
   readonly readText: (file: string) => Promise<string | null>;
   readonly mkdirp: (dir: string) => Promise<void>;
+  readonly removeDir: (dir: string) => Promise<void>;
   readonly pathExists: (target: string) => Promise<boolean>;
   /** Read the real credential without any redaction. Never logged. */
   readonly rawAuthToken: () => Promise<string>;
@@ -81,7 +83,14 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
     },
     startHost: (command, args, opts) => {
       let output = "";
-      const child: ChildProcess = spawn(command, [...args], { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], env: opts.env });
+      const child: ChildProcess = spawn(command, [...args], {
+        cwd: opts.cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: opts.env,
+        // Own process group so SIGINT/SIGKILL can be delivered to the whole
+        // Symphony host + Codex subtree, never just the direct child.
+        detached: true,
+      });
       const collect = (chunk: Buffer): void => { output += chunk.toString("utf8"); };
       child.stdout?.on("data", collect);
       child.stderr?.on("data", collect);
@@ -91,10 +100,10 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
         output: () => output,
         async stop(): Promise<number> {
           if (child.exitCode !== null) return child.exitCode;
-          child.kill("SIGINT");
+          signalProcessGroup(child.pid, "SIGINT");
           const timed = await Promise.race([exited, new Promise<number>((r) => setTimeout(() => r(-1), 30_000))]);
           if (timed === -1) {
-            try { child.kill("SIGKILL"); } catch { /* already gone */ }
+            signalProcessGroup(child.pid, "SIGKILL");
             return await exited;
           }
           return timed;
@@ -106,6 +115,7 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
     writeText: async (file, text) => { await writeFile(file, text, "utf8"); },
     readText: async (file) => { try { return await readFile(file, "utf8"); } catch { return null; } },
     mkdirp: async (dir) => { await mkdirWithParents(dir); },
+    removeDir: async (dir) => { await rm(dir, { recursive: true, force: true }); },
     pathExists: async (target) => { try { await stat(target); return true; } catch { return false; } },
     rawAuthToken: async () => {
       const result = spawnSync("gh", ["auth", "token"], { encoding: "utf8" });
@@ -123,6 +133,16 @@ export function createRealDogfoodDeps(env: Record<string, string | undefined> = 
 async function mkdirWithParents(dir: string): Promise<void> {
   const { mkdir } = await import("node:fs/promises");
   await mkdir(dir, { recursive: true });
+}
+
+/** Signal a whole detached process group, falling back to the direct PID. */
+function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already gone */ }
+  }
 }
 
 export class DogfoodError extends Error {
@@ -163,6 +183,7 @@ interface RunContext {
   readonly io: DogfoodIo;
   readonly artifacts: Record<string, string>;
   readonly hosts: HostTracker;
+  cancelled: boolean;
 }
 
 function log(ctx: RunContext, text: string): void {
@@ -198,10 +219,12 @@ async function waitFor(
 ): Promise<void> {
   const deadline = ctx.deps.now() + timeoutSeconds * 1000;
   while (ctx.deps.now() < deadline) {
+    if (ctx.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
     if (await predicate()) return;
     log(ctx, `dogfood: waiting for ${label}...`);
     await ctx.deps.sleep(intervalMs);
   }
+  if (ctx.cancelled) throw new DogfoodError("cancelled by signal", "cancelled");
   throw new DogfoodError(`timed out waiting for ${label}`, "dogfood_timeout");
 }
 
@@ -278,7 +301,7 @@ function mapCheckState(raw: string | undefined): "success" | "failure" | "pendin
   return "unknown";
 }
 
-async function readChecks(ctx: RunContext, prNumber: number): Promise<{ checks: CheckConclusion; mergeable: string }> {
+async function readChecks(ctx: RunContext, prNumber: number): Promise<{ checks: CheckConclusion; mergeable: string; headRefOid: string; mergeSha: string | null }> {
   const view = await ghJson<PrView>(ctx, ["pr", "view", String(prNumber), "--repo", ctx.repo, "--json", "statusCheckRollup,mergeable,state,headRefOid,mergeCommit"]);
   const rollup = view.statusCheckRollup ?? [];
   const states = rollup.map((entry) => mapCheckState(String(entry["conclusion"] ?? entry["state"] ?? "")));
@@ -288,7 +311,7 @@ async function readChecks(ctx: RunContext, prNumber: number): Promise<{ checks: 
     else if (states.some((s) => s === "pending" || s === "unknown")) checks = "pending";
     else if (states.every((s) => s === "success")) checks = "success";
   }
-  return { checks, mergeable: view.mergeable };
+  return { checks, mergeable: view.mergeable, headRefOid: view.headRefOid, mergeSha: view.mergeCommit?.oid ?? null };
 }
 
 async function readRepairObserved(ctx: RunContext, headBranch: string): Promise<boolean> {
@@ -334,9 +357,11 @@ async function renderWorkflow(templateDir: string, ctx: RunContext): Promise<str
   return template.replaceAll("<owner/repo>", ctx.repo).replace("interval_ms: 30000", "interval_ms: 15000");
 }
 
-function uniqueTask(runId: string, verb: string): { name: string; body: string } {
-  const suffix = runId.replace(/[^a-zA-Z0-9]/g, "").slice(-6);
-  const name = `${verb}${suffix}`;
+function uniqueTask(runId: string, scenario: string, verb: string): { name: string; body: string } {
+  // Stable, collision-resistant suffix over the full run id and scenario, so
+  // distinct runs (even in the same second) and scenarios never share a name.
+  const suffix = createHash("sha256").update(`${runId}:${scenario}`).digest("hex").slice(0, 10);
+  const name = `${verb}_${suffix}`;
   const body =
     `Add a \`${name}(a, b)\` export to \`src/math.mjs\` returning \`a - b\`, plus a test in ` +
     "`test/math.test.mjs` asserting it is correct. Run the project's local gate, then deliver end to end with the delivery skill.";
@@ -376,13 +401,13 @@ async function terminalFacts(ctx: RunContext, input: TerminalFactsInput): Promis
   const workspaceDir = path.join(ctx.workspaceRoot, ctx.deps.workspaceKeyOf(identifier));
   const issue = await getIssue(ctx, input.issueNumber);
   const pr = await readOwnedPr(ctx, input.issueNumber);
-  const checks = pr ? await readChecks(ctx, pr.number) : { checks: "unknown" as CheckConclusion, mergeable: "UNKNOWN" };
+  const checks = pr ? await readChecks(ctx, pr.number) : { checks: "unknown" as CheckConclusion, mergeable: "UNKNOWN", headRefOid: "", mergeSha: null };
   const repairObserved = pr ? await readRepairObserved(ctx, pr.headRefName) : false;
   const linkedPrCount = (await listIssuePrs(ctx, input.issueNumber)).length;
   const cleanupEvent = hasCleanupCompletedFor(input.hostLog, identifier);
   const workspaceGone = !(await ctx.deps.pathExists(workspaceDir));
   const sentinelAlive = await ctx.deps.pathExists(path.join(ctx.workspaceRoot, ".dogfood-sentinel"));
-  let mergeSha: string | null = null;
+  let ciRunMatched = false;
   await writeArtifact(ctx, `issue-${input.issueNumber}-final.json`, JSON.stringify(issue));
   if (pr) {
     await writeArtifact(ctx, `pr-${pr.number}-checks.json`, JSON.stringify(checks));
@@ -390,7 +415,7 @@ async function terminalFacts(ctx: RunContext, input: TerminalFactsInput): Promis
     await writeArtifact(ctx, `pr-${pr.number}-actions-runs.json`, runs.stdout);
     const mergeView = await gh(ctx, ["pr", "view", String(pr.number), "--repo", ctx.repo, "--json", "mergeCommit,mergedAt,state,headRefOid"]);
     await writeArtifact(ctx, `pr-${pr.number}-merge.json`, mergeView.stdout);
-    mergeSha = (await ghJson<PrView>(ctx, ["pr", "view", String(pr.number), "--repo", ctx.repo, "--json", "statusCheckRollup,mergeable,state,headRefOid,mergeCommit"])).mergeCommit?.oid ?? null;
+    ciRunMatched = parseRunsMatchHead(runs.stdout, checks.headRefOid);
   }
   return {
     issueClosed: issue.state.toUpperCase() === "CLOSED",
@@ -404,8 +429,33 @@ async function terminalFacts(ctx: RunContext, input: TerminalFactsInput): Promis
     workspaceCleanupObserved: cleanupEvent && input.workspaceObserved && workspaceGone && sentinelAlive,
     safetyRefusalCode: null,
     reuseVerified: false,
-    mergeSha,
+    mergeSha: checks.mergeSha,
+    ciRunMatched,
   };
+}
+
+/** True when the recorded Actions runs contain a success bound to the head SHA. */
+export function parseRunsMatchHead(runsJson: string, headSha: string): boolean {
+  if (headSha === "") return false;
+  let runs: ReadonlyArray<{ headSha?: string; conclusion?: string }>;
+  try {
+    runs = JSON.parse(runsJson || "[]") as ReadonlyArray<{ headSha?: string; conclusion?: string }>;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(runs)) return false;
+  return runs.some((run) => run.headSha === headSha && (run.conclusion ?? "").toUpperCase() === "SUCCESS");
+}
+
+/** Absolute CI-wait deadline persisted by the delivery skill, if present. */
+export function parsePersistedDeadline(stateText: string | null): number | null {
+  if (stateText === null) return null;
+  try {
+    const parsed = JSON.parse(stateText) as { deadlineTimestampMs?: unknown };
+    return typeof parsed.deadlineTimestampMs === "number" ? parsed.deadlineTimestampMs : null;
+  } catch {
+    return null;
+  }
 }
 
 async function injectRepairFault(ctx: RunContext): Promise<void> {
@@ -424,7 +474,7 @@ async function injectRepairFault(ctx: RunContext): Promise<void> {
 async function runTerminalHostScenario(ctx: RunContext, templateDir: string, kind: "happy" | "repair"): Promise<DogfoodFacts> {
   await ensureLabel(ctx);
   if (kind === "repair") await injectRepairFault(ctx);
-  const task = uniqueTask(ctx.runId, "subtract");
+  const task = uniqueTask(ctx.runId, kind, "subtract");
   const issueNumber = await createIssue(ctx, `Dogfood: ${task.name}`, task.body);
   const workflowPath = path.join(ctx.workRoot, "WORKFLOW.md");
   await ctx.deps.writeText(workflowPath, await renderWorkflow(templateDir, ctx));
@@ -449,14 +499,15 @@ async function runTerminalHostScenario(ctx: RunContext, templateDir: string, kin
   } finally {
     await host.stop();
     hostLog = host.output();
+    // Always capture the sanitized host log, including on failure/timeout.
+    await writeArtifact(ctx, `host-${kind}.log`, hostLog).catch(() => undefined);
   }
-  await writeArtifact(ctx, `host-${kind}.log`, hostLog);
   return terminalFacts(ctx, { issueNumber, hostLog, workspaceObserved });
 }
 
 async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<DogfoodFacts> {
   await ensureLabel(ctx);
-  const task = uniqueTask(ctx.runId, "multiply");
+  const task = uniqueTask(ctx.runId, "reuse", "multiply");
   const issueNumber = await createIssue(ctx, `Dogfood: ${task.name}`, task.body);
   const workflowPath = path.join(ctx.workRoot, "WORKFLOW.md");
   await ctx.deps.writeText(workflowPath, await renderWorkflow(templateDir, ctx));
@@ -465,15 +516,20 @@ async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<Dogf
   const workspaceDir = path.join(ctx.workspaceRoot, ctx.deps.workspaceKeyOf(identifier));
   const stateFile = path.join(workspaceDir, ".symphony", "delivery-state.json");
 
-  // Bounded pre-merge window: hold a required check so the first head cannot be
-  // merged until we deliberately release it after the graceful restart.
-  await createRestartHold(ctx);
+  // Bounded pre-merge window: add a required check we can release, preserving
+  // and exactly restoring any pre-existing branch protection afterwards. The
+  // mutation and its restore are both inside the try/finally.
+  const snapshot = await readProtection(ctx);
   let prBefore: PrRecord | null = null;
   let stateBefore: string | null = null;
   let workspaceObserved = false;
   let phase1Log = "";
-  const phase1 = await startTrackedHost(ctx, workflowPath);
+  let holdApplied = false;
+  let phase1: DogfoodHostHandle | null = null;
   try {
+    await applyRestartHold(ctx, snapshot);
+    holdApplied = true;
+    phase1 = await startTrackedHost(ctx, workflowPath);
     await waitFor(ctx, "workspace created", async () => {
       workspaceObserved ||= await ctx.deps.pathExists(workspaceDir);
       return workspaceObserved;
@@ -494,14 +550,21 @@ async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<Dogf
       return stateBefore !== null;
     }, 120, 3000);
   } finally {
-    await phase1.stop();
-    phase1Log = phase1.output();
-    await clearRestartHold(ctx);
+    if (phase1 !== null) {
+      await phase1.stop();
+      phase1Log = phase1.output();
+      await writeArtifact(ctx, "host-reuse-phase1.log", phase1Log).catch(() => undefined);
+    }
+    if (holdApplied) await restoreProtection(ctx, snapshot);
   }
   await writeArtifact(ctx, `reuse-before-${issueNumber}.json`, JSON.stringify(prBefore));
   await writeArtifact(ctx, `reuse-before-${issueNumber}-state.json`, stateBefore ?? "null");
 
   const phase2 = await startTrackedHost(ctx, workflowPath);
+  // The persisted absolute CI-wait deadline from phase 1 must still be present at
+  // restart, proving the resume preserved the budget instead of resetting it.
+  const stateAtRestart = await ctx.deps.readText(stateFile);
+  await writeArtifact(ctx, `reuse-restart-${issueNumber}-state.json`, stateAtRestart ?? "null");
   let phase2Log = "";
   try {
     await waitFor(ctx, `${identifier} closed after restart`, async () => {
@@ -513,23 +576,32 @@ async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<Dogf
   } finally {
     await phase2.stop();
     phase2Log = phase2.output();
+    await writeArtifact(ctx, "host-reuse-phase2.log", phase2Log).catch(() => undefined);
   }
   const hostLog = `${phase1Log}${phase2Log}`;
   await writeArtifact(ctx, "host-reuse.log", hostLog);
 
   const prAfter = await readOwnedPr(ctx, issueNumber);
   const linkedPrCount = (await listIssuePrs(ctx, issueNumber)).length;
-  const checks = prAfter ? await readChecks(ctx, prAfter.number) : { checks: "unknown" as CheckConclusion, mergeable: "UNKNOWN" };
+  const checks = prAfter
+    ? await readChecks(ctx, prAfter.number)
+    : { checks: "unknown" as CheckConclusion, mergeable: "UNKNOWN", headRefOid: "", mergeSha: null };
   const cleanupEvent = hasCleanupCompletedFor(hostLog, identifier);
   const workspaceGone = !(await ctx.deps.pathExists(workspaceDir));
   const sentinelAlive = await ctx.deps.pathExists(path.join(ctx.workspaceRoot, ".dogfood-sentinel"));
   const samePr = prBefore !== null && (prAfter?.number ?? -1) === prBefore.number;
+  const sameBranch = prBefore !== null && prAfter !== null && prAfter.headRefName === prBefore.headRefName;
+  const deadlineBefore = parsePersistedDeadline(stateBefore);
+  const deadlineAtRestart = parsePersistedDeadline(stateAtRestart);
+  const budgetPreserved = deadlineBefore !== null && deadlineAtRestart === deadlineBefore;
   const reuseVerified =
-    workspaceObserved && samePr && linkedPrCount === 1 && stateBefore !== null &&
+    workspaceObserved && samePr && sameBranch && budgetPreserved && linkedPrCount === 1 && stateBefore !== null &&
     prAfter?.state.toUpperCase() === "MERGED" && cleanupEvent && workspaceGone && sentinelAlive;
+  let ciRunMatched = false;
   if (prAfter) {
     const runs = await gh(ctx, ["run", "list", "--repo", ctx.repo, "--branch", prAfter.headRefName, "--limit", "30", "--json", "databaseId,headSha,conclusion,status,url,workflowName"]);
     await writeArtifact(ctx, `pr-${prAfter.number}-actions-runs.json`, runs.stdout);
+    ciRunMatched = parseRunsMatchHead(runs.stdout, checks.headRefOid);
   }
   const issue = await getIssue(ctx, issueNumber);
   return {
@@ -544,38 +616,99 @@ async function scenarioReuse(ctx: RunContext, templateDir: string): Promise<Dogf
     workspaceCleanupObserved: cleanupEvent && workspaceObserved && workspaceGone && sentinelAlive,
     safetyRefusalCode: null,
     reuseVerified,
-    mergeSha: null,
+    mergeSha: checks.mergeSha,
+    ciRunMatched,
   };
 }
 
-async function createRestartHold(ctx: RunContext): Promise<void> {
-  const payload = JSON.stringify({
-    required_status_checks: { strict: false, contexts: [HOLD_CONTEXT] },
-    enforce_admins: false,
-    required_pull_request_reviews: null,
-    restrictions: null,
-  });
-  await ctx.deps.writeText(path.join(ctx.workRoot, "restart-hold.json"), payload);
-  const res = await ctx.deps.runner.exec(
-    `gh api -X PUT repos/${ctx.repo}/branches/${ctx.baseBranch}/protection --input restart-hold.json`,
-    ctx.workRoot, 60_000, {},
-  );
-  if (res.exitCode !== 0) throw new DogfoodError(`failed to create restart hold: ${res.stderr}`);
-  await writeArtifact(ctx, "reuse-hold.json", res.stdout || "hold created");
+const PROTECTION_KEYS = [
+  "required_status_checks", "enforce_admins", "required_pull_request_reviews", "restrictions",
+  "required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
+  "required_conversation_resolution", "lock_branch", "allow_fork_syncing",
+] as const;
+
+interface ProtectionSnapshot {
+  readonly existed: boolean;
+  readonly body: string | null;
 }
 
-async function clearRestartHold(ctx: RunContext): Promise<void> {
-  // Best-effort: the hold must never survive the run, but clearing a missing
-  // protection is not an error.
-  await ctx.deps.runner.exec(
+/** Read the current branch protection so the hold can restore it exactly. */
+async function readProtection(ctx: RunContext): Promise<ProtectionSnapshot> {
+  const res = await gh(ctx, ["api", `repos/${ctx.repo}/branches/${ctx.baseBranch}/protection`]);
+  if (res.exitCode === 0) return { existed: true, body: res.stdout };
+  if (/404|not found/i.test(`${res.stderr}${res.stdout}`)) return { existed: false, body: null };
+  throw new DogfoodError(`failed to read branch protection: ${res.stderr}`);
+}
+
+/** Build a valid protection payload, preserving supported existing settings. */
+function protectionPayload(snapshot: ProtectionSnapshot, extraContext: string | null): string {
+  const payload: Record<string, unknown> = {};
+  if (snapshot.body !== null) {
+    const parsed = JSON.parse(snapshot.body) as Record<string, unknown>;
+    for (const key of PROTECTION_KEYS) {
+      if (key in parsed) payload[key] = parsed[key] ?? null;
+    }
+  }
+  const existing = (payload["required_status_checks"] as { strict?: boolean; contexts?: string[] } | null | undefined) ?? null;
+  const contexts = [...(existing?.contexts ?? [])];
+  if (extraContext !== null && !contexts.includes(extraContext)) contexts.push(extraContext);
+  payload["required_status_checks"] = { strict: existing?.strict ?? false, contexts };
+  payload["enforce_admins"] = payload["enforce_admins"] ?? false;
+  payload["required_pull_request_reviews"] = payload["required_pull_request_reviews"] ?? null;
+  payload["restrictions"] = payload["restrictions"] ?? null;
+  return JSON.stringify(payload);
+}
+
+async function putProtection(ctx: RunContext, payload: string, label: string): Promise<void> {
+  await ctx.deps.writeText(path.join(ctx.workRoot, "protection.json"), payload);
+  const res = await ctx.deps.runner.exec(
+    `gh api -X PUT repos/${ctx.repo}/branches/${ctx.baseBranch}/protection --input protection.json`,
+    ctx.workRoot, 60_000, {},
+  );
+  if (res.exitCode !== 0) throw new DogfoodError(`failed to ${label}: ${res.stderr}`);
+  await writeArtifact(ctx, "reuse-protection.json", `${label}\n${res.stdout}`);
+}
+
+/** Add a required check that cannot be satisfied until the harness removes it. */
+async function applyRestartHold(ctx: RunContext, snapshot: ProtectionSnapshot): Promise<void> {
+  await putProtection(ctx, protectionPayload(snapshot, HOLD_CONTEXT), "apply restart hold");
+}
+
+/** Restore the exact prior protection (or delete ours when none existed). */
+async function restoreProtection(ctx: RunContext, snapshot: ProtectionSnapshot): Promise<void> {
+  if (snapshot.existed) {
+    await putProtection(ctx, protectionPayload(snapshot, null), "restore branch protection");
+    return;
+  }
+  const res = await ctx.deps.runner.exec(
     `gh api -X DELETE repos/${ctx.repo}/branches/${ctx.baseBranch}/protection`,
     ctx.workRoot, 60_000, {},
   );
+  if (res.exitCode !== 0 && !/404|not found/i.test(`${res.stderr}${res.stdout}`)) {
+    throw new DogfoodError(`failed to remove restart hold: ${res.stderr}`);
+  }
 }
 
 interface LandOutcome {
   readonly exitCode: number;
   readonly code: string | null;
+}
+
+/**
+ * Extract the structured `{ error }` code emitted by the real `symphony pr`
+ * CLI (DeliveryError → JSON on stderr). Pure and exported so a test can drive
+ * the real service + CLI and assert the harness reads the same contract.
+ */
+export function parseStructuredErrorCode(stdout: string, stderr: string): string | null {
+  for (const stream of [stderr, stdout]) {
+    const text = stream.trim();
+    if (text === "") continue;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === "string") return parsed.error;
+    } catch { /* not JSON; keep looking */ }
+  }
+  return null;
 }
 
 /** Run the real `symphony pr land` entry and extract its structured refusal code. */
@@ -584,15 +717,7 @@ async function runPrLand(ctx: RunContext, args: readonly string[]): Promise<Land
     `${ctx.args.hostBinary} pr land --json ${args.join(" ")}`,
     ctx.workRoot, 120_000, {},
   ).catch((err: unknown) => ({ exitCode: 1, stdout: "", stderr: String(err) }));
-  let code: string | null = null;
-  for (const stream of [res.stderr, res.stdout]) {
-    const text = stream.trim();
-    if (text === "") continue;
-    try {
-      const parsed = JSON.parse(text) as { error?: unknown };
-      if (typeof parsed.error === "string") { code = parsed.error; break; }
-    } catch { /* not JSON; keep looking */ }
-  }
+  const code = parseStructuredErrorCode(res.stdout, res.stderr);
   await writeArtifact(ctx, "land-result.txt", `exit=${res.exitCode}\ncode=${code ?? "none"}\n${res.stdout}\n${res.stderr}`);
   return { exitCode: res.exitCode, code };
 }
@@ -636,6 +761,7 @@ async function scenarioForeign(ctx: RunContext): Promise<DogfoodFacts> {
     safetyRefusalCode: land.exitCode === 1 ? land.code : null,
     reuseVerified: false,
     mergeSha: null,
+    ciRunMatched: false,
   };
 }
 
@@ -683,6 +809,7 @@ async function scenarioConflict(ctx: RunContext): Promise<DogfoodFacts> {
     safetyRefusalCode: land.exitCode === 1 ? land.code : null,
     reuseVerified: false,
     mergeSha: null,
+    ciRunMatched: false,
   };
 }
 
@@ -775,17 +902,31 @@ export async function runGithubDogfoodCli(
     token = resolved.token;
     tokenExplicit = resolved.explicit;
   } catch (err) {
-    io.stdout.write(`SKIPPED: ${sanitizeCredentials(String(err))}\n`);
-    return 0;
+    const code = err instanceof DogfoodError ? err.code : "dogfood_error";
+    if (code === "missing_credential") {
+      io.stdout.write(`SKIPPED: ${sanitizeCredentials(String(err))}\n`);
+      return 0;
+    }
+    // A conflicting credential (or any other configuration failure) after
+    // explicit opt-in is a hard error, never a silent skip.
+    io.stderr.write(`symphony dogfood: ${sanitizeCredentials(String(err))}\n`);
+    return 1;
   }
   if (!tokenExplicit) {
     io.stderr.write("symphony dogfood: warning: using ambient `gh auth` credential; export GITHUB_TOKEN to pin the identity\n");
   }
 
+  // Pin the single selected identity for EVERY GitHub operation — harness gh,
+  // preflight, scenario setup, delivery and the host — so no call falls back to
+  // a different ambient credential.
+  deps.env["GH_TOKEN"] = token;
+  deps.env["GITHUB_TOKEN"] = token;
+
   const ctx: RunContext = {
     args, deps, repo: gate.repo, runId, evidenceDir, workRoot,
     workspaceRoot: path.join(workRoot, "workspaces"),
     token, tokenExplicit, baseBranch: "main", io, artifacts: {}, hosts: new HostTracker(),
+    cancelled: false,
   };
 
   const startedAtMs = deps.now();
@@ -798,6 +939,23 @@ export async function runGithubDogfoodCli(
     if (args.json) io.stdout.write(`${serializeEvidence(manifest, sanitizeCredentials)}\n`);
   };
 
+  // SIGINT/SIGTERM enter the shared shutdown: terminate the whole host/Codex
+  // subtree, record the outcome, then exit with the conventional signal code.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (ctx.cancelled) return;
+    ctx.cancelled = true;
+    void (async () => {
+      await ctx.hosts.stopAll();
+      await finalize("failed", `cancelled by ${signal}`, null).catch(() => undefined);
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    })();
+  };
+  const sigint = (): void => onSignal("SIGINT");
+  const sigterm = (): void => onSignal("SIGTERM");
+  process.once("SIGINT", sigint);
+  process.once("SIGTERM", sigterm);
+
+  let passed = false;
   try {
     await preflight(ctx, templateDir);
     log(ctx, `dogfood: run ${runId} scenario=${args.scenario} target=${gate.repo}`);
@@ -820,15 +978,21 @@ export async function runGithubDogfoodCli(
     const verdict = classifyDogfoodOutcome(args.scenario, facts);
     await finalize(verdict.status, verdict.reason, facts);
     if (!args.json) io.stdout.write(`dogfood: ${verdict.status} (${verdict.reason})\n`);
-    return verdict.status === "passed" ? 0 : 1;
+    passed = verdict.status === "passed";
+    return passed ? 0 : 1;
   } catch (err) {
     const message = sanitizeCredentials(String(err));
     await finalize("failed", message, null).catch(() => undefined);
     io.stderr.write(`symphony dogfood: failed: ${message}\n`);
     return 1;
   } finally {
+    process.removeListener("SIGINT", sigint);
+    process.removeListener("SIGTERM", sigterm);
     // Every started host is stopped on success, failure and cancellation.
     await ctx.hosts.stopAll();
-    await rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
+    // Only a clean success removes the run working directory. Failed or
+    // cancelled runs keep the workspace and persisted delivery state so the
+    // flow can be resumed, and keep the captured failure evidence.
+    if (passed) await deps.removeDir(workRoot).catch(() => undefined);
   }
 }

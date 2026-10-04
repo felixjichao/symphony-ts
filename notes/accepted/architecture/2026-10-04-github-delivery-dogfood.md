@@ -47,13 +47,24 @@ harness drives existing real entry points but never performs delivery itself.
    issue/PR/check/Actions-run/merge/host-log artifacts, all passed through
    `sanitizeCredentials`, stored outside any workspace Symphony cleans up.
 6. **Fail-closed safety semantics.** `foreign`/`conflict` pass only when the real
-   `pr land` entry returns the specific structured refusal code
-   (`ownership_refusal` / `unmergeable`); a transport error or any other outcome
-   fails the scenario even if the PR stays unmerged. `happy`/`repair`/`reuse`
-   additionally require observed terminal workspace cleanup (directory removed,
-   root sentinel preserved, `workspace_cleanup` `completed` logged for the exact
-   issue). Every started host is stopped on success, failure and cancellation,
-   and each run uses a unique synthetic task so re-runs remain meaningful.
+   `pr land` entry returns the specific structured refusal code from the real
+   `GitHubDeliveryService` contract (`ownership_refusal`; and `merge_rejected`
+   together with an independently verified `CONFLICTING` fact, since
+   `merge_rejected` is also used for draft/UNKNOWN). A transport error or any
+   other outcome fails the scenario even if the PR stays unmerged.
+   `happy`/`repair`/`reuse` additionally require observed terminal workspace
+   cleanup (directory removed, root sentinel preserved, `workspace_cleanup`
+   `completed` logged for the exact issue); `happy`/`repair` also require a
+   recorded Actions run whose head SHA equals the delivered PR head with a
+   success conclusion. `reuse` compares the PR number and branch before/after the
+   restart and requires the persisted absolute CI-wait deadline to be unchanged,
+   proving resume rather than a budget reset. One resolved credential is pinned
+   into the environment of every GitHub operation (harness `gh` and host); a
+   conflicting token is a hard error, and only a missing credential skips. The
+   `reuse` restart hold reads, applies and exactly restores the target's branch
+   protection (requiring Administration write), `SIGINT`/`SIGTERM` stop the whole
+   host/Codex process group, and failed runs retain their workspace, persisted
+   delivery state and sanitized logs for recovery.
 
 ## Alternatives considered
 
@@ -76,6 +87,11 @@ harness drives existing real entry points but never performs delivery itself.
   transport error, permission failure or timeout also leaves the PR unmerged.
   The safety scenarios must observe the specific structured refusal code returned
   by the real `pr land` entry; anything else fails.
+- **Hold the restart window by replacing branch protection wholesale.** Rejected:
+  a blind PUT/DELETE destroys existing required checks, reviews and admin
+  settings. The harness instead reads the current protection, merges in one
+  additional required check, and restores the exact prior settings (or deletes
+  when none existed), with the mutation and restore inside the same `finally`.
 
 ## Consequences
 

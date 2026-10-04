@@ -1,8 +1,14 @@
+import path from "node:path";
+
+import { DeliveryError } from "@symphony/domain";
+
 import { describe, expect, it } from "vitest";
 
+import { runDeliveryCli } from "../delivery-cli";
 import {
   DogfoodError,
   hasCleanupCompletedFor,
+  parseStructuredErrorCode,
   parseStructuredLogLine,
   resolveToken,
   runGithubDogfoodCli,
@@ -21,6 +27,7 @@ function res(exitCode = 0, stdout = "", stderr = ""): DogfoodProcessResult {
 interface FakeState {
   files: Map<string, string>;
   dirs: Set<string>;
+  removed: string[];
   nowMs: number;
   stopped: boolean;
   hostOutput: string;
@@ -31,12 +38,14 @@ interface FakeOptions {
   gh: (args: readonly string[], state: FakeState) => DogfoodProcessResult;
   exec: (command: string, state: FakeState) => DogfoodProcessResult;
   hostOutput?: string;
+  rawAuthToken?: () => Promise<string>;
 }
 
 function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState } {
   const state: FakeState = {
     files: new Map(),
     dirs: new Set(),
+    removed: [],
     nowMs: 0,
     stopped: false,
     hostOutput: options.hostOutput ?? "",
@@ -60,12 +69,13 @@ function makeDeps(options: FakeOptions): { deps: DogfoodDeps; state: FakeState }
       return state.files.get(file) ?? null;
     },
     mkdirp: async (dir) => { state.dirs.add(dir); },
+    removeDir: async (dir) => { state.removed.push(dir); },
     pathExists: async (target) => {
       if (target.endsWith("WORKFLOW.md")) return true;
       if (target.endsWith("GH-7")) return state.existingWorkspace;
       return state.dirs.has(target) || state.files.has(target);
     },
-    rawAuthToken: async () => "github_pat_rawambienttoken_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+    rawAuthToken: options.rawAuthToken ?? (async () => "github_pat_rawambienttoken_abcdefghijklmnopqrstuvwxyz0123456789ABCD"),
     env: {},
     cwd: "/work",
     workspaceKeyOf: (identifier) => identifier,
@@ -188,11 +198,18 @@ describe("conflict scenario entry", () => {
     };
   }
 
-  it("passes only on a real unmergeable refusal", async () => {
-    const { deps, state } = makeDeps({ gh: conflictGh, exec: execHandler(res(1, "", JSON.stringify({ error: "unmergeable", message: "conflict" }))) });
+  it("passes only on a real merge_rejected refusal with a verified conflict", async () => {
+    const { deps, state } = makeDeps({ gh: conflictGh, exec: execHandler(res(1, "", JSON.stringify({ error: "merge_rejected", message: "conflict" }))) });
     const code = await runGithubDogfoodCli(["github", "--yes", "--target", TARGET, "--scenario", "conflict", "--run-id", RUN_ID, "--evidence-dir", "/ev", "--json"], io(), deps);
     expect(code).toBe(0);
     expect(manifestOf(state)?.["status"]).toBe("passed");
+  });
+
+  it("fails when land returns a non-refusal code even though the PR is not merged", async () => {
+    const { deps, state } = makeDeps({ gh: conflictGh, exec: execHandler(res(1, "", JSON.stringify({ error: "timeout", message: "transient" }))) });
+    const code = await runGithubDogfoodCli(["github", "--yes", "--target", TARGET, "--scenario", "conflict", "--run-id", RUN_ID, "--evidence-dir", "/ev", "--json"], io(), deps);
+    expect(code).toBe(1);
+    expect(manifestOf(state)?.["status"]).toBe("failed");
   });
 
   it("fails when land unexpectedly succeeds and merges", async () => {
@@ -223,6 +240,8 @@ describe("host lifecycle", () => {
     expect(code).toBe(1);
     expect(state.stopped).toBe(true);
     expect(manifestOf(state)?.["status"]).toBe("failed");
+    // A failed run keeps its workspace/state for recovery.
+    expect(state.removed).toEqual([]);
   });
 
   it("stops the host on success and requires terminal cleanup", async () => {
@@ -237,7 +256,7 @@ describe("host lifecycle", () => {
         }
         if (args[0] === "pr" && args[1] === "list") return res(0, JSON.stringify([{ number: 5, state: "MERGED", url: "u", body: `Fixes ${TARGET}#7`, headRefName: "b", mergeable: "MERGEABLE" }]));
         if (args[0] === "pr" && args[1] === "view") return res(0, '{"statusCheckRollup":[{"conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","state":"MERGED","headRefOid":"h","mergeCommit":{"oid":"mergesha"}}');
-        if (args[0] === "run" && args[1] === "list") return res(0, "[]");
+        if (args[0] === "run" && args[1] === "list") return res(0, JSON.stringify([{ databaseId: 1, headSha: "h", conclusion: "SUCCESS", status: "completed", url: "u", workflowName: "CI" }]));
         return res(0, "{}");
       },
       exec: execHandler,
@@ -247,5 +266,98 @@ describe("host lifecycle", () => {
     expect(state.stopped).toBe(true);
     expect(code).toBe(0);
     expect(manifestOf(state)?.["status"]).toBe("passed");
+    // A clean success removes the run working directory.
+    expect(state.removed.some((p) => p.endsWith("work"))).toBe(true);
+  });
+});
+
+describe("credential and skip semantics", () => {
+  const unusedGh = (): DogfoodProcessResult => res(1, "", "unused");
+  const unusedExec = (): DogfoodProcessResult => res(1, "", "unused");
+  const argv = ["github", "--yes", "--target", TARGET, "--scenario", "foreign", "--run-id", RUN_ID, "--evidence-dir", "/ev"];
+
+  it("treats credential_conflict as a hard error, not a skip", async () => {
+    const { deps } = makeDeps({ gh: unusedGh, exec: unusedExec });
+    deps.env["GITHUB_TOKEN"] = "a";
+    deps.env["GH_TOKEN"] = "b";
+    const code = await runGithubDogfoodCli(argv, io(), deps);
+    expect(code).toBe(1);
+  });
+
+  it("skips cleanly only when no credential exists", async () => {
+    const { deps } = makeDeps({
+      gh: unusedGh,
+      exec: unusedExec,
+      rawAuthToken: async () => { throw new DogfoodError("no GitHub credential: set GITHUB_TOKEN or run 'gh auth login'", "missing_credential"); },
+    });
+    const code = await runGithubDogfoodCli(argv, io(), deps);
+    expect(code).toBe(0);
+  });
+
+  it("pins a dedicated token onto every GitHub operation, not only the host", async () => {
+    const token = "github_pat_dedicated0123456789_abcdefghijklmnopqrstuvwxyz0123456789AB";
+    const { deps } = makeDeps({ gh: unusedGh, exec: unusedExec });
+    deps.env["SYMPHONY_DOGFOOD_TOKEN"] = token;
+    await runGithubDogfoodCli(argv, io(), deps);
+    expect(deps.env["GH_TOKEN"]).toBe(token);
+    expect(deps.env["GITHUB_TOKEN"]).toBe(token);
+  });
+});
+
+describe("reuse scenario entry", () => {
+  it("verifies the same PR, branch and preserved budget across a bounded restart", async () => {
+    const cleanupLog = 'severity="info" event="workspace_cleanup" outcome="completed" reason="cleanup_completed" issue_identifier="GH-7"';
+    const evidenceDir = path.resolve("/ev", RUN_ID);
+    const stateFile = path.join(evidenceDir, "work", "workspaces", "GH-7", ".symphony", "delivery-state.json");
+    const persisted = JSON.stringify({ repo: TARGET, issueNumber: 7, workspaceKey: "GH-7", spentRepairs: 0, spentWaitSeconds: 12, deadlineTimestampMs: 123456789, isPaused: false });
+
+    const { deps, state } = makeDeps({
+      gh: (args, s) => {
+        if (args[0] === "label") return res();
+        if (args[0] === "issue" && args[1] === "create") return res(0, `https://github.com/${TARGET}/issues/7\n`);
+        if (args[0] === "issue" && args[1] === "view") {
+          s.existingWorkspace = false;
+          return res(0, '{"number":7,"state":"CLOSED","url":"u"}');
+        }
+        if (args[0] === "pr" && args[1] === "list") {
+          const prState = s.existingWorkspace ? "OPEN" : "MERGED";
+          return res(0, JSON.stringify([{ number: 5, state: prState, url: "u", body: `Fixes ${TARGET}#7`, headRefName: "symphony/GH-7", mergeable: "MERGEABLE" }]));
+        }
+        if (args[0] === "pr" && args[1] === "view") return res(0, '{"statusCheckRollup":[{"conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","state":"MERGED","headRefOid":"h","mergeCommit":{"oid":"mergesha"}}');
+        if (args[0] === "run" && args[1] === "list") return res(0, JSON.stringify([{ databaseId: 1, headSha: "h", conclusion: "SUCCESS", status: "completed", url: "u", workflowName: "CI" }]));
+        if (args[0] === "api" && args[1] !== undefined && args[1].includes("/protection")) return res(1, "", "HTTP 404: Not Found");
+        return res(0, "{}");
+      },
+      exec: (command) => {
+        if (command.includes("/protection")) return res();
+        if (command.startsWith("gh ") || command.startsWith("codex ") || command.includes("--version")) return res();
+        return res();
+      },
+      hostOutput: cleanupLog,
+    });
+    state.files.set(stateFile, persisted);
+
+    const code = await runGithubDogfoodCli(["github", "--yes", "--target", TARGET, "--scenario", "reuse", "--run-id", RUN_ID, "--evidence-dir", "/ev", "--json"], io(), deps);
+    expect(code).toBe(0);
+    const manifest = manifestOf(state);
+    expect(manifest?.["status"]).toBe("passed");
+    expect((manifest?.["facts"] as { reuseVerified: boolean }).reuseVerified).toBe(true);
+  });
+});
+
+describe("real service to CLI to harness contract", () => {
+  it("reads the real delivery CLI's merge_rejected conflict error", async () => {
+    const service = {
+      landPr: async () => { throw new DeliveryError("PR #9 has merge conflicts with main", { code: "merge_rejected" }); },
+    };
+    let out = "";
+    let errOut = "";
+    const code = await runDeliveryCli(["land", "--repo", "o/r", "--issue", "9", "--workspace-key", "k", "--opt-in", "--json"], {
+      service: service as never,
+      stdout: { write: (t: string) => { out += t; return true; } },
+      stderr: { write: (t: string) => { errOut += t; return true; } },
+    });
+    expect(code).toBe(1);
+    expect(parseStructuredErrorCode(out, errOut)).toBe("merge_rejected");
   });
 });

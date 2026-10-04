@@ -2,6 +2,7 @@ export {
   runGithubDogfoodCli,
   createRealDogfoodDeps,
   parseStructuredLogLine,
+  parseStructuredErrorCode,
   hasCleanupCompletedFor,
   resolveToken,
   DogfoodError,
