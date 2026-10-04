@@ -54,6 +54,10 @@ M4（Agent Runner / Coding Agent Integration）要与真实 Codex app-server 讲
 3. **分层落点**：wire 形状的漂移只允许改 `packages/agent` 的 protocol adapter / transport 层。只有当漂移改变了 `codex.approval_policy` / `codex.turn_sandbox_policy` 的**形状类别**（例如从 string 变成 object），才需要同时改 `@symphony/domain` 的 `CodexPassThroughValue` 与 `@symphony/config` 的 pass-through 校验；单纯枚举成员增减**不改** Symphony 类型（SPEC §5.3.6 SHOULD：不手维枚举）。
 4. **同步文档与门禁**：更新本节 tag / commit、[packages/agent/README.md](../packages/agent/README.md) 的基线小节、[conformance.md](conformance.md) 的 §10 / §17.5 行，并跑 `npm run gate`——`packages/agent` 的结构断言会守住"公共类型不复制 Codex generated schema"这条线。
 
+### 审查记录（Assessment Notes）
+
+- **2026-10-04（NEST-88 / #75）**：对 upstream release `rust-v0.160.0`（tag 对象 `79b1b666f2e8551f8abbbca34957227f67f3f553`，commit `a956835d020762cb2b570053af06f643a11c0ecc`）完成逐层协议 diff。结论：**No migration required**。`codex-rs/app-server-protocol` 目录 Git Tree SHA 完全一致（`01988e423904843f6b005fa640750aa3cd7b97b6`），24 项必查 schema surface 零漂移（zero enum/shape/method/lifecycle/usage drift）；`rust-v0.160.0` 带来的 app-server 变更仅限于内部 stderr logging span events 和 running turn count 增量统计，对 wire shape 无影响。继续保持 pinned `rust-v0.159.2`。完整证据详见 [2026-10-04-codex-protocol-drift-assessment-0.160.0 note](../notes/accepted/architecture/2026-10-04-codex-protocol-drift-assessment-0.160.0.md)。
+
 ## 规则
 
 1. **SPEC 优先**：现有代码 / 文档与官方 SPEC 冲突时，以固定 baseline 的 `SPEC.md` 为准。上游参考实现与任何第三方 TypeScript 实现只用于设计对照（比较模块粒度、测试方式），不构成规范。
