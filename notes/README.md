@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-10-04-codex-protocol-drift-assessment-0.160.0.md](accepted/architecture/2026-10-04-codex-protocol-drift-assessment-0.160.0.md) — Codex 协议漂移评估（rust-v0.159.2 → rust-v0.160.0）：app-server-protocol 树哈希完全一致，24 项必查 schema surface 零漂移，裁定保持 pinned rust-v0.159.2，无迁移需求（NEST-88 / #75）。
+
 - [accepted/architecture/2026-10-03-cli-process-lifecycle.md](accepted/architecture/2026-10-03-cli-process-lifecycle.md) — M6.5 host/shell 分层、显式 monitoring、共享 shutdown、failure priority 与真实 HTTPS process / timer 证据。
 
 - [accepted/architecture/2026-10-03-effective-runtime-and-workspace-reload-lifecycle.md](accepted/architecture/2026-10-03-effective-runtime-and-workspace-reload-lifecycle.md) — EffectiveRuntime 单一权威与 Workspace 动态重载生命周期（SPEC §6.2 / §13 / §18.1，M6.4 / NEST-84）：`EffectiveRuntimeController` 单点真相（不可变快照、watcher store 结合零双源、原子 `accept` 校验与回滚）、三种生命周期分层（current runtime / attempt frozen execution options / coordinator-bound cleanup）、workspace 根目录热重载与终态清理精准归属（旧 attempt 清理在旧 root、新 attempt 清理在新 root、不跨根误删、不暴力杀 worker、不遍历扫旧根）、secret boundary 运行时隔离（child env 严格排除 tracker secrets、宿主 adapter 正常认证）
