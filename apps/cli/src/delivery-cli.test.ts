@@ -282,5 +282,57 @@ describe("delivery-cli", () => {
       expect(stderr).not.toContain(token);
       expect(stderr).toContain("***");
     });
+
+    it("outputs valid JSON for diagnostics --json", async () => {
+      let stdout = "";
+      const service = createServiceMock({ readChecks: vi.fn(async () => mockChecksFail) });
+      const code = await runDeliveryCli(
+        ["diagnostics", "--repo", "org/repo", "--issue", "81", "--workspace-key", "ws-81", "--json"],
+        {
+          stdout: { write: (t) => { stdout += t; } },
+          service,
+        },
+      );
+      expect(code).toBe(2);
+      const parsed = JSON.parse(stdout);
+      expect(parsed.canAutoMerge).toBe(false);
+      expect(parsed.status).toBe("pending");
+      expect(parsed.diagnostics).toBeDefined();
+    });
+
+    it("sanitizes tokens in unrecognized action", async () => {
+      let stderr = "";
+      const token = "ghp_secrettoken12345678901234567890";
+      const code = await runDeliveryCli(
+        [token, "--repo", "org/repo", "--issue", "81", "--workspace-key", "ws-81"],
+        {
+          stderr: { write: (t) => { stderr += t; } },
+        },
+      );
+      expect(code).toBe(1);
+      expect(stderr).not.toContain(token);
+      expect(stderr).toContain("***");
+    });
+
+    it("outputs structured JSON errors for missing args and opt-in", async () => {
+      let stderrMissing = "";
+      const codeMissing = await runDeliveryCli(["--json"], {
+        stderr: { write: (t) => { stderrMissing += t; } },
+      });
+      expect(codeMissing).toBe(1);
+      const parsedMissing = JSON.parse(stderrMissing);
+      expect(parsedMissing.error).toBe("missing_action");
+
+      let stderrOptIn = "";
+      const codeOptIn = await runDeliveryCli(
+        ["land", "--repo", "org/repo", "--issue", "81", "--workspace-key", "ws-81", "--json"],
+        {
+          stderr: { write: (t) => { stderrOptIn += t; } },
+        },
+      );
+      expect(codeOptIn).toBe(1);
+      const parsedOptIn = JSON.parse(stderrOptIn);
+      expect(parsedOptIn.error).toBe("opt_in_required");
+    });
   });
 });

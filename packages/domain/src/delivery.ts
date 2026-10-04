@@ -75,6 +75,15 @@ export function validatePrOwnership(
   body: string,
   expected: DeliveryContext,
 ): { readonly valid: true; readonly marker: PrOwnershipMarker } | { readonly valid: false; readonly reason: string } {
+  // Check for multiple/conflicting markers
+  const markerMatches = body.match(/<!--\s*symphony-delivery-marker:/g);
+  if (!markerMatches || markerMatches.length === 0) {
+    return { valid: false, reason: "missing_or_malformed_symphony_marker" };
+  }
+  if (markerMatches.length > 1) {
+    return { valid: false, reason: "conflicting_multiple_markers_found" };
+  }
+
   const marker = parsePrOwnershipMarker(body);
   if (!marker) {
     return { valid: false, reason: "missing_or_malformed_symphony_marker" };
@@ -95,14 +104,21 @@ export function validatePrOwnership(
     return { valid: false, reason: `base_branch_mismatch: expected ${expected.baseBranch}, got ${marker.baseBranch}` };
   }
 
-  // Also check closing issue association
-  const issueRef = `#${expected.issueNumber}`;
-  const repoIssueRef = `${expected.repo}#${expected.issueNumber}`;
-  const hasAssociation =
-    body.includes(issueRef) ||
-    body.includes(repoIssueRef) ||
-    new RegExp(`(?:Fixes|Closes|Resolves)\\s+.*#${expected.issueNumber}`, "i").test(body);
-  if (!hasAssociation) {
+  // Check closing issue association strictly: keyword (Fixes|Closes|Resolves) + exact issue reference
+  const closingRegex = /\b(?:fixes|closes|resolves)\s+(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([^\s#]+)#|#)(\d+)\b/gi;
+  let hasValidClosingRef = false;
+  let match: RegExpExecArray | null;
+  while ((match = closingRegex.exec(body)) !== null) {
+    const matchedRepo = match[1] ?? match[2];
+    const matchedNumber = parseInt(match[3]!, 10);
+    if (matchedNumber === expected.issueNumber) {
+      if (!matchedRepo || matchedRepo.toLowerCase() === expected.repo.toLowerCase()) {
+        hasValidClosingRef = true;
+        break;
+      }
+    }
+  }
+  if (!hasValidClosingRef) {
     return { valid: false, reason: `missing_issue_association_in_body: #${expected.issueNumber}` };
   }
 

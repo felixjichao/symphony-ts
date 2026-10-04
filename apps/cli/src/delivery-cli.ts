@@ -128,39 +128,56 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
 
   const args = parseDeliveryArgs(argv);
 
-  if (args.help || !args.action) {
-    stdout.write(
-      "Usage: symphony pr <action> [options]\n" +
-      "       symphony delivery <action> [options]\n\n" +
-      "Actions:\n" +
-      "  ensure        Ensure pull request exists (create or reuse)\n" +
-      "  read          Read pull request details and state\n" +
-      "  checks        Fetch CI checks bound to head and evaluate policy\n" +
-      "  diagnostics   Print actionable diagnostics for failed or pending checks\n" +
-      "  land          Squash merge PR when policy is satisfied (--opt-in required)\n" +
-      "  verify        Verify whether PR is in final merged state\n\n" +
-      "Options:\n" +
-      "  --repo <owner/repo>       Repository slug (required)\n" +
-      "  --issue <number>          GitHub issue number (required)\n" +
-      "  --workspace-key <key>     Symphony workspace key (required)\n" +
-      "  --head <branch>           Head branch (default: symphony/<workspace-key>)\n" +
-      "  --base <branch>           Base branch (default: main)\n" +
-      "  --pr <number>             Specific PR number\n" +
-      "  --expected-head <sha>     Expected head commit SHA\n" +
-      "  --title <text>            PR title for ensure\n" +
-      "  --body <text>             PR body text for ensure\n" +
-      "  --draft                   Create PR as draft\n" +
-      "  --opt-in                  Explicit opt-in required for land\n" +
-      "  --delete-branch           Delete head branch on merge\n" +
-      "  --json                    Output pure JSON\n" +
-      "  -h, --help                Show help\n"
-    );
-    return args.help ? 0 : 1;
+  if (args.help) {
+    if (args.json) {
+      stdout.write(`${JSON.stringify({ help: true, usage: "symphony pr <action> [options]", actions: ["ensure", "read", "checks", "diagnostics", "land", "verify"] }, null, 2)}\n`);
+    } else {
+      stdout.write(
+        "Usage: symphony pr <action> [options]\n" +
+        "       symphony delivery <action> [options]\n\n" +
+        "Actions:\n" +
+        "  ensure        Ensure pull request exists (create or reuse)\n" +
+        "  read          Read pull request details and state\n" +
+        "  checks        Fetch CI checks bound to head and evaluate policy\n" +
+        "  diagnostics   Print actionable diagnostics for failed or pending checks\n" +
+        "  land          Squash merge PR when policy is satisfied (--opt-in required)\n" +
+        "  verify        Verify whether PR is in final merged state\n\n" +
+        "Options:\n" +
+        "  --repo <owner/repo>       Repository slug (required)\n" +
+        "  --issue <number>          GitHub issue number (required)\n" +
+        "  --workspace-key <key>     Symphony workspace key (required)\n" +
+        "  --head <branch>           Head branch (default: symphony/<workspace-key>)\n" +
+        "  --base <branch>           Base branch (default: main)\n" +
+        "  --pr <number>             Specific PR number\n" +
+        "  --expected-head <sha>     Expected head commit SHA\n" +
+        "  --title <text>            PR title for ensure\n" +
+        "  --body <text>             PR body text for ensure\n" +
+        "  --draft                   Create PR as draft\n" +
+        "  --opt-in                  Explicit opt-in required for land\n" +
+        "  --delete-branch           Delete head branch on merge\n" +
+        "  --json                    Output pure JSON\n" +
+        "  -h, --help                Show help\n"
+      );
+    }
+    return 0;
+  }
+
+  if (!args.action) {
+    if (args.json) {
+      stderr.write(`${JSON.stringify({ error: "missing_action", message: "Action is required (ensure, read, checks, diagnostics, land, verify)" })}\n`);
+    } else {
+      stderr.write("symphony pr error: action is required (ensure, read, checks, diagnostics, land, verify)\n");
+    }
+    return 1;
   }
 
   // Validate required context fields
   if (!args.repo || !args.issueNumber || !args.workspaceKey) {
-    stderr.write("symphony pr error: missing required options (--repo, --issue, --workspace-key)\n");
+    if (args.json) {
+      stderr.write(`${JSON.stringify({ error: "invalid_arguments", message: "missing required options (--repo, --issue, --workspace-key)" })}\n`);
+    } else {
+      stderr.write("symphony pr error: missing required options (--repo, --issue, --workspace-key)\n");
+    }
     return 1;
   }
 
@@ -183,7 +200,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
         if (args.json) {
           stdout.write(`${JSON.stringify(pr, null, 2)}\n`);
         } else {
-          stdout.write(`PR #${pr.number} ensured: ${pr.url} [state: ${pr.state}, mergeable: ${pr.mergeable}]\n`);
+          stdout.write(sanitizeCredentials(`PR #${pr.number} ensured: ${pr.url} [state: ${pr.state}, mergeable: ${pr.mergeable}]\n`));
         }
         return 0;
       }
@@ -194,12 +211,14 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           stdout.write(`${JSON.stringify(pr, null, 2)}\n`);
         } else {
           stdout.write(
-            `PR #${pr.number}: ${pr.title}\n` +
-            `URL: ${pr.url}\n` +
-            `State: ${pr.state}\n` +
-            `Mergeable: ${pr.mergeable}\n` +
-            `Head: ${pr.headBranch} (${pr.headSha})\n` +
-            `Base: ${pr.baseBranch}\n`
+            sanitizeCredentials(
+              `PR #${pr.number}: ${pr.title}\n` +
+              `URL: ${pr.url}\n` +
+              `State: ${pr.state}\n` +
+              `Mergeable: ${pr.mergeable}\n` +
+              `Head: ${pr.headBranch} (${pr.headSha})\n` +
+              `Base: ${pr.baseBranch}\n`
+            )
           );
         }
         return 0;
@@ -214,11 +233,13 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           stdout.write(`${JSON.stringify(report, null, 2)}\n`);
         } else {
           stdout.write(
-            `Checks for PR #${report.prNumber} @ ${report.headSha.slice(0, 8)}:\n` +
-            `Status: ${report.status.toUpperCase()}\n` +
-            `Can auto-merge: ${report.canAutoMerge ? "YES" : "NO"}\n` +
-            `Reason: ${report.reason}\n` +
-            `Required checks: ${report.requiredChecks.length}, Current checks: ${report.currentChecks.length}\n`
+            sanitizeCredentials(
+              `Checks for PR #${report.prNumber} @ ${report.headSha.slice(0, 8)}:\n` +
+              `Status: ${report.status.toUpperCase()}\n` +
+              `Can auto-merge: ${report.canAutoMerge ? "YES" : "NO"}\n` +
+              `Reason: ${report.reason}\n` +
+              `Required checks: ${report.requiredChecks.length}, Current checks: ${report.currentChecks.length}\n`
+            )
           );
         }
         return report.canAutoMerge ? 0 : 2;
@@ -230,13 +251,29 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           expectedHeadSha: args.expectedHeadSha,
         });
         const diagnostics = service.diagnoseFailedChecks(report);
-        stdout.write(`${diagnostics}\n`);
+        if (args.json) {
+          stdout.write(`${JSON.stringify({
+            prNumber: report.prNumber,
+            headSha: report.headSha,
+            status: report.status,
+            canAutoMerge: report.canAutoMerge,
+            reason: report.reason,
+            failedOrPendingChecks: report.failedOrPendingChecks,
+            diagnostics,
+          }, null, 2)}\n`);
+        } else {
+          stdout.write(sanitizeCredentials(`${diagnostics}\n`));
+        }
         return report.canAutoMerge ? 0 : 2;
       }
 
       case "land": {
         if (!args.optIn) {
-          stderr.write("symphony pr error: land requires explicit opt-in (--opt-in)\n");
+          if (args.json) {
+            stderr.write(`${JSON.stringify({ error: "opt_in_required", message: "land requires explicit opt-in (--opt-in)" })}\n`);
+          } else {
+            stderr.write("symphony pr error: land requires explicit opt-in (--opt-in)\n");
+          }
           return 1;
         }
         const result = await service.landPr(context, {
@@ -249,9 +286,11 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         } else {
           stdout.write(
-            `PR #${result.prNumber} successfully merged!\n` +
-            `Merge commit: ${result.mergeCommitSha}\n` +
-            `Merged at: ${result.mergedAt}\n`
+            sanitizeCredentials(
+              `PR #${result.prNumber} successfully merged!\n` +
+              `Merge commit: ${result.mergeCommitSha}\n` +
+              `Merged at: ${result.mergedAt}\n`
+            )
           );
         }
         return 0;
@@ -263,16 +302,23 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         } else {
           stdout.write(
-            `PR #${result.prNumber} merged: ${result.merged ? "YES" : "NO"}\n` +
-            (result.mergeCommitSha ? `Commit SHA: ${result.mergeCommitSha}\n` : "") +
-            (result.mergedAt ? `Merged at: ${result.mergedAt}\n` : "")
+            sanitizeCredentials(
+              `PR #${result.prNumber} merged: ${result.merged ? "YES" : "NO"}\n` +
+              (result.mergeCommitSha ? `Commit SHA: ${result.mergeCommitSha}\n` : "") +
+              (result.mergedAt ? `Merged at: ${result.mergedAt}\n` : "")
+            )
           );
         }
         return result.merged ? 0 : 2;
       }
 
       default: {
-        stderr.write(`symphony pr error: unrecognized action '${args.action}'\n`);
+        const errText = sanitizeCredentials(`symphony pr error: unrecognized action '${args.action}'`);
+        if (args.json) {
+          stderr.write(`${JSON.stringify({ error: "unrecognized_action", message: errText })}\n`);
+        } else {
+          stderr.write(`${errText}\n`);
+        }
         return 1;
       }
     }
@@ -283,7 +329,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
     if (args.json) {
       stderr.write(`${JSON.stringify({ error: code, message: cleanMessage })}\n`);
     } else {
-      stderr.write(`symphony pr error [${code}]: ${cleanMessage}\n`);
+      stderr.write(sanitizeCredentials(`symphony pr error [${code}]: ${cleanMessage}\n`));
     }
     return 1;
   }

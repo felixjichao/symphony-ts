@@ -106,6 +106,34 @@ describe("delivery domain contracts", () => {
       valid: false,
       reason: "missing_issue_association_in_body: #81",
     });
+
+    // Multiple conflicting markers
+    const multipleMarkersBody = `${validBody}\n${serializePrOwnershipMarker({ ...sampleMarker, issueNumber: 99 })}`;
+    expect(validatePrOwnership(multipleMarkersBody, sampleContext)).toEqual({
+      valid: false,
+      reason: "conflicting_multiple_markers_found",
+    });
+
+    // Loose issue reference or unrelated repo mention without closing keyword
+    const looseMentionBody = `Mention other/repo#810\n${serializePrOwnershipMarker(sampleMarker)}`;
+    expect(validatePrOwnership(looseMentionBody, sampleContext)).toEqual({
+      valid: false,
+      reason: "missing_issue_association_in_body: #81",
+    });
+
+    // Closing keyword with unrelated repo
+    const foreignRepoBody = `Fixes other/repo#81\n${serializePrOwnershipMarker(sampleMarker)}`;
+    expect(validatePrOwnership(foreignRepoBody, sampleContext)).toEqual({
+      valid: false,
+      reason: "missing_issue_association_in_body: #81",
+    });
+
+    // Exact closing keyword with matching full repo slug
+    const matchingRepoSlugBody = `Fixes felixjichao/symphony-ts#81\n${serializePrOwnershipMarker(sampleMarker)}`;
+    expect(validatePrOwnership(matchingRepoSlugBody, sampleContext)).toEqual({
+      valid: true,
+      marker: sampleMarker,
+    });
   });
 
   describe("evaluateChecksAutoMergePolicy (user-approved CI policy)", () => {

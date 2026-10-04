@@ -321,9 +321,26 @@ describe("GitHubDeliveryService", () => {
           };
         }
 
-        if (cmd === "pr" && sub === "checks" && args.includes("--required")) {
-          // No required checks
-          return { stdout: "no required checks reported on the 'main' branch\n", stderr: "", exitCode: 0 };
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: null,
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
         }
 
         throw new Error(`Unexpected command: ${args.join(" ")}`);
@@ -345,6 +362,30 @@ describe("GitHubDeliveryService", () => {
       const runner = createMockRunner(async (args) => {
         const cmd = args[0];
         const sub = args[1];
+
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: {
+                        requiredStatusCheckContexts: ["gate"],
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
 
         if (cmd === "pr" && sub === "view") {
           return {
@@ -373,10 +414,6 @@ describe("GitHubDeliveryService", () => {
             stderr: "",
             exitCode: 0,
           };
-        }
-
-        if (cmd === "pr" && sub === "checks" && args.includes("--required")) {
-          return { stdout: "gate\tpending\t10s\thttps://github.com/runs/1\t\n", stderr: "", exitCode: 8 };
         }
 
         throw new Error(`Unexpected command: ${args.join(" ")}`);
@@ -501,16 +538,33 @@ describe("GitHubDeliveryService", () => {
           };
         }
 
-        if (cmd === "pr" && sub === "checks" && args.includes("--required")) {
-          return { stdout: "no required checks reported on the 'main' branch\n", stderr: "", exitCode: 0 };
+        if (cmd === "api" && sub === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    baseRef: {
+                      branchProtectionRule: null,
+                    },
+                  },
+                },
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
         }
 
-        if (cmd === "pr" && sub === "merge") {
-          expect(args).toContain("--squash");
-          expect(args).toContain("--match-head-commit");
-          expect(args).toContain("sha81");
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+
+        if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/pulls/81/merge")) {
+          expect(args).toContain("merge_method=squash");
+          expect(args).toContain("sha=sha81");
           mergedState = true;
-          return { stdout: "Merged pull request #81\n", stderr: "", exitCode: 0 };
+          return { stdout: JSON.stringify({ sha: "squashcommit81", merged: true }), stderr: "", exitCode: 0 };
         }
 
         throw new Error(`Unexpected command: ${args.join(" ")}`);
@@ -552,6 +606,131 @@ describe("GitHubDeliveryService", () => {
 
       expect(result.merged).toBe(true);
       expect(result.mergeCommitSha).toBe("squashcommit81");
+    });
+
+    it("throws verification_unknown when merged PR lacks mergeCommitSha or mergedAt", async () => {
+      const runner = createMockRunner(async () => ({
+        stdout: JSON.stringify({
+          number: 81,
+          title: "PR 81",
+          body: validBody,
+          state: "MERGED",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefName: context.headBranch,
+          headRefOid: "sha81",
+          baseRefName: context.baseBranch,
+          url: "https://github.com/felixjichao/symphony-ts/pull/81",
+          mergedAt: null,
+          mergeCommit: null,
+        }),
+        stderr: "",
+        exitCode: 0,
+      }));
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "verification_unknown",
+      });
+    });
+  });
+
+  describe("security boundaries and regression guards", () => {
+    it("refuses PR from a cross-repository fork", async () => {
+      const runner = createMockRunner(async () => ({
+        stdout: JSON.stringify({
+          number: 81,
+          title: "PR 81",
+          body: validBody,
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefName: context.headBranch,
+          headRefOid: "sha81",
+          baseRefName: context.baseBranch,
+          url: "https://github.com/felixjichao/symphony-ts/pull/81",
+          isCrossRepository: true,
+        }),
+        stderr: "",
+        exitCode: 0,
+      }));
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readPr(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "ownership_refusal",
+      });
+    });
+
+    it("refuses PR with mismatched head branch", async () => {
+      const runner = createMockRunner(async () => ({
+        stdout: JSON.stringify({
+          number: 81,
+          title: "PR 81",
+          body: validBody,
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefName: "unrelated-branch",
+          headRefOid: "sha81",
+          baseRefName: context.baseBranch,
+          url: "https://github.com/felixjichao/symphony-ts/pull/81",
+          isCrossRepository: false,
+        }),
+        stderr: "",
+        exitCode: 0,
+      }));
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readPr(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "ownership_refusal",
+      });
+    });
+
+    it("fails closed with checks_unknown when branch protection GraphQL query fails (e.g. 403)", async () => {
+      const runner = createMockRunner(async (args) => {
+        const cmd = args[0];
+        const sub = args[1];
+
+        if (cmd === "pr" && sub === "view") {
+          return {
+            stdout: JSON.stringify({
+              number: 81,
+              title: "PR 81",
+              body: validBody,
+              state: "OPEN",
+              isDraft: false,
+              mergeable: "MERGEABLE",
+              headRefName: context.headBranch,
+              headRefOid: "sha81",
+              baseRefName: context.baseBranch,
+              url: "https://github.com/felixjichao/symphony-ts/pull/81",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "lint",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+
+        if (cmd === "api" && sub === "graphql") {
+          throw new DeliveryError("GraphQL query failed: 403 Forbidden", {
+            code: "cli_malformed_response",
+          });
+        }
+
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(service.readChecks(context, { prNumber: 81 })).rejects.toMatchObject({
+        code: "checks_unknown",
+      });
     });
   });
 });

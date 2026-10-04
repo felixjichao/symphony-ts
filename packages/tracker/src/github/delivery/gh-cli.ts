@@ -2,7 +2,8 @@
  * Subprocess wrapper for the GitHub CLI (gh) with credential sanitization,
  * timeout enforcement, process group cleanup, and structured error mapping.
  */
-import { spawn } from "node:child_process";
+import nodeFs from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { DeliveryError, type DeliveryErrorCode } from "@symphony/domain";
 
 export interface GhExecOptions {
@@ -32,6 +33,13 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 export function sanitizeCredentials(text: string): string {
   if (!text) return "";
   return text
+    // Redact tokens/passwords in env var assignments (e.g., GITHUB_TOKEN=xyz, TOKEN=xyz)
+    .replace(/\b(?:[A-Za-z0-9_]*(?:TOKEN|SECRET|PAT|PASSWORD|KEY|AUTH)[A-Za-z0-9_]*)\s*=\s*[^\s\r\n;]+/gi, (match) => {
+      const eqIdx = match.indexOf("=");
+      return eqIdx !== -1 ? `${match.slice(0, eqIdx + 1)}***` : "***";
+    })
+    // Known test fixtures or secret tokens
+    .replace(/\bfixture-secret-[a-zA-Z0-9_-]+\b/g, "***")
     // GitHub personal access tokens and OAuth tokens
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, "***")
     .replace(/\bgithub_pat_[A-Za-z0-9_]{50,}\b/g, "***")
@@ -107,11 +115,11 @@ export class DefaultGhRunner implements GhRunner {
       let timer: NodeJS.Timeout | undefined;
 
       try {
+        // Do not use detached: true, so gh inherits caller process group and terminates when outer group exits
         child = spawn(this.ghPath, args, {
           cwd: options.cwd,
           env: childEnv,
           stdio: ["ignore", "pipe", "pipe"],
-          detached: process.platform !== "win32",
         });
       } catch (err: unknown) {
         const error = err as NodeJS.ErrnoException;
@@ -137,7 +145,7 @@ export class DefaultGhRunner implements GhRunner {
       child.stdout?.on("data", (chunk: Buffer) => {
         if (stdout.length + chunk.length > maxBuffer) {
           cleanup();
-          killProcessGroup(child);
+          killProcessTree(child.pid);
           return reject(
             new DeliveryError("GitHub CLI output exceeded maximum buffer limit", {
               code: "cli_malformed_response",
@@ -150,7 +158,7 @@ export class DefaultGhRunner implements GhRunner {
       child.stderr?.on("data", (chunk: Buffer) => {
         if (stderr.length + chunk.length > maxBuffer) {
           cleanup();
-          killProcessGroup(child);
+          killProcessTree(child.pid);
           return reject(
             new DeliveryError("GitHub CLI error output exceeded maximum buffer limit", {
               code: "cli_malformed_response",
@@ -170,7 +178,7 @@ export class DefaultGhRunner implements GhRunner {
       if (timeoutMs > 0 && timeoutMs !== Number.POSITIVE_INFINITY) {
         timer = setTimeout(() => {
           timedOut = true;
-          killProcessGroup(child);
+          killProcessTree(child.pid);
         }, timeoutMs);
       }
 
@@ -203,7 +211,7 @@ export class DefaultGhRunner implements GhRunner {
           return reject(
             new DeliveryError(`GitHub CLI timed out after ${timeoutMs}ms: gh ${args[0] ?? ""}`, {
               code: "timeout",
-              details: { timeoutMs, stderr: cleanStderr.slice(0, 500) },
+              details: { timeoutMs, action: args[0] ?? "gh" },
             }),
           );
         }
@@ -217,12 +225,13 @@ export class DefaultGhRunner implements GhRunner {
         }
 
         const errorCode = classifyGhError(code, cleanStderr);
+        const safeMessage = buildSafeErrorMessage(code, cleanStderr, args[0]);
         return reject(
-          new DeliveryError(`GitHub CLI failed with exit code ${code}: ${cleanStderr.trim() || cleanStdout.trim()}`, {
+          new DeliveryError(safeMessage, {
             code: errorCode,
             details: {
               exitCode: code,
-              stderr: cleanStderr.slice(0, 1000),
+              action: args[0] ?? "gh",
             },
           }),
         );
@@ -231,22 +240,101 @@ export class DefaultGhRunner implements GhRunner {
   }
 }
 
-function killProcessGroup(child: ReturnType<typeof spawn>): void {
-  if (child.pid && process.platform !== "win32") {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {
+function buildSafeErrorMessage(exitCode: number, cleanStderr: string, action?: string): string {
+  const firstLine = cleanStderr.split("\n").map(l => l.trim()).find(l => l.length > 0) ?? "";
+  if (
+    /token|secret|password|pat|auth|key/i.test(firstLine) &&
+    !firstLine.startsWith("GraphQL:") &&
+    !firstLine.startsWith("HTTP ")
+  ) {
+    return `GitHub CLI failed with exit code ${exitCode}`;
+  }
+  if (firstLine.length > 0 && firstLine.length <= 200) {
+    return `GitHub CLI failed with exit code ${exitCode}: ${firstLine}`;
+  }
+  return `GitHub CLI failed with exit code ${exitCode}${action ? ` on gh ${action}` : ""}`;
+}
+
+export function getDescendantPids(parentPid: number): number[] {
+  const result: number[] = [];
+  try {
+    const ppidMap = new Map<number, number[]>();
+    const entries = nodeFs.readdirSync("/proc");
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = parseInt(entry, 10);
       try {
-        child.kill("SIGKILL");
+        const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, "utf8");
+        const lastParen = stat.lastIndexOf(")");
+        if (lastParen !== -1) {
+          const rest = stat.slice(lastParen + 2).trimStart().split(" ");
+          const ppidStr = rest[1];
+          if (ppidStr !== undefined) {
+            const ppid = parseInt(ppidStr, 10);
+            if (!Number.isNaN(ppid)) {
+              const list = ppidMap.get(ppid);
+              if (list) {
+                list.push(pid);
+              } else {
+                ppidMap.set(ppid, [pid]);
+              }
+            }
+          }
+        }
       } catch {
         // Ignored
       }
     }
-  } else {
+    const queue = [parentPid];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      const children = ppidMap.get(curr);
+      if (children) {
+        for (const child of children) {
+          result.push(child);
+          queue.push(child);
+        }
+      }
+    }
+    return result;
+  } catch {
     try {
-      child.kill("SIGKILL");
+      const output = execFileSync("pgrep", ["-P", String(parentPid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const pids = output
+        .split("\n")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !Number.isNaN(n));
+      for (const p of pids) {
+        result.push(p);
+        result.push(...getDescendantPids(p));
+      }
     } catch {
       // Ignored
     }
+    return result;
+  }
+}
+
+export function killProcessTree(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    const descendants = getDescendantPids(pid);
+    for (const dPid of descendants) {
+      try {
+        process.kill(dPid, "SIGKILL");
+      } catch {
+        // Ignored
+      }
+    }
+  } catch {
+    // Ignored
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Ignored
   }
 }

@@ -85,6 +85,9 @@ interface RawPrJson {
   readonly headRefOid: string;
   readonly baseRefName: string;
   readonly url: string;
+  readonly isCrossRepository?: boolean | undefined;
+  readonly headRepository?: { readonly name?: string | undefined } | null | undefined;
+  readonly headRepositoryOwner?: { readonly login?: string | undefined } | null | undefined;
   readonly mergedAt?: string | null | undefined;
   readonly mergeCommit?: { readonly oid?: string | undefined } | null | undefined;
   readonly statusCheckRollup?: readonly RawStatusCheckItem[] | undefined;
@@ -152,12 +155,24 @@ export class GitHubDeliveryService {
       try {
         await this.runner.exec(createArgs);
       } catch (err: unknown) {
-        // Handle race where PR was created concurrently
-        const errMessage = (err as Error).message || "";
-        if (errMessage.includes("already exists") || errMessage.includes("Pull request already exists")) {
+        // Handle race or uncertain outcome (e.g. timeout, network error, already exists): re-query facts
+        try {
           const freshCandidates = await this.listCandidatePrs(context);
           if (freshCandidates.length === 1) {
             return this.validateAndConvertCandidate(freshCandidates[0]!, context);
+          }
+          if (freshCandidates.length > 1) {
+            throw new DeliveryError(
+              `Multiple candidate PRs found matching head branch '${context.headBranch}' after PR creation error; refusal to prevent hijacking`,
+              {
+                code: "ownership_refusal",
+                details: { count: freshCandidates.length, numbers: freshCandidates.map(c => c.number) },
+              },
+            );
+          }
+        } catch (recoveryErr) {
+          if (recoveryErr instanceof DeliveryError && recoveryErr.code === "ownership_refusal") {
+            throw recoveryErr;
           }
         }
         throw err;
@@ -165,13 +180,21 @@ export class GitHubDeliveryService {
 
       // Re-query newly created PR to obtain full details
       const freshCandidates = await this.listCandidatePrs(context);
-      const created = freshCandidates.find(c => c.headRefName === context.headBranch);
-      if (!created) {
-        throw new DeliveryError("PR was created but could not be retrieved from repository", {
-          code: "cli_malformed_response",
-        });
+      if (freshCandidates.length === 1) {
+        return this.validateAndConvertCandidate(freshCandidates[0]!, context);
       }
-      return this.validateAndConvertCandidate(created, context);
+      if (freshCandidates.length > 1) {
+        throw new DeliveryError(
+          `Multiple candidate PRs found matching head branch '${context.headBranch}' after PR creation; refusal to prevent hijacking`,
+          {
+            code: "ownership_refusal",
+            details: { count: freshCandidates.length, numbers: freshCandidates.map(c => c.number) },
+          },
+        );
+      }
+      throw new DeliveryError("PR was created but could not be retrieved from repository", {
+        code: "cli_malformed_response",
+      });
     }
 
     if (candidates.length === 1) {
@@ -205,6 +228,9 @@ export class GitHubDeliveryService {
       "headRefOid",
       "baseRefName",
       "url",
+      "isCrossRepository",
+      "headRepository",
+      "headRepositoryOwner",
       "mergedAt",
       "mergeCommit",
       "statusCheckRollup",
@@ -240,8 +266,12 @@ export class GitHubDeliveryService {
       );
     }
 
-    // 1. Fetch required checks from gh pr checks --required
-    const requiredCheckNames = await this.fetchRequiredCheckNames(context.repo, pr.number);
+    // 1. Fetch authoritative required checks configuration
+    const requiredCheckNames = await this.fetchRequiredCheckNames(
+      context.repo,
+      pr.number,
+      context.baseBranch,
+    );
 
     // 2. Fetch all current checks from statusCheckRollup (from pr view)
     const viewFields = "statusCheckRollup,headRefOid";
@@ -263,6 +293,17 @@ export class GitHubDeliveryService {
         code: "cli_malformed_response",
         cause: err,
       });
+    }
+
+    // Verify checks belong to the expected head SHA
+    if (rawView.headRefOid && rawView.headRefOid !== pr.headSha) {
+      throw new DeliveryError(
+        `PR head commit changed during checks query: expected ${pr.headSha}, observed ${rawView.headRefOid}`,
+        {
+          code: "head_changed",
+          details: { expected: pr.headSha, actual: rawView.headRefOid },
+        },
+      );
     }
 
     const currentChecks: PrCheck[] = [];
@@ -355,12 +396,17 @@ export class GitHubDeliveryService {
     const pr = await this.readPr(context, { prNumber: options.prNumber });
 
     if (pr.state === "MERGED") {
+      if (!pr.mergeCommitSha || !pr.mergedAt) {
+        throw new DeliveryError(`PR #${pr.number} is merged, but merge commit SHA or timestamp is missing`, {
+          code: "verification_unknown",
+        });
+      }
       return {
         merged: true,
         prNumber: pr.number,
         headSha: pr.headSha,
-        mergeCommitSha: pr.mergeCommitSha ?? pr.headSha,
-        mergedAt: pr.mergedAt ?? new Date().toISOString(),
+        mergeCommitSha: pr.mergeCommitSha,
+        mergedAt: pr.mergedAt,
       };
     }
 
@@ -420,29 +466,53 @@ export class GitHubDeliveryService {
       });
     }
 
-    // 3. Execute squash merge using --match-head-commit
-    const mergeArgs = [
-      "pr",
-      "merge",
-      String(pr.number),
-      "--repo",
-      context.repo,
-      "--squash",
-      "--match-head-commit",
-      targetHeadSha,
-    ];
-    if (options.deleteBranch) {
-      mergeArgs.push("--delete-branch");
+    // 3. Re-read PR state after reading checks and immediately before merge
+    const rePr = await this.readPr(context, { prNumber: pr.number });
+    if (rePr.headSha !== targetHeadSha) {
+      throw new DeliveryError(
+        `PR head commit changed between check verification and merge: expected ${targetHeadSha}, current is ${rePr.headSha}`,
+        {
+          code: "head_changed",
+          details: { expected: targetHeadSha, actual: rePr.headSha },
+        },
+      );
+    }
+    if (rePr.state !== "OPEN") {
+      throw new DeliveryError(`PR state changed to ${rePr.state} before merge`, {
+        code: "merge_rejected",
+        details: { state: rePr.state },
+      });
+    }
+    if (rePr.isDraft) {
+      throw new DeliveryError("PR was switched to draft mode before merge", {
+        code: "merge_rejected",
+      });
+    }
+    if (rePr.mergeable !== "MERGEABLE") {
+      throw new DeliveryError(`PR mergeability changed to ${rePr.mergeable} before merge`, {
+        code: "merge_rejected",
+        details: { mergeable: rePr.mergeable },
+      });
     }
 
+    // 4. Execute squash merge using direct REST API (never gh pr merge --squash, avoiding deferred merge/queue)
     let mergeErr: unknown;
     try {
-      await this.runner.exec(mergeArgs);
+      await this.runner.exec([
+        "api",
+        `repos/${context.repo}/pulls/${pr.number}/merge`,
+        "-X",
+        "PUT",
+        "-F",
+        "merge_method=squash",
+        "-F",
+        `sha=${targetHeadSha}`,
+      ]);
     } catch (err) {
       mergeErr = err;
     }
 
-    // 4. Post-merge verification (CRITICAL invariant: exit code 0 alone is not proof of merge)
+    // 5. Post-merge verification (CRITICAL invariant: exit code 0 alone is not proof of merge)
     let freshPr: PrRecord;
     try {
       freshPr = await this.readPr(context, { prNumber: pr.number });
@@ -456,12 +526,32 @@ export class GitHubDeliveryService {
     }
 
     if (freshPr.state === "MERGED") {
+      if (!freshPr.mergeCommitSha || !freshPr.mergedAt) {
+        throw new DeliveryError(
+          `PR #${freshPr.number} was merged, but merge commit SHA or timestamp is missing`,
+          { code: "verification_unknown" },
+        );
+      }
+
+      if (options.deleteBranch) {
+        try {
+          await this.runner.exec([
+            "api",
+            `repos/${context.repo}/git/refs/heads/${encodeURIComponent(context.headBranch)}`,
+            "-X",
+            "DELETE",
+          ]);
+        } catch {
+          // Non-fatal if branch deletion fails or was already deleted
+        }
+      }
+
       return {
         merged: true,
         prNumber: freshPr.number,
         headSha: targetHeadSha,
-        mergeCommitSha: freshPr.mergeCommitSha ?? targetHeadSha,
-        mergedAt: freshPr.mergedAt ?? new Date().toISOString(),
+        mergeCommitSha: freshPr.mergeCommitSha,
+        mergedAt: freshPr.mergedAt,
       };
     }
 
@@ -532,6 +622,9 @@ export class GitHubDeliveryService {
       "headRefOid",
       "baseRefName",
       "url",
+      "isCrossRepository",
+      "headRepository",
+      "headRepositoryOwner",
       "mergedAt",
       "mergeCommit",
     ].join(",");
@@ -562,7 +655,34 @@ export class GitHubDeliveryService {
   }
 
   private validateAndConvertCandidate(candidate: RawPrJson, context: DeliveryContext): PrRecord {
-    // Verify base branch matches
+    // 1. Verify head branch matches context
+    if (candidate.headRefName !== context.headBranch) {
+      throw new DeliveryError(
+        `PR #${candidate.number} head branch mismatch: expected '${context.headBranch}', got '${candidate.headRefName}'`,
+        { code: "ownership_refusal" },
+      );
+    }
+
+    // 2. Reject fork / cross-repository PRs
+    if (candidate.isCrossRepository) {
+      throw new DeliveryError(
+        `PR #${candidate.number} is from a cross-repository fork; refusal to prevent foreign takeover`,
+        { code: "ownership_refusal" },
+      );
+    }
+
+    // 3. Verify head repository matches target repository
+    if (candidate.headRepositoryOwner?.login && candidate.headRepository?.name) {
+      const headRepoSlug = `${candidate.headRepositoryOwner.login}/${candidate.headRepository.name}`.toLowerCase();
+      if (headRepoSlug !== context.repo.toLowerCase()) {
+        throw new DeliveryError(
+          `PR #${candidate.number} head repository mismatch: expected '${context.repo}', got '${headRepoSlug}'`,
+          { code: "ownership_refusal" },
+        );
+      }
+    }
+
+    // 4. Verify base branch matches
     if (candidate.baseRefName !== context.baseBranch) {
       throw new DeliveryError(
         `PR #${candidate.number} base branch mismatch: expected '${context.baseBranch}', got '${candidate.baseRefName}'`,
@@ -570,7 +690,7 @@ export class GitHubDeliveryService {
       );
     }
 
-    // Verify ownership marker
+    // 5. Verify ownership marker and exact closing issue association
     const validation = validatePrOwnership(candidate.body ?? "", context);
     if (!validation.valid) {
       throw new DeliveryError(
@@ -620,37 +740,136 @@ export class GitHubDeliveryService {
     };
   }
 
-  private async fetchRequiredCheckNames(repo: string, prNumber: number): Promise<Set<string>> {
+  private async fetchRequiredCheckNames(repo: string, prNumber: number, baseBranch: string): Promise<Set<string>> {
     const requiredNames = new Set<string>();
+    const [owner, repoName] = repo.split("/");
+    if (!owner || !repoName) {
+      throw new DeliveryError(`Invalid repository slug '${repo}'`, { code: "invalid_context" });
+    }
+
+    // 1. Query GraphQL for branchProtectionRule on baseRef
+    const query = `query($owner: String!, $repo: String!, $pr: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) {
+          baseRef {
+            branchProtectionRule {
+              requiredStatusCheckContexts
+              requiredStatusChecks { context }
+            }
+          }
+        }
+      }
+    }`;
 
     try {
-      const res = await this.runner.exec(
-        ["pr", "checks", String(prNumber), "--repo", repo, "--required"],
-        { allowedExitCodes: [0, 8, 1] },
-      );
+      const res = await this.runner.exec([
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `repo=${repoName}`,
+        "-F",
+        `pr=${prNumber}`,
+      ]);
 
-      const out = res.stdout;
-      if (out.includes("no required checks reported")) {
-        return requiredNames;
+      interface GraphQLResponse {
+        readonly data?: {
+          readonly repository?: {
+            readonly pullRequest?: {
+              readonly baseRef?: {
+                readonly branchProtectionRule?: {
+                  readonly requiredStatusCheckContexts?: readonly string[] | null;
+                  readonly requiredStatusChecks?: ReadonlyArray<{ readonly context: string }> | null;
+                } | null;
+              } | null;
+            } | null;
+          } | null;
+        } | null;
+        readonly errors?: ReadonlyArray<{ readonly message?: string }> | null;
       }
 
-      // Parse tab-delimited checks: name\tstatus\tduration\turl
-      const lines = out.split("\n");
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const parts = line.split("\t");
-        const name = parts[0]?.trim();
-        if (name && name !== "name") {
-          requiredNames.add(name);
+      let json: GraphQLResponse;
+      try {
+        json = JSON.parse(res.stdout) as GraphQLResponse;
+      } catch (err) {
+        throw new DeliveryError("Failed to parse GraphQL response for branch protection checks", {
+          code: "checks_unknown",
+          cause: err,
+        });
+      }
+
+      if (json.errors && Array.isArray(json.errors) && json.errors.length > 0) {
+        throw new DeliveryError(
+          `GraphQL error querying branch protection checks: ${json.errors[0]?.message ?? "unknown"}`,
+          { code: "checks_unknown" },
+        );
+      }
+
+      const bpr = json.data?.repository?.pullRequest?.baseRef?.branchProtectionRule;
+      if (bpr) {
+        if (Array.isArray(bpr.requiredStatusCheckContexts)) {
+          for (const ctx of bpr.requiredStatusCheckContexts) {
+            if (typeof ctx === "string" && ctx.trim()) {
+              requiredNames.add(ctx.trim());
+            }
+          }
+        }
+        if (Array.isArray(bpr.requiredStatusChecks)) {
+          for (const check of bpr.requiredStatusChecks) {
+            if (check && typeof check.context === "string" && check.context.trim()) {
+              requiredNames.add(check.context.trim());
+            }
+          }
         }
       }
     } catch (err) {
-      // If gh pr checks --required failed with fatal exit code, surface as error
-      throw new DeliveryError(`Failed to query required checks for PR #${prNumber}: ${(err as Error).message}`, {
-        code: "checks_unknown",
-        cause: err,
-      });
+      if (err instanceof DeliveryError && err.code === "checks_unknown") {
+        throw err;
+      }
+      throw new DeliveryError(
+        `Failed to query branch protection required checks for PR #${prNumber}: ${(err as Error).message}`,
+        {
+          code: "checks_unknown",
+          cause: err,
+        },
+      );
+    }
+
+    // 2. Query repository branch rulesets (REST)
+    try {
+      const rulesRes = await this.runner.exec([
+        "api",
+        `repos/${repo}/rules/branches/${encodeURIComponent(baseBranch)}`,
+      ], { allowedExitCodes: [0, 404] });
+
+      interface RulesetItem {
+        readonly type?: string;
+        readonly parameters?: {
+          readonly required_status_checks?: ReadonlyArray<{ readonly context: string }>;
+        };
+      }
+
+      if (rulesRes.exitCode === 0 && rulesRes.stdout.trim().startsWith("[")) {
+        const rules = JSON.parse(rulesRes.stdout) as readonly RulesetItem[];
+        if (Array.isArray(rules)) {
+          for (const rule of rules) {
+            if (rule?.type === "required_status_checks" && rule.parameters?.required_status_checks) {
+              for (const item of rule.parameters.required_status_checks) {
+                if (item?.context && typeof item.context === "string" && item.context.trim()) {
+                  requiredNames.add(item.context.trim());
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof DeliveryError && err.code === "auth_failure") {
+        throw err;
+      }
     }
 
     return requiredNames;

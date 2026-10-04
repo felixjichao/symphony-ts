@@ -28,30 +28,31 @@ We implement the GitHub delivery execution capability across `@symphony/domain`,
      - `readPr`: Inspects PR state, mergeability, draft status, and validates ownership markers.
      - `readChecks`: Binds check evaluation to the head commit SHA, extracts required checks and check runs / status contexts, and evaluates CI auto-merge policy.
      - `diagnoseFailedChecks`: Formats safe, human-readable diagnostics for pending or failing checks with sanitized links.
-     - `landPr`: Requires explicit opt-in (`--opt-in`), verifies open and mergeable status, executes squash merge with `--match-head-commit <sha>`, and verifies final `state === "MERGED"` by re-reading the PR.
+     - `landPr`: Requires explicit opt-in (`--opt-in`), verifies open and mergeable status, executes direct conditional squash merge via REST API (`PUT /repos/{owner}/{repo}/pulls/{number}/merge` with `sha`), re-verifies PR state before merge, and verifies final `state === "MERGED"` by re-reading the PR without fabricating completion timestamps or commit SHAs.
      - `verifyMerged`: Verifies whether a PR is in the final merged state and retrieves merge commit details.
    - Subprocess safety (`DefaultGhRunner`):
-     - Executes `gh` via argv spawn (no shell interpolation).
-     - Credential sanitization (`sanitizeCredentials`): strips PATs (`ghp_*`, `github_pat_*`), OAuth tokens, Authorization headers, and URLs with embedded user credentials.
-     - Handles `gh pr checks` exit code 8 (pending checks) without treating it as CLI failure.
-     - Subprocess timeout enforcement with process-group `SIGKILL`.
+     - Executes `gh` via argv spawn (no shell interpolation), inheriting caller process group without `detached: true` so external cancellation terminates the entire delivery subprocess tree.
+     - Credential sanitization (`sanitizeCredentials`): strips PATs (`ghp_*`, `github_pat_*`), OAuth tokens, Authorization headers, and URLs with embedded user credentials. Output and error fields use whitelisted safe summaries instead of raw stderr dumps.
+     - Subprocess timeout enforcement with recursive `killProcessTree`.
+     - Temporary MVP Trust Boundary: In MVP.3, child workspace processes invoke `gh` using the environment's existing credential store (`gh auth` / `GH_TOKEN`). This is an explicit, temporary MVP trust boundary; target architecture is host-side provider-native tools (SPEC §11.5) where credentials remain isolated on the orchestrator host and are never exposed to child workspace tasks.
+     - Marker Boundary Limitation: The PR ownership marker (`<!-- symphony-delivery-marker: ... -->`) serves as durable association evidence for cooperative workflows within the repository. It is NOT a cryptographic proof against malicious repo writers who have write access to PR bodies. Cross-repository forks and mismatched head branches are strictly rejected at the API level (`isCrossRepository === false` and `headRefName === context.headBranch`).
 
 3. **CLI Host Integration (`@symphony/cli`)**:
    - Subcommands `symphony pr <action>` and `symphony delivery <action>`:
      - Actions: `ensure`, `read`, `checks`, `diagnostics`, `land`, `verify`.
-     - Supports `--json` flag for machine-readable JSON output and standard text formatting.
-     - Structured error exits with sanitized diagnostics.
+     - Supports `--json` flag for machine-readable JSON output across all commands (including diagnostics, help, and structured error exits).
+     - Structured error exits with sanitized diagnostics and whitelisted error details.
 
 ## Alternatives considered
 
 - **Alternative 1: Relying purely on branch name or PR title to claim existing PRs**:
-  Rejected because external contributors or other automations might open PRs with similar titles or branch prefixes. Using structured machine-readable Symphony markers combined with issue closing keywords prevents unauthorized takeover of foreign pull requests.
+  Rejected because external contributors or other automations might open PRs with similar titles or branch prefixes. Using structured machine-readable Symphony markers combined with issue closing keywords prevents accidental claim of foreign pull requests, though it relies on cooperative repository trust.
 
 - **Alternative 2: Permitting auto-merge when zero CI checks exist (empty set assumption)**:
   Rejected because merging before any CI check runs or in unconfigured repositories risks merging broken code. Requiring at least one strictly successful check when branch protection is absent provides a safe fallback without requiring pre-configured branch protection rules.
 
 - **Alternative 3: Treating `gh pr merge` exit code 0 as sufficient proof of merge completion**:
-  Rejected because exit codes from API wrappers can indicate accepted or queued requests rather than completed merges. The implementation mandates re-reading the PR from GitHub to verify `state === "MERGED"` and obtain the verified merge commit SHA.
+  Rejected because `gh pr merge --squash` can implicitly queue or enable deferred auto-merge in repositories with merge queues, and exit codes from API wrappers can indicate accepted or queued requests rather than completed merges. The implementation mandates direct REST squash merge and re-reading the PR from GitHub to verify `state === "MERGED"` with non-falsified merge commit SHA and merged timestamp.
 
 - **Alternative 4: Putting delivery tools directly into `@symphony/orchestrator`**:
   Rejected because delivery operations represent provider-specific external tools (SPEC §11.5). Orchestrator must focus on coordination and scheduling; placing delivery in `@symphony/tracker` and exposing it via `@symphony/cli` preserves clean dependency boundaries.
@@ -59,5 +60,6 @@ We implement the GitHub delivery execution capability across `@symphony/domain`,
 ## Consequences
 
 - Automated agents and workflows have deterministic primitives to manage pull requests, CI verification, and squash merges.
-- Full credential privacy: tokens and credentials are sanitized from outputs, errors, and URLs.
-- Conformance matrix updated with §11.5 / §17.3 delivery capability.
+- Temporary MVP trust boundary documented for child `gh` credential access, preserving clear migration path to host-side provider-native tools (§11.5).
+- Full credential privacy: tokens and credentials are sanitized from outputs, errors, and URLs, and raw stderr is never dumped into error details.
+- Conformance matrix updated with §11.5 / §17.3 delivery capability and documented security boundaries.
