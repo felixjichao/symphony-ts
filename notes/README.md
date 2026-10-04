@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [accepted/architecture/2026-10-04-github-delivery-mvp.md](accepted/architecture/2026-10-04-github-delivery-mvp.md) — GitHub Delivery MVP.3 交付原语与自动合并能力（SPEC §11.5 / §17.3，NEST-92 / #81）：`GitHubDeliveryService` 与 `symphony pr` CLI 支撑创建/复用 PR（精确保留 Symphony 所有权 marker 与 closing 关联、拒绝外国 PR / 歧义候选 / closed-unmerged）、基于 head commit SHA 的 required 与 current checks 判定（确认用户决策：有 required 严格全 green，无 required 至少 1 条严格全 green，其余均拒绝）、严格 squash 自动合并（显式 opt-in、服务端 `--match-head-commit` 校验、合并后重读事实验证 final merged state）、全链路凭据脱敏（URL/Token/Headers 零泄露）与子进程超时孤儿子树清理。
+
 - [accepted/architecture/2026-10-04-repository-workspace-bootstrap.md](accepted/architecture/2026-10-04-repository-workspace-bootstrap.md) — 仓储工作区引导与确定性 Issue 分支同步（SPEC §9 / §17.2，NEST-90 / #79）：`bootstrapRepository` 与 `symphony repo-bootstrap` CLI 支撑目标仓库 clone、动态默认分支探测（非硬编码 main）、确定性分支命名（`symphony/<workspaceKey>`）、安全重入与同步（脏工作区与本地提交零破坏性覆盖、干净工作区 fast-forward、未识别内容与 origin URL 不匹配安全失败）、URL 敏感凭据过滤与 hook 环境变量注入（`SYMPHONY_WORKSPACE_KEY` / `SYMPHONY_ISSUE_IDENTIFIER`）。
 
 - [accepted/architecture/2026-10-04-codex-protocol-drift-assessment-0.160.0.md](accepted/architecture/2026-10-04-codex-protocol-drift-assessment-0.160.0.md) — Codex 协议漂移评估（rust-v0.159.2 → rust-v0.160.0）：app-server-protocol 树哈希完全一致，24 项必查 schema surface 零漂移，裁定保持 pinned rust-v0.159.2，无迁移需求（NEST-88 / #75）。

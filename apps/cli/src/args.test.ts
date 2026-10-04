@@ -40,6 +40,17 @@ describe("parseCliArgs", () => {
       subcommandArgs: ["--repo", "https://github.com/org/repo.git"],
     });
   });
+
+  it("recognizes pr and delivery subcommands and arguments", () => {
+    expect(parseCliArgs(["pr", "ensure", "--repo", "org/repo", "--issue", "81"])).toEqual({
+      subcommand: "delivery",
+      subcommandArgs: ["ensure", "--repo", "org/repo", "--issue", "81"],
+    });
+    expect(parseCliArgs(["delivery", "land", "--opt-in"])).toEqual({
+      subcommand: "delivery",
+      subcommandArgs: ["land", "--opt-in"],
+    });
+  });
 });
 
 describe("resolveWorkflowPath", () => {
