@@ -59,19 +59,19 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
   - 返回可判别结果 `RemoveWorkspaceResult`：`removed` / `missing`（幂等成功，不运行 hook）/ `refused`（unsafe·out-of-root·非目录·root 不可用——**未运行 hook、未执行任何 destructive delete**，携带 typed `reason`）/ `failed`（filesystem 删除失败，不吞、携带 `cause`）；
   - `before_remove` 为 best-effort（failure / timeout → operator 事件，cleanup 继续）；删除前**双重** #28 containment 校验（hook 前 + destructive delete 前，收窄 TOCTOU）；
   - 除非法 identifier（抛 `invalid_identifier`）外全部经结果返回，便于 M5 在 sweep 循环里逐项处理；**调用方必须检查 `status`**。
-- `bootstrapRepository(options: RepositoryBootstrapOptions): Promise<RepositoryBootstrapResult>`（NEST-90 / #79，SPEC §9 / §17.2 条件扩展）：
-  - 目标工作区自动化 Git 引导与确定性 Issue 分支同步（默认分支 `symphony/<workspaceKey>`，`workspaceKey` 缺省由目标目录基名推导）；
+- `bootstrapRepository(options: BootstrapRepositoryOptions): Promise<BootstrapRepositoryResult>`（NEST-90 / #79，SPEC §9 / §17.2 条件扩展）：
+  - 目标工作区自动化 Git 引导与确定性 Issue 分支同步（默认分支 `symphony/<workspaceKey>`，`workspaceKey` 缺省由目标目录基名推导）；类型别名 `RepositoryBootstrapOptions` 与 `RepositoryBootstrapResult` 完全等价导出；
   - 动态探测 remote 默认分支（`refs/remotes/origin/HEAD` 或 `git ls-remote`，绝不硬编码 `main`/`master`）；
   - 重入与同步语义（Fail Safely）：
-    - 异分支且工作区 dirty：抛 `dirty_working_tree` 拒绝并阻止破坏性 checkout；
+    - 异分支且工作区 dirty：抛 `dirty_working_tree_on_switch` 拒绝并阻止破坏性 checkout；
     - 干净工作区且 HEAD 是 remote 默认分支的祖先：自动 fast-forward 到最新 remote 默认分支；
     - 脏工作区（未提交/未追踪更改）或分支包含本地提交：严格保留本地工作区与 HEAD，不执行破坏性 reset / rebase / pull；
     - 远端已存在同名 issue 分支：自动复用并追踪远端分支；
-    - 目标目录为非空非 git 目录：抛 `unrecognized_workspace_content` 拒绝；
-    - 已有仓储 `origin` URL 与传入仓库不一致：抛 `origin_url_mismatch` 拒绝；
-    - 存在进行中 git 操作（`MERGE_HEAD` / `REBASE_HEAD` 等）：抛 `git_in_progress` 拒绝；
+    - 目标目录为非空非 git 目录：抛 `unrecognized_non_empty_directory` 拒绝；
+    - 已有仓储 `origin` URL 与传入仓库不一致：抛 `repository_url_mismatch` 拒绝；
+    - 存在进行中 git 操作（`MERGE_HEAD` / `rebase-merge` 等）：抛 `git_operation_in_progress` 拒绝；
   - 安全与防护：所有 URL 敏感凭据脱敏（`sanitizeRepoUrl`）、子进程 `GIT_TERMINAL_PROMPT=0` 防交互挂起、超时 SIGKILL 进程组；
-- `runRepositoryBootstrapCli(argv: string[], io?: RepositoryBootstrapCliIo): Promise<number>`：
+- `runRepositoryBootstrapCli(argv: string[], io?: BootstrapCliIo): Promise<number>`：
   - 供 `@symphony/cli` 直接调用的轻量独立 CLI 执行器（0 成功、非 0 失败，脱敏诊断输出）。
 
 ### 错误契约（SPEC §9 / §17.2）
@@ -103,13 +103,17 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
 
 | 错误码（`code`） | 触发时机 |
 |---|---|
-| `missing_repository_url` | 缺少必需的 repository URL 参数 |
-| `unrecognized_workspace_content` | 目标路径存在非空文件/目录但缺少 `.git`，拒绝覆盖未知内容 |
-| `origin_url_mismatch` | 已存在仓储的 `origin` remote URL 与配置不匹配 |
-| `git_in_progress` | 仓储处于正在进行的合并、变基或挑选状态（如存在 `MERGE_HEAD`、`rebase-merge` 等） |
-| `dirty_working_tree` | 当前所在分支与目标分支不一致且工作区存在未提交/未追踪更改，拒绝破坏性切换 |
+| `invalid_repository_url` | 缺少必需的 repository URL 参数或 URL 格式非法 |
+| `invalid_workspace_path` | 目标工作区路径非法或不可解析 |
+| `unrecognized_non_empty_directory` | 目标路径存在非空文件/目录但缺少 `.git`，拒绝覆盖未知内容 |
+| `repository_url_mismatch` | 已存在仓储的 `origin` remote URL 与配置不匹配 |
+| `git_operation_in_progress` | 仓储处于正在进行的合并、变基或挑选状态（如存在 `MERGE_HEAD`、`rebase-merge` 等） |
+| `dirty_working_tree_on_switch` | 当前所在分支与目标分支不一致且工作区存在未提交/未追踪更改，拒绝破坏性切换 |
+| `invalid_branch_name` | 分支名称为空或不符合 git check-ref-format 规则 |
+| `missing_remote_default_branch` | 无法发现或刷新远端默认分支 |
+| `git_not_found` | 系统 PATH 中未找到 git 可执行程序 |
 | `git_command_failed` | 底层 git 命令执行失败（非零退出码） |
-| `git_timeout` | 底层 git 命令执行超时（超过配置的 `timeoutMs`，进程组被强制终止） |
+| `git_command_timeout` | 底层 git 命令执行超时（超过配置的 `timeoutMs`，进程组被强制终止） |
 
 ## Safety Invariants & Path Safety（SPEC §9.5 / #28）
 

@@ -92,5 +92,8 @@ export type {
   BootstrapCliIo,
   BootstrapRepositoryOptions,
   BootstrapRepositoryResult,
+  ParsedRepositoryBootstrapArgs,
   RepositoryBootstrapErrorCode,
+  RepositoryBootstrapOptions,
+  RepositoryBootstrapResult,
 } from "./repository-bootstrap";

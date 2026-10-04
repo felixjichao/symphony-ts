@@ -26,11 +26,17 @@ export class RepositoryBootstrapError extends Error {
   readonly code: RepositoryBootstrapErrorCode;
   readonly phase?: string | undefined;
   readonly sanitizedUrl?: string | undefined;
+  readonly details?: Record<string, unknown> | undefined;
 
   constructor(
     code: RepositoryBootstrapErrorCode,
     message: string,
-    options?: { phase?: string | undefined; sanitizedUrl?: string | undefined; cause?: unknown },
+    options?: {
+      phase?: string | undefined;
+      sanitizedUrl?: string | undefined;
+      details?: Record<string, unknown> | undefined;
+      cause?: unknown;
+    },
   ) {
     super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = "RepositoryBootstrapError";
@@ -41,6 +47,11 @@ export class RepositoryBootstrapError extends Error {
     if (options?.sanitizedUrl !== undefined) {
       this.sanitizedUrl = options.sanitizedUrl;
     }
+    this.details = {
+      ...(options?.details ?? {}),
+      ...(options?.phase !== undefined ? { phase: options.phase } : {}),
+      ...(options?.sanitizedUrl !== undefined ? { sanitizedUrl: options.sanitizedUrl } : {}),
+    };
   }
 }
 
@@ -87,10 +98,22 @@ export interface BootstrapRepositoryResult {
 }
 
 /**
+ * {@link BootstrapRepositoryOptions} 的别名。
+ */
+export type RepositoryBootstrapOptions = BootstrapRepositoryOptions;
+
+/**
+ * {@link BootstrapRepositoryResult} 的别名。
+ */
+export type RepositoryBootstrapResult = BootstrapRepositoryResult;
+
+/**
  * 脱敏 URL 中的凭据（token / 密码）。
  */
 export function sanitizeRepoUrl(url: string): string {
-  return url.replace(/^(https?:\/\/)([^:@\s]+):([^@\s]+)@/i, "$1***:***@");
+  return url.replace(/(https?:\/\/)([^@\s/]+)@/gi, (_match, proto, userinfo: string) => {
+    return userinfo.includes(":") ? `${proto}***:***@` : `${proto}***@`;
+  });
 }
 
 /**
@@ -111,14 +134,27 @@ export function normalizeGitUrl(url: string): string {
 
 function sanitizeText(text: string, repoUrl: string): string {
   let result = text;
-  const credMatch = repoUrl.match(/^(https?:\/\/)([^:@\s]+):([^@\s]+)@/i);
-  if (credMatch && credMatch[2] && credMatch[3]) {
-    const userPass = `${credMatch[2]}:${credMatch[3]}`;
-    result = result.split(userPass).join("***:***");
+  const credMatch = repoUrl.match(/https?:\/\/([^@\s/]+)@/i);
+  if (credMatch && credMatch[1]) {
+    const userinfo = credMatch[1];
+    result = result.split(userinfo).join("***");
     try {
-      result = result.split(encodeURIComponent(userPass)).join("***:***");
+      result = result.split(encodeURIComponent(userinfo)).join("***");
     } catch {
       // ignore URI decode error
+    }
+    if (userinfo.includes(":")) {
+      const parts = userinfo.split(":");
+      for (const part of parts) {
+        if (part.length > 0) {
+          result = result.split(part).join("***");
+          try {
+            result = result.split(encodeURIComponent(part)).join("***");
+          } catch {
+            // ignore
+          }
+        }
+      }
     }
   }
   return sanitizeRepoUrl(result);
@@ -236,6 +272,8 @@ async function discoverDefaultBranch(
   timeoutMs: number,
   repoUrl: string,
 ): Promise<string> {
+  // 1. 尝试主动向远端刷新 origin/HEAD（覆盖远端默认分支变更场景）
+  await execGit(["remote", "set-head", "origin", "--auto"], cwd, timeoutMs);
   let res = await execGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, timeoutMs);
   if (res.exitCode === 0 && res.stdout) {
     const prefix = "origin/";
@@ -245,7 +283,19 @@ async function discoverDefaultBranch(
     return res.stdout;
   }
 
-  await execGit(["remote", "set-head", "origin", "--auto"], cwd, timeoutMs);
+  // 2. 尝试通过 git ls-remote --symref origin HEAD 实时查询远端 HEAD
+  const lsRes = await execGit(["ls-remote", "--symref", "origin", "HEAD"], cwd, timeoutMs);
+  if (lsRes.exitCode === 0 && lsRes.stdout) {
+    const match = lsRes.stdout.match(/ref:\s+refs\/heads\/([^\s]+)\s+HEAD/);
+    if (match && match[1]) {
+      const branch = match[1];
+      // 同步更新本地 origin/HEAD
+      await execGit(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`], cwd, timeoutMs);
+      return branch;
+    }
+  }
+
+  // 3. 检查本地既有 refs/remotes/origin/HEAD（离线/网络受限下的安全降级）
   res = await execGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, timeoutMs);
   if (res.exitCode === 0 && res.stdout) {
     const prefix = "origin/";
@@ -255,19 +305,7 @@ async function discoverDefaultBranch(
     return res.stdout;
   }
 
-  const lsRes = await execGit(["ls-remote", "--symref", "origin", "HEAD"], cwd, timeoutMs);
-  if (lsRes.exitCode === 0 && lsRes.stdout) {
-    const match = lsRes.stdout.match(/ref:\s+refs\/heads\/([^\s]+)\s+HEAD/);
-    if (match && match[1]) {
-      return match[1];
-    }
-  }
-
-  const headRes = await execGit(["symbolic-ref", "--short", "HEAD"], cwd, timeoutMs);
-  if (headRes.exitCode === 0 && headRes.stdout) {
-    return headRes.stdout;
-  }
-
+  // 严禁以当前 issue branch 冒充远端默认分支！无法确定时明确失败
   throw new RepositoryBootstrapError(
     "missing_remote_default_branch",
     `Could not determine default branch for repository ${sanitizeRepoUrl(repoUrl)}`,
@@ -441,11 +479,20 @@ export async function bootstrapRepository(
       }
       const canFf = await isAncestor("HEAD", `origin/${defaultBranch}`, cwd, timeoutMs);
       if (canFf) {
-        const ffRes = await execGit(["merge", "--ff-only", `origin/${defaultBranch}`], cwd, timeoutMs);
-        if (ffRes.exitCode === 0) {
-          status = "fast_forwarded";
-        } else {
+        const headRev = await execGit(["rev-parse", "HEAD"], cwd, timeoutMs);
+        const remoteDefRev = await execGit(["rev-parse", `origin/${defaultBranch}`], cwd, timeoutMs);
+        if (headRev.stdout === remoteDefRev.stdout) {
           status = "reused";
+        } else {
+          const ffRes = await execGit(["merge", "--ff-only", `origin/${defaultBranch}`], cwd, timeoutMs);
+          if (ffRes.exitCode !== 0) {
+            throw new RepositoryBootstrapError(
+              "git_command_failed",
+              `Failed to fast-forward remote issue branch ${issueBranch} to origin/${defaultBranch}: ${sanitizeText(ffRes.stderr, rawUrl)}`,
+              { phase: "fast_forward", sanitizedUrl },
+            );
+          }
+          status = "fast_forwarded";
         }
       } else {
         status = "reused";
@@ -490,10 +537,11 @@ export async function bootstrapRepository(
     }
     const existingOrigin = remoteUrlRes.stdout;
     if (normalizeGitUrl(existingOrigin) !== normalizeGitUrl(rawUrl)) {
+      const sanitizedExistingOrigin = sanitizeRepoUrl(existingOrigin);
       throw new RepositoryBootstrapError(
         "repository_url_mismatch",
-        `Existing git repository origin "${sanitizeRepoUrl(existingOrigin)}" does not match requested "${sanitizedUrl}"`,
-        { sanitizedUrl },
+        `Existing git repository origin "${sanitizedExistingOrigin}" does not match requested "${sanitizedUrl}"`,
+        { sanitizedUrl, details: { existingOrigin: sanitizedExistingOrigin } },
       );
     }
 
@@ -571,11 +619,14 @@ export async function bootstrapRepository(
           status = "reused";
         } else {
           const mergeRes = await execGit(["merge", "--ff-only", `origin/${defaultBranch}`], cwd, timeoutMs);
-          if (mergeRes.exitCode === 0) {
-            status = "fast_forwarded";
-          } else {
-            status = "reused";
+          if (mergeRes.exitCode !== 0) {
+            throw new RepositoryBootstrapError(
+              "git_command_failed",
+              `Failed to fast-forward issue branch ${issueBranch} to origin/${defaultBranch}: ${sanitizeText(mergeRes.stderr, rawUrl)}`,
+              { phase: "fast_forward", sanitizedUrl },
+            );
           }
+          status = "fast_forwarded";
         }
       } else {
         status = "reused";
@@ -594,10 +645,31 @@ export async function bootstrapRepository(
     process.env.GIT_AUTHOR_EMAIL ??
     "symphony[bot]@users.noreply.github.com";
 
-  await execGit(["config", "user.name", userName], cwd, timeoutMs);
-  await execGit(["config", "user.email", userEmail], cwd, timeoutMs);
+  const nameRes = await execGit(["config", "user.name", userName], cwd, timeoutMs);
+  if (nameRes.exitCode !== 0) {
+    throw new RepositoryBootstrapError(
+      "git_command_failed",
+      `Failed to configure git user.name: ${sanitizeText(nameRes.stderr, rawUrl)}`,
+      { phase: "config_identity", sanitizedUrl },
+    );
+  }
+  const emailRes = await execGit(["config", "user.email", userEmail], cwd, timeoutMs);
+  if (emailRes.exitCode !== 0) {
+    throw new RepositoryBootstrapError(
+      "git_command_failed",
+      `Failed to configure git user.email: ${sanitizeText(emailRes.stderr, rawUrl)}`,
+      { phase: "config_identity", sanitizedUrl },
+    );
+  }
 
   const headRes = await execGit(["rev-parse", "HEAD"], cwd, timeoutMs);
+  if (headRes.exitCode !== 0 || !headRes.stdout) {
+    throw new RepositoryBootstrapError(
+      "git_command_failed",
+      `Failed to resolve HEAD commit: ${sanitizeText(headRes.stderr, rawUrl)}`,
+      { phase: "resolve_head", sanitizedUrl },
+    );
+  }
   const headCommit = headRes.stdout;
 
   return {
@@ -619,51 +691,96 @@ export interface BootstrapCliIo {
 }
 
 /**
+ * 解析后的命令行参数。
+ */
+export interface ParsedRepositoryBootstrapArgs {
+  readonly help: boolean;
+  readonly repoUrl?: string | undefined;
+  readonly target?: string | undefined;
+  readonly cwd?: string | undefined;
+  readonly issueBranch?: string | undefined;
+  readonly workspaceKey?: string | undefined;
+  readonly userName?: string | undefined;
+  readonly userEmail?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+  readonly error?: string | undefined;
+}
+
+/**
  * 解析 repository bootstrap 命令行参数。
  */
-export function parseRepositoryBootstrapArgs(argv: readonly string[]): {
-  help: boolean;
-  repoUrl?: string | undefined;
-  issueBranch?: string | undefined;
-  workspaceKey?: string | undefined;
-  userName?: string | undefined;
-  userEmail?: string | undefined;
-  cwd?: string | undefined;
-  timeoutMs?: number | undefined;
-} {
+export function parseRepositoryBootstrapArgs(argv: readonly string[]): ParsedRepositoryBootstrapArgs {
   let help = false;
   let repoUrl: string | undefined;
   let issueBranch: string | undefined;
   let workspaceKey: string | undefined;
   let userName: string | undefined;
   let userEmail: string | undefined;
-  let cwd: string | undefined;
+  let target: string | undefined;
   let timeoutMs: number | undefined;
+  let error: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h") {
       help = true;
-    } else if ((arg === "--repo" || arg === "-r") && i + 1 < argv.length) {
-      repoUrl = argv[++i];
-    } else if ((arg === "--branch" || arg === "-b") && i + 1 < argv.length) {
-      issueBranch = argv[++i];
-    } else if ((arg === "--workspace-key" || arg === "-k") && i + 1 < argv.length) {
-      workspaceKey = argv[++i];
-    } else if (arg === "--user-name" && i + 1 < argv.length) {
-      userName = argv[++i];
-    } else if (arg === "--user-email" && i + 1 < argv.length) {
-      userEmail = argv[++i];
-    } else if (arg === "--cwd" && i + 1 < argv.length) {
-      cwd = argv[++i];
-    } else if (arg === "--timeout-ms" && i + 1 < argv.length) {
-      const parsed = parseInt(argv[++i]!, 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        timeoutMs = parsed;
+    } else if (arg === "--repo" || arg === "-r") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --repo requires a value";
+        break;
       }
-    } else if (!arg.startsWith("-")) {
+      repoUrl = argv[++i];
+    } else if (arg === "--branch" || arg === "-b") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --branch requires a value";
+        break;
+      }
+      issueBranch = argv[++i];
+    } else if (arg === "--workspace-key" || arg === "-k") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --workspace-key requires a value";
+        break;
+      }
+      workspaceKey = argv[++i];
+    } else if (arg === "--user-name") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --user-name requires a value";
+        break;
+      }
+      userName = argv[++i];
+    } else if (arg === "--user-email") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --user-email requires a value";
+        break;
+      }
+      userEmail = argv[++i];
+    } else if (arg === "--target" || arg === "-t" || arg === "--cwd") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = `Option ${arg} requires a value`;
+        break;
+      }
+      target = argv[++i];
+    } else if (arg === "--timeout-ms") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        error = "Option --timeout-ms requires a value";
+        break;
+      }
+      const val = argv[++i]!;
+      const parsed = parseInt(val, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        error = `Invalid --timeout-ms value "${val}": must be a positive integer`;
+        break;
+      }
+      timeoutMs = parsed;
+    } else if (arg.startsWith("-")) {
+      error = `Unknown option: ${arg}`;
+      break;
+    } else {
       if (repoUrl === undefined) {
         repoUrl = arg;
+      } else {
+        error = `Unexpected positional argument: ${arg}`;
+        break;
       }
     }
   }
@@ -675,8 +792,9 @@ export function parseRepositoryBootstrapArgs(argv: readonly string[]): {
     ...(workspaceKey !== undefined ? { workspaceKey } : {}),
     ...(userName !== undefined ? { userName } : {}),
     ...(userEmail !== undefined ? { userEmail } : {}),
-    ...(cwd !== undefined ? { cwd } : {}),
+    ...(target !== undefined ? { target, cwd: target } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(error !== undefined ? { error } : {}),
   };
 }
 
@@ -695,15 +813,21 @@ export async function runRepositoryBootstrapCli(
       "Bootstrap git repository in workspace and create/reuse deterministic issue branch.\n\n" +
       "Options:\n" +
       "  --repo, -r <url>          Target repository URL\n" +
+      "  --target, -t <path>       Workspace target directory (defaults to process.cwd())\n" +
       "  --branch, -b <name>       Issue branch name (defaults to symphony/<workspaceKey>)\n" +
-      "  --workspace-key, -k <key> Workspace key (defaults to SYMPHONY_WORKSPACE_KEY or cwd basename)\n" +
+      "  --workspace-key, -k <key> Workspace key (defaults to SYMPHONY_WORKSPACE_KEY or target basename)\n" +
       "  --user-name <name>        Git user.name (defaults to symphony[bot])\n" +
       "  --user-email <email>      Git user.email (defaults to symphony[bot]@users.noreply.github.com)\n" +
-      "  --cwd <path>              Workspace directory (defaults to process.cwd())\n" +
+      "  --cwd <path>              Alias for --target\n" +
       "  --timeout-ms <ms>         Timeout in milliseconds for git operations\n" +
       "  -h, --help                Show this help message\n"
     );
     return 0;
+  }
+
+  if (parsed.error) {
+    io.stderr?.write(`repo-bootstrap: ${parsed.error}\n`);
+    return 1;
   }
 
   const repoUrl = parsed.repoUrl ?? process.env.SYMPHONY_REPO_URL ?? process.env.REPO_URL;
@@ -713,8 +837,9 @@ export async function runRepositoryBootstrapCli(
   }
 
   try {
+    const targetDir = parsed.target ?? parsed.cwd;
     const result = await bootstrapRepository({
-      cwd: parsed.cwd,
+      cwd: targetDir,
       repoUrl,
       issueBranch: parsed.issueBranch,
       workspaceKey: parsed.workspaceKey,
@@ -729,11 +854,11 @@ export async function runRepositoryBootstrapCli(
     );
     return 0;
   } catch (error) {
-    const message =
+    const rawMessage =
       error instanceof RepositoryBootstrapError
         ? `repo-bootstrap failed (${error.code}): ${error.message}\n`
         : `repo-bootstrap failed: ${error instanceof Error ? error.message : String(error)}\n`;
-    io.stderr?.write(message);
+    io.stderr?.write(sanitizeText(rawMessage, repoUrl));
     return 1;
   }
 }
