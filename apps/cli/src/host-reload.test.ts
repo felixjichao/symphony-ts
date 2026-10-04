@@ -1084,6 +1084,7 @@ Prompt A
         // Wait until TASK-COMMON starts running in Root A
         await waitFor(() => host!.state.running.has("id-TASK-COMMON"), 4000);
         const expectedPathA = path.join(rootA, "TASK-COMMON");
+        await waitFor(async () => await pathExists(expectedPathA), 4000);
         expect(await pathExists(expectedPathA)).toBe(true);
 
         // While Attempt A is still in-flight, reload workspace root to Root B

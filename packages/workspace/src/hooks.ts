@@ -280,6 +280,11 @@ export function executeWorkspaceHook(
       cwd,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...(workspaceKey !== undefined ? { SYMPHONY_WORKSPACE_KEY: workspaceKey } : {}),
+        ...(identifier !== undefined ? { SYMPHONY_ISSUE_IDENTIFIER: identifier } : {}),
+      },
     });
 
     const clearTimers = (): void => {

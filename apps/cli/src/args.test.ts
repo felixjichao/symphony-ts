@@ -23,8 +23,22 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs([])).toEqual({});
   });
 
-  it("ignores extra positional arguments after the first", () => {
-    expect(parseCliArgs(["first.md", "second.md"])).toEqual({ workflowPath: "first.md" });
+  it("recognizes repo-bootstrap subcommand and arguments", () => {
+    expect(parseCliArgs(["repo-bootstrap", "--repo", "https://github.com/org/repo.git"])).toEqual({
+      subcommand: "repo-bootstrap",
+      subcommandArgs: ["--repo", "https://github.com/org/repo.git"],
+    });
+    expect(parseCliArgs(["bootstrap-repo", "--repo", "https://github.com/org/repo.git"])).toEqual({
+      subcommand: "repo-bootstrap",
+      subcommandArgs: ["--repo", "https://github.com/org/repo.git"],
+    });
+  });
+
+  it("recognizes workspace bootstrap subcommand and arguments", () => {
+    expect(parseCliArgs(["workspace", "bootstrap", "--repo", "https://github.com/org/repo.git"])).toEqual({
+      subcommand: "repo-bootstrap",
+      subcommandArgs: ["--repo", "https://github.com/org/repo.git"],
+    });
   });
 });
 

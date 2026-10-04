@@ -79,3 +79,18 @@ export type {
   WorkspacePathAssertOptions,
   WorkspacePathValidation,
 } from "./path-safety";
+
+export {
+  RepositoryBootstrapError,
+  bootstrapRepository,
+  normalizeGitUrl,
+  parseRepositoryBootstrapArgs,
+  runRepositoryBootstrapCli,
+  sanitizeRepoUrl,
+} from "./repository-bootstrap";
+export type {
+  BootstrapCliIo,
+  BootstrapRepositoryOptions,
+  BootstrapRepositoryResult,
+  RepositoryBootstrapErrorCode,
+} from "./repository-bootstrap";
