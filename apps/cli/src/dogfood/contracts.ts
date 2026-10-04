@@ -192,6 +192,10 @@ export function decideDogfoodGate(args: DogfoodArgs): DogfoodGate {
 export type CheckConclusion = "pending" | "success" | "failure" | "unknown";
 export type PrState = "none" | "open" | "merged" | "closed";
 
+/** `symphony pr land` refusal codes that count as a genuine safety refusal. */
+export const FOREIGN_REFUSAL_CODE = "ownership_refusal";
+export const CONFLICT_REFUSAL_CODE = "unmergeable";
+
 export interface DogfoodFacts {
   /** Issue was closed by the merge (terminal state observed after landing). */
   readonly issueClosed: boolean;
@@ -209,8 +213,25 @@ export interface DogfoodFacts {
   readonly foreignPrOpen: boolean;
   /** The owned PR conflicts with base and must not be merged. */
   readonly conflicting: boolean;
-  /** Symphony logged terminal workspace cleanup. */
+  /**
+   * Symphony logged a terminal `workspace_cleanup` completion associated with
+   * this issue, and the issue workspace directory was observed, then removed,
+   * while the workspace root sentinel survived.
+   */
   readonly workspaceCleanupObserved: boolean;
+  /**
+   * Structured error code returned by the real `symphony pr land` entry for the
+   * safety scenarios (null when land unexpectedly succeeded or failed for a
+   * transport/other reason). Only the specific refusal code counts as safe.
+   */
+  readonly safetyRefusalCode: string | null;
+  /**
+   * The restart-reuse flow proved a bounded pre-merge window, reused the same PR
+   * after restart, persisted delivery state, and completed without timing out.
+   */
+  readonly reuseVerified: boolean;
+  /** Real squash-merge commit SHA read back after landing. */
+  readonly mergeSha: string | null;
 }
 
 export type DogfoodVerdict =
@@ -230,33 +251,37 @@ export function classifyDogfoodOutcome(scenario: DogfoodScenario, facts: Dogfood
   switch (scenario) {
     case "happy":
       return verdict(
-        facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" && facts.linkedPrCount === 1,
-        "issue closed by a single merged PR with green checks",
-        `happy path incomplete (pr=${facts.ownedPrState}, issueClosed=${facts.issueClosed}, checks=${facts.checks}, linkedPrs=${facts.linkedPrCount})`,
+        facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" &&
+          facts.linkedPrCount === 1 && facts.workspaceCleanupObserved,
+        "issue closed by a single merged PR with green checks and terminal workspace cleanup",
+        `happy path incomplete (pr=${facts.ownedPrState}, issueClosed=${facts.issueClosed}, checks=${facts.checks}, linkedPrs=${facts.linkedPrCount}, cleanup=${facts.workspaceCleanupObserved})`,
       );
     case "repair":
       return verdict(
-        facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" && facts.repairObserved,
-        "CI failure observed and repaired by a later green run",
-        `repair path incomplete (repairObserved=${facts.repairObserved}, pr=${facts.ownedPrState}, checks=${facts.checks})`,
+        facts.ownedPrState === "merged" && facts.issueClosed && facts.checks === "success" &&
+          facts.repairObserved && facts.workspaceCleanupObserved,
+        "CI failure observed and repaired by a later green run, then merged and cleaned up",
+        `repair path incomplete (repairObserved=${facts.repairObserved}, pr=${facts.ownedPrState}, checks=${facts.checks}, cleanup=${facts.workspaceCleanupObserved})`,
       );
     case "reuse":
       return verdict(
-        facts.linkedPrCount === 1 && (facts.ownedPrState === "merged" || facts.ownedPrState === "open"),
-        "restart reused the existing PR without creating a duplicate",
-        `duplicate or missing PR (linkedPrs=${facts.linkedPrCount}, pr=${facts.ownedPrState})`,
+        facts.ownedPrState === "merged" && facts.linkedPrCount === 1 && facts.reuseVerified,
+        "restart reused the same PR without creating a duplicate",
+        `reuse not verified (pr=${facts.ownedPrState}, linkedPrs=${facts.linkedPrCount}, reuseVerified=${facts.reuseVerified})`,
       );
     case "foreign":
       return verdict(
-        facts.foreignPrOpen && facts.ownedPrState !== "merged" && !facts.issueClosed,
-        "foreign PR left untouched and unmerged",
-        `foreign PR safety failed (foreignOpen=${facts.foreignPrOpen}, merged=${facts.ownedPrState === "merged"})`,
+        facts.foreignPrOpen && facts.ownedPrState !== "merged" && !facts.issueClosed &&
+          facts.safetyRefusalCode === FOREIGN_REFUSAL_CODE,
+        "real land entry refused the foreign PR with an ownership refusal and left it unmerged",
+        `foreign PR safety not proven (foreignOpen=${facts.foreignPrOpen}, merged=${facts.ownedPrState === "merged"}, refusalCode=${facts.safetyRefusalCode ?? "none"})`,
       );
     case "conflict":
       return verdict(
-        facts.conflicting && facts.ownedPrState !== "merged" && !facts.issueClosed,
-        "conflicting PR was not merged and the issue stayed open",
-        `conflict safety failed (conflicting=${facts.conflicting}, merged=${facts.ownedPrState === "merged"})`,
+        facts.conflicting && facts.ownedPrState !== "merged" && !facts.issueClosed &&
+          facts.safetyRefusalCode === CONFLICT_REFUSAL_CODE,
+        "real land entry refused the conflicting PR as unmergeable and left it unmerged",
+        `conflict safety not proven (conflicting=${facts.conflicting}, merged=${facts.ownedPrState === "merged"}, refusalCode=${facts.safetyRefusalCode ?? "none"})`,
       );
   }
 }

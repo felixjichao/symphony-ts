@@ -50,11 +50,20 @@ The npm wrapper is `npm run dogfood:github -- --target <owner/repo> --scenario <
 
 | Scenario | What it drives | Pass condition |
 |---|---|---|
-| `happy` | Host + real Codex implement `subtract()`, PR, green CI, opt-in squash merge | single PR merged, issue closed, checks green |
-| `repair` | Same, but the seeded CI-only lint fault makes the first head fail; real Codex `ci:fix` repairs it | a failing run is observed before a green run, then merged |
-| `reuse` | Host is stopped once a PR exists, then restarted | exactly one PR for the issue, resumed from GitHub facts |
-| `foreign` | A non-Symphony PR exists; the real delivery land entry is invoked | foreign PR stays open, no merge, issue open |
-| `conflict` | An owned PR is forced into a real conflict; land is invoked | PR stays unmerged, issue open |
+| `happy` | Host + real Codex implement the run's task, PR, green CI, opt-in squash merge | single PR merged, issue closed, checks green, **and terminal workspace cleanup observed** |
+| `repair` | Same, but an injected CI-only lint fault makes the first head fail; real Codex `ci:fix` repairs it | a failing run is observed before a green run, then merged + cleaned up |
+| `reuse` | A bounded pre-merge hold is created, the host is stopped once a PR exists, then restarted after the hold is released | same PR number reused, persisted delivery state present, single PR, merged + cleaned up, no wait timed out |
+| `foreign` | A non-Symphony PR exists; the real `pr land` entry is invoked | land returns the **`ownership_refusal`** code; foreign PR stays open, unmerged, issue open |
+| `conflict` | An owned PR is forced into a real conflict; `pr land` is invoked | land returns the **`unmergeable`** code; PR stays unmerged, issue open |
+
+The safety scenarios are only considered proven when the real `pr land` entry returns the specific structured refusal code. A transport error, timeout, authentication failure, or any other outcome — even if the PR happens to stay unmerged — fails the scenario; it is not accepted as a safety refusal.
+
+### Harness safety properties
+
+- **Single pinned credential.** The harness resolves one credential (`SYMPHONY_DOGFOOD_TOKEN`, else `GITHUB_TOKEN`/`GH_TOKEN`) and refuses to run when both env vars disagree. The raw value is read through a non-redacting path and is never logged; the same value is exported to the host so tracker, `gh`, `git` and Codex delivery share one identity. Without an explicit env token it falls back to the ambient `gh auth` login and prints a warning.
+- **Every started host is stopped.** All host runs are tracked and shut down on success, failure and cancellation; a timeout or thrown error still stops the host before the run is recorded as failed.
+- **Terminal cleanup is mandatory** for `happy`/`repair`/`reuse`: the issue workspace directory must be observed, then removed, the workspace-root sentinel must survive, and the host must log `workspace_cleanup` `completed` for that exact issue.
+- **Unique per-run task.** Each run asks for a distinct synthetic export name, so re-running a scenario on the same repository still exercises a real change.
 
 ### Exit status
 

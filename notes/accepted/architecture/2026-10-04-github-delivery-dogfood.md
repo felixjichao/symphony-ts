@@ -31,7 +31,10 @@ harness drives existing real entry points but never performs delivery itself.
 2. **Pure, gate-covered contracts** (`contracts.ts`): argument parsing, the opt-in
    gate, target safety (the product repository and any unauthorized target are
    rejected), one-to-one acceptance classification, and evidence redaction reuse.
-   `contracts.test.ts` runs credential-free inside the default gate.
+   The whole entry point takes injected dependencies, so
+   `contracts.test.ts` plus `github-dogfood.test.ts` run credential-free inside
+   the default gate and reproduce the false-positive paths (e.g. a `pr land`
+   transport error must fail, not pass as a safety refusal).
 3. **Skip, don't fake.** Without `--yes` or a credential the harness prints
    `SKIPPED: <reason>` and exits 0; an enabled run that hits a real failure exits
    non-zero and records the failure. It never substitutes a fixture or a manual
@@ -41,8 +44,16 @@ harness drives existing real entry points but never performs delivery itself.
    that runs a bounded real `codex exec` session. The `repair` scenario injects a
    deterministic `console.log` lint fault into the target before dispatch.
 5. **Out-of-workspace evidence**: `dogfood-artifacts/<runId>/manifest.json` plus
-   issue/PR/check/Actions/host-log artifacts, all passed through
+   issue/PR/check/Actions-run/merge/host-log artifacts, all passed through
    `sanitizeCredentials`, stored outside any workspace Symphony cleans up.
+6. **Fail-closed safety semantics.** `foreign`/`conflict` pass only when the real
+   `pr land` entry returns the specific structured refusal code
+   (`ownership_refusal` / `unmergeable`); a transport error or any other outcome
+   fails the scenario even if the PR stays unmerged. `happy`/`repair`/`reuse`
+   additionally require observed terminal workspace cleanup (directory removed,
+   root sentinel preserved, `workspace_cleanup` `completed` logged for the exact
+   issue). Every started host is stopped on success, failure and cancellation,
+   and each run uses a unique synthetic task so re-runs remain meaningful.
 
 ## Alternatives considered
 
@@ -61,6 +72,10 @@ harness drives existing real entry points but never performs delivery itself.
   deterministic CI-only lint fault (a `console.log` in `src/` caught only by the
   CI lint gate the local gate skips), so the repair path exercises real Codex
   fixing real code, not hiding a failure.
+- **Treat any unmerged PR as proof that a safety guard worked.** Rejected: a
+  transport error, permission failure or timeout also leaves the PR unmerged.
+  The safety scenarios must observe the specific structured refusal code returned
+  by the real `pr land` entry; anything else fails.
 
 ## Consequences
 

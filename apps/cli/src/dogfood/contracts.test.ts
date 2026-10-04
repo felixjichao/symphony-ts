@@ -26,6 +26,9 @@ function facts(overrides: Partial<DogfoodFacts> = {}): DogfoodFacts {
     foreignPrOpen: false,
     conflicting: false,
     workspaceCleanupObserved: false,
+    safetyRefusalCode: null,
+    reuseVerified: false,
+    mergeSha: null,
     ...overrides,
   };
 }
@@ -96,32 +99,41 @@ describe("decideDogfoodGate", () => {
 
 describe("classifyDogfoodOutcome", () => {
   it("passes a complete happy path and fails an incomplete one", () => {
-    expect(classifyDogfoodOutcome("happy", facts({ ownedPrState: "merged", issueClosed: true, checks: "success", linkedPrCount: 1 })).status).toBe("passed");
-    expect(classifyDogfoodOutcome("happy", facts({ ownedPrState: "open", issueClosed: true, checks: "success", linkedPrCount: 1 })).status).toBe("failed");
-    expect(classifyDogfoodOutcome("happy", facts({ ownedPrState: "merged", issueClosed: true, checks: "success", linkedPrCount: 2 })).status).toBe("failed");
+    const complete = { ownedPrState: "merged", issueClosed: true, checks: "success", linkedPrCount: 1, workspaceCleanupObserved: true } as const;
+    expect(classifyDogfoodOutcome("happy", facts(complete)).status).toBe("passed");
+    expect(classifyDogfoodOutcome("happy", facts({ ...complete, ownedPrState: "open" })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("happy", facts({ ...complete, linkedPrCount: 2 })).status).toBe("failed");
+    // Terminal workspace cleanup is mandatory for happy (acceptance 5).
+    expect(classifyDogfoodOutcome("happy", facts({ ...complete, workspaceCleanupObserved: false })).status).toBe("failed");
   });
 
-  it("requires an observed repair for the repair scenario", () => {
-    const base = { ownedPrState: "merged", issueClosed: true, checks: "success" } as const;
+  it("requires an observed repair and cleanup for the repair scenario", () => {
+    const base = { ownedPrState: "merged", issueClosed: true, checks: "success", workspaceCleanupObserved: true } as const;
     expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: false })).status).toBe("failed");
     expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: true })).status).toBe("passed");
+    expect(classifyDogfoodOutcome("repair", facts({ ...base, repairObserved: true, workspaceCleanupObserved: false })).status).toBe("failed");
   });
 
-  it("requires a single PR for reuse", () => {
-    expect(classifyDogfoodOutcome("reuse", facts({ linkedPrCount: 1, ownedPrState: "merged" })).status).toBe("passed");
-    expect(classifyDogfoodOutcome("reuse", facts({ linkedPrCount: 2, ownedPrState: "merged" })).status).toBe("failed");
+  it("requires verified restart reuse of the same single PR", () => {
+    expect(classifyDogfoodOutcome("reuse", facts({ ownedPrState: "merged", linkedPrCount: 1, reuseVerified: true })).status).toBe("passed");
+    expect(classifyDogfoodOutcome("reuse", facts({ ownedPrState: "merged", linkedPrCount: 1, reuseVerified: false })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("reuse", facts({ ownedPrState: "merged", linkedPrCount: 2, reuseVerified: true })).status).toBe("failed");
   });
 
-  it("requires the foreign PR to stay open and unmerged", () => {
-    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, ownedPrState: "none" })).status).toBe("passed");
-    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: false })).status).toBe("failed");
-    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, ownedPrState: "merged", issueClosed: true })).status).toBe("failed");
+  it("passes foreign only on a real ownership refusal, not merely an unmerged PR", () => {
+    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, safetyRefusalCode: "ownership_refusal" })).status).toBe("passed");
+    // The exact false positive the reviewer reproduced: a transport error leaves
+    // the PR open but is NOT a safety refusal.
+    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, safetyRefusalCode: null })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: false, safetyRefusalCode: "ownership_refusal" })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("foreign", facts({ foreignPrOpen: true, safetyRefusalCode: "ownership_refusal", ownedPrState: "merged", issueClosed: true })).status).toBe("failed");
   });
 
-  it("requires the conflicting PR to stay unmerged", () => {
-    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open" })).status).toBe("passed");
-    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "merged" })).status).toBe("failed");
-    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: false, ownedPrState: "open" })).status).toBe("failed");
+  it("passes conflict only on a real unmergeable refusal", () => {
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: "unmergeable" })).status).toBe("passed");
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: null })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "open", safetyRefusalCode: "timeout" })).status).toBe("failed");
+    expect(classifyDogfoodOutcome("conflict", facts({ conflicting: true, ownedPrState: "merged", safetyRefusalCode: "unmergeable" })).status).toBe("failed");
   });
 });
 
