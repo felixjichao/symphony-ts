@@ -206,9 +206,11 @@ Startup monitoring API defaults remain compatible with standalone config users. 
 
 ### Real delivery staging regression (2026-10-06)
 
-SPEC §11.5 / §17.8: initial delivery and CI-repair status/staging exclude the
+SPEC §11.5 / §17.8: initial delivery and CI-repair status/staging/final commit exclude the
 workspace's persisted delivery state. `delivery-review-regressions.test.ts`
 exercises the real Git index and commits for both untracked and already tracked
-state files, while default gate remains credential-free. Real happy and repair
+state files, including pre-staged entries in both initial and repair commits,
+while preserving the local budget and original index entry. Default gate remains
+credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).

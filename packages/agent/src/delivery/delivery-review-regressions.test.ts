@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatPrBody, type PersistedDeliveryState } from "@symphony/domain";
@@ -40,7 +40,9 @@ function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", c
 const options = { ...context, cwd: "/fixture", optInLand: false, maxWaitSeconds: 5, pollIntervalSeconds: 1 };
 
 describe("third-review delivery regressions", () => {
-  it.each([false, true])("commits source without runtime state (previously tracked: %s)", async (tracked) => {
+  it.each(
+    [false, true].flatMap((tracked) => [false, true].flatMap((staged) => [false, true].map((repair) => ({ tracked, staged, repair })))),
+  )("commits source without runtime state: %j", async ({ tracked, staged, repair }) => {
     const cwd = mkdtempSync(join(tmpdir(), "delivery-state-commit-"));
     const git = (args: readonly string[], commandCwd = cwd) => execFileSync("git", [...args], { cwd: commandCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     try {
@@ -53,24 +55,57 @@ describe("third-review delivery regressions", () => {
       git(["add", "."]);
       git(["commit", "-m", "seed"]);
       writeFileSync(join(cwd, "source.txt"), "after\n");
+      const statePath = join(cwd, ".symphony/delivery-state.json");
+      let stagedState = "pre-staged runtime state\n";
+      if (staged) {
+        writeFileSync(statePath, stagedState);
+        git(["add", ".symphony/delivery-state.json"]);
+      }
+      let repaired = false;
       const nested = join(cwd, "nested");
       mkdirSync(nested);
-      const f = fixture();
+      const f = fixture([{ name: check.name, detailsUrl: check.detailsUrl, status: "COMPLETED", conclusion: "FAILURE" }]);
       const runner: DeliveryGitGhRunner = {
         ...f.runner,
         async git(args, commandCwd) {
           if (args[0] === "remote") return { stdout: "https://github.com/owner/repo.git", stderr: "", exitCode: 0 };
-          if (args[0] === "push") return fail("Stop before network access");
+          if (args[0] === "push") return repair && !repaired ? ok({}) : fail("Stop before network access");
           return { stdout: git(args, commandCwd), stderr: "", exitCode: 0 };
         },
+        async gh(args, commandCwd) {
+          const response = await f.runner.gh(args, commandCwd);
+          if (args[0] === "pr" && ["view", "list"].includes(args[1] ?? "")) {
+            const data = JSON.parse(response.stdout);
+            const head = git(["rev-parse", "HEAD"]).trim();
+            if (Array.isArray(data)) for (const pr of data) pr.headRefOid = head;
+            else data.headRefOid = head;
+            return ok(data);
+          }
+          return response;
+        },
       };
-      await runDeliverySkill({ ...options, cwd: nested, runner, stateStorage: {
+      const result = await runDeliverySkill({ ...options, cwd: nested, runner, repairFn: () => {
+        repaired = true;
+        writeFileSync(join(cwd, "source.txt"), "repaired\n");
+        if (staged) {
+          stagedState = readFileSync(statePath, "utf8");
+          git(["add", ".symphony/delivery-state.json"]);
+        }
+        return true;
+      }, stateStorage: {
         readState: () => null,
         writeState: (state) => writeFileSync(join(cwd, ".symphony/delivery-state.json"), JSON.stringify(state)),
       } });
       expect(git(["show", "--format=", "--name-only", "HEAD"]).trim()).toBe("source.txt");
-      expect(git(["show", "HEAD:source.txt"])).toBe("after\n");
-      expect(git(["ls-files", ".symphony/delivery-state.json"]).trim()).toBe(tracked ? ".symphony/delivery-state.json" : "");
+      expect(git(["show", "HEAD:source.txt"])).toBe(repair ? "repaired\n" : "after\n");
+      expect(repaired).toBe(repair);
+      expect(result.spentRepairs).toBe(repair ? 1 : 0);
+      if (repair) expect(git(["show", "--format=", "--name-only", "HEAD~1"]).trim()).toBe("source.txt");
+      expect(git(["ls-files", ".symphony/delivery-state.json"]).trim()).toBe(tracked || staged ? ".symphony/delivery-state.json" : "");
+      if (staged) expect(git(["show", ":.symphony/delivery-state.json"])).toBe(stagedState);
+      const localState = JSON.parse(readFileSync(statePath, "utf8"));
+      expect(localState.issueNumber).toBe(context.issueNumber);
+      expect(localState.spentRepairs).toBe(repair ? 1 : 0);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

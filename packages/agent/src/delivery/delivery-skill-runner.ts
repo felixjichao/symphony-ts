@@ -31,6 +31,8 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
 }
 
 // SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
+// Commit --only uses these paths even for previously staged state, preserving its
+// original index entry and the local budget file.
 const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/delivery-state.json"] as const;
 
 const DEFAULT_READY_LABEL = "symphony-ready";
@@ -678,7 +680,7 @@ export async function runDeliverySkill(
     const commitType = options.commitType ?? "feat";
     const commitMsg =
       options.commitMessage ?? `${commitType}: implement delivery for issue #${context.issueNumber} (${context.workspaceKey})`;
-    const commitRes = await runner.git(["commit", "-m", commitMsg], options.cwd);
+    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd);
     if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
       return haltDispatch("manual_intervention_required", `Git commit failed: ${commitRes.stderr}`);
     }
@@ -1118,7 +1120,7 @@ export async function runDeliverySkill(
 
       await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
       const fixCommitRes = await runner.git(
-        ["commit", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`],
+        ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
         options.cwd,
       );
       if (fixCommitRes.exitCode !== 0) {

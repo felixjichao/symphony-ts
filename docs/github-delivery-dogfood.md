@@ -108,8 +108,10 @@ orchestrator state or second state machine. The only product-code addition is th
 
 ## Runtime state and real verification
 
-Delivery status checks and staging exclude `.symphony/delivery-state.json` in
-both initial delivery and CI repair. The target template also ignores
+Delivery status checks, staging, and final `git commit --only` pathspecs exclude `.symphony/delivery-state.json` in
+both initial delivery and CI repair. Already staged state is excluded at the
+commit boundary while its original index entry and local budget file remain
+intact. The target template also ignores
 `.symphony/`; persisted budgets stay local to the workspace. Existing tracked
 state is left untouched in the index, rather than deleting source files during
 an automated delivery.
