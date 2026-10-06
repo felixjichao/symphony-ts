@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Isolated synthetic target for the Symphony GitHub delivery dogfood (NEST-94 / #83).",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/*.test.mjs",
     "lint": "node scripts/lint.mjs",
     "gate": "npm test",
     "ci": "npm test && npm run lint",

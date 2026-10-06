@@ -105,3 +105,53 @@ This harness drives the same runtime as
 [docs/github-delivery-workflow.md](github-delivery-workflow.md); it adds no
 orchestrator state or second state machine. The only product-code addition is the
 `dogfood` subcommand and the target template.
+
+## Runtime state and real verification
+
+Delivery status checks and staging exclude `.symphony/delivery-state.json` in
+both initial delivery and CI repair. The target template also ignores
+`.symphony/`; persisted budgets stay local to the workspace. Existing tracked
+state is left untouched in the index, rather than deleting source files during
+an automated delivery.
+
+On 2026-10-06, the isolated target demonstrated real happy delivery in
+[PR #12](https://github.com/felixjichao/symphony-delivery-dogfood/pull/12), with
+[CI run 37406707232](https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/37406707232)
+successful on the delivered head. The original harness read-back timed out;
+a host restart then observed the closed issue and removed its workspace.
+The failed harness manifest is retained alongside the recovery evidence.
+[PR #14](https://github.com/felixjichao/symphony-delivery-dogfood/pull/14)
+demonstrated an actual failing CI run followed by a real Codex repair, green CI,
+automatic merge, issue closure, and terminal cleanup.
+
+When Codex tool shells filter inherited credential variables, use a private
+`GH_CONFIG_DIR` populated from the selected `gh-bot token`, and put the literal
+configuration directory in the rendered workflow's delivery shell block.
+Unset `GH_TOKEN` and `GITHUB_TOKEN` in that block so another ambient token cannot
+override the selected configuration. Keep the configuration outside the evidence
+and workspace roots, restrict its directory/file permissions to 700/600, and
+remove it after the host stops. Never place the token itself in the workflow.
+A bounded retry wrapper may retry read-only GitHub requests on transient TLS
+errors; writes are not automatically replayed, and the delivery deadline remains
+unchanged across a restart.
+
+The restart hold PUT sends the source-aware `checks` form alone; sending both
+legacy `contexts` and `checks` was rejected with HTTP 422 during real validation.
+Legacy contexts are converted to explicit any-app checks (`app_id: -1`) before
+apply/restore, preserving source semantics. A real checks-only PUT and DELETE
+restore succeeded on the isolated target. See the
+[GitHub branch-protection API](https://docs.github.com/en/rest/branches/branch-protection)
+for the check-source contract.
+
+The controlled restart used the same
+[PR #17](https://github.com/felixjichao/symphony-delivery-dogfood/pull/17), branch,
+head SHA, and persisted absolute deadline before/after restarting. Its
+[CI run 37408085760](https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/37408085760)
+passed, followed by automatic merge, issue closure and workspace cleanup; exactly
+one linked PR was found. The original harness stopped when policy restoration
+hit a TLS timeout. An operator read the actual policy, removed only the run-owned
+hold, verified the original unprotected state, and restarted the same host.
+The failed manifest and successful recovery evidence are both retained; this
+result includes that operator recovery, rather than claiming an uninterrupted
+harness pass. Foreign/conflict refusal evidence remains from the 2026-10-05
+real runs (`ownership_refusal` / `merge_rejected`), with both PRs still open.

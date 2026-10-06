@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { formatPrBody, type PersistedDeliveryState } from "@symphony/domain";
 import { fetchCiFailureDiagnostics, parseGitHubRepoFromRemote, runDeliverySkill } from "./delivery-skill-runner";
 import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-runner";
@@ -36,6 +40,41 @@ function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", c
 const options = { ...context, cwd: "/fixture", optInLand: false, maxWaitSeconds: 5, pollIntervalSeconds: 1 };
 
 describe("third-review delivery regressions", () => {
+  it.each([false, true])("commits source without runtime state (previously tracked: %s)", async (tracked) => {
+    const cwd = mkdtempSync(join(tmpdir(), "delivery-state-commit-"));
+    const git = (args: readonly string[], commandCwd = cwd) => execFileSync("git", [...args], { cwd: commandCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      git(["init", "-b", context.headBranch]);
+      git(["config", "user.name", "Test"]);
+      git(["config", "user.email", "test@example.invalid"]);
+      writeFileSync(join(cwd, "source.txt"), "before\n");
+      mkdirSync(join(cwd, ".symphony"));
+      if (tracked) writeFileSync(join(cwd, ".symphony/delivery-state.json"), "old tracked state\n");
+      git(["add", "."]);
+      git(["commit", "-m", "seed"]);
+      writeFileSync(join(cwd, "source.txt"), "after\n");
+      const nested = join(cwd, "nested");
+      mkdirSync(nested);
+      const f = fixture();
+      const runner: DeliveryGitGhRunner = {
+        ...f.runner,
+        async git(args, commandCwd) {
+          if (args[0] === "remote") return { stdout: "https://github.com/owner/repo.git", stderr: "", exitCode: 0 };
+          if (args[0] === "push") return fail("Stop before network access");
+          return { stdout: git(args, commandCwd), stderr: "", exitCode: 0 };
+        },
+      };
+      await runDeliverySkill({ ...options, cwd: nested, runner, stateStorage: {
+        readState: () => null,
+        writeState: (state) => writeFileSync(join(cwd, ".symphony/delivery-state.json"), JSON.stringify(state)),
+      } });
+      expect(git(["show", "--format=", "--name-only", "HEAD"]).trim()).toBe("source.txt");
+      expect(git(["show", "HEAD:source.txt"])).toBe("after\n");
+      expect(git(["ls-files", ".symphony/delivery-state.json"]).trim()).toBe(tracked ? ".symphony/delivery-state.json" : "");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
   it("persists a pending deadline before interruption and expires across restart without repair", async () => {
     let state: PersistedDeliveryState | null = null;
     let clock = 100_000;

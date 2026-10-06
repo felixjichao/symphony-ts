@@ -112,3 +112,11 @@ harness drives existing real entry points but never performs delivery itself.
 - Operators must supply an authorized isolated target; the harness will refuse to
   run otherwise. Removing `symphony-ready` (or deleting `.symphony/delivery-state.json`
   to start a new budget round) remains an explicit operator action.
+
+- Real validation on 2026-10-06 found that GitHub rejected a protection PUT with
+  both legacy `contexts` and source-aware `checks`. Conversion now emits only
+  `checks`, mapping legacy contexts to explicit any-app sources. A real PUT and
+  restoration validated this choice before the restart scenario was retried.
+- Runtime delivery-state files are excluded from initial and repair source
+  status/staging. The target template also ignores `.symphony/`; real Git tests
+  protect against persisting runtime budgets in source commits.

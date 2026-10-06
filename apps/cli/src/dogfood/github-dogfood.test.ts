@@ -402,6 +402,7 @@ describe("branch protection GET to PUT conversion", () => {
     expect(payload["allow_force_pushes"]).toBe(false);
     const rsc = payload["required_status_checks"] as { strict: boolean; contexts: string[]; checks: Array<{ context: string; app_id?: number }> };
     expect(rsc.strict).toBe(true);
+    expect(rsc).not.toHaveProperty("contexts");
     expect(rsc.checks).toEqual([{ context: "build", app_id: 15368 }]);
     const rpr = payload["required_pull_request_reviews"] as { required_approving_review_count: number; dismissal_restrictions: { users: string[]; teams: string[] } };
     expect(rpr.required_approving_review_count).toBe(2);
@@ -428,12 +429,17 @@ describe("branch protection GET to PUT conversion", () => {
     expect(() => assertProtectionFidelity(get)).not.toThrow();
   });
 
+  it("restores legacy contexts as explicit any-app checks without duplicate forms", () => {
+    const payload = JSON.parse(buildProtectionPutPayload(JSON.stringify({ required_status_checks: { strict: true, contexts: ["legacy"] } }), "hold"));
+    expect(payload.required_status_checks).toEqual({ strict: true, checks: [{ context: "legacy", app_id: -1 }, { context: "hold", app_id: -1 }] });
+  });
+
   it("preserves null semantics and adds the hold context without dropping bindings", () => {
     expect(JSON.parse(buildProtectionPutPayload(null, null))["required_status_checks"]).toBeNull();
     expect(JSON.parse(buildProtectionPutPayload(null, null))["enforce_admins"]).toBe(false);
     const hold = JSON.parse(buildProtectionPutPayload(null, "symphony-dogfood-hold")) as Record<string, unknown>;
     const rsc = hold["required_status_checks"] as { contexts: string[]; checks: Array<{ context: string; app_id: number }> };
-    expect(rsc.contexts).toContain("symphony-dogfood-hold");
+    expect(rsc).not.toHaveProperty("contexts");
     expect(rsc.checks).toContainEqual({ context: "symphony-dogfood-hold", app_id: -1 });
   });
 });

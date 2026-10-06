@@ -203,3 +203,12 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | EffectiveRuntime authority and secret boundary regression | `apps/cli/src/effective-runtime.test.ts`: `atomically initializes EffectiveRuntime with all 7 invariant components`, `rejects adapter construction failure (AC #8) without partial publish`; `apps/cli/src/secret-boundary.test.ts`: AC #11–#13 host auth/child exclusion/profile reload | `npm test -w @symphony/cli -- src/effective-runtime.test.ts src/secret-boundary.test.ts` |
 
 Startup monitoring API defaults remain compatible with standalone config users. `lifecycle.ts` uses an explicit host failure promise rather than interpreting logs; recoverable config/tracker/agent/hook/sink failures keep their existing semantics. Final default lifecycle log is emitted after loop/worker/cleanup settlement, immediately before logger close; shell handlers are removed only after host.stop settles.
+
+### Real delivery staging regression (2026-10-06)
+
+SPEC §11.5 / §17.8: initial delivery and CI-repair status/staging exclude the
+workspace's persisted delivery state. `delivery-review-regressions.test.ts`
+exercises the real Git index and commits for both untracked and already tracked
+state files, while default gate remains credential-free. Real happy and repair
+results, including the failed-readback recovery caveat, are recorded in
+[the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).

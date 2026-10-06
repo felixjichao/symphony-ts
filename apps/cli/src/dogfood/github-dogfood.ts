@@ -687,10 +687,11 @@ function convertRequiredStatusChecks(value: unknown): Record<string, unknown> | 
       const appId = typeof check.app_id === "number" && Number.isFinite(check.app_id) ? check.app_id : ANY_APP_ID;
       return { context: String(check.context ?? ""), app_id: appId };
     });
-    return { strict: Boolean(record.strict), checks, contexts: checks.map((c) => c["context"]) };
+    // GitHub accepts the source-aware checks form without the legacy contexts form.
+    return { strict: Boolean(record.strict), checks };
   }
   const contexts = Array.isArray(record.contexts) ? record.contexts.map(String) : [];
-  return { strict: Boolean(record.strict), contexts };
+  return { strict: Boolean(record.strict), checks: contexts.map((context) => ({ context, app_id: ANY_APP_ID })) };
 }
 
 function convertRequiredReviews(value: unknown): Record<string, unknown> | null {
@@ -727,12 +728,10 @@ export function buildProtectionPutPayload(getBody: string | null, extraContext: 
     if (key in body) payload[key] = asEnabled(body[key]);
   }
   if (extraContext !== null) {
-    const current = payload["required_status_checks"] as { strict?: boolean; contexts?: string[]; checks?: Array<Record<string, unknown>> } | null;
-    const contexts = [...(current?.contexts ?? [])];
+    const current = payload["required_status_checks"] as { strict?: boolean; checks?: Array<Record<string, unknown>> } | null;
     const checks = [...(current?.checks ?? [])];
-    if (!contexts.includes(extraContext)) contexts.push(extraContext);
     if (!checks.some((c) => c["context"] === extraContext)) checks.push({ context: extraContext, app_id: ANY_APP_ID });
-    payload["required_status_checks"] = { strict: current?.strict ?? false, contexts, checks };
+    payload["required_status_checks"] = { strict: current?.strict ?? false, checks };
   }
   return JSON.stringify(payload);
 }
