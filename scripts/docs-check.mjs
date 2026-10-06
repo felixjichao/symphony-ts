@@ -4,8 +4,9 @@
  * 检查四件事，让"文档即架构契约"有 freshness protection：
  * 1. 仓库内所有 Markdown 的相对链接必须指向存在的文件 / 目录；
  * 2. `AGENTS.md` 行数不超过预算（standing orders 必须保持短小可导航）；
- * 3. 开发进度里程碑只存在于 `docs/status.md`（非空 `## 里程碑` 表、名称唯一、状态可分类、
- *    不使用"✅ 本次"）；根 README 与 architecture 不得再出现里程碑进度表；
+ * 3. 开发进度里程碑只存在于 `docs/status.md`（非空、恰好三列的 `## 里程碑` 表、名称唯一、
+ *    状态可分类、不使用"✅ 本次"）；根 README 与 architecture 不得再出现里程碑进度表
+ *    （按表结构识别，不依赖固定标题）；
  * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`。
  *
  * 零依赖，Node >= 20 直接运行。
@@ -98,10 +99,74 @@ function milestoneStatusCategory(status) {
 const MILESTONE_HEADING = "## 里程碑";
 const STATUS_DOC = join("docs", "status.md");
 
+/** 按管道拆分一个 Markdown 表格行，去掉首尾管道并 trim 每个单元格。 */
+function splitTableRow(line) {
+  const trimmed = line.trim();
+  return trimmed
+    .slice(1, trimmed.endsWith("|") ? -1 : undefined)
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+const SEPARATOR_CELL = /^:?-{1,}:?$/;
+
 /**
- * 读取一个 `## 里程碑` 小节里的三列进度表。返回 { hasHeading, rows }，
+ * 扫描全部 Markdown 表格，返回 [{ header, rows }]（rows 为数据行单元格数组）。
+ * 只有「表头行 + 分隔行」开头、且至少一行数据的连续块才算表格。
+ */
+function findTables(content) {
+  const lines = content.split(/\r?\n/);
+  const tables = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!(lines[i] ?? "").trim().startsWith("|")) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && (lines[j] ?? "").trim().startsWith("|")) {
+      j += 1;
+    }
+    const block = lines.slice(i, j).map(splitTableRow);
+    i = j;
+    if (block.length < 3) continue;
+    const separator = block[1] ?? [];
+    if (separator.length === 0 || !separator.every((cell) => SEPARATOR_CELL.test(cell))) {
+      continue;
+    }
+    tables.push({ header: block[0] ?? [], rows: block.slice(2) });
+  }
+  return tables;
+}
+
+/**
+ * 判断表格是否为「里程碑进度表」（而非普通配置 / 映射表）：
+ * 表头三列为里程碑 / 内容 / 状态，或（标题被改写时）存在
+ * `M#` / `GitHub Delivery MVP` 之类名称加可分类状态的数据行。
+ */
+function isMilestoneProgressTable(table) {
+  const { header, rows } = table;
+  if (rows.length === 0) return false;
+  const headerLooks =
+    header.length === 3 &&
+    /里程碑|阶段|milestone/i.test(header[0] ?? "") &&
+    /状态|status/i.test(header[2] ?? "");
+  if (headerLooks) return true;
+  return rows.some((cells) => {
+    if (cells.length !== 3) return false;
+    const name = cells[0] ?? "";
+    const status = cells[2] ?? "";
+    return (
+      (/^M\d/.test(name) || /GitHub Delivery MVP/.test(name)) &&
+      milestoneStatusCategory(status) !== "unknown"
+    );
+  });
+}
+
+/**
+ * 读取一个 `## 里程碑` 小节里的进度表。返回 { hasHeading, rows }，
  * rows 为数据行（跳过表头与分隔行），支持任意里程碑名称（如 `GitHub Delivery MVP`）。
- * 缺 heading、空表或非三列行都由调用方判定，不在解析阶段静默丢弃。
+ * 缺 heading、空表或列数不对都由调用方判定，不在解析阶段静默丢弃。
  */
 function readMilestoneTable(content) {
   const lines = content.split(/\r?\n/);
@@ -119,15 +184,12 @@ function readMilestoneTable(content) {
       if (inTable) break;
       continue;
     }
-    const cells = trimmed
-      .slice(1, trimmed.endsWith("|") ? -1 : undefined)
-      .split("|")
-      .map((cell) => cell.trim());
+    const cells = splitTableRow(trimmed);
     if (!inTable) {
       inTable = true; // 表头行
       continue;
     }
-    if (cells.every((cell) => /^:?-{1,}:?$/.test(cell))) continue; // 分隔行
+    if (cells.length > 0 && cells.every((cell) => SEPARATOR_CELL.test(cell))) continue; // 分隔行
     rows.push({ name: cells[0] ?? "", status: cells[2] ?? "", columns: cells.length });
   }
   return { hasHeading: true, rows };
@@ -148,8 +210,8 @@ async function checkStatusMilestones(errors) {
   }
   const seen = new Set();
   for (const { name, status, columns } of rows) {
-    if (columns < 3) {
-      errors.push(`${STATUS_DOC} 里程碑行缺少三列：${name || "(空名称)"}`);
+    if (columns !== 3) {
+      errors.push(`${STATUS_DOC} 里程碑行必须恰好三列（实际 ${columns} 列）：${name || "(空名称)"}`);
       continue;
     }
     if (name === "") {
@@ -170,8 +232,8 @@ async function checkStatusMilestones(errors) {
   for (const rel of ["README.md", join("docs", "architecture.md")]) {
     const path = join(ROOT, rel);
     if (!(await exists(path))) continue;
-    const table = readMilestoneTable(await readFile(path, "utf8"));
-    if (table.hasHeading && table.rows.length > 0) {
+    const tables = findTables(await readFile(path, "utf8"));
+    if (tables.some(isMilestoneProgressTable)) {
       errors.push(`${rel} 出现里程碑进度表：里程碑进度唯一归 ${STATUS_DOC}`);
     }
   }
