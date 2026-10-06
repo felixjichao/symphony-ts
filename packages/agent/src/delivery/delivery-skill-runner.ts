@@ -30,6 +30,11 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly log?: (msg: string) => void;
 }
 
+// SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
+// Commit --only uses these paths even for previously staged state, preserving its
+// original index entry and the local budget file.
+const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/delivery-state.json"] as const;
+
 const DEFAULT_READY_LABEL = "symphony-ready";
 const DEFAULT_MAX_REPAIRS = 3;
 const DEFAULT_MAX_WAIT_SECONDS = 300;
@@ -669,13 +674,13 @@ export async function runDeliverySkill(
   // Phase 3: Commit Changes
   // ==========================================
   log("[delivery-skill] Phase 3: Committing changes...");
-  const statusRes = await runner.git(["status", "--porcelain"], options.cwd);
+  const statusRes = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
   if (statusRes.stdout.trim().length > 0) {
-    await runner.git(["add", "-A"], options.cwd);
+    await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
     const commitType = options.commitType ?? "feat";
     const commitMsg =
       options.commitMessage ?? `${commitType}: implement delivery for issue #${context.issueNumber} (${context.workspaceKey})`;
-    const commitRes = await runner.git(["commit", "-m", commitMsg], options.cwd);
+    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd);
     if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
       return haltDispatch("manual_intervention_required", `Git commit failed: ${commitRes.stderr}`);
     }
@@ -1105,7 +1110,7 @@ export async function runDeliverySkill(
       }
 
       // 核对是否有代码改动
-      const diffCheck = await runner.git(["status", "--porcelain"], options.cwd);
+      const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
       if (diffCheck.stdout.trim().length === 0) {
         return haltDispatch(
           "ci_failed_max_repairs",
@@ -1113,9 +1118,9 @@ export async function runDeliverySkill(
         );
       }
 
-      await runner.git(["add", "-A"], options.cwd);
+      await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
       const fixCommitRes = await runner.git(
-        ["commit", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`],
+        ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
         options.cwd,
       );
       if (fixCommitRes.exitCode !== 0) {

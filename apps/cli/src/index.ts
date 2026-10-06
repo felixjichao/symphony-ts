@@ -12,3 +12,13 @@ export {
 } from "./workspace-lifecycle";
 export type { SnapshotClock, ObservabilitySnapshot, SnapshotResult } from "@symphony/observability";
 export { runCli, type RunCliOptions, type LifecycleProcess } from "./lifecycle";
+export {
+  runGithubDogfoodCli,
+  parseDogfoodArgs,
+  validateDogfoodTarget,
+  decideDogfoodGate,
+  classifyDogfoodOutcome,
+  type DogfoodArgs,
+  type DogfoodFacts,
+  type DogfoodScenario,
+} from "./dogfood";

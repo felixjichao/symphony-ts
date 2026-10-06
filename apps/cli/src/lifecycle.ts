@@ -4,6 +4,7 @@ import { runRepositoryBootstrapCli } from "@symphony/workspace";
 import { runDeliveryCli } from "./delivery-cli";
 import { parseCliArgs, resolveWorkflowPath } from "./args";
 import { runDeliverySkillCli } from "./delivery-skill-cli";
+import { runGithubDogfoodCli } from "./dogfood";
 import { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
 
 export interface LifecycleProcess {
@@ -50,18 +51,26 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         stderr: shell.stderr,
       });
     }
+    if (args.subcommand === "dogfood") {
+      return await runGithubDogfoodCli(args.subcommandArgs ?? [], {
+        stdout: shell.stdout,
+        stderr: shell.stderr,
+      });
+    }
     if (args.help) {
       shell.stdout.write(
         "Usage: symphony [workflow-path]\n" +
         "       symphony repo-bootstrap --repo <url> [options]\n" +
         "       symphony workspace bootstrap --repo <url> [options]\n" +
         "       symphony delivery-skill [run|halt] [options]\n" +
-        "       symphony pr <action> [options]\n\n" +
+        "       symphony pr <action> [options]\n" +
+        "       symphony dogfood github --target <owner/repo> [options]\n\n" +
         "Commands:\n" +
         "  repo-bootstrap       Bootstrap git repository in workspace and create issue branch\n" +
         "  workspace bootstrap  Alias for repo-bootstrap\n" +
         "  delivery-skill       Execute delivery + land workflow skill or halt dispatch\n" +
-        "  pr                   GitHub delivery primitives (ensure, read, checks, land, verify)\n\n" +
+        "  pr                   GitHub delivery primitives (ensure, read, checks, land, verify)\n" +
+        "  dogfood              Opt-in real GitHub + real Codex end-to-end dogfood harness\n\n" +
         "Options:\n" +
         "  -h, --help           Show this help message\n" +
         "  -v, --version        Show version information\n"

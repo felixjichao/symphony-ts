@@ -201,4 +201,6 @@ The delivery protocol itself is documented in the
 This profile does not add dashboards, HTTP surfaces, SSH workers, multiple
 providers, durable scheduler state, a review-approval gate, or a PR/CI state
 machine inside the orchestrator. The end-to-end real GitHub + real Codex dogfood
-is tracked separately (#83).
+is implemented as an opt-in harness; see
+[docs/github-delivery-dogfood.md](github-delivery-dogfood.md) and the target
+[template](../examples/github-delivery-dogfood/README.md).
