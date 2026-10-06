@@ -372,11 +372,13 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
   默认不装配 logger 的独立 adapter 仍静默省略；正式 CLI host 已通过同一 observer 完成生产日志装配（M6.3–M6.5）。
 - **provider-native agent tools 未落地**（§11.5 / §17.3）：`TrackerAdapterContext.env`
   已为构造期需要预留，但 tools 的名字、schema、授权边界与结果/错误行为尚未定义。
-- **没有真实 GitHub 的 smoke（§17.8 Real Integration Profile）**：本包的验收全部在
+- **本包自身没有 opt-in 的真实仓库只读 smoke**：本包的验收全部在
   Core Conformance 层，凭据无关、可在默认 CI 复跑；端到端那条用本地 REST stub 顶替
-  provider（`src/github-rest-integration.test.ts`）。opt-in 的真实仓库只读 smoke 尚未
-  实现，将来加入时缺席只能 skip、不得记为 Core Conformance passed，也不得对生产仓库
-  做写操作。
+  provider（`src/github-rest-integration.test.ts`）。§17.8 Real Integration Profile 已由
+  CLI 的 opt-in dogfood harness 以真实 GitHub mutation 闭环验证（#83 / PR #88，见
+  [docs/github-delivery-dogfood.md](../../docs/github-delivery-dogfood.md)），不在本包内；
+  本包若将来加入只读 smoke，缺席只能 skip、不得记为 Core Conformance passed，也不得对
+  生产仓库做写操作。
 - **只有 GitHub 一个 provider**：§11.3 的通用归一化规则目前只有单一实现作为对照，
   "跨 provider 抽象是否漏了什么"要等第二个 adapter（Linear / Jira）才能证伪。
 - 本包不拥有 polling cadence / claim / retry / required-label 过滤 / 并发上限（§8、§14
@@ -386,4 +388,4 @@ transport **原样保留**，由 normalize 标 `dispatchable=false`（§11.1：c
 - 空输入的"零 provider 请求"由 `createTrackerReadKernel` 保证，但该守卫只在经由
   registry 或显式 `createTrackerReadKernel` 的路径上生效；直接持有裸 `TrackerAdapter`
   的调用方需自行包装。
-- 进度见 [docs/conformance.md](../../docs/conformance.md)。
+- 整体进度见 [docs/status.md](../../docs/status.md)，SPEC 验收映射见 [docs/conformance.md](../../docs/conformance.md)。

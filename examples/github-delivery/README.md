@@ -17,14 +17,15 @@ open issue + `symphony-ready`
 
 The runtime behavior lives in the existing packages; this profile only supplies
 configuration and a prompt. It does **not** add orchestrator state or a second
-state machine. See [docs/github-delivery-workflow.md](../../docs/github-delivery-workflow.md)
+state machine. Start from the [root README](../../README.md) for installation and
+prerequisites; see [docs/github-delivery-workflow.md](../../docs/github-delivery-workflow.md)
 for the full start/run/stop lifecycle and the [CLI reference](../../apps/cli/README.md)
 for every subcommand.
 
 ## Prerequisites
 
 - Node.js >= 20 and a built `symphony` CLI on `PATH`
-  (`npm ci && npm run typecheck`, then put `apps/cli/dist/bin` on `PATH`).
+  (`npm ci && npm run build`, then put the absolute `apps/cli/dist/bin` on `PATH`).
 - `git` on `PATH` with credentials for the target repository.
 - [`gh`](https://cli.github.com) authenticated for the same account, so the
   delivery skill can read checks and merge. Run `gh auth setup-git` once on the

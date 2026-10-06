@@ -40,7 +40,7 @@ green; whether the issue was closed by a merge.
 
 ## Start
 
-1. Build the CLI and put it on `PATH` (`npm ci && npm run typecheck`; the binary
+1. Build the CLI and put it on `PATH` (`npm ci && npm run build`; the binary
    is `apps/cli/dist/bin/symphony.js`).
 2. Copy the reference profile into the target repository and fill in the
    repo-specific values (see the [example README](../examples/github-delivery/README.md)).
@@ -171,9 +171,9 @@ perform delivery. This is an explicit, temporary trust boundary:
 - The delivery runner redacts classic/fine-grained PATs, bearer headers, and
   credential-bearing URLs from everything it prints.
 
-A provider-native tools boundary may replace this after the loop is proven by the
-end-to-end dogfood (#83). Do not treat the MVP boundary as the final security
-model.
+The loop is now proven by the end-to-end dogfood (#83 / PR #88). A provider-native
+tools boundary may replace this temporary boundary in the future; do not treat the
+MVP boundary as the final security model.
 
 ## Recommended initial values
 

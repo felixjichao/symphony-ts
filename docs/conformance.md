@@ -1,6 +1,6 @@
 # SPEC Conformance Matrix
 
-实现进度与官方 SPEC 验收项（§17 Test and Validation Matrix、§18 Implementation Checklist）的可追踪映射。规范 baseline 与升级规则见 [upstream.md](upstream.md)；owner 包的职责边界见 [architecture.md](architecture.md)。
+官方 SPEC 验收项（§17 Test and Validation Matrix、§18 Implementation Checklist）与实现的可追踪映射。整体开发进度与里程碑见 [status.md](status.md)；规范 baseline 与升级规则见 [upstream.md](upstream.md)；owner 包的职责边界见 [architecture.md](architecture.md)。
 
 ## 规则
 
@@ -61,7 +61,7 @@ M1 的 config / domain 行落地时，以 **§17.1（Workflow and Config Parsing
 
 **M2 收口（M2.4）**：上面 §17.1 两行、§11.1–§11.4 与 §17.3 行的 Test 入口现在含一条端到端项 `packages/tracker/src/github-rest-integration.test.ts`——真实 `WORKFLOW.md` → config preflight（built-in registry 的扩展点）→ `registry.create()` → GitHub profile → REST transport → 本地 GitHub REST fixture → normalized `Issue`。M2 的 Core Conformance 全程**不需要外部 GitHub 凭据**，因此可在默认 CI 稳定复跑（验收口径：M3/M5 只消费 tracker 的 public API 与 normalized `Issue`；`@symphony/config` 仍不依赖 `@symphony/tracker`）。
 
-**§17.8 Real Integration Profile 未落地（有意为之）**：opt-in 的真实 GitHub 只读 smoke（环境变量提供测试仓库与 token、缺席即 skip）在 M2.4 不做——它是可选增强，不构成 M2 验收。将来加入时：skip 不得被记成 Core Conformance passed，不得对生产仓库做 mutation 测试（需要写操作时另设专用测试仓库）。**该 opt-in Real Integration profile 已由 NEST-94 的 dogfood harness 落地**（真实 GitHub + 真实 Codex mutation 闭环；缺 credential 显式 skip，默认 `npm run gate` 仍 credential-free），见下方 NEST-94 段落与 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md)。provider-native agent tools（§11.5）仍留在 M2 之外。malformed 省略日志与 observer exception 隔离已在 M6.2 helpers 收口（`tracker/src/github/adapter.test.ts` 与 `cli/src/logging.test.ts`），正式 host 装配已由 M6.3–M6.5 验证。
+**§17.8 Real Integration Profile：opt-in 已落地，不在默认 gate**：M2.4 当时不做 opt-in 的真实 GitHub 只读 smoke（它是可选增强，不构成 M2 验收）。**该 opt-in Real Integration profile 已由 NEST-94 的 dogfood harness 落地**（真实 GitHub + 真实 Codex mutation 闭环；缺 credential 显式 skip，默认 `npm run gate` 仍 credential-free），见下方 NEST-94 段落与 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md)。当时的约束仍然成立：skip 不得被记成 Core Conformance passed，不对生产仓库做 mutation 测试（需要写操作时另设专用测试仓库）。provider-native agent tools（§11.5）仍留在 M2 之外。malformed 省略日志与 observer exception 隔离已在 M6.2 helpers 收口（`tracker/src/github/adapter.test.ts` 与 `cli/src/logging.test.ts`），正式 host 装配已由 M6.3–M6.5 验证。
 
 **M3.1 落地（M3.1 / #27）**：`@symphony/workspace` 建立公共管理内核 `WorkspaceManager` 与工厂函数 `createWorkspaceManager`，直接复用 `@symphony/domain` 的 `deriveWorkspaceKey`，实现确定性目录计算、缺失目录创建与已有目录复用。针对 SPEC §17.2 实现裁定的 existing non-directory 场景采用 Fail Safely 策略（绝不自动删除或替换未知文件/符号链接，抛出类型化 `existing_non_directory` 错误，见 [workspace non-directory policy Agent Note](../notes/accepted/architecture/2026-09-29-workspace-non-directory-policy.md) 与 [packages/workspace/README.md](../packages/workspace/README.md)）。路径 containment 校验（#28）与 hooks / cleanup（#29）随后续里程碑落地。
 
@@ -181,7 +181,7 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 
 ## M6.5 Core 证据索引
 
-**M6 Core 已完成并通过验收**（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）。PR/local gate 不替代 main CI。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 不属于本轮；M7 不承担 M6 host 返工。本地 HTTPS tracker + app-server subprocess 只证明 Core，不代表 §17.8 外部 GitHub/Codex Real Integration。
+**M6 Core 已完成并通过验收**（merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）。PR/local gate 不替代 main CI。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 不属于本轮。本地 HTTPS tracker + app-server subprocess 只证明 Core；§17.8 外部 GitHub / Codex Real Integration 由 opt-in 的 dogfood harness 单独验证（#83 / PR #88，见 [github-delivery-dogfood.md](github-delivery-dogfood.md)），默认 gate 不代表它。当前进度与 deferred 见 [status.md](status.md)。
 
 | M6 Core 项 | 文件与用例名 | 可复跑命令 |
 |---|---|---|

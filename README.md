@@ -2,87 +2,132 @@
 
 按 [OpenAI Symphony](https://github.com/openai/symphony) 官方 `SPEC.md` 实现的 TypeScript 版本：**一个长运行的 orchestrator**，从 issue tracker 读取工作（issue），为每个 issue 建立隔离的 workspace，运行 coding agent（如 Codex）完成工作，并负责 retry / reconciliation / observability。
 
-运行模型（SPEC §3）：
+## 能做什么
 
+- 以 `WORKFLOW.md` 声明式配置运行一个长驻 host：轮询 issue tracker、按并发上限派发、为每个 issue provisioning 隔离 workspace、启动 coding agent、重试与对账、输出结构化日志与只读状态出口。
+- 内置 `github` issue tracker profile。
+- 提供 **GitHub 自动交付闭环**（GitHub Delivery MVP）：把 `open` + `symphony-ready` 的 issue 一路推进到合入并关闭。
+
+```text
+open issue + symphony-ready
+  → Symphony 派发 + workspace bootstrap（clone + 确定性 issue 分支）
+  → Codex 实现 + 验证
+  → commit + push → 创建 / 复用 PR
+  → CI 检查 + 有界修复
+  → squash merge（opt-in）→ Fixes #N 关闭 issue
+  → Symphony 对账 + workspace 清理
 ```
-WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agent Runner → Observability
-```
 
-规范来源与进度追踪：
+整体实现状态与里程碑见 [docs/status.md](docs/status.md)；SPEC 逐项验收矩阵见 [docs/conformance.md](docs/conformance.md)。
 
-- 唯一产品规范是官方 `SPEC.md`，baseline 固定为 `be10a1b79df723d6d7612b5651c8522704dafb2e`；coding agent 协议另有独立的 Codex app-server 基线（`rust-v0.159.2` / `ff6aec96948b70d94983af2641a6b67c94faeff5`）——两条版本轴、schema source paths 与各自的升级规则见 [docs/upstream.md](docs/upstream.md)；
-- 实现与 SPEC §17 / §18 验收项的映射见 [docs/conformance.md](docs/conformance.md)；
-- 参考实现与第三方 TypeScript 实现只用于设计对照，不构成规范。
+## Prerequisites
 
-## 快速开始
+- **Node.js >= 20** 与 npm。npm 是唯一 canonical 包管理器（仓库只有 `package-lock.json`）。
+- **Codex**：已安装并完成登录，`codex app-server` 能启动——host 通过它驱动 coding agent。
+- **GitHub 交付场景**另外需要：`git`、[`gh`](https://cli.github.com)，以及与目标仓库匹配的凭据（见 [GitHub closed-loop quick start](#github-closed-loop-quick-start)）。
+- 当前进程与 hook 使用 POSIX `sh` / `bash`：优先 Linux / macOS，或具备相应 shell 的 WSL。原生 Windows 未验证。
 
-要求 Node >= 20；npm 是唯一 canonical 包管理器。
+## 安装与构建
+
+从源码 checkout 安装（当前没有发布到 npm 的全局包）：
 
 ```bash
-npm ci                        # 安装（严格按 package-lock.json）
-npm run gate                  # 一键门禁：typecheck + test + lint + docs:check
-npm test -w @symphony/domain  # 只跑某个 workspace 的测试
+npm ci            # 严格按 package-lock.json 安装
+npm run build     # 构建各 workspace，产出 apps/cli/dist/bin/symphony.js
 ```
 
-日常开发命令、TS 布局约定见 [docs/development.md](docs/development.md)。
-
-## 运行 CLI
+把 CLI 放入 `PATH`，或直接执行 package binary：
 
 ```bash
-npm run build
+export PATH="$PWD/apps/cli/dist/bin:$PATH"   # 之后可直接用 symphony
+node apps/cli/dist/bin/symphony.js --help    # 或不改 PATH，直接执行
+```
+
+## First run
+
+在任意目录准备一个最小 `WORKFLOW.md`（YAML front matter + prompt 正文）：
+
+```markdown
+---
+tracker:
+  kind: github
+  provider:
+    repo: <owner/repo>      # 必填：从这里读取 issue
+    token: $GITHUB_TOKEN    # 必填：export 一个具 repo scope 的 token
+  active_states: [open]
+  terminal_states: [closed]
+workspace:
+  root: ./workspaces        # 相对 WORKFLOW.md 所在目录解析
+codex:
+  command: codex app-server
+---
+
+You are working on {{ issue.identifier }}: {{ issue.title }}
+
+{{ issue.description }}
+```
+
+其余字段（`polling`、`agent`、`hooks`、`codex.*` 等）都有默认值；字段语义与默认值表见 [packages/config/README.md](packages/config/README.md)。
+
+启动 host：
+
+```bash
+export GITHUB_TOKEN=...
 node apps/cli/dist/bin/symphony.js ./WORKFLOW.md
-# 无路径参数时使用 cwd 的 ./WORKFLOW.md；SIGINT / SIGTERM 等待资源收口后退出 0。
-npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts
+# 无 positional 参数时，默认读取 cwd 下的 ./WORKFLOW.md
 ```
 
-startup/preflight、致命生命周期或 shutdown 失败退出 1。CLI 自然退出，不以强制 exit 隐藏 watcher、poll、retry 或 agent 遗留。M6 Core 各项文件、用例名与命令见 [conformance](docs/conformance.md#m65-core-证据索引)。本地 HTTPS tracker / app-server fixture 证据不代表外部 GitHub / Codex Real Integration；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 均不在 M6 Core 范围。
+- **确认已运行**：结构化日志会输出 `startup` / completed（reason `startup_completed`）。没有符合条件的 issue 时 host 保持轮询等待，这是正常的。
+- **停止**：`Ctrl-C`（SIGINT）或 SIGTERM；host 等待 worker 与清理收口后以 `0` 退出。startup / fatal / shutdown 失败以 `1` 退出。
+- 当前没有 HTTP 健康检查入口（属 optional extension）。
 
-## 包布局
+> 上面的最小 workflow 只启动 host，不做仓库 clone。要真正跑「issue → PR」闭环，用下面的参考 profile。
 
-| 包 | SPEC §3 组件 | SPEC sections | 职责 |
-|---|---|---|---|
-| `packages/domain` | —（共享契约） | §4 | 领域类型唯一权威：Issue、WorkflowDefinition、ServiceConfig、Workspace、RunAttempt、RetryEntry… |
-| `packages/config` | Workflow Loader + Config Layer | §5、§6 | `WORKFLOW.md` 解析、front matter schema、typed config、env / path resolution、模板渲染 |
-| `packages/tracker` | Issue Tracker Adapter | §11 | provider 无关的工单读取、认证、payload → Issue 归一化 |
-| `packages/workspace` | Workspace Manager | §9 | per-issue 隔离目录、路径 containment、生命周期 hooks |
-| `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程、live session 事件流 |
-| `packages/orchestrator` | Orchestrator | §7、§8、§14 | 状态机、polling / scheduling / reconciliation、retry / backoff |
-| `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 |
-| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 |
+## GitHub closed-loop quick start
 
-每个包都有自己的 `README.md`（purpose / configuration / extension points / known limitations）。依赖方向与两条硬约束（tracker 不 import orchestrator；agent 不拥有调度 / retry）见 [docs/architecture.md](docs/architecture.md)。
+完整 start / run / stop 生命周期与安全边界见 [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md)；可复制的 workflow 在 [examples/github-delivery/WORKFLOW.md](examples/github-delivery/WORKFLOW.md)，复制步骤与需替换的值见 [examples/github-delivery/README.md](examples/github-delivery/README.md)。
 
-## 文档导航
+前提：
+
+1. Node >= 20，已 build，并把 CLI 的**绝对** `apps/cli/dist/bin` 放入 `PATH`——`after_create` hook 里的 `symphony repo-bootstrap` 依赖它在 shell 中可用。
+2. 目标仓库有 `symphony-ready` label；只有 `open` 且带该 label 的 issue 会被派发。
+3. 目标仓库的 CI 会在 PR 上产生 checks（这是「合并前全绿」的事实来源）。
+4. `GITHUB_TOKEN`（repo scope）供 tracker 使用；`git` 与 `gh` 独立具备可用认证（例如 `gh auth setup-git`）；Codex 已登录。派发给 agent 的子进程不会继承 tracker token。
+5. 目标仓库提供自己的验证命令与 CI 修复入口。参考 profile 默认 `--validate "npm run gate"`、`--repair-cmd "npm run ci:fix"`；本产品仓库没有 `ci:fix`，所以目标仓库必须提供该命令，或用 `SYMPHONY_DELIVERY_VALIDATE` / `SYMPHONY_DELIVERY_REPAIR_CMD` 覆盖。
+
+步骤：
+
+1. 把 `examples/github-delivery/WORKFLOW.md` 复制到目标仓库根目录，替换其中的 `<owner/repo>` 占位符。
+2. 把本仓库的 `skills/github-delivery/` 复制进目标仓库并提交——`after_create` 会把它安装进 workspace，供 Codex 发现。
+3. 提交这两个文件，然后启动 host：
+
+   ```bash
+   GITHUB_TOKEN=... symphony /path/to/WORKFLOW.md
+   ```
+
+之后，一个 `open` 且带 `symphony-ready` 的 issue 会在下一次轮询被派发。
+
+## 安全与运维行为
+
+- **自动合入只针对显式的 Symphony-owned PR**：派发需要 `symphony-ready` label；delivery 需要显式 `--opt-in`；PR 必须属于当前 issue / workspace（foreign、歧义、closed-unmerged 一律拒绝）。
+- **检查失败关闭（fail closed）**：只有 PR open、mergeable 且所有 required 与 observed checks 全部成功才合入；pending / failed / unknown / 零 checks 一律不合入。
+- **交接与恢复**：需求歧义、破坏性变更、无法安全合入或预算耗尽时，delivery skill 保持 issue open、移除 `symphony-ready` 停止继续派发，并输出交接报告。修好根因后重新加 label 即恢复；`--resume` 保留已消耗的修复次数与绝对 CI 等待 deadline，不会重置预算。
+- **凭据边界**：MVP 下 delivery 使用 host 提供的 `git` / `gh` 凭据；tracker 读取 host 的 `GITHUB_TOKEN`，但派发给 agent 的子进程会通过 `excludeEnvNames` 排除它。这是显式、临时的 MVP trust boundary，不是最终安全模型；provider-native tools / credential boundary 仍属 deferred。细节见 [credential / trust boundary](docs/github-delivery-workflow.md#credential--trust-boundary-mvp)。
+
+## 配置、CLI 与文档
+
+- 配置：front matter 字段、默认值与校验由 [`@symphony/config`](packages/config/README.md) owner；GitHub tracker 键见 [`@symphony/tracker`](packages/tracker/README.md)。
+- CLI：所有子命令（`repo-bootstrap`、`delivery-skill`、`pr`、`dogfood` 等）见 [`apps/cli/README.md`](apps/cli/README.md)。
 
 | 文档 | 内容 |
 |---|---|
-| [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders：命令矩阵、扩展点表、TODO 分级 |
-| [docs/upstream.md](docs/upstream.md) | 两条上游 baseline：Symphony SPEC（SHA、同步 / 升级规则）与 Codex app-server 协议（tag / commit、schema source paths、升级落点） |
-| [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新） |
-| [docs/architecture.md](docs/architecture.md) | 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑 |
+| [docs/status.md](docs/status.md) | 当前实现状态、里程碑、deferred 与 next work（进度唯一权威） |
+| [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（SPEC capability 唯一权威） |
+| [docs/architecture.md](docs/architecture.md) | 稳定架构、组件职责与依赖方向（SPEC §3 映射） |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
 | [docs/testing.md](docs/testing.md) | 测试分层（对齐 SPEC §17 profiles）与三条测试哲学 |
-| [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) | GitHub 自动交付闭环（start / run / stop、GitHub lifecycle 与安全边界） |
+| [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) | GitHub 自动交付闭环（start / run / stop、安全边界） |
+| [docs/github-delivery-dogfood.md](docs/github-delivery-dogfood.md) | opt-in 真实 GitHub + 真实 Codex 端到端验证 |
+| [docs/upstream.md](docs/upstream.md) | 两条上游 baseline（Symphony SPEC、Codex app-server 协议） |
+| [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders |
 | [notes/](notes/README.md) | 架构 / 选型决策记录（Agent Notes） |
-
-## 里程碑
-
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| M0 / M0.5 | 工程基建：monorepo、strict TS、测试、`npm run gate`、AGENTS / docs / notes | ✅ 已完成 |
-| M0.6 | 对齐官方 SPEC：固定 baseline、按 §3 重建 workspace 边界、删除协议栈 scaffold、CI + doc gate、conformance 矩阵 | ✅ 已完成 |
-| M1 | Domain + Workflow + Config：领域模型、`WORKFLOW.md` loader、typed config / defaults / env / path resolution 与校验（SPEC §4、§5、§6，验收 §17.1） | ✅ 已完成 |
-| M2 | Issue Tracker Adapter：provider 无关 read kernel / registry、built-in `github` profile + 归一化 + REST transport 与端到端 conformance 收口（§11，验收 §17.3） | ✅ 已完成 |
-| M3 | Workspace Manager：确定性 provisioning、lexical + canonical containment、lifecycle hooks、safe cleanup 与端到端 Core Conformance（§9，验收 §17.2；agent launch cwd 绑定随 M4.2 落地） | ✅ 已完成 |
-| M4 | Agent Runner：prompt 组装、子进程控制、session 事件流（§10、§12） | ✅ 已完成（M4.1–M4.5 各层实现，以及 WORKFLOW.md → config → workspace → runner → fake app-server 端到端 Core Conformance 与 §17.2 / §17.5 / §10 / §12 收口） |
-| M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | ✅ 已完成（M5.1–M5.6；§17.4 非 conditional 条目已收口） |
-| M6 | Observability + Status Surface + CLI 装配（§13、§17 CLI lifecycle） | ✅ 已完成（Core）：M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿。HTTP §13.7 / provider-native tools §11.5 / durable recovery / SSH 保持为范围外 extension |
-| M7 | 加固：安全 / 运维（§15）、可选 SSH worker 扩展（Appendix A） | 未开始 |
-
-里程碑顺序跟随依赖方向（orchestrator 最后接线）；每个 issue 必须标注对应 SPEC section，进度以 [docs/conformance.md](docs/conformance.md) 矩阵为准。
-
-## 注意事项
-
-- 包间依赖使用 `*` 语义（npm workspaces 自动链接本地包），tsconfig `paths` 映射到各包 `src`；发布形态（dist 产物）在首个打包里程碑切换。
-- 严格模式：`strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`。
-- M0 的协议栈 scaffold（`sym/0` / protobuf / UDP / gateway / relay）已随 M0.6 架构重校准删除，历史见 Git；决策记录见 [align-with-upstream-spec note](notes/accepted/architecture/2026-09-26-align-with-upstream-spec.md)。

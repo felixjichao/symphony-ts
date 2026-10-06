@@ -10,6 +10,9 @@ The harness itself only prepares scenarios, launches those real entry points,
 injects controlled faults, reads GitHub back and records sanitized evidence. It
 never implements, repairs, commits, pushes or merges on the agent's behalf.
 
+Overall project progress is tracked in [status.md](status.md); the SPEC capability
+matrix is [conformance.md](conformance.md).
+
 ## Default gate stays credential-free
 
 `symphony dogfood github` is **never** part of `npm run gate`. It requires
@@ -36,7 +39,7 @@ entry that runs real Codex. The template supplies all of these.
 
 ```sh
 # Build once so the `symphony` binary is available.
-npm ci && npm run typecheck
+npm ci && npm run build
 export PATH="$PWD/apps/cli/dist/bin:$PATH"
 
 # Real run against the authorized isolated target (mutations: branches/PRs/merge).
@@ -88,7 +91,7 @@ headers and credential-bearing URLs never enter the artifacts.
 
 ## Reproducing on another machine
 
-1. Node >= 20, `npm ci`, `npm run typecheck`; put `apps/cli/dist/bin` on `PATH`.
+1. Node >= 20, `npm ci`, `npm run build`; put `apps/cli/dist/bin` on `PATH`.
 2. Authenticate `gh` for an account with write access to the isolated target, and
    a Codex login (`codex login status`) so `codex app-server` starts. The
    `reuse` scenario additionally needs **Administration: write** on the target to

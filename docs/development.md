@@ -37,7 +37,7 @@ npm run gate        # 一键门禁 = typecheck + test + lint + docs:check（提�
 npm run typecheck   # 全仓 tsc 严格编译（noEmit）
 npm test            # 全仓单元测试（vitest）
 npm run lint        # eslint
-npm run docs:check  # 文档门禁：Markdown 相对链接存在 + AGENTS.md ≤ 150 行
+npm run docs:check  # 文档门禁：Markdown 相对链接存在 + AGENTS.md ≤ 150 行 + docs/status.md 里程碑表
 
 # 单 workspace（-w 用包名或路径均可）：
 npm test -w @symphony/config
@@ -52,7 +52,7 @@ npm run build -w @symphony/domain
 - doc gate（`scripts/docs-check.mjs`，零依赖）：
   1. 仓库内所有 Markdown 的**相对链接必须指向存在的文件 / 目录**（外部 URL 与纯 anchor 跳过）；
   2. **`AGENTS.md` ≤ 150 行**——standing orders 保持短小可导航，详细内容下沉到 `docs/` 与各包 README；
-  3. 根 `README.md` 与 `docs/architecture.md` 的里程碑状态类别必须一致，且禁止 `✅ 本次` 这类会随时间失真的状态；
+  3. 开发进度里程碑只能存在于 `docs/status.md`：该文件必须存在且含非空 `## 里程碑` 表（拒绝重复名称、无法分类的状态与 `✅ 本次` 这类会随时间失真的状态），且 `README.md` 与 `docs/architecture.md` 不得再出现里程碑进度表；
   4. workspace 一旦已有 `src/**/*.test.ts`，其 `test` 脚本不得继续带 `--passWithNoTests`。
 - 移动 / 重命名 Markdown 文件或目录时，跑一次 `npm run docs:check` 再提交。
 
