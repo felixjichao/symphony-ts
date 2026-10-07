@@ -1,6 +1,6 @@
 # 架构
 
-> 当前 **M0–M6 Core 已完成**，且 **GitHub Delivery MVP 已完成并经真实 GitHub + 真实 Codex dogfood 验收**（#83 / PR #88）；M7 §15 hardening 未开始。当前 executable CLI host 已完成 config / tracker / workspace / agent / orchestrator / observability 的生产组件装配，提供 structured logging、同步只读 snapshot、live reload / EffectiveRuntime 与 signal / exit-code lifecycle；默认 CI 的 Core Conformance 包含真实 WORKFLOW、本地 tracker fixture、temp filesystem 与 app-server subprocess。装配证据见 [testing.md](testing.md)，逐项范围见 [conformance.md](conformance.md)，整体进度与 deferred 见 [status.md](status.md)。HTTP §13.7 / dashboard、provider-native tools §11.5、durable recovery 与 SSH workers 为 deferred / optional extensions；最终 provider-native credential / tool boundary 仍未实现，当前 MVP trust boundary 见 [github-delivery-workflow.md](github-delivery-workflow.md)。snapshot acquisition timeout 尚未实现且不适用于本地同步 projector。
+> 本文件只记录**稳定架构**：产品模型、组件职责、依赖方向与进程 / lifecycle 契约。当前实现状态、里程碑、deferred 与 next work 只在 [status.md](status.md) 维护；SPEC 逐项能力与验收证据见 [conformance.md](conformance.md)；装配与测试入口见 [testing.md](testing.md)。
 
 ## 产品模型
 

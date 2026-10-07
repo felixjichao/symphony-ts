@@ -5,8 +5,8 @@
  * 1. 仓库内所有 Markdown 的相对链接必须指向存在的文件 / 目录；
  * 2. `AGENTS.md` 行数不超过预算（standing orders 必须保持短小可导航）；
  * 3. 开发进度里程碑只存在于 `docs/status.md`（非空、恰好三列的 `## 里程碑` 表、名称唯一、
- *    状态可分类、不使用"✅ 本次"）；根 README 与 architecture 不得再出现里程碑进度表
- *    （按表结构识别，不依赖固定标题）；
+ *    状态可分类、不使用"✅ 本次"）；根 README / architecture / AGENTS 不得再出现里程碑进度表
+ *    或「里程碑 / §section + 进度状态」摘要（按表结构与行内容识别，不依赖固定标题）；
  * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`。
  *
  * 零依赖，Node >= 20 直接运行。
@@ -109,6 +109,8 @@ function splitTableRow(line) {
 }
 
 const SEPARATOR_CELL = /^:?-{1,}:?$/;
+const PROGRESS_STATUS_RE = /(已完成|未开始|进行中|in[ -]?progress|planned|deferred)/i;
+const MILESTONE_OR_SPEC_RE = /(\bM[0-7](?:\.\d+)?\b|§\d+(?:\.\d+)?)/;
 
 /**
  * 扫描全部 Markdown 表格，返回 [{ header, rows }]（rows 为数据行单元格数组）。
@@ -240,6 +242,26 @@ async function checkStatusMilestones(errors) {
   return seen.size;
 }
 
+/**
+ * README / architecture / AGENTS 只描述身份、稳定边界与 standing orders，不得复述
+ * 「里程碑 / SPEC section + 进度状态」这类当前进度摘要——它只归 docs/status.md。
+ */
+async function checkProgressSingleSource(errors) {
+  let checked = 0;
+  for (const rel of ["README.md", "AGENTS.md", join("docs", "architecture.md")]) {
+    const path = join(ROOT, rel);
+    if (!(await exists(path))) continue;
+    checked += 1;
+    const lines = (await readFile(path, "utf8")).split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (PROGRESS_STATUS_RE.test(line) && MILESTONE_OR_SPEC_RE.test(line)) {
+        errors.push(`${rel}:${index + 1} 出现里程碑 / 进度摘要：当前状态只由 ${STATUS_DOC} 维护`);
+      }
+    });
+  }
+  return checked;
+}
+
 async function hasTestFile(dir) {
   if (!(await exists(dir))) return false;
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -287,6 +309,7 @@ for await (const file of walkMarkdown(ROOT)) {
 }
 const agentsLines = await checkAgentsBudget(errors);
 const milestones = await checkStatusMilestones(errors);
+const progressSources = await checkProgressSingleSource(errors);
 const testedWorkspaces = await checkPassWithNoTests(errors);
 
 if (errors.length > 0) {
@@ -297,5 +320,5 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行；docs/status.md ${milestones} 个里程碑；${testedWorkspaces} 个已有测试的 workspace 未使用 --passWithNoTests。`,
+  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行；docs/status.md ${milestones} 个里程碑；${progressSources} 个进度单源文件无重复摘要；${testedWorkspaces} 个已有测试的 workspace 未使用 --passWithNoTests。`,
 );

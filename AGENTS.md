@@ -1,6 +1,6 @@
 # AGENTS.md — Standing Orders
 
-symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。**M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance；当前 CLI host 已完成生产组件装配并可通过 executable 启动，提供 structured logging、只读 snapshot、live reload 与 signal / exit-code lifecycle。**GitHub Delivery MVP 已完成并经真实 GitHub + 真实 Codex dogfood 验收**（#83 / PR #88）：host 用 `git` + `gh` 完成 issue → Codex → PR → CI → auto merge → close → cleanup 闭环。M7 §15 hardening 未开始；HTTP §13.7、provider-native tools §11.5、durable recovery 与 SSH workers 保持 deferred / optional，最终 provider-native credential / tool boundary 仍未实现（当前 MVP trust boundary 见 [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md)）；snapshot acquisition timeout 未实现且不适用于本地同步 projector；不宣称整个 SPEC 已完成。当前进度总览见 [docs/status.md](docs/status.md)。本文件只放 standing orders，详细契约见文末导航。
+symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。它是一个**长运行的 orchestrator**：从 issue tracker 读取工作，为每个 issue 建立隔离 workspace，运行 coding agent，并负责调度、重试、对账与可观测性；宿主另提供基于 `git` + `gh` 的 GitHub 交付闭环。**当前实现状态、里程碑、deferred 与 next work 只由 [docs/status.md](docs/status.md) 维护**；SPEC 逐项能力与验收证据见 [docs/conformance.md](docs/conformance.md)。本文件只放 standing orders（命令矩阵、扩展点表、TODO 分级、文档职责与导航），详细契约见文末导航。
 
 ## Command Matrix
 

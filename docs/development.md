@@ -52,7 +52,7 @@ npm run build -w @symphony/domain
 - doc gate（`scripts/docs-check.mjs`，零依赖）：
   1. 仓库内所有 Markdown 的**相对链接必须指向存在的文件 / 目录**（外部 URL 与纯 anchor 跳过）；
   2. **`AGENTS.md` ≤ 150 行**——standing orders 保持短小可导航，详细内容下沉到 `docs/` 与各包 README；
-  3. 开发进度里程碑只能存在于 `docs/status.md`：该文件必须存在且含非空、恰好三列的 `## 里程碑` 表（拒绝重复名称、无法分类的状态与 `✅ 本次` 这类会随时间失真的状态），且 `README.md` 与 `docs/architecture.md` 不得再出现里程碑进度表（按表结构识别，不依赖固定标题）；
+  3. 开发进度里程碑只能存在于 `docs/status.md`：该文件必须存在且含非空、恰好三列的 `## 里程碑` 表（拒绝重复名称、无法分类的状态与 `✅ 本次` 这类会随时间失真的状态），且 `README.md`、`docs/architecture.md` 与 `AGENTS.md` 不得再出现里程碑进度表或「里程碑 / §section + 进度状态」摘要（按表结构与行内容识别，不依赖固定标题）；
   4. workspace 一旦已有 `src/**/*.test.ts`，其 `test` 脚本不得继续带 `--passWithNoTests`。
 - 移动 / 重命名 Markdown 文件或目录时，跑一次 `npm run docs:check` 再提交。
 
