@@ -30,9 +30,9 @@ committed SVG is stale, or when one of the authoritative documents stops
 referencing its diagram. Only the `diagram-design` visual grammar is reused
 (one reading direction, orthogonal connectors, limited density, 1–2 accent
 elements, dashed tier / trust-boundary zones), pinned at commit
-`f4547ee95f88e5b28a52517feff6b6c11cc657f9` (v2.5.10, MIT); PNG export is out of
-scope. A new tooling Agent Note is required before introducing any heavier
-rendering path.
+`f4547ee95f88e5b28a52517feff6b6c11cc657f9` (skill metadata version 2.6, MIT);
+PNG export is out of scope. A new tooling Agent Note is required before
+introducing any heavier rendering path.
 
 ## Alternatives considered
 

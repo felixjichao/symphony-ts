@@ -51,7 +51,8 @@ the artifacts render on GitHub without external CSS or JavaScript.
 
 The diagrams follow the visual grammar of
 [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)
-(MIT), pinned at commit `f4547ee95f88e5b28a52517feff6b6c11cc657f9` (v2.5.10):
+(MIT), pinned at commit `f4547ee95f88e5b28a52517feff6b6c11cc657f9` (skill
+metadata version 2.6):
 one primary reading direction per diagram, orthogonal connectors, a limited node
 count, accent color reserved for one or two focal elements, and dashed zones for
 tiers and trust boundaries. Only the grammar is reused — the diagrams are

@@ -24,7 +24,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 ![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心](diagrams/runtime-architecture.svg)
 
-上图是运行模型的权威可视化：`Orchestrator` 是中心 hub，`WORKFLOW.md` 经 Config / Workflow Loader 变成 typed config 进入调度；Issue Tracker Adapter 只做 provider 归一化，GitHub 是其外部持久事实来源；Workspace Manager 与 Agent Runner（驱动 Codex app-server 子进程）由 orchestrator 派发；Observability 只消费只读 snapshot。可编辑源与再生成步骤见 [docs/diagrams/](diagrams/README.md)。
+上图是运行模型的权威可视化：`Orchestrator` 是中心 hub，`WORKFLOW.md` 经 Config / Workflow Loader 变成 typed config 进入调度；Issue Tracker Adapter 只做 provider 归一化，GitHub 是其外部持久事实来源；Workspace Manager 与 Agent Runner（驱动 Codex app-server 子进程）由 orchestrator 派发，Agent Runner 再通过 session 事件与 attempt outcome 向 orchestrator 回传监督事实；Observability 只消费只读 snapshot。可编辑源与再生成步骤见 [docs/diagrams/](diagrams/README.md)。
 
 ## Workspace 职责与依赖方向（SPEC §3 映射）
 

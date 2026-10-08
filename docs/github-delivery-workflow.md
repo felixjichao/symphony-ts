@@ -80,10 +80,13 @@ releases the workspace — no extra label is involved.
 
 The diagram is the canonical visual for the path above. GitHub holds the durable
 work / delivery facts, Symphony schedules, supervises and reconciles, the Codex
-delivery skill implements and drives delivery, and CI verifies. A failing check
-enters the bounded repair loop; when delivery cannot complete safely or a budget
-is exhausted, the loop exits through the handoff path instead of retrying
-forever. Editable source and regeneration steps: [docs/diagrams/](diagrams/README.md).
+delivery skill implements and drives delivery, and CI verifies. Landing requires
+CI green and a mergeable PR plus explicit opt-in and PR ownership; a failing
+check enters the bounded repair loop, while a pending check waits within the CI
+deadline. When the repair budget, the CI deadline or merge safety is exhausted —
+or delivery cannot otherwise complete safely — the loop exits through the handoff
+path instead of retrying forever. Editable source and regeneration steps:
+[docs/diagrams/](diagrams/README.md).
 
 ## Stop and exit paths
 
@@ -184,9 +187,11 @@ perform delivery. This is an explicit, temporary trust boundary:
 
 The diagram shows the same boundary: the tracker reads `GITHUB_TOKEN` on the
 host; the agent subprocess never inherits it (`excludeEnvNames`); the delivery
-skill still reaches GitHub through host-provided `git` and authenticated `gh`,
-behind the opt-in / ownership / check-policy gate. Excluding the tracker token
-does not sandbox the agent from host credentials, and this is the current
+skill still reaches GitHub through host-provided `git` and authenticated `gh` for
+push, PR creation/reuse and check reads. The opt-in / ownership / check-policy
+gate governs only the delivery skill's squash-merge decision — it is not a
+credential layer in front of every GitHub call. Excluding the tracker token does
+not sandbox the agent from host credentials, and this is the current
 temporary MVP boundary rather than the final provider-native model.
 
 The loop is now proven by the end-to-end dogfood (#83 / PR #88). A provider-native
