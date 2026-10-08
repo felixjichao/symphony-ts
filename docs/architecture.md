@@ -22,9 +22,9 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 6. **Agent Runner** 组装注入 issue 上下文的 prompt，启动 coding agent 子进程（如 Codex app-server），向上转发 live session 事件（token / turn / PID）；
 7. **Logging / Status Surface** 输出结构化日志（保留关键标识符），并以只读 snapshot 提供面向操作者的状态出口。
 
-![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心](diagrams/runtime-architecture.svg)
+![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心](diagrams/zh/runtime-architecture.svg)
 
-上图是运行模型的权威可视化：`Orchestrator` 是中心 hub，`WORKFLOW.md` 经 Config / Workflow Loader 变成 typed config 进入调度；Issue Tracker Adapter 只做 provider 归一化，GitHub 是其外部持久事实来源；Workspace Manager 与 Agent Runner（驱动 Codex app-server 子进程）由 orchestrator 派发，Agent Runner 再通过 session 事件与 attempt outcome 向 orchestrator 回传监督事实；Observability 只消费只读 snapshot。可编辑源与再生成步骤见 [docs/diagrams/](diagrams/README.md)。
+上图是运行模型的权威可视化：`Orchestrator` 是中心 hub，`WORKFLOW.md` 经 Config / Workflow Loader 变成 typed config 进入调度；Issue Tracker Adapter 只做 provider 归一化，GitHub 是其外部持久事实来源；Workspace Manager 与 Agent Runner（驱动 Codex app-server 子进程）由 orchestrator 派发，Agent Runner 再通过 session 事件与 attempt outcome 向 orchestrator 回传监督事实；Observability 只消费只读 snapshot。英文版见 [runtime-architecture（English）](diagrams/runtime-architecture.svg)；可编辑源与再生成步骤见 [docs/diagrams/](diagrams/README.md)。
 
 ## Workspace 职责与依赖方向（SPEC §3 映射）
 
@@ -44,9 +44,9 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 1. **tracker 永不 import orchestrator**——轮询节奏 / claim / 调度属 coordination 层；
 2. **agent runner 不拥有 scheduler / retry policy**——coordination 只由 orchestrator 拥有。
 
-![Symphony 包依赖方向：所有包汇聚到 domain，apps/cli 位于顶端](diagrams/package-dependencies.svg)
+![Symphony 包依赖方向：所有包汇聚到 domain，apps/cli 位于顶端](diagrams/zh/package-dependencies.svg)
 
-依赖图只画 covering relations（省略可由传递推出的边以控制密度）：箭头指向被依赖方，`apps/cli` 位于顶端、`@symphony/domain` 位于底端并汇聚全部包。tracker 不依赖 orchestrator、agent 不拥有 scheduler / retry、observability 只消费只读 snapshot 都能由图形结构直接读出；devDependency 测试边（tracker → config、workspace → config、orchestrator → observability）不计入生产依赖，因此不出现在图中。
+依赖图只画 covering relations（省略可由传递推出的边以控制密度）：箭头指向被依赖方，`apps/cli` 位于顶端、`@symphony/domain` 位于底端并汇聚全部包。tracker 不依赖 orchestrator、agent 不拥有 scheduler / retry、observability 只消费只读 snapshot 都能由图形结构直接读出；devDependency 测试边（tracker → config、workspace → config、orchestrator → observability）不计入生产依赖，因此不出现在图中。英文版见 [package-dependencies（English）](diagrams/package-dependencies.svg)。
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
 

@@ -17,9 +17,11 @@ must remain editable, deterministic to regenerate, and diffable in review.
 
 Add four canonical diagrams under `docs/diagrams/`: `runtime-architecture`,
 `package-dependencies`, `github-delivery-loop` and `delivery-trust-boundary`.
-Each ships as an editable `docs/diagrams/source/<name>.html` and a committed
-`docs/diagrams/<name>.svg`. The whole diagram — markup and styles — lives inside
-a single `<svg>` element in the source HTML; `scripts/export-diagrams.mjs`
+Each ships in two parallel locales — the original English set at
+`docs/diagrams/source/<name>.html` + `docs/diagrams/<name>.svg`, and a
+Chinese-primary set at `docs/diagrams/zh/source/<name>.html` +
+`docs/diagrams/zh/<name>.svg`. The whole diagram — markup and styles — lives
+inside a single `<svg>` element in the source HTML; `scripts/export-diagrams.mjs`
 extracts that element verbatim and prepends an XML declaration, so a regeneration
 is deterministic and needs no browser, canvas, rasterizer or network.
 
@@ -57,15 +59,22 @@ introducing any heavier rendering path.
    rank-layer budgets and reads as a hairball; the covering-relation reduction
    keeps the constraint story legible, while the authoritative direct dependency
    list stays in `docs/architecture.md` and `AGENTS.md`.
+6. **Put English and Chinese labels in one bilingual diagram instead of two
+   locale sets.** Rejected: it doubles the label density inside every node,
+   breaking the diagram-design density budget and harming the English rendering
+   that already shipped; a parallel `zh/` set keeps each locale readable and
+   leaves the original English artifacts untouched.
 
 ## Consequences
 
-- Four diagrams are committed as source + artifact pairs; regeneration is
-  documented in `docs/diagrams/README.md`, and the docs gate protects the pairing,
-  freshness and required references with zero rendering dependency.
+- Four diagrams are committed as source + artifact pairs in two locales; the
+  docs gate protects the pairing, freshness and required references (per locale)
+  with zero rendering dependency. The Chinese set keeps technical tokens in
+  Latin and uses a CJK font fallback stack rather than adding a rendering
+  dependency.
 - The text documents remain authoritative for exact contracts. When a documented
-  boundary or the delivery path changes, the same PR must update the matching
-  diagram source and regenerate its SVG.
+  boundary or the delivery path changes, the same PR must update every affected
+  diagram source — both locales — and regenerate their SVGs.
 - Contributors must not hand-edit `docs/diagrams/*.svg`; the gate rejects a stale
   artifact, so the editable HTML is the only maintenance entry point.
 - Visual layout quality is still a human review responsibility — the docs gate

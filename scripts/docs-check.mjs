@@ -8,15 +8,16 @@
  *    状态可分类、不使用"✅ 本次"）；根 README / architecture / AGENTS 不得再出现里程碑进度表
  *    或「里程碑 / §section + 进度状态」摘要（按表结构与行内容识别，不依赖固定标题）；
  * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`；
- * 5. `docs/diagrams/` 的四张 canonical 图必须同时提交可编辑 HTML 源与派生产物 SVG，产物与源
- *    逐字节一致，且被对应权威文档引用（避免缺图 / 过期产物 / 引用断裂）。
+ * 5. `docs/diagrams/` 的四张 canonical 图（英文版 + 中文为主的 `zh/` 平行版）必须同时提交可编辑
+ *    HTML 源与派生产物 SVG，产物与源逐字节一致，且被对应权威文档以正确的相对路径引用
+ *    （避免缺图 / 过期产物 / 引用断裂）。
  *
  * 零依赖，Node >= 20 直接运行。
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import {
-  DIAGRAM_NAMES,
+  DIAGRAMS,
   artifactPathFor,
   renderDiagram,
   sourcePathFor,
@@ -309,47 +310,56 @@ async function checkPassWithNoTests(errors) {
 }
 
 /**
- * 四张 canonical 图各自的权威引用文档（相对仓库根）。任一图缺源、缺产物、产物过期或未被引用
- * 都让 docs gate 失败。
+ * 每张 (locale, name) 图各自的权威引用文档（相对仓库根）。除文档存在外，还要求该文档以
+ * 指向该 artifact 的正确相对路径引用它——按 `relative(dirname(doc), artifact)` 计算，
+ * 从而把英文版与 `zh/` 版区分开。
  */
 const REQUIRED_DIAGRAM_REFS = {
-  "runtime-architecture": ["README.md", join("docs", "architecture.md")],
-  "package-dependencies": [join("docs", "architecture.md")],
-  "github-delivery-loop": [join("docs", "github-delivery-workflow.md")],
-  "delivery-trust-boundary": [join("docs", "github-delivery-workflow.md")],
+  "en:runtime-architecture": ["README.md", join("docs", "architecture.md"), join("docs", "diagrams", "README.md")],
+  "en:package-dependencies": [join("docs", "architecture.md"), join("docs", "diagrams", "README.md")],
+  "en:github-delivery-loop": [join("docs", "github-delivery-workflow.md"), join("docs", "diagrams", "README.md")],
+  "en:delivery-trust-boundary": [join("docs", "github-delivery-workflow.md"), join("docs", "diagrams", "README.md")],
+  "zh:runtime-architecture": ["README.md", join("docs", "architecture.md"), join("docs", "diagrams", "README.md")],
+  "zh:package-dependencies": [join("docs", "architecture.md"), join("docs", "diagrams", "README.md")],
+  "zh:github-delivery-loop": [join("docs", "diagrams", "README.md")],
+  "zh:delivery-trust-boundary": [join("docs", "diagrams", "README.md")],
 };
 
 async function checkDiagramAssets(errors) {
   let checked = 0;
-  for (const name of DIAGRAM_NAMES) {
-    const source = sourcePathFor(name);
-    const artifact = artifactPathFor(name);
+  for (const { name, locale } of DIAGRAMS) {
+    const label = locale === "en" ? name : `${locale}/${name}`;
+    const source = sourcePathFor(name, locale);
+    const artifact = artifactPathFor(name, locale);
+    const sourceRel = relative(ROOT, source);
+    const artifactRel = relative(ROOT, artifact);
     if (!(await exists(source))) {
-      errors.push(`docs/diagrams: 缺少 ${name} 的 HTML 源（docs/diagrams/source/${name}.html）`);
+      errors.push(`docs/diagrams: 缺少 ${label} 的 HTML 源（${sourceRel}）`);
       continue;
     }
     if (!(await exists(artifact))) {
-      errors.push(`docs/diagrams: 缺少 ${name}.svg 产物（运行 npm run docs:diagrams）`);
+      errors.push(`docs/diagrams: 缺少 ${label}.svg 产物（${artifactRel}，运行 npm run docs:diagrams）`);
       continue;
     }
     try {
       const expected = renderDiagram(await readFile(source, "utf8"));
       const actual = await readFile(artifact, "utf8");
       if (actual !== expected) {
-        errors.push(`docs/diagrams: ${name}.svg 与源不一致（运行 npm run docs:diagrams）`);
+        errors.push(`docs/diagrams: ${label}.svg 与源不一致（运行 npm run docs:diagrams）`);
       }
     } catch (error) {
-      errors.push(`docs/diagrams: ${name} 源无法导出为 SVG：${error.message}`);
+      errors.push(`docs/diagrams: ${label} 源无法导出为 SVG：${error.message}`);
     }
     checked += 1;
-    for (const doc of REQUIRED_DIAGRAM_REFS[name] ?? []) {
+    for (const doc of REQUIRED_DIAGRAM_REFS[`${locale}:${name}`] ?? []) {
       const docPath = join(ROOT, doc);
       if (!(await exists(docPath))) {
-        errors.push(`docs/diagrams: ${name} 的引用文档 ${doc} 不存在`);
+        errors.push(`docs/diagrams: ${label} 的引用文档 ${doc} 不存在`);
         continue;
       }
-      if (!(await readFile(docPath, "utf8")).includes(`${name}.svg`)) {
-        errors.push(`docs/diagrams: ${doc} 未引用 ${name}.svg`);
+      const target = relative(dirname(docPath), artifact);
+      if (!(await readFile(docPath, "utf8")).includes(target)) {
+        errors.push(`docs/diagrams: ${doc} 未引用 ${label}.svg（期望路径 ${target}）`);
       }
     }
   }

@@ -18,9 +18,9 @@ open issue + symphony-ready
   → Symphony 对账 + workspace 清理
 ```
 
-![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心，连接配置、tracker、workspace、agent 与只读 observability](docs/diagrams/runtime-architecture.svg)
+![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心，连接配置、tracker、workspace、agent 与只读 observability](docs/diagrams/zh/runtime-architecture.svg)
 
-运行时组件总览：`Orchestrator` 是调度 / 监督 / 对账的唯一权威，配置、tracker、workspace、agent 与只读 observability 围绕它协作，而不是一条单向数据管道。四张 canonical 架构图（含可编辑源与再生成步骤）见 [docs/diagrams/](docs/diagrams/README.md)。
+运行时组件总览：`Orchestrator` 是调度 / 监督 / 对账的唯一权威，配置、tracker、workspace、agent 与只读 observability 围绕它协作，而不是一条单向数据管道。四张 canonical 架构图各有中文（默认）与英文两版，英文版见 [runtime-architecture（English）](docs/diagrams/runtime-architecture.svg)；可编辑源与再生成步骤见 [docs/diagrams/](docs/diagrams/README.md)。
 
 整体实现状态与里程碑见 [docs/status.md](docs/status.md)；SPEC 逐项验收矩阵见 [docs/conformance.md](docs/conformance.md)。
 

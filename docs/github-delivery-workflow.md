@@ -85,8 +85,9 @@ CI green and a mergeable PR plus explicit opt-in and PR ownership; a failing
 check enters the bounded repair loop, while a pending check waits within the CI
 deadline. When the repair budget, the CI deadline or merge safety is exhausted —
 or delivery cannot otherwise complete safely — the loop exits through the handoff
-path instead of retrying forever. Editable source and regeneration steps:
-[docs/diagrams/](diagrams/README.md).
+path instead of retrying forever. A Chinese-primary version is available at
+[github-delivery-loop（中文）](diagrams/zh/github-delivery-loop.svg). Editable
+source and regeneration steps: [docs/diagrams/](diagrams/README.md).
 
 ## Stop and exit paths
 
@@ -192,7 +193,9 @@ push, PR creation/reuse and check reads. The opt-in / ownership / check-policy
 gate governs only the delivery skill's squash-merge decision — it is not a
 credential layer in front of every GitHub call. Excluding the tracker token does
 not sandbox the agent from host credentials, and this is the current
-temporary MVP boundary rather than the final provider-native model.
+temporary MVP boundary rather than the final provider-native model. A
+Chinese-primary version is available at
+[delivery-trust-boundary（中文）](diagrams/zh/delivery-trust-boundary.svg).
 
 The loop is now proven by the end-to-end dogfood (#83 / PR #88). A provider-native
 tools boundary may replace this temporary boundary in the future; do not treat the
