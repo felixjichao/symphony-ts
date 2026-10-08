@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Decision contracts](accepted/architecture/2026-10-08-decision-contracts.md) — provider-neutral v1 session/task/result/binding, pure validation and exact SHA approval (NEST-99 / #94).
+
 - [accepted/tooling/2026-10-08-architecture-diagrams.md](accepted/tooling/2026-10-08-architecture-diagrams.md) — canonical 架构图的源/产物契约与 docs gate 校验（NEST-96 / #91）：四张图以 `docs/diagrams/source/*.html` 为唯一可编辑源、提交对应 `.svg`，`scripts/export-diagrams.mjs` 以零依赖确定性抽取内嵌 SVG，`docs-check` 校验源/产物配对、产物与源一致及必需文档引用；仅复用 diagram-design 视觉语法，PNG/浏览器不进默认 gate。
 - [accepted/architecture/2026-10-04-github-delivery-dogfood.md](accepted/architecture/2026-10-04-github-delivery-dogfood.md) — GitHub Delivery 真实集成 dogfood harness（SPEC §17.8 Real Integration，NEST-94 / #83）：opt-in `symphony dogfood github` 子命令驱动真实 Symphony host / 真实 Codex / 真实 GitHub 闭环（happy / repair / reuse / foreign / conflict），harness 只准备场景、注入受控故障与读回断言，交付动作全部走既有真实入口；缺 `--yes` 或凭据显式 SKIP，默认 gate 保持 credential-free；隔离目标模板与脱敏证据 manifest 落在 workspace 之外。
 - [accepted/architecture/2026-10-04-codex-delivery-skill.md](accepted/architecture/2026-10-04-codex-delivery-skill.md) — Codex 交付与自动合入工作流 Skill（SPEC §11.5 / MVP.2，NEST-91 / #80）：`runDeliverySkill` 与 `symphony delivery-skill` CLI 支撑代码提交、分支推送、PR 创建与复用（`<!-- symphony-delivery-marker -->`）、HEAD 检查评估（复用 MVP.3 canonical `evaluateChecksAutoMergePolicy`）、有限修复循环（`maxRepairAttempts`）与自动 Squash Merge。落实用户确认决策：预算耗尽或 Blocker 时保持 Issue Open、自动移除 `symphony-ready` 标签停止调度派发，并输出 Operator 可见交接报告。

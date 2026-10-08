@@ -214,3 +214,16 @@ while preserving the local budget and original index entry. Default gate remains
 credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).
+
+## Decision Plane extension evidence (NEST-99 / GitHub #94)
+
+This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. No store, bridge, executor or delivery integration is claimed. [Protocol](decision-protocol.md).
+
+| Capability | Evidence |
+|---|---|
+| Issue-root identities; Plan/Review typed v1 records and JSON validation | `packages/domain/src/decision.test.ts`: Decision identity and v1 persistence |
+| Legal/illegal lifecycle, claim expiry, stale submission fencing | same file: Decision task transition table |
+| Approval exact session/repository/PR/HEAD; SHA A → B → A supersession | same file: Exact revision review authorization |
+| Binding loss/rebind generation; completion and explicit reopen | same file: Session lifecycle and executor continuity |
+
+Validation commands: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Tests use the public domain entry point. Atomic store guarantees and external integration require future evidence.

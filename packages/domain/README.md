@@ -43,7 +43,7 @@ M1.1 已落地的公共 API（唯一出口 `src/index.ts`；进度见 [docs/conf
 
 ## Known limitations
 
-- 只含类型与 §4.2 纯函数，无任何业务行为：状态机转移（§7）归 orchestrator（M5）、workspace provisioning（§9）归 workspace（M3）、归一化动作（§11.3）归 tracker（M2）、config 解析与热重载（§5 / §6）归 config（M1.2–M1.4）；
+- Core 只含类型与 §4.2 纯函数；Decision extension 另含独立协议校验与纯转换：状态机转移（§7）归 orchestrator（M5）、workspace provisioning（§9）归 workspace（M3）、归一化动作（§11.3）归 tracker（M2）、config 解析与热重载（§5 / §6）归 config（M1.2–M1.4）；
 - §13.3 只读 runtime snapshot 的行类型归属本包（见 [architecture.md](../../docs/architecture.md)），随 observability（M6）落地；
 - `CodexEventName` 是 string 别名而非闭合枚举：§10.4 事件清单是开放集合。M4.1（#37）已在 `@symphony/agent` 定型事件**形状**（`AgentEvent`）与保证存在的名称清单（`AGENT_EVENT_NAMES`），但事件**产生与映射**（哪个 Codex notification → 哪个事件名）随 M4.4 落地；
 - `deriveWorkspaceKey` 对空 identifier 抛 `TypeError`（§11.3 非空约束前置），调用方不得捕获后静默降级。
@@ -55,3 +55,7 @@ M1.1 已落地的公共 API（唯一出口 `src/index.ts`；进度见 [docs/conf
 ## StructuredLogEvent (M6.2)
 
 SPEC §13.1/§13.2 service/issue/session discriminated union uses stable snake_case log keys. Issue scope requires issue_id + issue_identifier (explicit null for unknown manual retry identity); session scope adds actual string session_id. Only scalar whitelist context is modeled; there is no arbitrary payload map or Error object. Rendering/sinks belong to observability and composition belongs to CLI.
+
+## Decision Plane extension (NEST-99 / GitHub #94)
+
+`DecisionSession`, `DecisionTask`, `DecisionResult`, `ExecutorBinding` 及纯身份、v1 校验、lease/lifecycle/rebind/精确 SHA 审批函数均由 `src/index.ts` 导出。详见 [协议](../../docs/decision-protocol.md) 与 [Note](../../notes/accepted/architecture/2026-10-08-decision-contracts.md)。没有 I/O、调度或 store；不修改 Core §7 状态机。

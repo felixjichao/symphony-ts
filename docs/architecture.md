@@ -65,3 +65,7 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 host stop 同步关闭 EffectiveRuntime 提交与 watcher，再调用既有 loop.stop 的同步前缀关闭 authority 调度；等待 startup/tick/worker/cleanup 后输出最终 lifecycle 日志并关闭 logger，shell 最后移除本次 handlers。重复信号与 stop 共享收口 promise；失败优先；信号取消正常启动不会记录 startup completed。timer 迟到回调、closed reload/preflight 均不复活 runtime。原有 scheduler、attempt/root 绑定、session.stop → after_run 与 transport TERM→KILL 保持唯一实现。
 
 文件、用例名和命令见 [conformance.md 的 Core 证据索引](conformance.md#m65-core-证据索引)，设计取舍见 [lifecycle Note](../notes/accepted/architecture/2026-10-03-cli-process-lifecycle.md)。
+
+## Decision Plane protocol extension
+
+`@symphony/domain` owns the provider-neutral [Decision protocol](decision-protocol.md): Issue-root session identity, versioned Plan/Review facts, exact HEAD review approval, lease fencing and executor binding generations. Pure validators/transitions have no I/O or reverse dependencies. Conversation continuity is advisory; it never supplies authoritative workflow state. This independent extension preserves Symphony §7 orchestration and current delivery behavior. Future durable stores must enforce atomic claims/result commits and session completion; adapters, bridge and delivery integration remain separate work. See [Decision Note](../notes/accepted/architecture/2026-10-08-decision-contracts.md).
