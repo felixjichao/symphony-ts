@@ -1,6 +1,6 @@
 # AGENTS.md — Standing Orders
 
-symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。**M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance；当前 CLI host 已完成生产组件装配并可通过 executable 启动，提供 structured logging、只读 snapshot、live reload 与 signal / exit-code lifecycle。M7 §15 hardening 未开始；HTTP §13.7、provider-native tools §11.5、external Real Integration §17.8、durable recovery 与 SSH workers 保持 deferred / optional，snapshot acquisition timeout 未实现且不适用于本地同步 projector；不宣称整个 SPEC 已完成。本文件只放 standing orders，详细契约见文末导航。
+symphony-ts：按固定 baseline 的官方 Symphony SPEC 实现的 TypeScript 版本（见 [docs/upstream.md](docs/upstream.md)）。它是一个**长运行的 orchestrator**：从 issue tracker 读取工作，为每个 issue 建立隔离 workspace，运行 coding agent，并负责调度、重试、对账与可观测性；宿主另提供基于 `git` + `gh` 的 GitHub 交付闭环。**当前实现状态、里程碑、deferred 与 next work 只由 [docs/status.md](docs/status.md) 维护**；SPEC 逐项能力与验收证据见 [docs/conformance.md](docs/conformance.md)。本文件只放 standing orders（命令矩阵、扩展点表、TODO 分级、文档职责与导航），详细契约见文末导航。
 
 ## Command Matrix
 
@@ -26,6 +26,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 5. 架构 / 选型 / 跨包契约的决策要写 Agent Note（流程与模板见 [notes/README.md](notes/README.md)）；`## Alternatives considered` 为强制小节，不允许空标题。
 6. TypeScript 严格模式（`strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`）；不要为过编译加 `any` / `@ts-expect-error`，除非 Note 中记录理由。
 7. 包间 import 走包名（如 `@symphony/domain`），由根 `tsconfig.base.json` 的 `paths` 映射到各包 `src`；不要写跨包相对路径。
+8. **文档职责单一**：README 面向 operator / adopter；开发进度与 deferred 更新 [docs/status.md](docs/status.md)；SPEC capability / validation 变化更新 [docs/conformance.md](docs/conformance.md)；稳定架构与边界变化更新 [docs/architecture.md](docs/architecture.md)；工程命令更新 [docs/development.md](docs/development.md)、验证入口更新 [docs/testing.md](docs/testing.md)。里程碑 PR 不再把完整进度表同步回 README。
 
 ## Where New Behavior Goes
 
@@ -68,8 +69,9 @@ apps/cli            → config + tracker + workspace + agent + orchestrator + ob
 ## 文档导航
 
 - [docs/upstream.md](docs/upstream.md) — 上游 SPEC baseline（SHA、同步 / 升级规则）
+- [docs/status.md](docs/status.md) — 当前实现状态、里程碑、deferred 与 next work（进度唯一权威）
 - [docs/conformance.md](docs/conformance.md) — 实现 ↔ SPEC §17 / §18 验收项矩阵（milestone PR 必须更新对应行）
-- [docs/architecture.md](docs/architecture.md) — 产品模型、workspace 职责与依赖方向（SPEC §3 映射）、里程碑
+- [docs/architecture.md](docs/architecture.md) — 产品模型、workspace 职责与依赖方向（SPEC §3 映射）
 - [docs/development.md](docs/development.md) — 环境搭建、日常命令、TS 布局与依赖约定
 - [docs/testing.md](docs/testing.md) — 测试分层（对齐 SPEC §17 profiles）与三条测试哲学
 - [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) — GitHub 自动交付闭环（start / run / stop、GitHub lifecycle 与安全边界）

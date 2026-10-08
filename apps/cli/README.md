@@ -88,7 +88,7 @@ symphony pr <action> --repo <owner/repo> --issue <number> --workspace-key <key> 
 
 ## Known limitations
 
-- M0–M6 Core 已完成；当前 executable CLI host 已完成生产组件装配，M6.1–M6.5 已合入并通过 main CI，验收证据见 [conformance](../../docs/conformance.md#m65-core-证据索引)。M7 §15 hardening 未开始。
+- M0–M6 Core 与 GitHub Delivery MVP 已完成；当前 executable CLI host 已完成生产组件装配并通过 main CI，验收证据见 [conformance](../../docs/conformance.md#m65-core-证据索引)，整体进度见 [status](../../docs/status.md)。M7 §15 hardening 未开始。
 - HTTP status surface 属可选扩展。
 
 ## Runtime log observers (M6.2)
@@ -110,4 +110,4 @@ Attempt wrappers invoke existing reduction callbacks first and independently iso
 
 `src/bin.test.ts` 每轮 rebuild 真正 package bin，使用 loopback HTTPS + test CA (`NODE_EXTRA_CA_CERTS`)；请求、session、文件 marker 作 readiness barrier。两根 workspace 的 agent PID、cwd、transcript、prompt 与 after_run marker 均重读核验；stubborn agent 沿用 transport deadline。测试用 key/cert 仅服务本地 fixture，生产 HTTPS 校验不变。`test-fixtures/lifecycle-harness.ts` 仅补充退出码证据，不代替正式 bin 链路。
 
-`npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts` 覆盖 signals、startup/reload race、timer 清零/迟到回调、failure priority 和资源释放；`npm test -w @symphony/config -- src/workflow-reload.test.ts` 验证显式 monitoring 兼容性。每个 M6 Core 项的用例名见 [conformance](../../docs/conformance.md#m65-core-证据索引)。HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 和外部 Real Integration 未在此实现。
+ `npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts` 覆盖 signals、startup/reload race、timer 清零/迟到回调、failure priority 和资源释放；`npm test -w @symphony/config -- src/workflow-reload.test.ts` 验证显式 monitoring 兼容性。每个 M6 Core 项的用例名见 [conformance](../../docs/conformance.md#m65-core-证据索引)。HTTP §13.7、provider-native tools §11.5、durable recovery 与 SSH 未在此实现；真实 GitHub / Codex Real Integration 由 opt-in 的 dogfood harness 验证（见 [github-delivery-dogfood](../../docs/github-delivery-dogfood.md)），不在默认 gate 内。
