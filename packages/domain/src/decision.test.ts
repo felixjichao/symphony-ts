@@ -241,3 +241,56 @@ describe("Session transition table", () => {
     expect(parseDecisionResult({ ...review, findings: [{ severity: "suggestion", message: "Consider simplification", location: "file.ts:1" }] }).kind).toBe("review");
   });
 });
+
+describe("Strict JSON result arrays", () => {
+  const fields = ["acceptanceCriteria", "risks", "clarifications", "findings"] as const;
+  function withArray(field: typeof fields[number], values: readonly unknown[]): unknown {
+    const envelope = result(task(field === "findings" ? "review" : "plan"));
+    if (envelope.kind === "plan") return { ...envelope, content: { ...envelope.content, [field]: values } };
+    return { ...envelope, findings: values };
+  }
+  const mutations: readonly { name: string; mutate: (values: unknown[]) => void }[] = [
+    { name: "toJSON returning null", mutate: values => { Object.defineProperty(values, "toJSON", { value: () => null }); } },
+    { name: "toJSON dropping elements", mutate: values => { Object.defineProperty(values, "toJSON", { value: () => [] }); } },
+    { name: "custom enumerable field", mutate: values => { Object.defineProperty(values, "extra", { value: "extra", enumerable: true }); } },
+    { name: "custom nonenumerable field", mutate: values => { Object.defineProperty(values, "extra", { value: "extra" }); } },
+    { name: "symbol field", mutate: values => { Object.defineProperty(values, Symbol("extra"), { value: "extra" }); } },
+    { name: "overridden iterator", mutate: values => { Object.defineProperty(values, Symbol.iterator, { value: function* () { /* hides elements */ } }); } },
+    { name: "index accessor", mutate: values => { Object.defineProperty(values, "0", { get: () => { throw new Error("Accessor must not execute"); }, enumerable: true }); } },
+    { name: "nonenumerable index", mutate: values => { Object.defineProperty(values, "0", { value: "hidden", enumerable: false }); } },
+    { name: "sparse array", mutate: values => { delete values[0]; } },
+    { name: "custom prototype", mutate: values => { Object.setPrototypeOf(values, { toJSON: () => [] }); } },
+  ];
+  for (const field of fields) for (const mutation of mutations) {
+    it(`rejects ${field}: ${mutation.name}`, () => {
+      // Invalid elements also expose an iterator that hides validation work.
+      const values: unknown[] = mutation.name === "overridden iterator" ? [null]
+        : field === "findings" ? [{ severity: "blocker", message: "Must fix", location: null }]
+        : ["must not disappear"];
+      mutation.mutate(values);
+      expect(() => parseDecisionResult(withArray(field, values))).toThrow(TypeError);
+    });
+  }
+  for (const field of fields) {
+    it(`rejects ${field} serialization hooks even with otherwise valid elements`, () => {
+      const values: unknown[] = field === "findings"
+        ? [{ severity: "blocker", message: "Must fix", location: null }]
+        : ["must not disappear"];
+      Object.defineProperty(values, "toJSON", { value: () => [] });
+      expect(() => parseDecisionResult(withArray(field, values))).toThrow(TypeError);
+      const empty: unknown[] = [];
+      Object.defineProperty(empty, "toJSON", { value: () => null });
+      expect(() => parseDecisionResult(withArray(field, empty))).toThrow(TypeError);
+    });
+    it(`preserves ${field} elements across JSON round trips`, () => {
+      const values: unknown[] = field === "findings"
+        ? [{ severity: "blocker", message: "Must fix", location: null }, { severity: "suggestion", message: "Consider this", location: "file.ts:1" }]
+        : ["must not disappear", "second element"];
+      for (const array of [[], values, Object.freeze([...values])]) {
+        const envelope = withArray(field, array);
+        const parsed = parseDecisionResult(envelope);
+        expect(parseDecisionResult(JSON.parse(JSON.stringify(parsed)))).toEqual(envelope);
+      }
+    });
+  }
+});

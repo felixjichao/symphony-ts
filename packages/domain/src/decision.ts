@@ -114,9 +114,19 @@ function oneOf(value: unknown, choices: readonly string[]): void {
   requireValue(typeof value === "string" && choices.includes(value), "invalid enum");
 }
 function version(value: unknown): void { requireValue(value === 1, "unsupported schemaVersion"); }
+/** Dense ordinary JSON arrays only; never trust a caller-supplied iterator or toJSON. */
+function array(value: unknown): readonly unknown[] {
+  requireValue(Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype, "expected plain array");
+  requireValue(Reflect.ownKeys(value).length === value.length + 1, "unknown array field or sparse array");
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    requireValue(descriptor?.enumerable === true && Object.hasOwn(descriptor, "value"), "expected array data element");
+  }
+  return value;
+}
 function strings(value: unknown): void {
-  requireValue(Array.isArray(value), "expected array");
-  for (const item of value) string(item);
+  const items = array(value);
+  for (let index = 0; index < items.length; index++) string(items[index]);
 }
 function repository(value: unknown): asserts value is string {
   string(value);
@@ -225,9 +235,9 @@ export function parseDecisionResult(value: unknown): DecisionResult {
   } else {
     oneOf(result["verdict"], ["approve", "changes_requested", "needs_human"]);
     parseDecisionReviewTarget(result["target"]);
-    requireValue(Array.isArray(result["findings"]), "expected findings array");
-    for (const item of result["findings"]) {
-      const finding = record(item, ["severity", "message", "location"]);
+    const findings = array(result["findings"]);
+    for (let index = 0; index < findings.length; index++) {
+      const finding = record(findings[index], ["severity", "message", "location"]);
       oneOf(finding["severity"], ["blocker", "suggestion"]); string(finding["message"]);
       if (finding["location"] !== null) string(finding["location"]);
     }

@@ -109,6 +109,9 @@ Persist plain JSON via `JSON.stringify`; load with `JSON.parse` then the respect
 `parseDecision*` / `parseExecutorBinding` function. Parsers accept unknown values,
 throw `TypeError` on malformed records and never coerce values or silently drop
 fields. Nested root/target/lease/content/finding objects have strict field whitelists.
+Result arrays must be dense ordinary arrays with only length and enumerable data indices: custom properties, symbol keys,
+serialization hooks, accessors and custom prototypes are rejected. Elements are
+validated by index without invoking a supplied iterator.
 All properties are required; unavailable binding, lease, resume URI and finding
 location use explicit `null`, collections use arrays. No explicit undefined,
 functions, class instances, nonfinite/fractional numbers or unknown enums are valid.
