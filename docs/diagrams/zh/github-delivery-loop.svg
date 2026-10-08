@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1120 600" xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-labelledby="github-delivery-loop-zh-title github-delivery-loop-zh-desc" id="github-delivery-loop-zh-root">
+      <title id="github-delivery-loop-zh-title">GitHub 交付闭环</title>
+      <desc id="github-delivery-loop-zh-desc">从就绪 GitHub issue 到 PR 合入、issue 关闭的自动交付路径。合入需要 CI 全绿且 PR 可合并，并显式 opt-in 与 PR ownership；失败检查进入有界修复回路，修复预算、CI deadline 或合并安全性耗尽时走 handoff 出口。</desc>
+
+      <defs>
+        <style>
+          #github-delivery-loop-zh-root .name { font-family: 'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-weight: 600; font-size: 13px; fill: #2d3142; }
+          #github-delivery-loop-zh-root .sub { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9px; fill: #4f5d75; }
+          #github-delivery-loop-zh-root .sub-zh { font-family: 'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-weight: 500; font-size: 11px; fill: #4f5d75; }
+          #github-delivery-loop-zh-root .owner { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 7px; font-weight: 500; letter-spacing: 0.08em; fill: #4f5d75; }
+          #github-delivery-loop-zh-root .label { font-family: 'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-weight: 500; font-size: 11px; fill: #4f5d75; }
+          #github-delivery-loop-zh-root .label-mono { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8px; letter-spacing: 0.06em; fill: #4f5d75; }
+          #github-delivery-loop-zh-root .foot { font-family: 'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 11px; fill: #4f5d75; }
+        </style>
+        <marker id="dl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="dl-arrow-soft" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7a8399"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Owner legend (top) -->
+      <text class="owner" x="40" y="80">OWNER</text>
+      <text class="foot" x="88" y="80">GH GitHub · SYM Symphony · CDX Codex / delivery skill · CI 验证</text>
+
+      <!-- Loop-back return edge -->
+      <path d="M 1050,200 V 116 Q 1050,112 1046,112 H 84 Q 76,112 76,116 V 200" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow)"/>
+      <text class="label" x="560" y="106" text-anchor="middle">Symphony 持续轮询下一个就绪 issue</text>
+
+      <!-- Main rail edges -->
+      <line x1="152" y1="232" x2="160" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="272" y1="232" x2="280" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="392" y1="232" x2="400" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="512" y1="232" x2="520" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="632" y1="232" x2="640" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="752" y1="232" x2="848" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="960" y1="232" x2="968" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+
+      <!-- CI -> merge success condition -->
+      <rect x="758" y="226" width="84" height="14" rx="2" fill="#f5f5f5"/>
+      <text class="label-mono" x="800" y="237" text-anchor="middle">green + mergeable</text>
+
+      <!-- CI failure -> bounded repair -->
+      <line x1="696" y1="264" x2="696" y2="344" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <rect x="704" y="294" width="40" height="16" rx="2" fill="#f5f5f5"/>
+      <text class="label" x="708" y="306">失败</text>
+
+      <path d="M 620,372 H 608 Q 600,372 600,364 V 264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <rect x="506" y="308" width="100" height="16" rx="2" fill="#f5f5f5"/>
+      <text class="label" x="510" y="320">重新校验 + 推送</text>
+
+      <!-- Handoff exits -->
+      <line x1="772" y1="372" x2="848" y2="372" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <text class="label" x="810" y="366" text-anchor="middle">修复预算</text>
+
+      <path d="M 740,264 V 316 Q 740,324 748,324 H 848 Q 856,324 856,332 V 344" fill="none" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <rect x="760" y="316" width="64" height="16" rx="2" fill="#f5f5f5"/>
+      <text class="label" x="764" y="328">CI 超时</text>
+
+      <line x1="904" y1="264" x2="904" y2="344" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <rect x="912" y="294" width="64" height="16" rx="2" fill="#f5f5f5"/>
+      <text class="label" x="916" y="306">不可合并</text>
+
+      <!-- Owner chips -->
+      <rect x="86" y="172" width="20" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="96" y="181" text-anchor="middle">GH</text>
+      <rect x="202" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="216" y="181" text-anchor="middle">SYM</text>
+      <rect x="322" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="336" y="181" text-anchor="middle">SYM</text>
+      <rect x="442" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="456" y="181" text-anchor="middle">CDX</text>
+      <rect x="562" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="576" y="181" text-anchor="middle">CDX</text>
+      <rect x="686" y="172" width="20" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="696" y="181" text-anchor="middle">CI</text>
+      <rect x="882" y="172" width="44" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="904" y="181" text-anchor="middle">CDX/GH</text>
+      <rect x="1010" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="1024" y="181" text-anchor="middle">SYM</text>
+
+      <!-- Rail nodes -->
+      <rect x="40" y="200" width="112" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text class="name" x="96" y="228" text-anchor="middle">就绪 issue</text>
+      <text class="sub" x="96" y="244" text-anchor="middle">open + label</text>
+
+      <rect x="160" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="216" y="228" text-anchor="middle">派发</text>
+      <text class="sub" x="216" y="244" text-anchor="middle">poll · claim</text>
+
+      <rect x="280" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="336" y="228" text-anchor="middle">引导</text>
+      <text class="sub-zh" x="336" y="246" text-anchor="middle">克隆 + 建分支</text>
+
+      <rect x="400" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="456" y="228" text-anchor="middle">实现</text>
+      <text class="sub-zh" x="456" y="246" text-anchor="middle">Codex + 校验</text>
+
+      <rect x="520" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="576" y="228" text-anchor="middle">推送 + PR</text>
+      <text class="sub-zh" x="576" y="246" text-anchor="middle">提交 · 复用</text>
+
+      <rect x="640" y="200" width="112" height="64" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text class="name" x="696" y="228" text-anchor="middle">CI 检查</text>
+      <text class="sub" x="696" y="244" text-anchor="middle">required + observed</text>
+
+      <rect x="848" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="904" y="228" text-anchor="middle">合并 + 关闭</text>
+      <text class="sub" x="904" y="244" text-anchor="middle">squash · Fixes #N</text>
+
+      <rect x="968" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="1024" y="228" text-anchor="middle">对账</text>
+      <text class="sub-zh" x="1024" y="246" text-anchor="middle">清理 + 轮询</text>
+
+      <!-- Repair node -->
+      <rect x="620" y="344" width="152" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="696" y="370" text-anchor="middle">修复（有界）</text>
+      <text class="sub-zh" x="696" y="388" text-anchor="middle">诊断 → 修复命令</text>
+
+      <!-- Handoff node -->
+      <rect x="848" y="344" width="232" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,4"/>
+      <text class="name" x="964" y="370" text-anchor="middle">Handoff</text>
+      <text class="sub-zh" x="964" y="388" text-anchor="middle">暂停 · 报告 · 保持 issue 打开</text>
+
+      <!-- Footer notes -->
+      <line x1="40" y1="470" x2="1080" y2="470" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text class="foot" x="40" y="492">GitHub 持有持久事实 · Symphony 负责调度、监督与对账 · Codex / delivery skill 负责执行 · CI 负责验证。</text>
+      <text class="foot" x="40" y="510">合入需要显式 --opt-in、PR ownership，且 required + observed checks 全部成功、PR mergeable；pending / failed / zero / unknown 一律不合入。</text>
+      <text class="foot" x="40" y="528">失败检查进入有界修复回路；pending 检查在 CI deadline 内等待，不会触发修复。</text>
+      <text class="foot" x="40" y="546">handoff 会保持 issue 打开、暂停 delivery、尝试移除 symphony-ready（不保证远端操作成功）并发布 operator 报告；没有 --opt-in 时在 CI 全绿后停止、不合入。</text>
+    </svg>

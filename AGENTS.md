@@ -50,7 +50,7 @@ workspace           → domain
 agent               → domain + config + workspace
 orchestrator        → domain + config + tracker + workspace + agent
 observability       → domain（以及只读 runtime snapshot 契约）
-apps/cli            → config + tracker + workspace + agent + orchestrator + observability
+apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability
 ```
 
 两条硬约束（最常见错误）：

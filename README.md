@@ -18,6 +18,10 @@ open issue + symphony-ready
   → Symphony 对账 + workspace 清理
 ```
 
+![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心，连接配置、tracker、workspace、agent 与只读 observability](docs/diagrams/zh/runtime-architecture.svg)
+
+运行时组件总览：`Orchestrator` 是调度 / 监督 / 对账的唯一权威，配置、tracker、workspace、agent 与只读 observability 围绕它协作，而不是一条单向数据管道。四张 canonical 架构图各有中文（默认）与英文两版，英文版见 [runtime-architecture（English）](docs/diagrams/runtime-architecture.svg)；可编辑源与再生成步骤见 [docs/diagrams/](docs/diagrams/README.md)。
+
 整体实现状态与里程碑见 [docs/status.md](docs/status.md)；SPEC 逐项验收矩阵见 [docs/conformance.md](docs/conformance.md)。
 
 ## Prerequisites
@@ -124,6 +128,7 @@ node apps/cli/dist/bin/symphony.js ./WORKFLOW.md
 | [docs/status.md](docs/status.md) | 当前实现状态、里程碑、deferred 与 next work（进度唯一权威） |
 | [docs/conformance.md](docs/conformance.md) | 实现 ↔ SPEC §17 / §18 验收项矩阵（SPEC capability 唯一权威） |
 | [docs/architecture.md](docs/architecture.md) | 稳定架构、组件职责与依赖方向（SPEC §3 映射） |
+| [docs/diagrams/](docs/diagrams/README.md) | 四张 canonical 架构图（可编辑 HTML 源 + 提交的 SVG 产物，含再生成步骤） |
 | [docs/development.md](docs/development.md) | 环境搭建、日常命令、TS 布局与依赖约定 |
 | [docs/testing.md](docs/testing.md) | 测试分层（对齐 SPEC §17 profiles）与三条测试哲学 |
 | [docs/github-delivery-workflow.md](docs/github-delivery-workflow.md) | GitHub 自动交付闭环（start / run / stop、安全边界） |

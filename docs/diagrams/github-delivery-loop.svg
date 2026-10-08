@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1120 600" xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-labelledby="github-delivery-loop-title github-delivery-loop-desc" id="github-delivery-loop-root">
+      <title id="github-delivery-loop-title">The GitHub delivery loop</title>
+      <desc id="github-delivery-loop-desc">The automatic delivery path from a ready GitHub issue to a merged pull request and a closed issue. Landing needs CI green and a mergeable PR plus explicit opt-in and PR ownership; failing checks enter a bounded repair loop, and the path exits to a handoff when the repair budget, the CI deadline or merge safety is exhausted.</desc>
+
+      <defs>
+        <style>
+          #github-delivery-loop-root .name { font-family: 'Geist', system-ui, sans-serif; font-weight: 600; font-size: 13px; fill: #2d3142; }
+          #github-delivery-loop-root .sub { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9px; fill: #4f5d75; }
+          #github-delivery-loop-root .owner { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 7px; font-weight: 500; letter-spacing: 0.08em; fill: #4f5d75; }
+          #github-delivery-loop-root .arrow-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8px; letter-spacing: 0.06em; fill: #4f5d75; }
+          #github-delivery-loop-root .foot { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8.5px; fill: #4f5d75; }
+        </style>
+        <marker id="dl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="dl-arrow-soft" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7a8399"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Owner legend (top) -->
+      <text class="owner" x="40" y="80">OWNER</text>
+      <text class="foot" x="88" y="80">GH GitHub · SYM Symphony · CDX Codex / delivery skill · CI verifier</text>
+
+      <!-- Loop-back return edge -->
+      <path d="M 1050,200 V 116 Q 1050,112 1046,112 H 84 Q 76,112 76,116 V 200" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow)"/>
+      <text class="arrow-label" x="560" y="106" text-anchor="middle">Symphony keeps polling for the next ready issue</text>
+
+      <!-- Main rail edges -->
+      <line x1="152" y1="232" x2="160" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="272" y1="232" x2="280" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="392" y1="232" x2="400" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="512" y1="232" x2="520" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="632" y1="232" x2="640" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="752" y1="232" x2="848" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <line x1="960" y1="232" x2="968" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+
+      <!-- CI -> merge success condition -->
+      <rect x="758" y="226" width="84" height="12" rx="2" fill="#f5f5f5"/>
+      <text class="arrow-label" x="800" y="235" text-anchor="middle">green + mergeable</text>
+
+      <!-- CI failure -> bounded repair -->
+      <line x1="696" y1="264" x2="696" y2="344" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <rect x="704" y="296" width="48" height="12" rx="2" fill="#f5f5f5"/>
+      <text class="arrow-label" x="708" y="305">failed</text>
+
+      <path d="M 620,372 H 608 Q 600,372 600,364 V 264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#dl-arrow)"/>
+      <rect x="516" y="310" width="76" height="12" rx="2" fill="#f5f5f5"/>
+      <text class="arrow-label" x="520" y="319">re-validate + push</text>
+
+      <!-- Handoff exits -->
+      <line x1="772" y1="372" x2="848" y2="372" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <text class="arrow-label" x="810" y="366" text-anchor="middle">repair budget</text>
+
+      <path d="M 740,264 V 316 Q 740,324 748,324 H 848 Q 856,324 856,332 V 344" fill="none" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <rect x="760" y="318" width="76" height="12" rx="2" fill="#f5f5f5"/>
+      <text class="arrow-label" x="764" y="327">CI deadline</text>
+
+      <line x1="904" y1="264" x2="904" y2="344" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#dl-arrow-soft)"/>
+      <rect x="912" y="296" width="76" height="12" rx="2" fill="#f5f5f5"/>
+      <text class="arrow-label" x="916" y="305">unmergeable</text>
+
+      <!-- Owner chips -->
+      <rect x="86" y="172" width="20" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="96" y="181" text-anchor="middle">GH</text>
+      <rect x="202" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="216" y="181" text-anchor="middle">SYM</text>
+      <rect x="322" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="336" y="181" text-anchor="middle">SYM</text>
+      <rect x="442" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="456" y="181" text-anchor="middle">CDX</text>
+      <rect x="562" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="576" y="181" text-anchor="middle">CDX</text>
+      <rect x="686" y="172" width="20" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="696" y="181" text-anchor="middle">CI</text>
+      <rect x="882" y="172" width="44" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="904" y="181" text-anchor="middle">CDX/GH</text>
+      <rect x="1010" y="172" width="28" height="12" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.20)" stroke-width="0.8"/>
+      <text class="owner" x="1024" y="181" text-anchor="middle">SYM</text>
+
+      <!-- Rail nodes -->
+      <rect x="40" y="200" width="112" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text class="name" x="96" y="228" text-anchor="middle">Ready issue</text>
+      <text class="sub" x="96" y="244" text-anchor="middle">open + label</text>
+
+      <rect x="160" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="216" y="228" text-anchor="middle">Dispatch</text>
+      <text class="sub" x="216" y="244" text-anchor="middle">poll · claim</text>
+
+      <rect x="280" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="336" y="228" text-anchor="middle">Bootstrap</text>
+      <text class="sub" x="336" y="244" text-anchor="middle">clone + branch</text>
+
+      <rect x="400" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="456" y="228" text-anchor="middle">Implement</text>
+      <text class="sub" x="456" y="244" text-anchor="middle">Codex + validate</text>
+
+      <rect x="520" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="576" y="228" text-anchor="middle">Push + PR</text>
+      <text class="sub" x="576" y="244" text-anchor="middle">commit · reuse</text>
+
+      <rect x="640" y="200" width="112" height="64" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text class="name" x="696" y="228" text-anchor="middle">CI inspect</text>
+      <text class="sub" x="696" y="244" text-anchor="middle">required + observed</text>
+
+      <rect x="848" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="904" y="228" text-anchor="middle">Merge + close</text>
+      <text class="sub" x="904" y="244" text-anchor="middle">squash · Fixes #N</text>
+
+      <rect x="968" y="200" width="112" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="1024" y="228" text-anchor="middle">Reconcile</text>
+      <text class="sub" x="1024" y="244" text-anchor="middle">cleanup + poll</text>
+
+      <!-- Repair node -->
+      <rect x="620" y="344" width="152" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text class="name" x="696" y="370" text-anchor="middle">Repair (bounded)</text>
+      <text class="sub" x="696" y="386" text-anchor="middle">diagnostics → repair cmd</text>
+
+      <!-- Handoff node -->
+      <rect x="848" y="344" width="232" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="#7a8399" stroke-width="1" stroke-dasharray="4,4"/>
+      <text class="name" x="964" y="370" text-anchor="middle">Handoff</text>
+      <text class="sub" x="964" y="386" text-anchor="middle">pause · report · keep issue open</text>
+
+      <!-- Footer notes -->
+      <line x1="40" y1="470" x2="1080" y2="470" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text class="foot" x="40" y="492">GitHub holds the durable facts · Symphony schedules, supervises and reconciles · Codex / delivery skill executes · CI verifies.</text>
+      <text class="foot" x="40" y="510">Merge requires an explicit --opt-in, PR ownership, and every required + observed check successful and the PR mergeable; pending, failed, zero or unknown checks fail closed.</text>
+      <text class="foot" x="40" y="528">Failed checks enter the bounded repair loop; a pending check waits within the CI deadline and never triggers repair.</text>
+      <text class="foot" x="40" y="546">A handoff keeps the issue open, pauses delivery, tries to remove symphony-ready (removal is not guaranteed) and posts an operator report; without --opt-in, delivery stops after green without merging.</text>
+    </svg>
