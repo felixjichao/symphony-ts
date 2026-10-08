@@ -1,18 +1,26 @@
 /**
  * docs-check — 轻量 doc gate（`npm run docs:check`，纳入 `npm run gate`）。
  *
- * 检查四件事，让"文档即架构契约"有 freshness protection：
+ * 检查五件事，让"文档即架构契约"有 freshness protection：
  * 1. 仓库内所有 Markdown 的相对链接必须指向存在的文件 / 目录；
  * 2. `AGENTS.md` 行数不超过预算（standing orders 必须保持短小可导航）；
  * 3. 开发进度里程碑只存在于 `docs/status.md`（非空、恰好三列的 `## 里程碑` 表、名称唯一、
  *    状态可分类、不使用"✅ 本次"）；根 README / architecture / AGENTS 不得再出现里程碑进度表
  *    或「里程碑 / §section + 进度状态」摘要（按表结构与行内容识别，不依赖固定标题）；
- * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`。
+ * 4. 已有测试文件的 workspace 不得继续使用 `--passWithNoTests`；
+ * 5. `docs/diagrams/` 的四张 canonical 图必须同时提交可编辑 HTML 源与派生产物 SVG，产物与源
+ *    逐字节一致，且被对应权威文档引用（避免缺图 / 过期产物 / 引用断裂）。
  *
  * 零依赖，Node >= 20 直接运行。
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import {
+  DIAGRAM_NAMES,
+  artifactPathFor,
+  renderDiagram,
+  sourcePathFor,
+} from "./export-diagrams.mjs";
 
 const ROOT = process.cwd();
 const IGNORED_DIRS = new Set(["node_modules", "dist", "coverage", ".git"]);
@@ -300,6 +308,54 @@ async function checkPassWithNoTests(errors) {
   return checked;
 }
 
+/**
+ * 四张 canonical 图各自的权威引用文档（相对仓库根）。任一图缺源、缺产物、产物过期或未被引用
+ * 都让 docs gate 失败。
+ */
+const REQUIRED_DIAGRAM_REFS = {
+  "runtime-architecture": ["README.md", join("docs", "architecture.md")],
+  "package-dependencies": [join("docs", "architecture.md")],
+  "github-delivery-loop": [join("docs", "github-delivery-workflow.md")],
+  "delivery-trust-boundary": [join("docs", "github-delivery-workflow.md")],
+};
+
+async function checkDiagramAssets(errors) {
+  let checked = 0;
+  for (const name of DIAGRAM_NAMES) {
+    const source = sourcePathFor(name);
+    const artifact = artifactPathFor(name);
+    if (!(await exists(source))) {
+      errors.push(`docs/diagrams: 缺少 ${name} 的 HTML 源（docs/diagrams/source/${name}.html）`);
+      continue;
+    }
+    if (!(await exists(artifact))) {
+      errors.push(`docs/diagrams: 缺少 ${name}.svg 产物（运行 npm run docs:diagrams）`);
+      continue;
+    }
+    try {
+      const expected = renderDiagram(await readFile(source, "utf8"));
+      const actual = await readFile(artifact, "utf8");
+      if (actual !== expected) {
+        errors.push(`docs/diagrams: ${name}.svg 与源不一致（运行 npm run docs:diagrams）`);
+      }
+    } catch (error) {
+      errors.push(`docs/diagrams: ${name} 源无法导出为 SVG：${error.message}`);
+    }
+    checked += 1;
+    for (const doc of REQUIRED_DIAGRAM_REFS[name] ?? []) {
+      const docPath = join(ROOT, doc);
+      if (!(await exists(docPath))) {
+        errors.push(`docs/diagrams: ${name} 的引用文档 ${doc} 不存在`);
+        continue;
+      }
+      if (!(await readFile(docPath, "utf8")).includes(`${name}.svg`)) {
+        errors.push(`docs/diagrams: ${doc} 未引用 ${name}.svg`);
+      }
+    }
+  }
+  return checked;
+}
+
 const errors = [];
 let files = 0;
 let links = 0;
@@ -311,6 +367,7 @@ const agentsLines = await checkAgentsBudget(errors);
 const milestones = await checkStatusMilestones(errors);
 const progressSources = await checkProgressSingleSource(errors);
 const testedWorkspaces = await checkPassWithNoTests(errors);
+const diagramAssets = await checkDiagramAssets(errors);
 
 if (errors.length > 0) {
   console.error(`docs-check 失败（${errors.length} 个问题）：`);
@@ -320,5 +377,5 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行；docs/status.md ${milestones} 个里程碑；${progressSources} 个进度单源文件无重复摘要；${testedWorkspaces} 个已有测试的 workspace 未使用 --passWithNoTests。`,
+  `docs-check 通过：${files} 个 Markdown 文件，${links} 个相对链接有效；AGENTS.md ${agentsLines}/${AGENTS_MAX_LINES} 行；docs/status.md ${milestones} 个里程碑；${progressSources} 个进度单源文件无重复摘要；${testedWorkspaces} 个已有测试的 workspace 未使用 --passWithNoTests；${diagramAssets} 组 canonical 图源/产物一致且被引用。`,
 );

@@ -76,6 +76,15 @@ The PR body uses `Fixes #N`, so GitHub closes the issue automatically on merge.
 Symphony then sees the terminal state through its normal tracker refresh and
 releases the workspace — no extra label is involved.
 
+![The GitHub delivery loop](diagrams/github-delivery-loop.svg)
+
+The diagram is the canonical visual for the path above. GitHub holds the durable
+work / delivery facts, Symphony schedules, supervises and reconciles, the Codex
+delivery skill implements and drives delivery, and CI verifies. A failing check
+enters the bounded repair loop; when delivery cannot complete safely or a budget
+is exhausted, the loop exits through the handoff path instead of retrying
+forever. Editable source and regeneration steps: [docs/diagrams/](diagrams/README.md).
+
 ## Stop and exit paths
 
 The loop has exactly three outcomes:
@@ -170,6 +179,15 @@ perform delivery. This is an explicit, temporary trust boundary:
   `gh auth setup-git`), not on a token placed in the workspace.
 - The delivery runner redacts classic/fine-grained PATs, bearer headers, and
   credential-bearing URLs from everything it prints.
+
+![Delivery trust boundary (MVP)](diagrams/delivery-trust-boundary.svg)
+
+The diagram shows the same boundary: the tracker reads `GITHUB_TOKEN` on the
+host; the agent subprocess never inherits it (`excludeEnvNames`); the delivery
+skill still reaches GitHub through host-provided `git` and authenticated `gh`,
+behind the opt-in / ownership / check-policy gate. Excluding the tracker token
+does not sandbox the agent from host credentials, and this is the current
+temporary MVP boundary rather than the final provider-native model.
 
 The loop is now proven by the end-to-end dogfood (#83 / PR #88). A provider-native
 tools boundary may replace this temporary boundary in the future; do not treat the

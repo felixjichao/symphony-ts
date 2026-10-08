@@ -12,6 +12,8 @@ symphony-ts 是 [OpenAI Symphony](https://github.com/openai/symphony) 官方 `SP
 WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agent Runner → Observability
 ```
 
+（上面的顺序是 SPEC §3 的组件列举，不是一条单向数据管道；运行期以 `Orchestrator` 为中心协作，见下方架构图。）
+
 1. **Workflow Loader** 解析仓库内的 `WORKFLOW.md`（YAML front matter + 原始 prompt 正文）；
 2. **Config Layer** 产出 typed config：默认值合并、`$VAR` 环境解析、tilde 展开 / 相对路径规范化、无效配置类型化报错并安全回退；
 3. **Issue Tracker Adapter** 按配置轮询符合条件的工单，把 provider payload 归一化为 Issue（保留 provider keys）；
@@ -19,6 +21,10 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 5. **Workspace Manager** 为每个 issue provisioning 隔离目录（id 净化、防碰撞），校验路径 containment，执行生命周期脚本；
 6. **Agent Runner** 组装注入 issue 上下文的 prompt，启动 coding agent 子进程（如 Codex app-server），向上转发 live session 事件（token / turn / PID）；
 7. **Logging / Status Surface** 输出结构化日志（保留关键标识符），并以只读 snapshot 提供面向操作者的状态出口。
+
+![Symphony 运行时架构：Orchestrator 作为调度 / 监督 / 对账中心](diagrams/runtime-architecture.svg)
+
+上图是运行模型的权威可视化：`Orchestrator` 是中心 hub，`WORKFLOW.md` 经 Config / Workflow Loader 变成 typed config 进入调度；Issue Tracker Adapter 只做 provider 归一化，GitHub 是其外部持久事实来源；Workspace Manager 与 Agent Runner（驱动 Codex app-server 子进程）由 orchestrator 派发；Observability 只消费只读 snapshot。可编辑源与再生成步骤见 [docs/diagrams/](diagrams/README.md)。
 
 ## Workspace 职责与依赖方向（SPEC §3 映射）
 
@@ -31,12 +37,16 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
-| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | config, tracker, workspace, agent, orchestrator, observability |
+| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability |
 
 依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前两条例外：`packages/tracker` 与 `packages/workspace` 各以 devDependency 引用 `@symphony/config`（各自仅 `src/config-integration.test.ts` 使用），用来证明扩展点或 typed 契约两侧真的对得上——`@symphony/config` 侧不引用它们，运行期方向仍是 `tracker → domain`、`workspace → domain`。两条硬约束：
 
 1. **tracker 永不 import orchestrator**——轮询节奏 / claim / 调度属 coordination 层；
 2. **agent runner 不拥有 scheduler / retry policy**——coordination 只由 orchestrator 拥有。
+
+![Symphony 包依赖方向：所有包汇聚到 domain，apps/cli 位于顶端](diagrams/package-dependencies.svg)
+
+依赖图只画 covering relations（省略可由传递推出的边以控制密度）：箭头指向被依赖方，`apps/cli` 位于顶端、`@symphony/domain` 位于底端并汇聚全部包。tracker 不依赖 orchestrator、agent 不拥有 scheduler / retry、observability 只消费只读 snapshot 都能由图形结构直接读出；devDependency 测试边（tracker → config、workspace → config、orchestrator → observability）不计入生产依赖，因此不出现在图中。
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
 

@@ -17,6 +17,8 @@
     "typecheck": "npm run build --workspaces --if-present",
     "lint": "eslint .",
     "docs:check": "node scripts/docs-check.mjs",
+    "docs:diagrams": "node scripts/export-diagrams.mjs",
+    "docs:diagrams:check": "node scripts/export-diagrams.mjs --check",
     "dogfood:github": "node apps/cli/dist/bin/symphony.js dogfood github",
     "gate": "npm run typecheck && npm test && npm run lint && npm run docs:check"
   },
