@@ -16,6 +16,7 @@ import {
   type DecisionSessionResumeResult,
   type DecisionExecutionOutcome,
   DecisionAdapterError,
+  parseDecisionSessionRootFromId,
   validateDecisionContextForTask,
 } from "@symphony/domain";
 import type {
@@ -136,25 +137,58 @@ const VALID_SUGGESTED_ACTIONS = new Set<DecisionAdapterSuggestedAction>([
   "fail_closed",
 ]);
 
+const TRUSTED_ERROR_NAMES = new Set<string>([
+  "Error",
+  "SyntaxError",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "URIError",
+  "EvalError",
+  "DecisionAdapterError",
+  "AbortError",
+  "TimeoutError",
+]);
+
+const TRUSTED_DIAGNOSTIC_REASONS = new Set<string>([
+  "invalid_json",
+  "schema_validation_failed",
+  "unsupported_verdict",
+  "missing_required_field",
+  "adapter_mismatch",
+  "session_not_found",
+  "account_terminated",
+  "binding_broken",
+  "timeout",
+  "network_error",
+  "auth_required",
+  "rate_limited",
+]);
+
 function sanitizeErrorName(name: unknown): string {
-  if (typeof name !== "string") return "Error";
-  const trimmed = name.trim();
-  if (/^[A-Za-z0-9_$.-]{1,64}$/.test(trimmed)) {
-    return trimmed;
+  if (typeof name === "string" && TRUSTED_ERROR_NAMES.has(name.trim())) {
+    return name.trim();
   }
   return "Error";
 }
 
-function sanitizeStringField(value: unknown, maxLength: number): string | undefined {
+function sanitizeSessionId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  let printable = "";
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    printable += code >= 32 && code !== 127 ? value[i] : " ";
+  const trimmed = value.trim();
+  // Session IDs must match work-item reference format: provider:key
+  // e.g. github:owner/repo#123
+  if (!/^[a-z][a-z0-9-]*:[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)?#[1-9][0-9]*$/.test(trimmed)) {
+    return undefined;
   }
-  const trimmed = printable.trim();
-  if (trimmed.length === 0) return undefined;
-  return trimmed.slice(0, maxLength);
+  if (trimmed.length > 128) {
+    return undefined;
+  }
+  try {
+    parseDecisionSessionRootFromId(trimmed);
+    return trimmed;
+  } catch {
+    return undefined;
+  }
 }
 
 function sanitizeNumberField(value: unknown, min: number, max: number): number | undefined {
@@ -192,7 +226,7 @@ function sanitizeReviewTargetDiagnostic(value: unknown): Record<string, unknown>
   return undefined;
 }
 
-function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefined {
+function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string, unknown> | undefined {
   if (!rawObj || typeof rawObj !== "object" || Array.isArray(rawObj)) {
     return undefined;
   }
@@ -211,14 +245,13 @@ function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefin
   }
 
   if ("reason" in raw) {
-    const reason = sanitizeStringField(raw["reason"], 128);
-    if (reason !== undefined) {
-      sanitized["reason"] = reason;
+    if (typeof raw["reason"] === "string" && TRUSTED_DIAGNOSTIC_REASONS.has(raw["reason"].trim())) {
+      sanitized["reason"] = raw["reason"].trim();
     }
   }
 
-  if ("expectedKind" in raw && (raw["expectedKind"] === "plan" || raw["expectedKind"] === "review")) {
-    sanitized["expectedKind"] = raw["expectedKind"];
+  if ("expectedKind" in raw) {
+    sanitized["expectedKind"] = task.kind;
   }
 
   if ("actualKind" in raw && (raw["actualKind"] === "plan" || raw["actualKind"] === "review")) {
@@ -226,24 +259,18 @@ function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefin
   }
 
   if ("expectedSessionId" in raw) {
-    const sid = sanitizeStringField(raw["expectedSessionId"], 128);
-    if (sid !== undefined) {
-      sanitized["expectedSessionId"] = sid;
-    }
+    sanitized["expectedSessionId"] = task.sessionId;
   }
 
   if ("actualSessionId" in raw) {
-    const sid = sanitizeStringField(raw["actualSessionId"], 128);
+    const sid = sanitizeSessionId(raw["actualSessionId"]);
     if (sid !== undefined) {
       sanitized["actualSessionId"] = sid;
     }
   }
 
   if ("expectedRevision" in raw) {
-    const rev = sanitizeNumberField(raw["expectedRevision"], 1, 1_000_000);
-    if (rev !== undefined) {
-      sanitized["expectedRevision"] = rev;
-    }
+    sanitized["expectedRevision"] = task.revision;
   }
 
   if ("actualRevision" in raw) {
@@ -254,9 +281,12 @@ function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefin
   }
 
   if ("expectedTarget" in raw) {
-    const target = sanitizeReviewTargetDiagnostic(raw["expectedTarget"]);
-    if (target !== undefined) {
-      sanitized["expectedTarget"] = target;
+    if (task.kind === "review" && task.target) {
+      sanitized["expectedTarget"] = {
+        repository: task.target.repository,
+        prNumber: task.target.prNumber,
+        headSha: task.target.headSha,
+      };
     }
   }
 
@@ -294,7 +324,7 @@ function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefin
         observedGeneration = err.observedGeneration;
       }
       if (err.details && typeof err.details === "object") {
-        rawDetails = buildSafeRawDetails(err.details["rawDetails"]);
+        rawDetails = buildSafeRawDetails(err.details["rawDetails"], task);
       }
     } else if (err instanceof Error) {
       rawDetails = {

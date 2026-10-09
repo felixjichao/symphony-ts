@@ -93,6 +93,7 @@ export function extractSymphonyResultPayload(rawText: string): unknown {
       message: "Malformed JSON in symphony-result code block",
       rawDetails: {
         errorName: (err as Error).name,
+        reason: "invalid_json",
         contentLength: content.length,
       },
       cause: err,
@@ -113,9 +114,10 @@ export function normalizeDecisionResult(payload: unknown, task?: DecisionTask): 
   } catch (err) {
     throw new DecisionAdapterError({
       code: "malformed_output",
-      message: `Invalid DecisionResult envelope: ${(err as Error).message}`,
+      message: "Invalid DecisionResult envelope",
       rawDetails: {
-        reason: (err as Error).message,
+        errorName: "TypeError",
+        reason: "schema_validation_failed",
       },
       cause: err,
     });
@@ -181,7 +183,11 @@ export function normalizeDecisionResult(payload: unknown, task?: DecisionTask): 
     } catch (err) {
       throw new DecisionAdapterError({
         code: "malformed_output",
-        message: `DecisionResult validation failed for task: ${(err as Error).message}`,
+        message: "DecisionResult validation failed for task",
+        rawDetails: {
+          errorName: "TypeError",
+          reason: "schema_validation_failed",
+        },
         cause: err,
       });
     }

@@ -1268,7 +1268,7 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
 
       expect(outcomeA.status).toBe("failed");
 
-      // Scenario B: oversized string under reason (> 32KB)
+      // Scenario B: untrusted oversized reason text (> 32KB)
       const sessionB = await service1.createSession(githubDecisionRoot("owner", "repo", 43));
       const taskB = await service1.createPlanTask(sessionB.id, { operationKey: "op:plan:oversized:1" });
       const claimB = await service1.claimTask(taskB.id, { owner: "worker-1" });
@@ -1301,6 +1301,82 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
 
       expect(outcomeB.status).toBe("failed");
 
+      // Scenario C: short tokens and untrusted strings in reason, errorName, and actualSessionId
+      const sessionC = await service1.createSession(githubDecisionRoot("owner", "repo", 44));
+      const taskC = await service1.createPlanTask(sessionC.id, { operationKey: "op:plan:untrusted:1" });
+      const claimC = await service1.claimTask(taskC.id, { owner: "worker-1" });
+
+      const SHORT_BEARER_TOKEN = "PRIVATE_REASON_TOKEN_123";
+      const CUSTOM_ERROR_NAME_TOKEN = "Bearer_SECRET_TOKEN";
+      const PRIVATE_PROMPT_SESSION = "Bearer private_prompt_session_token";
+      const SPOOFED_SESSION_ID = "attacker_spoofed_session";
+
+      const untrustedTokensAdapter = new FakeDecisionExecutorAdapter({
+        executeError: new DecisionAdapterError({
+          code: "execution_failed",
+          message: "Execution failed with sensitive diagnostic",
+          rawDetails: {
+            errorName: CUSTOM_ERROR_NAME_TOKEN,
+            reason: `HTTP 401 Authorization: Bearer ${SHORT_BEARER_TOKEN}`,
+            actualSessionId: PRIVATE_PROMPT_SESSION,
+            expectedSessionId: SPOOFED_SESSION_ID,
+            expectedRevision: 999999,
+          },
+        }),
+      });
+
+      const outcomeC = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: untrustedTokensAdapter,
+        task: claimC.task,
+        session: claimC.session,
+        lease: claimC.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionC.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeC.status).toBe("failed");
+
+      // Scenario D: trusted whitelist enum reason and standard error name
+      const sessionD = await service1.createSession(githubDecisionRoot("owner", "repo", 45));
+      const taskD = await service1.createPlanTask(sessionD.id, { operationKey: "op:plan:trusted:1" });
+      const claimD = await service1.claimTask(taskD.id, { owner: "worker-1" });
+
+      const trustedEnumAdapter = new FakeDecisionExecutorAdapter({
+        executeError: new DecisionAdapterError({
+          code: "malformed_output",
+          message: "Output failed schema validation",
+          rawDetails: {
+            errorName: "TypeError",
+            reason: "schema_validation_failed",
+            actualKind: "plan",
+            expectedKind: "plan",
+          },
+        }),
+      });
+
+      const outcomeD = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: trustedEnumAdapter,
+        task: claimD.task,
+        session: claimD.session,
+        lease: claimD.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionD.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeD.status).toBe("failed");
+
       await store1.close();
 
       // Read raw store.json from disk and verify zero leakage and bounded file size
@@ -1311,10 +1387,24 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
       expect(storeContent.includes(NESTED_TOKEN)).toBe(false);
       expect(storeContent.includes("CONFIDENTIAL_TRANSCRIPT_BLOCK_")).toBe(false);
 
-      // Verify oversized string was clamped (full 32KB string not present)
+      // Verify untrusted oversized string is completely discarded (no full string, no prefix)
       expect(storeContent.includes(OVERSIZED_REASON_TEXT)).toBe(false);
-      // Entire store.json file size must be small (< 15KB), definitely not 64KB+!
-      expect(storeContent.length).toBeLessThan(15000);
+      expect(storeContent.includes("OVERSIZED_STRING_REASON_SEGMENT_")).toBe(false);
+
+      // Verify short tokens and private prompts in reason, errorName, and actualSessionId are completely absent
+      expect(storeContent.includes(SHORT_BEARER_TOKEN)).toBe(false);
+      expect(storeContent.includes("PRIVATE_REASON_TOKEN")).toBe(false);
+      expect(storeContent.includes(CUSTOM_ERROR_NAME_TOKEN)).toBe(false);
+      expect(storeContent.includes(PRIVATE_PROMPT_SESSION)).toBe(false);
+      expect(storeContent.includes("private_prompt_session")).toBe(false);
+      expect(storeContent.includes(SPOOFED_SESSION_ID)).toBe(false);
+
+      // Verify trusted enum reasons and standard error names ARE persisted safely
+      expect(storeContent.includes("schema_validation_failed")).toBe(true);
+      expect(storeContent.includes("TypeError")).toBe(true);
+
+      // Entire store.json file size must be small (< 25KB)
+      expect(storeContent.length).toBeLessThan(25000);
 
       // Reopen store and verify valid structured recovery
       const store2 = new DurableDecisionStore({ storeDir: tempDir });
@@ -1330,10 +1420,34 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
       const receiptB = service2.getReceipt(taskB.id);
       expect(receiptB?.type).toBe("failure");
       const detailsB = (receiptB?.payload as DecisionTaskFailure)?.details as Record<string, unknown>;
-      const rawDetailsB = detailsB?.["rawDetails"] as Record<string, unknown> | undefined;
-      expect(rawDetailsB).toBeDefined();
-      expect(typeof rawDetailsB?.["reason"]).toBe("string");
-      expect((rawDetailsB?.["reason"] as string).length).toBeLessThanOrEqual(128);
+      // Untrusted oversized reason string was discarded
+      expect(detailsB?.["rawDetails"]).toBeUndefined();
+
+      const receiptC = service2.getReceipt(taskC.id);
+      expect(receiptC?.type).toBe("failure");
+      const detailsC = (receiptC?.payload as DecisionTaskFailure)?.details as Record<string, unknown>;
+      const rawDetailsC = detailsC?.["rawDetails"] as Record<string, unknown> | undefined;
+      expect(rawDetailsC).toBeDefined();
+      // errorName mapped strictly to trusted "Error"
+      expect(rawDetailsC?.["errorName"]).toBe("Error");
+      // untrusted reason containing short Bearer token was discarded
+      expect(rawDetailsC?.["reason"]).toBeUndefined();
+      // untrusted actualSessionId containing prompt text was discarded
+      expect(rawDetailsC?.["actualSessionId"]).toBeUndefined();
+      // expectedSessionId populated strictly from trusted task.sessionId, not spoofed
+      expect(rawDetailsC?.["expectedSessionId"]).toBe(taskC.sessionId);
+      // expectedRevision populated strictly from trusted task.revision, not spoofed 999999
+      expect(rawDetailsC?.["expectedRevision"]).toBe(taskC.revision);
+
+      const receiptD = service2.getReceipt(taskD.id);
+      expect(receiptD?.type).toBe("failure");
+      const detailsD = (receiptD?.payload as DecisionTaskFailure)?.details as Record<string, unknown>;
+      const rawDetailsD = detailsD?.["rawDetails"] as Record<string, unknown> | undefined;
+      expect(rawDetailsD).toBeDefined();
+      expect(rawDetailsD?.["errorName"]).toBe("TypeError");
+      expect(rawDetailsD?.["reason"]).toBe("schema_validation_failed");
+      expect(rawDetailsD?.["expectedKind"]).toBe("plan");
+      expect(rawDetailsD?.["actualKind"]).toBe("plan");
 
       await store2.close();
     } finally {
