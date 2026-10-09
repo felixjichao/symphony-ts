@@ -353,7 +353,12 @@ Security boundaries:
 
 ## Executor adapter boundary and context strategies
 
-The `@symphony/decision/adapter` entrypoint and `@symphony/domain` export the provider-neutral adapter layer for external model engines (such as Web ChatGPT, browser userscripts, or direct LLM APIs). Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md).
+The `@symphony/decision/adapter` entrypoint and `@symphony/domain/decision` subpath export the provider-neutral adapter layer and Decision Plane contracts for external model engines (such as Web ChatGPT, browser userscripts, or direct LLM APIs). Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md).
+
+> [!NOTE]
+> **Browser vs Server Runtime Entrypoints**:
+> - **Browser runtimes** (userscripts, Tampermonkey, WebExtension content scripts): MUST import adapter execution primitives from `@symphony/decision/adapter` and domain contracts/types from `@symphony/domain/decision`. These subpaths contain zero Node built-in dependencies (`node:crypto`, `node:fs`, etc.) and produce clean browser bundles without polyfills.
+> - **Server / Node.js runtimes** (CLI, orchestrator, localhost bridge): May import from the root `@symphony/domain` (which re-exports `@symphony/domain/decision` alongside Core workspace and config types) and `@symphony/decision`.
 
 ### DecisionExecutorAdapter interface
 

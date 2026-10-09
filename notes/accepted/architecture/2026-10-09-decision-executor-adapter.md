@@ -51,7 +51,7 @@ We introduce the executor adapter boundary and context strategy contracts across
    - **Safe Bounded Diagnostics**: Parser error messages and persisted `rawDetails` never embed raw fenced content or model transcripts; metadata is strictly filtered to bounded scalar fields (`errorName`, `contentLength`, `reason`, expected/actual identity pairs) preventing sensitive token leakage into durable failure receipts.
 
 5. **Browser-Safe Distribution**:
-   - Entry point `@symphony/decision/adapter` contains zero `node:*` built-in dependencies. Browser extensions or userscripts can import extractor, fake adapter, and types directly.
+   - Entry point `@symphony/decision/adapter` and domain subpath `@symphony/domain/decision` contain zero `node:*` built-in dependencies. Browser extensions or userscripts must import Decision Plane contracts from `@symphony/domain/decision` rather than the root `@symphony/domain` (as the root re-exports Core modules importing `node:crypto`). Both subpaths bundle cleanly for browser platforms without polyfills.
 
 6. **Deterministic Verification Harness**:
    - `FakeDecisionExecutorAdapter` supports simulated execution, configurable results, custom handlers, and error injection for testing without network or browser dependencies.
@@ -70,4 +70,4 @@ We introduce the executor adapter boundary and context strategy contracts across
 - Decision tasks can be executed against any adapter implementing `DecisionExecutorAdapter`.
 - Web ChatGPT adapter development can proceed independently without altering Core domain or orchestration code.
 - Both connector-based (web navigation) and materialized (bundled artifacts) workflows are cleanly supported.
-- Browser-safe subpath `@symphony/decision/adapter` allows userscript builds without polyfill bloat.
+- Browser-safe subpaths `@symphony/decision/adapter` and `@symphony/domain/decision` allow userscript builds without polyfill bloat.
