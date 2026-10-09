@@ -1116,6 +1116,231 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
     }
   });
 
+  it("sanitizes generic Error and DecisionAdapterError messages preventing token or prompt leakage into store.json and receipts across restart", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-msg-sanitize-"));
+    try {
+      const store1 = new DurableDecisionStore({ storeDir: tempDir });
+      await store1.open();
+      const service1 = new DecisionService(store1);
+
+      // Scenario A: Generic Error containing Bearer token
+      const sessionA = await service1.createSession(root);
+      const taskA = await service1.createPlanTask(sessionA.id, { operationKey: "op:plan:bearer:1" });
+      const claimA = await service1.claimTask(taskA.id, { owner: "worker-1" });
+
+      const BEARER_TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.sensitive_payload.signature";
+      const genericErrorAdapter = new FakeDecisionExecutorAdapter({
+        executeError: new Error(`Failed with authorization header: ${BEARER_TOKEN}`),
+      });
+
+      const outcomeA = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: genericErrorAdapter,
+        task: claimA.task,
+        session: claimA.session,
+        lease: claimA.lease,
+        context: connectorContext,
+      });
+
+      expect(outcomeA.status).toBe("failed");
+      if (outcomeA.status === "failed") {
+        expect(outcomeA.failure.error).toBe("execution_failed");
+        expect((outcomeA.failure.details as Record<string, unknown>)?.["message"]).toBe(
+          "Executor task execution failed"
+        );
+      }
+
+      // Scenario B: DecisionAdapterError message containing private prompt data
+      const sessionB = await service1.createSession(githubDecisionRoot("owner", "repo", 43));
+      const taskB = await service1.createPlanTask(sessionB.id, { operationKey: "op:plan:prompt:1" });
+      const claimB = await service1.claimTask(taskB.id, { owner: "worker-1" });
+
+      const PRIVATE_USER_PROMPT = "Confidential customer prompt: please process payroll records secret_12345";
+      const adapterErrorWithPrompt = new FakeDecisionExecutorAdapter({
+        executeError: new DecisionAdapterError({
+          code: "human_required",
+          message: `Executor halted on prompt: ${PRIVATE_USER_PROMPT}`,
+          suggestedAction: "human_intervention",
+        }),
+      });
+
+      const outcomeB = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: adapterErrorWithPrompt,
+        task: claimB.task,
+        session: claimB.session,
+        lease: claimB.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionB.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeB.status).toBe("failed");
+      if (outcomeB.status === "failed") {
+        expect(outcomeB.failure.error).toBe("human_required");
+        expect((outcomeB.failure.details as Record<string, unknown>)?.["message"]).toBe(
+          "Executor requires human interaction or verification"
+        );
+      }
+
+      await store1.close();
+
+      // Read raw store.json from disk and verify zero leakage
+      const storeContent = await fs.readFile(path.join(tempDir, "store.json"), "utf8");
+      expect(storeContent.includes(BEARER_TOKEN)).toBe(false);
+      expect(storeContent.includes("sensitive_payload")).toBe(false);
+      expect(storeContent.includes(PRIVATE_USER_PROMPT)).toBe(false);
+      expect(storeContent.includes("secret_12345")).toBe(false);
+
+      // Verify canonical safe messages are persisted
+      expect(storeContent).toContain('"message": "Executor task execution failed"');
+      expect(storeContent).toContain('"message": "Executor requires human interaction or verification"');
+
+      // Reopen in fresh DurableDecisionStore and verify receipts
+      const store2 = new DurableDecisionStore({ storeDir: tempDir });
+      await store2.open();
+      const service2 = new DecisionService(store2);
+
+      const reloadedTaskA = service2.getTask(taskA.id);
+      expect(reloadedTaskA?.status).toBe("failed");
+      const receiptA = service2.getReceipt(taskA.id);
+      expect(receiptA?.type).toBe("failure");
+      const failurePayloadA = receiptA?.payload as DecisionTaskFailure;
+      expect(failurePayloadA.error).toBe("execution_failed");
+      expect((failurePayloadA.details as Record<string, unknown>)?.["message"]).toBe(
+        "Executor task execution failed"
+      );
+
+      const reloadedTaskB = service2.getTask(taskB.id);
+      expect(reloadedTaskB?.status).toBe("failed");
+      const receiptB = service2.getReceipt(taskB.id);
+      expect(receiptB?.type).toBe("failure");
+      const failurePayloadB = receiptB?.payload as DecisionTaskFailure;
+      expect(failurePayloadB.error).toBe("human_required");
+      expect((failurePayloadB.details as Record<string, unknown>)?.["message"]).toBe(
+        "Executor requires human interaction or verification"
+      );
+
+      await store2.close();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects nested objects under whitelist keys and clamps oversized strings preventing diagnostic bloating across restart", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-nested-sanitize-"));
+    try {
+      const store1 = new DurableDecisionStore({ storeDir: tempDir });
+      await store1.open();
+      const service1 = new DecisionService(store1);
+
+      // Scenario A: nested object under reason and actualTarget with sensitive auth token
+      const sessionA = await service1.createSession(root);
+      const taskA = await service1.createPlanTask(sessionA.id, { operationKey: "op:plan:nested:1" });
+      const claimA = await service1.claimTask(taskA.id, { owner: "worker-1" });
+
+      const NESTED_32K_TRANSCRIPT = "CONFIDENTIAL_TRANSCRIPT_BLOCK_".repeat(1000); // > 30KB
+      const NESTED_TOKEN = "ghp_super_secret_personal_access_token_999999999";
+
+      const nestedErrorAdapter = new FakeDecisionExecutorAdapter({
+        executeError: new DecisionAdapterError({
+          code: "target_mismatch",
+          message: "Target mismatch error",
+          rawDetails: {
+            reason: { transcript: NESTED_32K_TRANSCRIPT },
+            actualTarget: { authorization: NESTED_TOKEN, invalidExtra: true },
+          },
+        }),
+      });
+
+      const outcomeA = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: nestedErrorAdapter,
+        task: claimA.task,
+        session: claimA.session,
+        lease: claimA.lease,
+        context: connectorContext,
+      });
+
+      expect(outcomeA.status).toBe("failed");
+
+      // Scenario B: oversized string under reason (> 32KB)
+      const sessionB = await service1.createSession(githubDecisionRoot("owner", "repo", 43));
+      const taskB = await service1.createPlanTask(sessionB.id, { operationKey: "op:plan:oversized:1" });
+      const claimB = await service1.claimTask(taskB.id, { owner: "worker-1" });
+
+      const OVERSIZED_REASON_TEXT = "OVERSIZED_STRING_REASON_SEGMENT_".repeat(1024); // > 32KB
+      const oversizedErrorAdapter = new FakeDecisionExecutorAdapter({
+        executeError: new DecisionAdapterError({
+          code: "binding_broken",
+          message: "Broken binding",
+          rawDetails: {
+            reason: OVERSIZED_REASON_TEXT,
+          },
+        }),
+      });
+
+      const outcomeB = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: oversizedErrorAdapter,
+        task: claimB.task,
+        session: claimB.session,
+        lease: claimB.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionB.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeB.status).toBe("failed");
+
+      await store1.close();
+
+      // Read raw store.json from disk and verify zero leakage and bounded file size
+      const storeContent = await fs.readFile(path.join(tempDir, "store.json"), "utf8");
+
+      // Verify that neither the 30KB transcript nor the nested token is persisted
+      expect(storeContent.includes(NESTED_32K_TRANSCRIPT)).toBe(false);
+      expect(storeContent.includes(NESTED_TOKEN)).toBe(false);
+      expect(storeContent.includes("CONFIDENTIAL_TRANSCRIPT_BLOCK_")).toBe(false);
+
+      // Verify oversized string was clamped (full 32KB string not present)
+      expect(storeContent.includes(OVERSIZED_REASON_TEXT)).toBe(false);
+      // Entire store.json file size must be small (< 15KB), definitely not 64KB+!
+      expect(storeContent.length).toBeLessThan(15000);
+
+      // Reopen store and verify valid structured recovery
+      const store2 = new DurableDecisionStore({ storeDir: tempDir });
+      await store2.open();
+      const service2 = new DecisionService(store2);
+
+      const receiptA = service2.getReceipt(taskA.id);
+      expect(receiptA?.type).toBe("failure");
+      const detailsA = (receiptA?.payload as DecisionTaskFailure)?.details as Record<string, unknown>;
+      // Nested objects under reason and actualTarget were rejected, so rawDetails is not set or empty
+      expect(detailsA?.["rawDetails"]).toBeUndefined();
+
+      const receiptB = service2.getReceipt(taskB.id);
+      expect(receiptB?.type).toBe("failure");
+      const detailsB = (receiptB?.payload as DecisionTaskFailure)?.details as Record<string, unknown>;
+      const rawDetailsB = detailsB?.["rawDetails"] as Record<string, unknown> | undefined;
+      expect(rawDetailsB).toBeDefined();
+      expect(typeof rawDetailsB?.["reason"]).toBe("string");
+      expect((rawDetailsB?.["reason"] as string).length).toBeLessThanOrEqual(128);
+
+      await store2.close();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects cross-issue context at coordinator entrypoint before touching adapter or mutating task", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-cross-issue-test-"));
     try {

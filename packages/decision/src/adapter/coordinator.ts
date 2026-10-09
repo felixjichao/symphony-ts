@@ -10,6 +10,7 @@ import {
   type DecisionContextBundle,
   type DecisionExecutorAdapter,
   type DecisionAdapterErrorCode,
+  type DecisionAdapterSuggestedAction,
   type DecisionBindingInspectionResult,
   type DecisionSessionCreationResult,
   type DecisionSessionResumeResult,
@@ -102,51 +103,214 @@ export async function executeTaskWithAdapter(
   // Enforce work-item and task context consistency at the execution entry point (Blocker 2)
   validateDecisionContextForTask(context, task, currentSession);
 
+const CANONICAL_SAFE_MESSAGES: Record<DecisionAdapterErrorCode, string> = {
+  malformed_output: "Executor output failed schema validation or could not be parsed",
+  task_mismatch: "Executor result does not match claimed task identity",
+  revision_mismatch: "Executor result revision does not match claimed task revision",
+  target_mismatch: "Executor review result target does not match claimed task target",
+  binding_broken: "Executor binding is unusable or broken",
+  execution_failed: "Executor task execution failed",
+  human_required: "Executor requires human interaction or verification",
+  unsupported_strategy: "Context strategy is not supported by executor adapter",
+  unsupported_task_kind: "Task kind is not supported by executor adapter",
+  cancelled: "Task execution was cancelled",
+};
+
+const VALID_ERROR_CODES = new Set<DecisionAdapterErrorCode>([
+  "malformed_output",
+  "task_mismatch",
+  "revision_mismatch",
+  "target_mismatch",
+  "binding_broken",
+  "execution_failed",
+  "human_required",
+  "unsupported_strategy",
+  "unsupported_task_kind",
+  "cancelled",
+]);
+
+const VALID_SUGGESTED_ACTIONS = new Set<DecisionAdapterSuggestedAction>([
+  "retry",
+  "rebind",
+  "human_intervention",
+  "fail_closed",
+]);
+
+function sanitizeErrorName(name: unknown): string {
+  if (typeof name !== "string") return "Error";
+  const trimmed = name.trim();
+  if (/^[A-Za-z0-9_$.-]{1,64}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return "Error";
+}
+
+function sanitizeStringField(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let printable = "";
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    printable += code >= 32 && code !== 127 ? value[i] : " ";
+  }
+  const trimmed = printable.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeNumberField(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
+  if (value < min || value > max) return undefined;
+  return value;
+}
+
+function sanitizeReviewTargetDiagnostic(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const obj = value as Record<string, unknown>;
+  const res: Record<string, unknown> = {};
+
+  if (typeof obj["repository"] === "string") {
+    const repo = obj["repository"].trim();
+    if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repo) && repo.length <= 128) {
+      res["repository"] = repo;
+    }
+  }
+
+  if (typeof obj["prNumber"] === "number" && Number.isSafeInteger(obj["prNumber"]) && obj["prNumber"] > 0) {
+    res["prNumber"] = obj["prNumber"];
+  }
+
+  if (typeof obj["headSha"] === "string") {
+    const sha = obj["headSha"].trim();
+    if (/^[0-9a-fA-F]{40}$/.test(sha)) {
+      res["headSha"] = sha;
+    }
+  }
+
+  if (Object.keys(res).length > 0) {
+    return res;
+  }
+  return undefined;
+}
+
+function buildSafeRawDetails(rawObj: unknown): Record<string, unknown> | undefined {
+  if (!rawObj || typeof rawObj !== "object" || Array.isArray(rawObj)) {
+    return undefined;
+  }
+  const raw = rawObj as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+
+  if ("errorName" in raw) {
+    sanitized["errorName"] = sanitizeErrorName(raw["errorName"]);
+  }
+
+  if ("contentLength" in raw) {
+    const len = sanitizeNumberField(raw["contentLength"], 0, 100_000_000);
+    if (len !== undefined) {
+      sanitized["contentLength"] = len;
+    }
+  }
+
+  if ("reason" in raw) {
+    const reason = sanitizeStringField(raw["reason"], 128);
+    if (reason !== undefined) {
+      sanitized["reason"] = reason;
+    }
+  }
+
+  if ("expectedKind" in raw && (raw["expectedKind"] === "plan" || raw["expectedKind"] === "review")) {
+    sanitized["expectedKind"] = raw["expectedKind"];
+  }
+
+  if ("actualKind" in raw && (raw["actualKind"] === "plan" || raw["actualKind"] === "review")) {
+    sanitized["actualKind"] = raw["actualKind"];
+  }
+
+  if ("expectedSessionId" in raw) {
+    const sid = sanitizeStringField(raw["expectedSessionId"], 128);
+    if (sid !== undefined) {
+      sanitized["expectedSessionId"] = sid;
+    }
+  }
+
+  if ("actualSessionId" in raw) {
+    const sid = sanitizeStringField(raw["actualSessionId"], 128);
+    if (sid !== undefined) {
+      sanitized["actualSessionId"] = sid;
+    }
+  }
+
+  if ("expectedRevision" in raw) {
+    const rev = sanitizeNumberField(raw["expectedRevision"], 1, 1_000_000);
+    if (rev !== undefined) {
+      sanitized["expectedRevision"] = rev;
+    }
+  }
+
+  if ("actualRevision" in raw) {
+    const rev = sanitizeNumberField(raw["actualRevision"], 1, 1_000_000);
+    if (rev !== undefined) {
+      sanitized["actualRevision"] = rev;
+    }
+  }
+
+  if ("expectedTarget" in raw) {
+    const target = sanitizeReviewTargetDiagnostic(raw["expectedTarget"]);
+    if (target !== undefined) {
+      sanitized["expectedTarget"] = target;
+    }
+  }
+
+  if ("actualTarget" in raw) {
+    const target = sanitizeReviewTargetDiagnostic(raw["actualTarget"]);
+    if (target !== undefined) {
+      sanitized["actualTarget"] = target;
+    }
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
   // Helper to record structured failure if adapter lifecycle or execution fails (Blocker 1 & 3)
   const recordFailure = async (err: unknown): Promise<TaskExecutionFailureOutcome> => {
     let errorCode: DecisionAdapterErrorCode = "execution_failed";
     let retryable = false;
-    let safeDetails: Record<string, unknown> = {};
+    let suggestedAction: DecisionAdapterSuggestedAction = "fail_closed";
+    let observedGeneration: number | undefined;
+    let rawDetails: Record<string, unknown> | undefined;
 
     if (err instanceof DecisionAdapterError) {
-      errorCode = err.code;
-      retryable = err.retryable;
-      safeDetails = {
-        code: err.code,
-        message: err.message,
-        suggestedAction: err.suggestedAction,
-        ...(err.observedGeneration !== undefined ? { observedGeneration: err.observedGeneration } : {}),
-      };
+      if (VALID_ERROR_CODES.has(err.code)) {
+        errorCode = err.code;
+      }
+      retryable = Boolean(err.retryable);
+      if (VALID_SUGGESTED_ACTIONS.has(err.suggestedAction)) {
+        suggestedAction = err.suggestedAction;
+      }
+      if (
+        typeof err.observedGeneration === "number" &&
+        Number.isSafeInteger(err.observedGeneration) &&
+        err.observedGeneration >= 0
+      ) {
+        observedGeneration = err.observedGeneration;
+      }
       if (err.details && typeof err.details === "object") {
-        const raw = err.details["rawDetails"];
-        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-          const rawObj = raw as Record<string, unknown>;
-          const sanitizedRaw: Record<string, unknown> = {};
-          for (const key of [
-            "errorName",
-            "contentLength",
-            "reason",
-            "expectedKind",
-            "actualKind",
-            "expectedSessionId",
-            "actualSessionId",
-            "expectedRevision",
-            "actualRevision",
-            "expectedTarget",
-            "actualTarget",
-          ]) {
-            if (key in rawObj && rawObj[key] !== undefined) {
-              sanitizedRaw[key] = rawObj[key];
-            }
-          }
-          if (Object.keys(sanitizedRaw).length > 0) {
-            safeDetails["rawDetails"] = sanitizedRaw;
-          }
-        }
+        rawDetails = buildSafeRawDetails(err.details["rawDetails"]);
       }
     } else if (err instanceof Error) {
-      safeDetails = { message: err.message, name: err.name };
+      rawDetails = {
+        errorName: sanitizeErrorName(err.name),
+      };
     }
+
+    const safeMessage = CANONICAL_SAFE_MESSAGES[errorCode] ?? "Executor task execution failed";
+
+    const safeDetails: Record<string, unknown> = {
+      code: errorCode,
+      message: safeMessage,
+      suggestedAction,
+      ...(observedGeneration !== undefined ? { observedGeneration } : {}),
+      ...(rawDetails !== undefined ? { rawDetails } : {}),
+    };
 
     const submission = await controller.submitFailure(task.id, {
       owner: lease.owner,
