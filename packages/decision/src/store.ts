@@ -5,6 +5,7 @@ import {
   parseDecisionSession,
   parseDecisionTask,
   parseDecisionResult,
+  parseDecisionReviewTarget,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
@@ -221,6 +222,16 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
     if (!task) {
       throw new CorruptedStoreError(`Receipt ${receipt.taskId} references non-existent task`);
     }
+    if (receipt.claimGeneration !== task.claimGeneration) {
+      throw new CorruptedStoreError(
+        `Receipt ${receipt.taskId} claimGeneration ${receipt.claimGeneration} does not match task claimGeneration ${task.claimGeneration}`
+      );
+    }
+    if (receipt.claimToken !== task.lastClaimToken) {
+      throw new CorruptedStoreError(
+        `Receipt ${receipt.taskId} claimToken does not match task lastClaimToken`
+      );
+    }
     if (receipt.type === "result") {
       const res = record.results[key];
       if (!res || !canonicalJsonEqual(res, receipt.payload)) {
@@ -269,7 +280,7 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
     if (!record.sessions[op.sessionId]) {
       throw new CorruptedStoreError(`Operation receipt references non-existent session ${op.sessionId}`);
     }
-    if (op.kind === "create-plan-task" || op.kind === "create-review-task") {
+    if (op.kind === "create-plan-task") {
       const t = record.tasks[op.entityId];
       if (!t) {
         throw new CorruptedStoreError(`Operation receipt references non-existent task ${op.entityId}`);
@@ -277,11 +288,59 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
       if (t.sessionId !== op.sessionId) {
         throw new CorruptedStoreError(`Operation receipt task sessionId does not match receipt sessionId`);
       }
+      if (t.kind !== "plan") {
+        throw new CorruptedStoreError(
+          `Operation receipt kind is create-plan-task but task ${t.id} kind is "${t.kind}"`
+        );
+      }
+      if (op.target !== undefined && op.target !== null) {
+        throw new CorruptedStoreError(`Operation receipt kind is create-plan-task but target is specified`);
+      }
+    } else if (op.kind === "create-review-task") {
+      const t = record.tasks[op.entityId];
+      if (!t) {
+        throw new CorruptedStoreError(`Operation receipt references non-existent task ${op.entityId}`);
+      }
+      if (t.sessionId !== op.sessionId) {
+        throw new CorruptedStoreError(`Operation receipt task sessionId does not match receipt sessionId`);
+      }
+      if (t.kind !== "review") {
+        throw new CorruptedStoreError(
+          `Operation receipt kind is create-review-task but task ${t.id} kind is "${t.kind}"`
+        );
+      }
+      if (!op.target) {
+        throw new CorruptedStoreError(`Operation receipt kind is create-review-task but has no target`);
+      }
+      parseDecisionReviewTarget(op.target);
+      if (!canonicalJsonEqual(op.target, t.target)) {
+        throw new CorruptedStoreError(
+          `Operation receipt ${op.operationKey} target does not match task ${t.id} target`
+        );
+      }
     } else if (op.kind === "rebind-session") {
+      if (op.entityId !== op.sessionId) {
+        throw new CorruptedStoreError(`Operation receipt entityId does not match sessionId`);
+      }
       const s = record.sessions[op.entityId];
       if (!s) {
         throw new CorruptedStoreError(`Operation receipt references non-existent session ${op.entityId}`);
       }
+      if (op.resultingSession) {
+        parseDecisionSession(op.resultingSession);
+        if (op.resultingSession.id !== op.sessionId) {
+          throw new CorruptedStoreError(`Operation receipt resultingSession id does not match sessionId`);
+        }
+        if (op.bindingGeneration !== undefined && op.resultingSession.bindingGeneration !== op.bindingGeneration) {
+          throw new CorruptedStoreError(
+            `Operation receipt resultingSession bindingGeneration does not match bindingGeneration`
+          );
+        }
+      }
+    } else {
+      throw new CorruptedStoreError(
+        `Unknown operation receipt kind: ${String((op as Record<string, unknown>)["kind"])}`
+      );
     }
   }
 }

@@ -137,50 +137,71 @@ The `@symphony/decision` package implements durable storage, task coordination s
 
 ### Persistence Schema Envelope
 
-The `store.json` file adheres to schemaVersion `1` with the following envelope:
+The `store.json` file adheres to schemaVersion `1` and passes all integrity checks enforced by `validateStoreRecord`. The canonical envelope structure is:
 
 ```json
 {
   "schemaVersion": 1,
-  "transactionSequence": 1,
+  "transactionSequence": 2,
   "sessions": {
-    "<sessionId>": {
+    "github:owner/repo#42": {
       "schemaVersion": 1,
       "id": "github:owner/repo#42",
-      "root": { "provider": "github", "key": "owner/repo#42" },
+      "root": {
+        "provider": "github",
+        "key": "owner/repo#42"
+      },
       "status": "active",
       "binding": {
         "schemaVersion": 1,
         "adapter": "browser-agent",
-        "externalSessionRef": "chat-001",
+        "externalSessionRef": "chat-002",
         "resumeUri": null,
-        "generation": 1
+        "generation": 2
       },
-      "bindingGeneration": 1,
+      "bindingGeneration": 2,
       "createdAtMs": 1700000000000,
-      "updatedAtMs": 1700000000000
+      "updatedAtMs": 1700000001000
     }
   },
   "tasks": {
-    "<taskId>": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
       "schemaVersion": 1,
-      "id": "github:owner/repo#42:plan:1",
+      "id": "github%3Aowner%2Frepo%2342:plan:1",
       "sessionId": "github:owner/repo#42",
       "kind": "plan",
       "revision": 1,
+      "status": "completed",
+      "lease": null,
+      "claimGeneration": 1,
+      "lastClaimToken": "00000000-0000-0000-0000-000000000001",
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000000500
+    },
+    "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567": {
+      "schemaVersion": 1,
+      "id": "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567",
+      "sessionId": "github:owner/repo#42",
+      "kind": "review",
+      "revision": 1,
       "status": "pending",
+      "target": {
+        "repository": "owner/repo",
+        "prNumber": 42,
+        "headSha": "0123456789abcdef0123456789abcdef01234567"
+      },
       "lease": null,
       "claimGeneration": 0,
       "lastClaimToken": null,
-      "createdAtMs": 1700000000000,
-      "updatedAtMs": 1700000000000
+      "createdAtMs": 1700000000600,
+      "updatedAtMs": 1700000000600
     }
   },
   "results": {
-    "<taskId>": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
       "schemaVersion": 1,
       "kind": "plan",
-      "taskId": "github:owner/repo#42:plan:1",
+      "taskId": "github%3Aowner%2Frepo%2342:plan:1",
       "sessionId": "github:owner/repo#42",
       "revision": 1,
       "verdict": "ready",
@@ -190,48 +211,117 @@ The `store.json` file adheres to schemaVersion `1` with the following envelope:
         "risks": [],
         "clarifications": []
       },
-      "createdAtMs": 1700000000000
+      "createdAtMs": 1700000000500
     }
   },
-  "failures": {
-    "<taskId>": {
-      "schemaVersion": 1,
-      "taskId": "github:owner/repo#42:plan:1",
-      "sessionId": "github:owner/repo#42",
-      "revision": 1,
-      "error": "Timeout",
-      "details": null,
-      "retryable": false,
-      "createdAtMs": 1700000000000
-    }
-  },
+  "failures": {},
   "receipts": {
-    "<taskId>": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
       "schemaVersion": 1,
-      "taskId": "github:owner/repo#42:plan:1",
+      "taskId": "github%3Aowner%2Frepo%2342:plan:1",
       "type": "result",
       "claimGeneration": 1,
       "claimOwner": "worker-1",
-      "claimToken": "uuid-token",
-      "acceptedAtMs": 1700000000000,
-      "payload": {}
+      "claimToken": "00000000-0000-0000-0000-000000000001",
+      "acceptedAtMs": 1700000000500,
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "plan",
+        "taskId": "github%3Aowner%2Frepo%2342:plan:1",
+        "sessionId": "github:owner/repo#42",
+        "revision": 1,
+        "verdict": "ready",
+        "content": {
+          "plan": "Step 1",
+          "acceptanceCriteria": ["AC1"],
+          "risks": [],
+          "clarifications": []
+        },
+        "createdAtMs": 1700000000500
+      }
     }
   },
   "revisions": {
-    "plan:github:owner/repo#42": 1
+    "plan:github:owner/repo#42": 1,
+    "review:github:owner/repo#42:owner/repo:42": 1
   },
   "operationReceipts": {
-    "op-1": {
+    "op-plan-1": {
       "schemaVersion": 1,
-      "operationKey": "op-1",
+      "operationKey": "op-plan-1",
       "kind": "create-plan-task",
       "sessionId": "github:owner/repo#42",
-      "entityId": "github:owner/repo#42:plan:1",
+      "entityId": "github%3Aowner%2Frepo%2342:plan:1",
       "createdAtMs": 1700000000000
+    },
+    "op-rev-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-rev-1",
+      "kind": "create-review-task",
+      "sessionId": "github:owner/repo#42",
+      "target": {
+        "repository": "owner/repo",
+        "prNumber": 42,
+        "headSha": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "entityId": "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567",
+      "createdAtMs": 1700000000600
+    },
+    "op-rebind-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-rebind-1",
+      "kind": "rebind-session",
+      "sessionId": "github:owner/repo#42",
+      "bindingGeneration": 2,
+      "expectedGeneration": 1,
+      "adapter": "browser-agent",
+      "externalSessionRef": "chat-002",
+      "resumeUri": null,
+      "resultingSession": {
+        "schemaVersion": 1,
+        "id": "github:owner/repo#42",
+        "root": {
+          "provider": "github",
+          "key": "owner/repo#42"
+        },
+        "status": "active",
+        "binding": {
+          "schemaVersion": 1,
+          "adapter": "browser-agent",
+          "externalSessionRef": "chat-002",
+          "resumeUri": null,
+          "generation": 2
+        },
+        "bindingGeneration": 2,
+        "createdAtMs": 1700000000000,
+        "updatedAtMs": 1700000001000
+      },
+      "entityId": "github:owner/repo#42",
+      "createdAtMs": 1700000001000
     }
   }
 }
 ```
+
+#### Snapshot Integrity & Mutual Exclusion Facts
+
+The store validator enforces fail-closed consistency across all records:
+
+- **Canonical Task IDs**: Task IDs are generated deterministically using `decisionTaskId(...)`, which URL-encodes session IDs and review repository paths (e.g. `github%3Aowner%2Frepo%2342:plan:1`). Handcrafted IDs that deviate from domain encoding fail closed on startup.
+- **Terminal Status Mutual Exclusivity**:
+  - `completed` tasks MUST have a corresponding record in `results` and `receipts`, and MUST NOT have a record in `failures`.
+  - `failed` tasks MUST have a corresponding record in `failures` and `receipts`, and MUST NOT have a record in `results`.
+  - Non-terminal tasks (`pending`, `claimed`, `running`, `cancelled`) MUST NOT have any entries in `results` or `failures`.
+- **Receipt Consistency**: Each `SubmissionReceipt` verifies that:
+  - `receipt.taskId` matches the task ID key.
+  - `receipt.claimGeneration === task.claimGeneration`.
+  - `receipt.claimToken === task.lastClaimToken`.
+  - `receipt.payload` canonically matches stored `results[taskId]` or `failures[taskId]`.
+- **Operation Receipts**:
+  - `create-plan-task`: Stores `entityId` referencing the created plan task (`task.kind === "plan"`), with no target.
+  - `create-review-task`: Stores `entityId` and `target`, validating `task.kind === "review"` and canonical equality between `receipt.target` and `task.target`.
+  - `rebind-session`: Stores `entityId`, `expectedGeneration`, `bindingGeneration`, `adapter`, `externalSessionRef`, `resumeUri`, and `resultingSession` (the historical session state generated by that rebind). When replaying an existing `operationKey`, full parameter identity is enforced; conflicting payloads return HTTP 409 Conflict without modifying session state.
+
 
 ### Web Agent Bridge HTTP API
 

@@ -152,22 +152,41 @@ export class DecisionService {
       operationKey?: string | undefined;
     }
   ): Promise<DecisionSession> {
+    const checkRebindOp = (op: OperationReceipt): DecisionSession => {
+      const genMatches =
+        (op.expectedGeneration === undefined ||
+          params.expectedGeneration === op.expectedGeneration ||
+          params.expectedGeneration === op.bindingGeneration) &&
+        (op.bindingGeneration === undefined ||
+          op.bindingGeneration === params.expectedGeneration ||
+          op.bindingGeneration === params.expectedGeneration + 1);
+
+      if (
+        op.kind !== "rebind-session" ||
+        op.sessionId !== sessionId ||
+        !genMatches ||
+        (op.adapter !== undefined && op.adapter !== params.adapter) ||
+        (op.externalSessionRef !== undefined && op.externalSessionRef !== params.externalSessionRef) ||
+        (op.resumeUri !== undefined && op.resumeUri !== params.resumeUri)
+      ) {
+        throw new DecisionConflictError(
+          `Operation key "${params.operationKey}" was already used for a different operation`
+        );
+      }
+      if (op.resultingSession) {
+        return op.resultingSession;
+      }
+      const existing = this.store.getSession(sessionId);
+      if (existing) return existing;
+      throw new DecisionConflictError(
+        `Operation key "${params.operationKey}" references non-existent session "${sessionId}"`
+      );
+    };
+
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
       if (op) {
-        if (
-          op.kind !== "rebind-session" ||
-          op.sessionId !== sessionId ||
-          (op.bindingGeneration !== undefined &&
-            op.bindingGeneration !== params.expectedGeneration &&
-            op.bindingGeneration !== params.expectedGeneration + 1)
-        ) {
-          throw new DecisionConflictError(
-            `Operation key "${params.operationKey}" was already used for a different operation`
-          );
-        }
-        const existing = this.store.getSession(sessionId);
-        if (existing) return existing;
+        return checkRebindOp(op);
       }
     }
 
@@ -175,19 +194,34 @@ export class DecisionService {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
+          const genMatches =
+            (op.expectedGeneration === undefined ||
+              params.expectedGeneration === op.expectedGeneration ||
+              params.expectedGeneration === op.bindingGeneration) &&
+            (op.bindingGeneration === undefined ||
+              op.bindingGeneration === params.expectedGeneration ||
+              op.bindingGeneration === params.expectedGeneration + 1);
+
           if (
             op.kind !== "rebind-session" ||
             op.sessionId !== sessionId ||
-            (op.bindingGeneration !== undefined &&
-              op.bindingGeneration !== params.expectedGeneration &&
-              op.bindingGeneration !== params.expectedGeneration + 1)
+            !genMatches ||
+            (op.adapter !== undefined && op.adapter !== params.adapter) ||
+            (op.externalSessionRef !== undefined && op.externalSessionRef !== params.externalSessionRef) ||
+            (op.resumeUri !== undefined && op.resumeUri !== params.resumeUri)
           ) {
             throw new DecisionConflictError(
               `Operation key "${params.operationKey}" was already used for a different operation`
             );
           }
+          if (op.resultingSession) {
+            return op.resultingSession;
+          }
           const current = draft.sessions[sessionId];
           if (current) return current;
+          throw new DecisionConflictError(
+            `Operation key "${params.operationKey}" references non-existent session "${sessionId}"`
+          );
         }
       }
 
@@ -222,6 +256,11 @@ export class DecisionService {
           kind: "rebind-session",
           sessionId,
           bindingGeneration: nextGen,
+          expectedGeneration: params.expectedGeneration,
+          adapter: params.adapter,
+          externalSessionRef: params.externalSessionRef,
+          resumeUri: params.resumeUri,
+          resultingSession: updated,
           entityId: sessionId,
           createdAtMs: now,
         };

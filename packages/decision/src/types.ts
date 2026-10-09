@@ -40,6 +40,11 @@ export interface OperationReceipt {
   readonly sessionId: string;
   readonly target?: DecisionReviewTarget | null | undefined;
   readonly bindingGeneration?: number | undefined;
+  readonly adapter?: string | undefined;
+  readonly externalSessionRef?: string | undefined;
+  readonly resumeUri?: string | null | undefined;
+  readonly expectedGeneration?: number | undefined;
+  readonly resultingSession?: DecisionSession | undefined;
   readonly entityId: string;
   readonly createdAtMs: UtcTimestampMs;
 }

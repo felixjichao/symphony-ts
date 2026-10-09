@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { githubDecisionRoot } from "@symphony/domain";
+import { githubDecisionRoot, decisionTaskId } from "@symphony/domain";
 import {
   CorruptedStoreError,
   DecisionConflictError,
@@ -13,6 +13,8 @@ import {
   DurableDecisionStore,
   StoreLock,
 } from "./index";
+import { validateStoreRecord } from "./store";
+import type { DecisionStoreRecord } from "./types";
 
 async function fixture() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-fix-"));
@@ -299,5 +301,294 @@ describe("Review blocker regressions", () => {
       await bridge2.stop();
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects rebind operation payload conflict and replays original resulting session", async () => {
+    const f = await fixture();
+    try {
+      await f.service.putBinding(f.session.id, {
+        adapter: "browser",
+        externalSessionRef: "one",
+        resumeUri: null,
+      });
+      const params = {
+        adapter: "browser",
+        externalSessionRef: "two",
+        resumeUri: null,
+        expectedGeneration: 1,
+        operationKey: "rebind",
+      };
+      const first = await f.service.rebindSession(f.session.id, params);
+      expect(first.bindingGeneration).toBe(2);
+      expect(first.binding?.externalSessionRef).toBe("two");
+
+      // Conflicting payload on same operation key throws 409
+      await expect(
+        f.service.rebindSession(f.session.id, {
+          ...params,
+          adapter: "OTHER",
+          externalSessionRef: "DIFFERENT",
+          resumeUri: "different",
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Subsequent rebind advances session to generation 3
+      await f.service.rebindSession(f.session.id, {
+        ...params,
+        externalSessionRef: "three",
+        expectedGeneration: 2,
+        operationKey: "next-rebind",
+      });
+      expect(f.store.getSession(f.session.id)?.bindingGeneration).toBe(3);
+
+      // Replay of the first operation returns the original historical session (generation 2, 'two')
+      const replay = await f.service.rebindSession(f.session.id, params);
+      expect(replay.bindingGeneration).toBe(2);
+      expect(replay.binding?.externalSessionRef).toBe("two");
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("fails closed on corrupted operation receipt target mismatch on restart", async () => {
+    const f = await fixture();
+    const reopened = new DurableDecisionStore({ storeDir: f.dir });
+    try {
+      const targetA = { repository: "owner/repo", prNumber: 1, headSha: "a".repeat(40) };
+      const targetB = { ...targetA, headSha: "b".repeat(40) };
+      await f.service.createReviewTask(f.session.id, { operationKey: "review", target: targetA });
+      await f.store.close();
+
+      const filename = path.join(f.dir, "store.json");
+      const raw = JSON.parse(await fs.readFile(filename, "utf8"));
+      raw.operationReceipts.review.target = targetB;
+      await fs.writeFile(filename, JSON.stringify(raw));
+
+      // Startup must fail closed with CorruptedStoreError
+      await expect(reopened.open()).rejects.toThrow(CorruptedStoreError);
+    } finally {
+      await reopened.close().catch(() => {});
+      await f.cleanup();
+    }
+  });
+
+  it("fails closed on corrupted receipt claim credentials on restart", async () => {
+    const f = await fixture();
+    const reopened = new DurableDecisionStore({ storeDir: f.dir });
+    try {
+      const task = await f.service.createPlanTask(f.session.id, { operationKey: "failure" });
+      const claim = await f.service.claimTask(task.id, { owner: "worker" });
+      await f.service.submitFailure(task.id, {
+        owner: "worker",
+        token: claim.lease.token,
+        generation: 1,
+        error: "timeout",
+      });
+      await f.store.close();
+
+      const filename = path.join(f.dir, "store.json");
+      const raw = JSON.parse(await fs.readFile(filename, "utf8"));
+      raw.receipts[task.id].claimToken = "WRONG";
+      raw.receipts[task.id].claimGeneration = 999;
+      await fs.writeFile(filename, JSON.stringify(raw));
+
+      // Startup must fail closed with CorruptedStoreError
+      await expect(reopened.open()).rejects.toThrow(CorruptedStoreError);
+    } finally {
+      await reopened.close().catch(() => {});
+      await f.cleanup();
+    }
+  });
+
+  it("prevents dual lock acquisition when both main lock and reclaim mutex are stale", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-r2-lock-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    try {
+      const dead = JSON.stringify({ pid: 999999, hostname: os.hostname(), acquiredAtMs: 1 });
+      await fs.writeFile(main, dead);
+      await fs.writeFile(reclaim, dead);
+
+      const results = await Promise.allSettled([a.acquire(), b.acquire()]);
+      const acquiredCount = (a.isAcquired() ? 1 : 0) + (b.isAcquired() ? 1 : 0);
+      expect(acquiredCount).toBe(1);
+
+      const rejected = results.find((r) => r.status === "rejected");
+      expect(rejected).toBeDefined();
+      if (rejected && rejected.status === "rejected") {
+        expect(rejected.reason).toBeInstanceOf(DecisionStoreLockError);
+      }
+    } finally {
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates the canonical persistence envelope documented in decision-protocol.md", () => {
+    const sessionId = "github:owner/repo#42";
+    const planId = decisionTaskId({ sessionId, kind: "plan", revision: 1 });
+    const reviewTarget = {
+      repository: "owner/repo",
+      prNumber: 42,
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+    };
+    const reviewId = decisionTaskId({
+      sessionId,
+      kind: "review",
+      revision: 1,
+      target: reviewTarget,
+    });
+
+    const record = {
+      schemaVersion: 1,
+      transactionSequence: 2,
+      sessions: {
+        [sessionId]: {
+          schemaVersion: 1,
+          id: sessionId,
+          root: { provider: "github", key: "owner/repo#42" },
+          status: "active",
+          binding: {
+            schemaVersion: 1,
+            adapter: "browser-agent",
+            externalSessionRef: "chat-002",
+            resumeUri: null,
+            generation: 2,
+          },
+          bindingGeneration: 2,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000001000,
+        },
+      },
+      tasks: {
+        [planId]: {
+          schemaVersion: 1,
+          id: planId,
+          sessionId,
+          kind: "plan",
+          revision: 1,
+          status: "completed",
+          lease: null,
+          claimGeneration: 1,
+          lastClaimToken: "00000000-0000-0000-0000-000000000001",
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000500,
+        },
+        [reviewId]: {
+          schemaVersion: 1,
+          id: reviewId,
+          sessionId,
+          kind: "review",
+          revision: 1,
+          status: "pending",
+          target: reviewTarget,
+          lease: null,
+          claimGeneration: 0,
+          lastClaimToken: null,
+          createdAtMs: 1700000000600,
+          updatedAtMs: 1700000000600,
+        },
+      },
+      results: {
+        [planId]: {
+          schemaVersion: 1,
+          kind: "plan",
+          taskId: planId,
+          sessionId,
+          revision: 1,
+          verdict: "ready",
+          content: {
+            plan: "Step 1",
+            acceptanceCriteria: ["AC1"],
+            risks: [],
+            clarifications: [],
+          },
+          createdAtMs: 1700000000500,
+        },
+      },
+      failures: {},
+      receipts: {
+        [planId]: {
+          schemaVersion: 1,
+          taskId: planId,
+          type: "result",
+          claimGeneration: 1,
+          claimOwner: "worker-1",
+          claimToken: "00000000-0000-0000-0000-000000000001",
+          acceptedAtMs: 1700000000500,
+          payload: {
+            schemaVersion: 1,
+            kind: "plan",
+            taskId: planId,
+            sessionId,
+            revision: 1,
+            verdict: "ready",
+            content: {
+              plan: "Step 1",
+              acceptanceCriteria: ["AC1"],
+              risks: [],
+              clarifications: [],
+            },
+            createdAtMs: 1700000000500,
+          },
+        },
+      },
+      revisions: {
+        "plan:github:owner/repo#42": 1,
+        "review:github:owner/repo#42:owner/repo:42": 1,
+      },
+      operationReceipts: {
+        "op-plan-1": {
+          schemaVersion: 1,
+          operationKey: "op-plan-1",
+          kind: "create-plan-task",
+          sessionId,
+          entityId: planId,
+          createdAtMs: 1700000000000,
+        },
+        "op-rev-1": {
+          schemaVersion: 1,
+          operationKey: "op-rev-1",
+          kind: "create-review-task",
+          sessionId,
+          target: reviewTarget,
+          entityId: reviewId,
+          createdAtMs: 1700000000600,
+        },
+        "op-rebind-1": {
+          schemaVersion: 1,
+          operationKey: "op-rebind-1",
+          kind: "rebind-session",
+          sessionId,
+          bindingGeneration: 2,
+          expectedGeneration: 1,
+          adapter: "browser-agent",
+          externalSessionRef: "chat-002",
+          resumeUri: null,
+          resultingSession: {
+            schemaVersion: 1,
+            id: sessionId,
+            root: { provider: "github", key: "owner/repo#42" },
+            status: "active",
+            binding: {
+              schemaVersion: 1,
+              adapter: "browser-agent",
+              externalSessionRef: "chat-002",
+              resumeUri: null,
+              generation: 2,
+            },
+            bindingGeneration: 2,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000001000,
+          },
+          entityId: sessionId,
+          createdAtMs: 1700000001000,
+        },
+      },
+    };
+    expect(() => validateStoreRecord(record as unknown as DecisionStoreRecord)).not.toThrow();
   });
 });
