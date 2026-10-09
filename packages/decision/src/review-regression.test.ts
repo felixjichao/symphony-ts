@@ -701,4 +701,71 @@ describe("Review blocker regressions", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects dual owners when a validated stale-lock recovery is delayed past live acquisition", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-r4-lock-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    const originalLink = fs.link.bind(fs);
+
+    let candidatesReady = 0;
+    let bothValidated!: () => void;
+    let firstAcquired!: () => void;
+    const validationBarrier = new Promise<void>((r) => {
+      bothValidated = r;
+    });
+    const firstAcquiredBarrier = new Promise<void>((r) => {
+      firstAcquired = r;
+    });
+
+    try {
+      const dead = JSON.stringify({ pid: 999999, hostname: os.hostname(), acquiredAtMs: 1 });
+      await fs.writeFile(main, dead);
+      await fs.writeFile(reclaim, dead);
+
+      vi.spyOn(fs, "link").mockImplementation(async (...args) => {
+        if (args[0] === reclaim && String(args[1]).includes(".retired.")) {
+          const order = ++candidatesReady;
+          if (order === 2) {
+            bothValidated();
+          }
+          await validationBarrier; // Both instances observed the dead PID before retiring
+          if (order === 2) {
+            await firstAcquiredBarrier; // Second instance is delayed until the first fully acquires
+          }
+        }
+        return originalLink(...args);
+      });
+
+      const results = await Promise.allSettled([
+        a.acquire().then(() => firstAcquired()),
+        b.acquire().then(() => firstAcquired()),
+      ]);
+
+      const acquiredList = [a, b].filter((l) => l.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+      expect(a.isAcquired()).toBe(true);
+      expect(b.isAcquired()).toBe(false);
+
+      expect(results[0].status).toBe("fulfilled");
+      expect(results[1].status).toBe("rejected");
+      if (results[1].status === "rejected") {
+        expect(results[1].reason).toBeInstanceOf(DecisionStoreLockError);
+      }
+
+      // Verify main lock on disk is intact and owned by A
+      const mainContent = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(mainContent.pid).toBe(process.pid);
+      expect(mainContent.hostname).toBe(os.hostname());
+    } finally {
+      vi.restoreAllMocks();
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+
