@@ -18,7 +18,7 @@ import {
   DecisionAdapterError,
   parseDecisionSessionRootFromId,
   validateDecisionContextForTask,
-} from "@symphony/domain";
+} from "@symphony/domain/decision";
 import type {
   DecisionTaskFailure,
   SubmissionReceipt,

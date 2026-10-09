@@ -14,6 +14,7 @@
     "noEmit": true,
     "paths": {
       "@symphony/domain": ["./packages/domain/src/index.ts"],
+      "@symphony/domain/decision": ["./packages/domain/src/decision-entry.ts"],
       "@symphony/config": ["./packages/config/src/index.ts"],
       "@symphony/tracker": ["./packages/tracker/src/index.ts"],
       "@symphony/workspace": ["./packages/workspace/src/index.ts"],

@@ -9,7 +9,7 @@ import {
   parseDecisionResult,
   validateDecisionResultForTask,
   DecisionAdapterError,
-} from "@symphony/domain";
+} from "@symphony/domain/decision";
 
 /**
  * Extracts the raw JSON payload from the LAST ```symphony-result code block in `rawText`.

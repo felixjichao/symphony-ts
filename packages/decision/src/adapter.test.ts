@@ -1525,17 +1525,74 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
     }
   });
 
-  it("verifies browser safety of @symphony/decision/adapter entrypoint", async () => {
-    // Verify that the adapter module file contains no imports of node built-ins
+  it("verifies browser safety and real browser bundling of @symphony/decision/adapter", async () => {
+    // 1. Verify that the adapter module source files contain no direct imports of node built-ins
     const adapterIndexFile = path.resolve(__dirname, "adapter/index.ts");
     const resultExtractorFile = path.resolve(__dirname, "adapter/result-extractor.ts");
     const fakeAdapterFile = path.resolve(__dirname, "adapter/fake-adapter.ts");
     const coordinatorFile = path.resolve(__dirname, "adapter/coordinator.ts");
+    const domainDecisionFile = path.resolve(__dirname, "../../domain/src/decision-entry.ts");
 
-    for (const file of [adapterIndexFile, resultExtractorFile, fakeAdapterFile, coordinatorFile]) {
+    for (const file of [adapterIndexFile, resultExtractorFile, fakeAdapterFile, coordinatorFile, domainDecisionFile]) {
       const content = await fs.readFile(file, "utf8");
       expect(content).not.toMatch(/from\s+["']node:/);
       expect(content).not.toMatch(/require\(["']node:/);
     }
+
+    // 2. Real esbuild browser bundle regression (verifies transitive dependency graph has zero Node built-ins)
+    const repoRoot = path.resolve(__dirname, "../../..");
+    const esbuildPath = path.resolve(repoRoot, "node_modules/vite/node_modules/esbuild/lib/main.js");
+    const { default: esbuild } = await import(esbuildPath);
+
+    // Scenario A: minimal result-extractor import
+    const bundleExtractor = await esbuild.build({
+      stdin: {
+        contents: 'import { extractSymphonyResultPayload } from "@symphony/decision/adapter"; console.log(extractSymphonyResultPayload);',
+        resolveDir: repoRoot,
+        loader: "ts",
+      },
+      bundle: true,
+      platform: "browser",
+      format: "esm",
+      write: false,
+    });
+    expect(bundleExtractor.errors).toHaveLength(0);
+    const textExtractor = bundleExtractor.outputFiles[0]?.text ?? "";
+    expect(textExtractor).not.toContain("node:crypto");
+    expect(textExtractor).not.toContain("node:");
+
+    // Scenario B: full adapter subpath export
+    const bundleFull = await esbuild.build({
+      stdin: {
+        contents: 'import * as adapter from "@symphony/decision/adapter"; console.log(adapter);',
+        resolveDir: repoRoot,
+        loader: "ts",
+      },
+      bundle: true,
+      platform: "browser",
+      format: "esm",
+      write: false,
+    });
+    expect(bundleFull.errors).toHaveLength(0);
+    const textFull = bundleFull.outputFiles[0]?.text ?? "";
+    expect(textFull).not.toContain("node:crypto");
+    expect(textFull).not.toContain("node:");
+
+    // Scenario C: pure Decision domain contracts subpath
+    const bundleDomain = await esbuild.build({
+      stdin: {
+        contents: 'import * as decisionDomain from "@symphony/domain/decision"; console.log(decisionDomain);',
+        resolveDir: repoRoot,
+        loader: "ts",
+      },
+      bundle: true,
+      platform: "browser",
+      format: "esm",
+      write: false,
+    });
+    expect(bundleDomain.errors).toHaveLength(0);
+    const textDomain = bundleDomain.outputFiles[0]?.text ?? "";
+    expect(textDomain).not.toContain("node:crypto");
+    expect(textDomain).not.toContain("node:");
   });
 });

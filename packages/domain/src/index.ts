@@ -99,55 +99,5 @@ export {
 } from "./delivery";
 
 // Decision Plane extension: pure protocol contracts, independent of Symphony §7.
-export type {
-  DecisionSessionStatus, DecisionTaskStatus, DecisionWorkItemRef, ExecutorBinding,
-  DecisionSession, DecisionReviewTarget, DecisionLease, DecisionPlanTask,
-  DecisionReviewTask, DecisionTask, DecisionPlanResult, DecisionReviewFinding,
-  DecisionReviewResult, DecisionResult,
-} from "./decision";
-export {
-  DECISION_SCHEMA_VERSION, decisionSessionId, githubDecisionRoot, decisionTaskId,
-  parseDecisionReviewTarget, parseExecutorBinding, parseDecisionSession,
-  parseDecisionLease, parseDecisionTask, parseDecisionResult,
-  validateDecisionResultForTask, claimDecisionTask, startDecisionTask,
-  heartbeatDecisionTask, completeDecisionTask, failDecisionTask,
-  releaseExpiredDecisionTask, cancelDecisionTask, supersedeDecisionTask,
-  isDecisionReviewApproved, rebindDecisionSession, breakDecisionBinding,
-  completeDecisionSession, reopenDecisionSession, parseDecisionSessionRootFromId,
-} from "./decision";
-
-// Decision Plane executor adapter & context strategies (NEST-101 / #96)
-export type {
-  DecisionContextStrategyKind,
-  DecisionConnectorContext,
-  DecisionMaterializedIssue,
-  DecisionMaterializedPlan,
-  DecisionMaterializedPullRequest,
-  DecisionMaterializedDiff,
-  DecisionMaterializedCiCheck,
-  DecisionMaterializedCi,
-  DecisionMaterializedContext,
-  DecisionContextBundle,
-  DecisionExecutionRequest,
-} from "./decision-context";
-export {
-  parseDecisionContextBundle,
-  validateDecisionContextForTask,
-  parseDecisionExecutionRequest,
-} from "./decision-context";
-
-export type {
-  DecisionAdapterErrorCode,
-  DecisionAdapterSuggestedAction,
-  DecisionAdapterFailureDiagnostic,
-  DecisionBindingInspectionResult,
-  DecisionSessionCreationResult,
-  DecisionSessionResumeResult,
-  DecisionExecutionOptions,
-  DecisionExecutionOutcome,
-  DecisionExecutorAdapter,
-} from "./decision-executor";
-export {
-  DecisionAdapterError,
-} from "./decision-executor";
+export * from "./decision-entry";
 

@@ -20,7 +20,7 @@ import {
   type DecisionReviewResult,
   DecisionAdapterError,
   validateDecisionContextForTask,
-} from "@symphony/domain";
+} from "@symphony/domain/decision";
 import {
   extractDecisionResultFromOutput,
   normalizeDecisionResult,
