@@ -115,3 +115,39 @@ export {
   isDecisionReviewApproved, rebindDecisionSession, breakDecisionBinding,
   completeDecisionSession, reopenDecisionSession,
 } from "./decision";
+
+// Decision Plane executor adapter & context strategies (NEST-101 / #96)
+export type {
+  DecisionContextStrategyKind,
+  DecisionConnectorContext,
+  DecisionMaterializedIssue,
+  DecisionMaterializedPlan,
+  DecisionMaterializedPullRequest,
+  DecisionMaterializedDiff,
+  DecisionMaterializedCiCheck,
+  DecisionMaterializedCi,
+  DecisionMaterializedContext,
+  DecisionContextBundle,
+  DecisionExecutionRequest,
+} from "./decision-context";
+export {
+  parseDecisionContextBundle,
+  validateDecisionContextForTask,
+  parseDecisionExecutionRequest,
+} from "./decision-context";
+
+export type {
+  DecisionAdapterErrorCode,
+  DecisionAdapterSuggestedAction,
+  DecisionAdapterFailureDiagnostic,
+  DecisionBindingInspectionResult,
+  DecisionSessionCreationResult,
+  DecisionSessionResumeResult,
+  DecisionExecutionOptions,
+  DecisionExecutionOutcome,
+  DecisionExecutorAdapter,
+} from "./decision-executor";
+export {
+  DecisionAdapterError,
+} from "./decision-executor";
+

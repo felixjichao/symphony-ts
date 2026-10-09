@@ -20,7 +20,8 @@
       "@symphony/orchestrator": ["./packages/orchestrator/src/index.ts"],
       "@symphony/agent": ["./packages/agent/src/index.ts"],
       "@symphony/observability": ["./packages/observability/src/index.ts"],
-      "@symphony/decision": ["./packages/decision/src/index.ts"]
+      "@symphony/decision": ["./packages/decision/src/index.ts"],
+      "@symphony/decision/adapter": ["./packages/decision/src/adapter/index.ts"]
     }
   }
 }

@@ -351,17 +351,79 @@ Security boundaries:
 - Restrictive Origin enforcement: any request with an `Origin` header not explicitly listed in `allowedOrigins` is rejected with `403 Forbidden` before routing or execution (preventing unauthorized simple cross-origin requests and preflight requests).
 - 1MB body limit with graceful socket draining to avoid connection reset.
 
+## Executor adapter boundary and context strategies
+
+The `@symphony/decision/adapter` entrypoint and `@symphony/domain` export the provider-neutral adapter layer for external model engines (such as Web ChatGPT, browser userscripts, or direct LLM APIs). Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md).
+
+### DecisionExecutorAdapter interface
+
+```ts
+interface DecisionExecutorAdapter {
+  readonly adapterName: string;
+  readonly supportedStrategies: readonly DecisionContextStrategy[];
+  readonly supportedTaskKinds: readonly DecisionTaskKind[];
+
+  inspectBinding(session: DecisionSession): Promise<DecisionBindingInspectionResult>;
+  createSession(root: DecisionSessionRoot, options?: DecisionExecutionOptions): Promise<DecisionSessionCreationResult>;
+  resumeSession(session: DecisionSession, options?: DecisionExecutionOptions): Promise<DecisionSessionResumeResult>;
+  executeTask(request: DecisionExecutionRequest, options?: DecisionExecutionOptions): Promise<DecisionExecutionOutcome>;
+  normalizeResult(task: DecisionTask, rawOutput: string): Promise<DecisionResult>;
+}
+```
+
+### Context strategies
+
+Execution requests decouple task persistence from prompt assembly via `DecisionExecutionRequest`:
+- **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (provider, key, url), `repository`, optional `prNumber`, and optional `headSha`. Ideal for web-based agents that navigate GitHub directly via browser automation.
+- **`materialized` strategy** (`DecisionMaterializedContext`): Explicit pre-bundled artifacts containing `issue` (title, description, author), optional `plan`, optional `pr` (number, title, branch, baseSha, headSha), optional `diff`, optional `ciStatus`, optional `instructions`, optional `priorReviews`, and optional `findings`. Ideal for API or offline models without autonomous web navigation.
+
+### Machine-readable result extraction
+
+Models return structured results enclosed within fenced code blocks:
+````markdown
+```symphony-result
+{
+  "schemaVersion": 1,
+  "taskId": "<task-id>",
+  "sessionId": "<session-id>",
+  "kind": "plan",
+  "revision": 1,
+  "verdict": "ready",
+  "content": {
+    "plan": "...",
+    "acceptanceCriteria": ["..."],
+    "risks": [],
+    "clarifications": []
+  },
+  "createdAtMs": 1728480000000
+}
+```
+````
+
+Extraction rules:
+1. **Last-block rule**: If multiple `symphony-result` blocks exist in the output (e.g. conversational self-correction), only the LAST block is extracted.
+2. **Fail-closed semantics**: If the last block is missing, unclosed, contains malformed JSON, or fails schema validation, extraction throws `DecisionAdapterError`. It NEVER falls back to earlier valid blocks.
+3. **Identity verification**: Result `taskId`, `sessionId`, `revision`, and review `target` must match the claimed task; mismatches throw `task_mismatch`, `revision_mismatch`, or `target_mismatch`.
+
+### Error classification
+
+`DecisionAdapterErrorCode`:
+- `malformed_output`: Missing, invalid, or unclosed `symphony-result` JSON.
+- `task_mismatch`: Result taskId or sessionId does not match claimed task.
+- `revision_mismatch`: Result revision does not match task revision.
+- `target_mismatch`: Review result target does not match task review target.
+- `binding_broken`: Executor session expired, disconnected, or unrecoverable.
+- `execution_failed`: Unhandled runtime execution exception.
+- `human_required`: Interactive barrier encountered (CAPTCHA, 2FA, login, rate limit).
+- `unsupported_strategy`: Requested context strategy not supported by adapter.
+- `unsupported_task_kind`: Task kind not supported by adapter.
+- `cancelled`: Execution aborted by caller.
+
 ## Validation evidence
 
-`packages/domain/src/decision.test.ts` imports only the public package entry point.
-It covers the complete task transition table, session transitions, all six verdicts,
-identity mismatch, same-root multiple PRs, exact SHA approval and A → B → A,
-expiry and claim fencing, binding generation/recovery, strict nested validation
-and JSON round trips.
+`packages/domain/src/decision.test.ts` and `packages/domain/src/decision-context.test.ts` cover domain validation, context parsing, task/session transitions, all six verdicts, and identity guards.
 
-`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence,
-decision service lease coordination and automatic supersession, and the HTTP bridge
-(DNS rebinding defense, CORS restrictions, bearer authentication, body limits, and REST routes).
+`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence, lease coordination, HTTP bridge, adapter result extraction, last-block fail-closed semantics, and `FakeDecisionExecutorAdapter` execution with CAS rebind.
 
 CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `apps/cli/src/bin.test.ts`.
 

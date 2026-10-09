@@ -41,6 +41,12 @@ await bridge.stop();
 - **Service Layer (`DecisionService`)**: Implements session lifecycle, binding generation and compare-and-swap (CAS) rebind, task revision sequencing, deterministic `next` candidate selection, atomic lease acquisition, live heartbeat renewal, and key-order independent result/failure submission with idempotency receipts.
 - **HTTP Bridge (`DecisionBridge`)**: Loopback-only (`127.0.0.1`) HTTP service exposing REST endpoints for executors and control operators. Enforces host header validation (DNS rebinding protection), bearer token authentication, request body size limits (1MB), and standard CORS policies.
 - **HTTP Client (`DecisionBridgeClient`)**: Typed client for interacting with the Decision Bridge from tests, CLI commands, or external adapters.
+- **Executor Adapter Layer (`@symphony/decision/adapter`)**: Zero-Node-dependency, browser-safe primitives for connecting external execution engines (Web ChatGPT, browser userscripts, API models):
+  - `DecisionExecutorAdapter`: Contract defining `inspectBinding`, `createSession`, `resumeSession`, `executeTask`, and `normalizeResult`.
+  - Context Strategies: `connector` (minimal web pointers: workItem, repo, PR, SHA) and `materialized` (explicit bundled markdown artifacts: issue, plan, PR, diff, CI, instructions).
+  - Result Extractor (`extractDecisionResultFromOutput`): Extracts machine-readable ````symphony-result` JSON payloads with fail-closed last-block parsing (never falls back to earlier blocks).
+  - Fake Adapter (`FakeDecisionExecutorAdapter`): Deterministic test harness supporting simulated execution, configurable results, and error injection.
+  - Adapter Coordinator (`executeTaskWithAdapter`): Ties adapter execution to `DecisionService` or `DecisionBridgeClient` with automatic CAS rebind and structured failure submission.
 
 ### HTTP Endpoints
 
@@ -68,4 +74,4 @@ await bridge.stop();
 - Restricted strictly to loopback (`127.0.0.1`). Not exposed to the local network (LAN) or public interfaces.
 - Single writer per store directory: concurrent instances on the same directory fail startup with `DecisionStoreLockError`.
 - Whole JSON snapshot format: designed for local single-node workflows without external database dependencies. High-throughput multi-writer scenarios require migrating to a relational database (see [Agent Note](../../notes/accepted/architecture/2026-10-09-decision-store-bridge.md)).
-- Does not implement DOM automation, browser scripts, or orchestrator state machine wiring.
+- Does not implement DOM automation, browser scripts, or orchestrator state machine wiring (see [Executor Adapter Note](../../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md)).

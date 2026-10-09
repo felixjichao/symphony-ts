@@ -87,10 +87,10 @@ export interface DecisionReviewResult extends DecisionResultBase {
 export type DecisionResult = DecisionPlanResult | DecisionReviewResult;
 
 // Small strict v1 validators: unknown fields are rejected at every object boundary.
-function requireValue(condition: unknown, message: string): asserts condition {
+export function requireValue(condition: unknown, message: string): asserts condition {
   if (!condition) throw new TypeError(`Invalid decision record: ${message}`);
 }
-function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
+export function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
   requireValue(typeof value === "object" && value !== null && !Array.isArray(value), "expected object");
   const object = value as Record<string, unknown>;
   requireValue(Object.getPrototypeOf(object) === Object.prototype || Object.getPrototypeOf(object) === null, "expected plain object");
@@ -100,22 +100,22 @@ function record(value: unknown, keys: readonly string[]): Record<string, unknown
   }), "missing or unknown field");
   return object;
 }
-function string(value: unknown): asserts value is string {
+export function string(value: unknown): asserts value is string {
   requireValue(typeof value === "string" && value.trim().length > 0, "expected nonempty string");
 }
-function integer(value: unknown, minimum = 0): asserts value is number {
+export function integer(value: unknown, minimum = 0): asserts value is number {
   requireValue(typeof value === "number" && Number.isSafeInteger(value) && value >= minimum, "expected safe integer");
 }
-function timestamp(value: unknown): asserts value is number {
+export function timestamp(value: unknown): asserts value is number {
   integer(value);
   requireValue(value <= 8_640_000_000_000_000, "timestamp outside UTC range");
 }
-function oneOf(value: unknown, choices: readonly string[]): void {
+export function oneOf(value: unknown, choices: readonly string[]): void {
   requireValue(typeof value === "string" && choices.includes(value), "invalid enum");
 }
-function version(value: unknown): void { requireValue(value === 1, "unsupported schemaVersion"); }
+export function version(value: unknown): void { requireValue(value === 1, "unsupported schemaVersion"); }
 /** Dense ordinary JSON arrays only; never trust a caller-supplied iterator or toJSON. */
-function array(value: unknown): readonly unknown[] {
+export function array(value: unknown): readonly unknown[] {
   requireValue(Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype, "expected plain array");
   requireValue(Reflect.ownKeys(value).length === value.length + 1, "unknown array field or sparse array");
   for (let index = 0; index < value.length; index++) {
@@ -124,16 +124,16 @@ function array(value: unknown): readonly unknown[] {
   }
   return value;
 }
-function strings(value: unknown): void {
+export function strings(value: unknown): void {
   const items = array(value);
   for (let index = 0; index < items.length; index++) string(items[index]);
 }
-function repository(value: unknown): asserts value is string {
+export function repository(value: unknown): asserts value is string {
   string(value);
   requireValue(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\/[a-z0-9_.-]+$/.test(value), "expected canonical owner/repository");
   requireValue(!value.endsWith("/.") && !value.endsWith("/.."), "invalid repository");
 }
-function validateRoot(value: unknown): DecisionWorkItemRef {
+export function validateRoot(value: unknown): DecisionWorkItemRef {
   const root = record(value, ["provider", "key"]);
   string(root["provider"]); string(root["key"]);
   requireValue(/^[a-z][a-z0-9-]*$/.test(root["provider"]), "invalid work-item provider");

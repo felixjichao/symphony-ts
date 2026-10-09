@@ -55,3 +55,21 @@ export {
 export { DecisionService } from "./service";
 export { DecisionBridge } from "./bridge";
 export { DecisionBridgeClient, type DecisionBridgeClientOptions } from "./client";
+
+// Executor adapter abstraction and context strategies (NEST-101 / #96)
+export {
+  extractSymphonyResultPayload,
+  normalizeDecisionResult,
+  extractDecisionResultFromOutput,
+  formatSymphonyResultPayload,
+  FakeDecisionExecutorAdapter,
+  type FakeAdapterHandle,
+  type FakeAdapterOptions,
+  executeTaskWithAdapter,
+  type DecisionTaskController,
+  type ExecuteTaskWithAdapterOptions,
+  type TaskExecutionSuccessOutcome,
+  type TaskExecutionFailureOutcome,
+  type TaskExecutionOutcome,
+} from "./adapter";
+

@@ -105,4 +105,4 @@ readiness 用真实 request/session/transcript/prompt/after_run marker，无固�
 
 ## Decision protocol extension
 
-`npm test -w @symphony/domain` covers v1 parsing, task/session transitions, lease fencing, binding generation and exact HEAD authorization in `src/decision.test.ts`. Protocol and caller/store boundaries: [decision-protocol.md](decision-protocol.md); extension evidence: [conformance.md](conformance.md#decision-plane-extension-evidence-nest-99--github-94). Final validation remains `npm run gate`.
+`npm test -w @symphony/domain` covers v1 parsing, task/session transitions, lease fencing, binding generation, exact HEAD authorization in `src/decision.test.ts`, and context bundle validation in `src/decision-context.test.ts`. `npm test -w @symphony/decision` covers store persistence, process locking, lease coordination, HTTP bridge, result extraction, and executor adapters in `src/adapter.test.ts`. Protocol and caller/store boundaries: [decision-protocol.md](decision-protocol.md); extension evidence: [conformance.md](conformance.md). Final validation remains `npm run gate`.
