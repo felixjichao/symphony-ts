@@ -5,6 +5,7 @@ import { runDeliveryCli } from "./delivery-cli";
 import { parseCliArgs, resolveWorkflowPath } from "./args";
 import { runDeliverySkillCli } from "./delivery-skill-cli";
 import { runGithubDogfoodCli } from "./dogfood";
+import { runDecisionBridgeCli } from "./decision-bridge-cli";
 import { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
 
 export interface LifecycleProcess {
@@ -33,6 +34,14 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
   let host: Pick<SymphonyHost, "start" | "stop" | "failure">;
   try {
     const args = parseCliArgs(argv);
+    if (args.subcommand === "decision-bridge") {
+      return await runDecisionBridgeCli(args.subcommandArgs ?? [], {
+        stdout: shell.stdout,
+        stderr: shell.stderr,
+        on: typeof shell.on === "function" ? shell.on.bind(shell) : undefined,
+        removeListener: typeof shell.removeListener === "function" ? shell.removeListener.bind(shell) : undefined,
+      });
+    }
     if (args.subcommand === "repo-bootstrap") {
       return await runRepositoryBootstrapCli(args.subcommandArgs ?? [], {
         stdout: shell.stdout,
@@ -64,13 +73,15 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "       symphony workspace bootstrap --repo <url> [options]\n" +
         "       symphony delivery-skill [run|halt] [options]\n" +
         "       symphony pr <action> [options]\n" +
-        "       symphony dogfood github --target <owner/repo> [options]\n\n" +
+        "       symphony dogfood github --target <owner/repo> [options]\n" +
+        "       symphony decision bridge --store <dir> [options]\n\n" +
         "Commands:\n" +
         "  repo-bootstrap       Bootstrap git repository in workspace and create issue branch\n" +
         "  workspace bootstrap  Alias for repo-bootstrap\n" +
         "  delivery-skill       Execute delivery + land workflow skill or halt dispatch\n" +
         "  pr                   GitHub delivery primitives (ensure, read, checks, land, verify)\n" +
-        "  dogfood              Opt-in real GitHub + real Codex end-to-end dogfood harness\n\n" +
+        "  dogfood              Opt-in real GitHub + real Codex end-to-end dogfood harness\n" +
+        "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n\n" +
         "Options:\n" +
         "  -h, --help           Show this help message\n" +
         "  -v, --version        Show version information\n"

@@ -14,7 +14,7 @@ npm install   # 日常：增删依赖后更新 lockfile（lockfile 变化要随�
 
 ## Monorepo 布局
 
-npm workspaces，两个通配：`packages/*` 与 `apps/*`，共 8 个 workspace（owner 映射详见 [architecture.md](architecture.md)）：
+npm workspaces，两个通配：`packages/*` 与 `apps/*`，共 9 个 workspace（owner 映射详见 [architecture.md](architecture.md)）：
 
 ```
 packages/domain         @symphony/domain         领域类型唯一权威（SPEC §4）
@@ -24,6 +24,7 @@ packages/workspace      @symphony/workspace      per-issue 隔离目录 + hooks�
 packages/agent          @symphony/agent          coding agent runner + prompt 组装（§10、§12）
 packages/orchestrator   @symphony/orchestrator   状态机 / 调度 / retry（§7、§8、§14）
 packages/observability  @symphony/observability  结构化日志 + 只读状态出口（§13）
+packages/decision       @symphony/decision       Decision 任务/会话存储与 Web Agent Bridge（扩展）
 apps/cli                @symphony/cli            CLI / 进程生命周期（§17、§18）
 ```
 

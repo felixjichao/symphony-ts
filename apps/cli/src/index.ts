@@ -21,4 +21,9 @@ export {
   type DogfoodArgs,
   type DogfoodFacts,
   type DogfoodScenario,
-} from "./dogfood";
+} from "./dogfood";export {
+  runDecisionBridgeCli,
+  parseDecisionBridgeArgs,
+  type DecisionBridgeCliIo,
+  type DecisionBridgeParsedArgs,
+} from "./decision-bridge-cli";

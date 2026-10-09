@@ -124,12 +124,53 @@ exists. Breaking changes (including adding fields to this strict format) require
 new schema version and explicit migration before readers accept it. Unknown versions
 are rejected. Migration execution and durable recovery belong to subsequent work.
 
+## Durable Store and Web Agent Bridge (NEST-100 / #95)
+
+The `@symphony/decision` package implements durable storage, task coordination service, and localhost HTTP bridge for Web Agents and local controllers. Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-store-bridge.md).
+
+### Storage and Process Concurrency
+
+- **Snapshot file**: All sessions, tasks, and results are persisted in a versioned JSON snapshot file (`snapshot.json`).
+- **Atomic persistence**: Writes write to `snapshot.json.tmp`, flush to disk, and atomically rename over `snapshot.json`, followed by directory fsync.
+- **Fail closed on corruption**: Startup verifies data integrity; malformed or unparseable files fail closed without silent reset.
+- **Single-writer process lock**: An advisory `store.lock` records owner PID and acquisition timestamp. Stale locks from terminated processes are safely recovered.
+
+### Web Agent Bridge HTTP API
+
+The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Agents (Tampermonkey userscripts, browser extensions, or local tools):
+
+- `GET /v1/tasks/next?kinds=plan,review` — Fetch the next pending executable task.
+- `POST /v1/tasks/:id/claim` — Atomically claim lease with `{ owner, ttlMs }`.
+- `POST /v1/tasks/:id/start` — Mark task running with `{ claimToken }`.
+- `POST /v1/tasks/:id/heartbeat` — Extend lease expiration with `{ claimToken, ttlMs }`.
+- `POST /v1/tasks/:id/result` — Submit idempotent decision result with `{ claimToken, result }`.
+- `POST /v1/tasks/:id/fail` — Submit task failure with `{ claimToken, error }`.
+- `GET /v1/sessions/:id` — Retrieve session status and binding.
+- `PUT /v1/sessions/:id/binding` — Bind or update executor binding.
+- `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check.
+- `POST /v1/tasks` — Create a new task (auto-supersedes earlier revisions of the same kind).
+- `POST /v1/sessions` — Create or retrieve an issue session.
+
+Security boundaries:
+- Loopback-only binding (`127.0.0.1` by default).
+- DNS rebinding prevention via strict `Host` header checks (`127.0.0.1`, `localhost`, bound host:port).
+- Optional constant-time Bearer token authentication.
+- Restricted CORS: requests from non-loopback origins are rejected.
+- 1MB body limit with graceful socket draining to avoid connection reset.
+
 ## Validation evidence
 
 `packages/domain/src/decision.test.ts` imports only the public package entry point.
 It covers the complete task transition table, session transitions, all six verdicts,
 identity mismatch, same-root multiple PRs, exact SHA approval and A → B → A,
 expiry and claim fencing, binding generation/recovery, strict nested validation
-and JSON round trips. Run `npm test -w @symphony/domain`, `npm run typecheck`, then
-`npm run gate`. These tests prove protocol rules; no external executor or GitHub
-write integration is claimed.
+and JSON round trips.
+
+`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence,
+decision service lease coordination and automatic supersession, and the HTTP bridge
+(DNS rebinding defense, CORS restrictions, bearer authentication, body limits, and REST routes).
+
+CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `apps/cli/src/bin.test.ts`.
+
+Run `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`,
+`npm run typecheck`, then `npm run gate`.

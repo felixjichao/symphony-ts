@@ -37,7 +37,8 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
-| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability |
+| `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务 | domain |
+| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
 
 依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前两条例外：`packages/tracker` 与 `packages/workspace` 各以 devDependency 引用 `@symphony/config`（各自仅 `src/config-integration.test.ts` 使用），用来证明扩展点或 typed 契约两侧真的对得上——`@symphony/config` 侧不引用它们，运行期方向仍是 `tracker → domain`、`workspace → domain`。两条硬约束：
 
@@ -68,4 +69,6 @@ host stop 同步关闭 EffectiveRuntime 提交与 watcher，再调用既有 loop
 
 ## Decision Plane protocol extension
 
-`@symphony/domain` owns the provider-neutral [Decision protocol](decision-protocol.md): Issue-root session identity, versioned Plan/Review facts, exact HEAD review approval, lease fencing and executor binding generations. Pure validators/transitions have no I/O or reverse dependencies. Conversation continuity is advisory; it never supplies authoritative workflow state. This independent extension preserves Symphony §7 orchestration and current delivery behavior. Future durable stores must enforce atomic claims/result commits and session completion; adapters, bridge and delivery integration remain separate work. See [Decision Note](../notes/accepted/architecture/2026-10-08-decision-contracts.md).
+`@symphony/domain` owns the provider-neutral [Decision protocol](decision-protocol.md): Issue-root session identity, versioned Plan/Review facts, exact HEAD review approval, lease fencing and executor binding generations. Pure validators/transitions have no I/O or reverse dependencies. Conversation continuity is advisory; it never supplies authoritative workflow state. This independent extension preserves Symphony §7 orchestration and current delivery behavior.
+
+`@symphony/decision` provides durable task/session snapshot persistence, single-writer process lock (`store.lock`), lease coordination, and the localhost Web Agent Bridge HTTP server. `apps/cli` exposes this via `symphony decision bridge`. See [Decision Note](../notes/accepted/architecture/2026-10-08-decision-contracts.md) and [Decision Store & Bridge Note](../notes/accepted/architecture/2026-10-09-decision-store-bridge.md).
