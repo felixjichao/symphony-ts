@@ -147,45 +147,30 @@ export class StoreLock {
     newMeta: LockMetadata
   ): Promise<boolean> {
     const tombstone = `${targetPath}.retired.${expected.pid}.${expected.acquiredAtMs}.${expected.nonce || "0"}`;
-    const takeoverLock = `${tombstone}.takeover`;
-    const takeoverNonce = crypto.randomUUID();
-    let hasTakeover = false;
+    const reclaimAuthDir = `${tombstone}.reclaim-auth`;
+    const authNonce = crypto.randomUUID();
 
+    // 1. Link targetPath to tombstone if not already linked
     try {
       await fs.link(targetPath, tombstone);
-      hasTakeover = await this.acquireTakeoverLock(takeoverLock, takeoverNonce);
     } catch (err: unknown) {
       const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === "EEXIST") {
-        // Tombstone already exists. Check if this is a previous reclaimer crash between link and unlink.
-        const stLock = await fs.stat(targetPath).catch(() => null);
-        const stTomb = await fs.stat(tombstone).catch(() => null);
-        if (stLock && stTomb && stLock.ino === stTomb.ino) {
-          const tombContent = await fs.readFile(tombstone, "utf8").catch(() => null);
-          if (tombContent) {
-            try {
-              const tombMeta = JSON.parse(tombContent) as LockMetadata;
-              if (
-                tombMeta.pid === expected.pid &&
-                tombMeta.hostname === expected.hostname &&
-                tombMeta.acquiredAtMs === expected.acquiredAtMs
-              ) {
-                // Acquire exclusive takeover authority before resuming retirement
-                hasTakeover = await this.acquireTakeoverLock(takeoverLock, takeoverNonce);
-              }
-            } catch {
-              // Ignore
-            }
-          }
-        }
+      if (nodeErr.code !== "EEXIST") {
+        return false;
       }
     }
 
-    if (!hasTakeover) {
+    // 2. Atomically acquire exclusive reclamation authority via directory mutex
+    const gotAuth = await this.acquireDirectoryMutex(reclaimAuthDir, authNonce);
+    if (!gotAuth) {
       return false;
     }
 
     try {
+      // 3. Under exclusive authority, clean up any legacy takeover file from crash residue
+      const legacyTakeover = `${tombstone}.takeover`;
+      await fs.unlink(legacyTakeover).catch(() => {});
+
       // Inode and identity verification under exclusive authority
       const stLock = await fs.stat(targetPath).catch(() => null);
       const stTomb = await fs.stat(tombstone).catch(() => null);
@@ -227,26 +212,21 @@ export class StoreLock {
         return false;
       }
     } finally {
-      await this.releaseTakeoverLock(takeoverLock, takeoverNonce);
+      await this.releaseDirectoryMutex(reclaimAuthDir, authNonce);
     }
   }
 
-  private async acquireTakeoverLock(takeoverLock: string, takeoverNonce: string): Promise<boolean> {
-    const takeoverMeta: LockMetadata = {
+  private async acquireDirectoryMutex(mutexDir: string, nonce: string): Promise<boolean> {
+    const claimMeta: LockMetadata = {
       pid: process.pid,
       hostname: os.hostname(),
       acquiredAtMs: Date.now(),
-      nonce: takeoverNonce,
+      nonce,
     };
 
     try {
-      const handle = await fs.open(takeoverLock, "wx");
-      try {
-        await handle.writeFile(JSON.stringify(takeoverMeta, null, 2), "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await fs.mkdir(mutexDir);
+      await fs.writeFile(path.join(mutexDir, "claim.json"), JSON.stringify(claimMeta, null, 2), "utf8");
       return true;
     } catch (err: unknown) {
       const nodeErr = err as NodeJS.ErrnoException;
@@ -255,53 +235,40 @@ export class StoreLock {
       }
     }
 
-    // takeoverLock exists. Check if previous takeover process died.
-    const takeoverContent = await fs.readFile(takeoverLock, "utf8").catch(() => null);
-    if (!takeoverContent) {
+    // Directory already exists. Inspect owner.
+    const claimFile = path.join(mutexDir, "claim.json");
+    const content = await fs.readFile(claimFile, "utf8").catch(() => null);
+    if (!content) {
       return false;
     }
 
     try {
-      const existing = JSON.parse(takeoverContent) as LockMetadata;
+      const existing = JSON.parse(content) as LockMetadata;
       if (existing.hostname !== os.hostname() || typeof existing.pid !== "number") {
         return false;
       }
 
       try {
         process.kill(existing.pid, 0);
-        return false; // Takeover process is alive!
+        return false; // Active owner
       } catch (killErr: unknown) {
         if ((killErr as NodeJS.ErrnoException).code !== "ESRCH") {
           return false;
         }
       }
 
-      // Previous takeover process is dead. Safely unlink the dead takeoverLock and try open("wx") again.
-      const deadTakeoverTomb = `${takeoverLock}.retired.${existing.pid}.${existing.nonce || "0"}`;
+      // Existing owner is dead. Atomically retire directory via rename.
+      const retiredDir = `${mutexDir}.retired.${existing.pid}.${existing.nonce || "0"}`;
       try {
-        await fs.link(takeoverLock, deadTakeoverTomb);
-      } catch (linkErr: unknown) {
-        const nErr = linkErr as NodeJS.ErrnoException;
-        if (nErr.code !== "EEXIST") {
-          return false;
-        }
-      }
-
-      const stTakeover = await fs.stat(takeoverLock).catch(() => null);
-      const stDeadTomb = await fs.stat(deadTakeoverTomb).catch(() => null);
-      if (!stTakeover || !stDeadTomb || stTakeover.ino !== stDeadTomb.ino) {
+        await fs.rename(mutexDir, retiredDir);
+      } catch {
+        // Competing rename won (ENOTEMPTY or ENOENT)
         return false;
       }
 
-      await fs.unlink(takeoverLock).catch(() => {});
       try {
-        const handle = await fs.open(takeoverLock, "wx");
-        try {
-          await handle.writeFile(JSON.stringify(takeoverMeta, null, 2), "utf8");
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
+        await fs.mkdir(mutexDir);
+        await fs.writeFile(path.join(mutexDir, "claim.json"), JSON.stringify(claimMeta, null, 2), "utf8");
         return true;
       } catch {
         return false;
@@ -311,21 +278,22 @@ export class StoreLock {
     }
   }
 
-  private async releaseTakeoverLock(takeoverLock: string, takeoverNonce: string): Promise<void> {
+  private async releaseDirectoryMutex(mutexDir: string, nonce: string): Promise<void> {
     try {
-      const content = await fs.readFile(takeoverLock, "utf8").catch(() => null);
+      const claimFile = path.join(mutexDir, "claim.json");
+      const content = await fs.readFile(claimFile, "utf8").catch(() => null);
       if (content) {
         const meta = JSON.parse(content) as LockMetadata;
         if (
           meta.pid === process.pid &&
           meta.hostname === os.hostname() &&
-          meta.nonce === takeoverNonce
+          meta.nonce === nonce
         ) {
-          await fs.unlink(takeoverLock).catch(() => {});
+          await fs.rm(mutexDir, { recursive: true, force: true }).catch(() => {});
         }
       }
     } catch {
-      // Ignore
+      // Best-effort
     }
   }
 

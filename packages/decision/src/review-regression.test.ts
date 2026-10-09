@@ -873,11 +873,76 @@ describe("Review blocker regressions", () => {
       const results = await Promise.allSettled([pA, pB]);
       const acquiredList = [a, b].filter((l) => l.isAcquired());
       expect(acquiredList).toHaveLength(1);
-      expect(a.isAcquired()).toBe(true);
-      expect(b.isAcquired()).toBe(false);
 
-      expect(results[0].status).toBe("fulfilled");
-      expect(results[1].status).toBe("rejected");
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+    } finally {
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects dual owners when two instances race on crash residues with dead takeover locks", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r7-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead" };
+    const locks = [new StoreLock(dir), new StoreLock(dir)];
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(dead));
+        await fs.link(target, `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`);
+        const takeover = `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}.takeover`;
+        await fs.writeFile(takeover, JSON.stringify({ ...dead, nonce: "dead-takeover" }));
+      }
+
+      const results = await Promise.allSettled(locks.map((lock) => lock.acquire()));
+      const acquiredList = locks.filter((lock) => lock.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const content = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(content.pid).toBe(process.pid);
+      expect(content.hostname).toBe(os.hostname());
+    } finally {
+      for (const lock of locks) await lock.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects dual owners when delayed reclaimer attempts takeover after live owner acquired", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r7-delayed-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead" };
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(dead));
+        await fs.link(target, `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`);
+        const takeover = `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}.takeover`;
+        await fs.writeFile(takeover, JSON.stringify({ ...dead, nonce: "dead-takeover" }));
+      }
+
+      // a acquires first
+      await a.acquire();
+      expect(a.isAcquired()).toBe(true);
+
+      // b attempts to acquire afterwards
+      await expect(b.acquire()).rejects.toThrow(DecisionStoreLockError);
+      expect(b.isAcquired()).toBe(false);
+      expect(a.isAcquired()).toBe(true);
+
+      const content = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(content.pid).toBe(process.pid);
     } finally {
       await a.release().catch(() => {});
       await b.release().catch(() => {});
@@ -914,6 +979,52 @@ describe("Review blocker regressions", () => {
       expect(lock.isAcquired()).toBe(false);
     } finally {
       await lock.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects dual owners and prevents duplicate takeover deletions during concurrent crash recovery", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r7-race-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead" };
+    const locks = [new StoreLock(dir), new StoreLock(dir)];
+
+    let takeoverUnlinks = 0;
+    const realUnlink = fs.unlink.bind(fs);
+    vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith(".takeover")) {
+        takeoverUnlinks++;
+      }
+      return realUnlink(...args);
+    });
+
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(dead));
+        await fs.link(target, `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`);
+        const takeover = `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}.takeover`;
+        await fs.writeFile(takeover, JSON.stringify({ ...dead, nonce: "dead-takeover" }));
+      }
+
+      const results = await Promise.allSettled(locks.map((lock) => lock.acquire()));
+      const acquiredList = locks.filter((lock) => lock.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      // Verify that takeover files were only unlinked by the sole winner (once per target, never duplicated)
+      expect(takeoverUnlinks).toBe(2);
+
+      const content = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(content.pid).toBe(process.pid);
+      expect(content.hostname).toBe(os.hostname());
+    } finally {
+      vi.restoreAllMocks();
+      for (const lock of locks) await lock.release().catch(() => {});
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
