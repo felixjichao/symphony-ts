@@ -147,10 +147,13 @@ export class StoreLock {
     newMeta: LockMetadata
   ): Promise<boolean> {
     const tombstone = `${targetPath}.retired.${expected.pid}.${expected.acquiredAtMs}.${expected.nonce || "0"}`;
-    let linked = false;
+    const takeoverLock = `${tombstone}.takeover`;
+    const takeoverNonce = crypto.randomUUID();
+    let hasTakeover = false;
+
     try {
       await fs.link(targetPath, tombstone);
-      linked = true;
+      hasTakeover = await this.acquireTakeoverLock(takeoverLock, takeoverNonce);
     } catch (err: unknown) {
       const nodeErr = err as NodeJS.ErrnoException;
       if (nodeErr.code === "EEXIST") {
@@ -167,9 +170,8 @@ export class StoreLock {
                 tombMeta.hostname === expected.hostname &&
                 tombMeta.acquiredAtMs === expected.acquiredAtMs
               ) {
-                // Verified: target and tombstone point to the exact same inode of the dead process.
-                // The previous reclaimer crashed before unlinking. It is safe to resume retirement.
-                linked = true;
+                // Acquire exclusive takeover authority before resuming retirement
+                hasTakeover = await this.acquireTakeoverLock(takeoverLock, takeoverNonce);
               }
             } catch {
               // Ignore
@@ -179,49 +181,151 @@ export class StoreLock {
       }
     }
 
-    if (!linked) {
+    if (!hasTakeover) {
       return false;
     }
 
-    // Inode and identity verification
-    const stLock = await fs.stat(targetPath).catch(() => null);
-    const stTomb = await fs.stat(tombstone).catch(() => null);
-    if (!stLock || !stTomb || stLock.ino !== stTomb.ino) {
-      return false;
-    }
-
-    const tombContent = await fs.readFile(tombstone, "utf8").catch(() => null);
-    if (!tombContent) {
-      return false;
-    }
     try {
-      const tombMeta = JSON.parse(tombContent) as LockMetadata;
-      if (
-        tombMeta.pid !== expected.pid ||
-        tombMeta.hostname !== expected.hostname ||
-        tombMeta.acquiredAtMs !== expected.acquiredAtMs
-      ) {
+      // Inode and identity verification under exclusive authority
+      const stLock = await fs.stat(targetPath).catch(() => null);
+      const stTomb = await fs.stat(tombstone).catch(() => null);
+      if (!stLock || !stTomb || stLock.ino !== stTomb.ino) {
         return false;
       }
-    } catch {
-      return false;
-    }
 
-    // Safe to unlink the retired lock
-    await fs.unlink(targetPath).catch(() => {});
-
-    // Acquire lock via O_CREAT | O_EXCL
-    try {
-      const handle = await fs.open(targetPath, "wx");
+      const tombContent = await fs.readFile(tombstone, "utf8").catch(() => null);
+      if (!tombContent) {
+        return false;
+      }
       try {
-        await handle.writeFile(JSON.stringify(newMeta, null, 2), "utf8");
+        const tombMeta = JSON.parse(tombContent) as LockMetadata;
+        if (
+          tombMeta.pid !== expected.pid ||
+          tombMeta.hostname !== expected.hostname ||
+          tombMeta.acquiredAtMs !== expected.acquiredAtMs
+        ) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+
+      // Safe to unlink the retired lock under exclusive authority
+      await fs.unlink(targetPath).catch(() => {});
+
+      // Acquire lock via O_CREAT | O_EXCL
+      try {
+        const handle = await fs.open(targetPath, "wx");
+        try {
+          await handle.writeFile(JSON.stringify(newMeta, null, 2), "utf8");
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    } finally {
+      await this.releaseTakeoverLock(takeoverLock, takeoverNonce);
+    }
+  }
+
+  private async acquireTakeoverLock(takeoverLock: string, takeoverNonce: string): Promise<boolean> {
+    const takeoverMeta: LockMetadata = {
+      pid: process.pid,
+      hostname: os.hostname(),
+      acquiredAtMs: Date.now(),
+      nonce: takeoverNonce,
+    };
+
+    try {
+      const handle = await fs.open(takeoverLock, "wx");
+      try {
+        await handle.writeFile(JSON.stringify(takeoverMeta, null, 2), "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
       return true;
+    } catch (err: unknown) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      if (nodeErr.code !== "EEXIST") {
+        return false;
+      }
+    }
+
+    // takeoverLock exists. Check if previous takeover process died.
+    const takeoverContent = await fs.readFile(takeoverLock, "utf8").catch(() => null);
+    if (!takeoverContent) {
+      return false;
+    }
+
+    try {
+      const existing = JSON.parse(takeoverContent) as LockMetadata;
+      if (existing.hostname !== os.hostname() || typeof existing.pid !== "number") {
+        return false;
+      }
+
+      try {
+        process.kill(existing.pid, 0);
+        return false; // Takeover process is alive!
+      } catch (killErr: unknown) {
+        if ((killErr as NodeJS.ErrnoException).code !== "ESRCH") {
+          return false;
+        }
+      }
+
+      // Previous takeover process is dead. Safely unlink the dead takeoverLock and try open("wx") again.
+      const deadTakeoverTomb = `${takeoverLock}.retired.${existing.pid}.${existing.nonce || "0"}`;
+      try {
+        await fs.link(takeoverLock, deadTakeoverTomb);
+      } catch (linkErr: unknown) {
+        const nErr = linkErr as NodeJS.ErrnoException;
+        if (nErr.code !== "EEXIST") {
+          return false;
+        }
+      }
+
+      const stTakeover = await fs.stat(takeoverLock).catch(() => null);
+      const stDeadTomb = await fs.stat(deadTakeoverTomb).catch(() => null);
+      if (!stTakeover || !stDeadTomb || stTakeover.ino !== stDeadTomb.ino) {
+        return false;
+      }
+
+      await fs.unlink(takeoverLock).catch(() => {});
+      try {
+        const handle = await fs.open(takeoverLock, "wx");
+        try {
+          await handle.writeFile(JSON.stringify(takeoverMeta, null, 2), "utf8");
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        return true;
+      } catch {
+        return false;
+      }
     } catch {
       return false;
+    }
+  }
+
+  private async releaseTakeoverLock(takeoverLock: string, takeoverNonce: string): Promise<void> {
+    try {
+      const content = await fs.readFile(takeoverLock, "utf8").catch(() => null);
+      if (content) {
+        const meta = JSON.parse(content) as LockMetadata;
+        if (
+          meta.pid === process.pid &&
+          meta.hostname === os.hostname() &&
+          meta.nonce === takeoverNonce
+        ) {
+          await fs.unlink(takeoverLock).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore
     }
   }
 

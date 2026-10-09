@@ -817,6 +817,106 @@ describe("Review blocker regressions", () => {
       }
     });
   }
+
+  it("rejects dual owners when two instances race on crash residues with linked tombstones", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r6-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead" };
+    const locks = [new StoreLock(dir), new StoreLock(dir)];
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(dead));
+        await fs.link(target, `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`);
+      }
+
+      const results = await Promise.allSettled(locks.map((lock) => lock.acquire()));
+      const acquiredList = locks.filter((lock) => lock.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      const firstRejected = rejected[0];
+      expect(firstRejected).toBeDefined();
+      if (firstRejected && firstRejected.status === "rejected") {
+        expect(firstRejected.reason).toBeInstanceOf(DecisionStoreLockError);
+      }
+
+      // Verify the acquired lock is active and valid on disk
+      const content = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(content.pid).toBe(process.pid);
+      expect(content.hostname).toBe(os.hostname());
+    } finally {
+      for (const lock of locks) await lock.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects dual owners with staggered race across crash residue recovery", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r6-staggered-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead" };
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(dead));
+        await fs.link(target, `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`);
+      }
+
+      const pA = a.acquire();
+      await new Promise((r) => setTimeout(r, 5));
+      const pB = b.acquire();
+
+      const results = await Promise.allSettled([pA, pB]);
+      const acquiredList = [a, b].filter((l) => l.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+      expect(a.isAcquired()).toBe(true);
+      expect(b.isAcquired()).toBe(false);
+
+      expect(results[0].status).toBe("fulfilled");
+      expect(results[1].status).toBe("rejected");
+    } finally {
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("safely recovers when previous reclaimer died with both tombstone and takeover lock present", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r6-takeover-crash-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const deadOwner = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead-owner" };
+    const deadReclaimer = { pid: 999998, hostname: os.hostname(), acquiredAtMs: 2, nonce: "dead-reclaimer" };
+    expect(() => process.kill(deadOwner.pid, 0)).toThrow();
+    expect(() => process.kill(deadReclaimer.pid, 0)).toThrow();
+
+    const lock = new StoreLock(dir);
+    try {
+      for (const target of [main, reclaim]) {
+        await fs.writeFile(target, JSON.stringify(deadOwner));
+        const tomb = `${target}.retired.${deadOwner.pid}.${deadOwner.acquiredAtMs}.${deadOwner.nonce}`;
+        await fs.link(target, tomb);
+        await fs.writeFile(`${tomb}.takeover`, JSON.stringify(deadReclaimer));
+      }
+
+      await expect(lock.acquire()).resolves.toBeUndefined();
+      expect(lock.isAcquired()).toBe(true);
+
+      const content = JSON.parse(await fs.readFile(main, "utf8"));
+      expect(content.pid).toBe(process.pid);
+      expect(content.hostname).toBe(os.hostname());
+
+      await lock.release();
+      expect(lock.isAcquired()).toBe(false);
+    } finally {
+      await lock.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 
