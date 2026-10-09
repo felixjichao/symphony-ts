@@ -27,6 +27,7 @@ export interface SubmissionReceipt {
   readonly type: "result" | "failure";
   readonly claimGeneration: number;
   readonly claimOwner: string;
+  readonly claimToken: string;
   readonly acceptedAtMs: UtcTimestampMs;
   readonly payload: DecisionResult | DecisionTaskFailure;
   readonly supersededAtMs?: UtcTimestampMs | null | undefined;
@@ -36,6 +37,9 @@ export interface OperationReceipt {
   readonly schemaVersion: 1;
   readonly operationKey: string;
   readonly kind: "create-plan-task" | "create-review-task" | "rebind-session";
+  readonly sessionId: string;
+  readonly target?: DecisionReviewTarget | null | undefined;
+  readonly bindingGeneration?: number | undefined;
   readonly entityId: string;
   readonly createdAtMs: UtcTimestampMs;
 }
@@ -128,6 +132,14 @@ export interface SubmitFailureResponse {
 export interface NextTaskResponse {
   readonly task: DecisionTask;
   readonly session: DecisionSession;
+}
+
+export interface GetTaskResultResponse {
+  readonly result: DecisionResult;
+}
+
+export interface GetTaskReceiptResponse {
+  readonly receipt: SubmissionReceipt;
 }
 
 export interface PutBindingRequest {

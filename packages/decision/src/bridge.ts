@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import {
   parseDecisionReviewTarget,
@@ -5,6 +6,7 @@ import {
   type DecisionWorkItemRef,
 } from "@symphony/domain";
 import {
+  DecisionForbiddenError,
   DecisionNotFoundError,
   DecisionPayloadTooLargeError,
   DecisionStoreError,
@@ -16,6 +18,12 @@ import { DurableDecisionStore } from "./store";
 import type { DecisionBridgeConfig, DecisionStoreConfig } from "./types";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1MB
+
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  const hashA = crypto.createHash("sha256").update(a, "utf8").digest();
+  const hashB = crypto.createHash("sha256").update(b, "utf8").digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
 
 export class DecisionBridge {
   private readonly service: DecisionService;
@@ -146,9 +154,13 @@ export class DecisionBridge {
       }
     }
 
-    // 2. CORS Handling
+    // 2. Origin & CORS Handling
     const origin = req.headers.origin;
-    if (origin && this.allowedOrigins.has(origin)) {
+    if (origin !== undefined) {
+      if (!this.allowedOrigins.has(origin)) {
+        this.sendError(res, new DecisionForbiddenError(`Forbidden origin: ${origin}`));
+        return;
+      }
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
@@ -164,7 +176,11 @@ export class DecisionBridge {
     // 3. Bearer Token Auth
     if (this.authToken !== undefined) {
       const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== this.authToken) {
+      if (
+        !authHeader ||
+        !authHeader.startsWith("Bearer ") ||
+        !timingSafeEqualStrings(authHeader.slice(7), this.authToken)
+      ) {
         throw new DecisionUnauthorizedError();
       }
     }
@@ -290,6 +306,36 @@ export class DecisionBridge {
         retryable: typeof b["retryable"] === "boolean" ? b["retryable"] : undefined,
       });
       this.sendJson(res, 200, outcome);
+      return;
+    }
+
+    // GET /v1/tasks/:id/result
+    const taskResultMatch = /^\/v1\/tasks\/([^/]+)\/result$/.exec(pathname);
+    if (method === "GET" && taskResultMatch) {
+      const id = decodeURIComponent(taskResultMatch[1]!);
+      const result = this.service.getResult(id);
+      if (!result) throw new DecisionNotFoundError(`Result for task "${id}" not found`);
+      this.sendJson(res, 200, { result });
+      return;
+    }
+
+    // GET /v1/tasks/:id/receipt
+    const taskReceiptMatch = /^\/v1\/tasks\/([^/]+)\/receipt$/.exec(pathname);
+    if (method === "GET" && taskReceiptMatch) {
+      const id = decodeURIComponent(taskReceiptMatch[1]!);
+      const receipt = this.service.getReceipt(id);
+      if (!receipt) throw new DecisionNotFoundError(`Receipt for task "${id}" not found`);
+      this.sendJson(res, 200, { receipt });
+      return;
+    }
+
+    // GET /v1/tasks/:id/failure
+    const taskFailureMatch = /^\/v1\/tasks\/([^/]+)\/failure$/.exec(pathname);
+    if (method === "GET" && taskFailureMatch) {
+      const id = decodeURIComponent(taskFailureMatch[1]!);
+      const failure = this.service.getFailure(id);
+      if (!failure) throw new DecisionNotFoundError(`Failure for task "${id}" not found`);
+      this.sendJson(res, 200, { failure });
       return;
     }
 

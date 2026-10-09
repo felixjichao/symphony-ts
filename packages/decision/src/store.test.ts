@@ -53,6 +53,7 @@ describe("DurableDecisionStore", () => {
 
       await store1.transaction((draft) => {
         draft.sessions[sessionId] = session;
+        draft.revisions[`plan:${sessionId}`] = 1;
         draft.tasks[taskId] = task;
       });
 

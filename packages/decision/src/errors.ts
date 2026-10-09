@@ -58,6 +58,12 @@ export class DecisionUnauthorizedError extends DecisionStoreError {
   }
 }
 
+export class DecisionForbiddenError extends DecisionStoreError {
+  constructor(message = "Forbidden") {
+    super(message, "forbidden", 403);
+  }
+}
+
 export class DecisionPayloadTooLargeError extends DecisionStoreError {
   constructor(message = "Request payload exceeds size limit") {
     super(message, "payload_too_large", 413);

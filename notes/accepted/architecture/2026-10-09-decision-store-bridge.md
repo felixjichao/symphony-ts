@@ -13,25 +13,25 @@ In the Decision Plane protocol (GitHub #94 / NEST-99), Decision tasks, sessions,
 
 We introduce `@symphony/decision` and the CLI command `symphony decision bridge`:
 1. **Durable Store Architecture**:
-   - Single-writer process exclusivity via advisory filesystem lock (`store.lock`) recording owner PID and timestamp, with stale-lock detection and reclaim when the holding PID is no longer alive.
-   - Atomic persistence using atomic file rename (`snapshot.json.tmp` -> `snapshot.json`) followed by directory fsync.
-   - Fail-closed corruption handling: malformed or corrupt snapshots halt startup rather than silently dropping or resetting state.
+   - Single-writer process exclusivity via advisory filesystem lock (`store.lock`) recording owner PID and timestamp, with stale-lock detection and atomic reclaim mutex (`store.reclaim.lock`) preventing concurrent recovery races.
+   - Atomic persistence using atomic file rename (`store.json.tmp` -> `store.json`) followed by directory fsync. Real I/O errors propagate and poison the store.
+   - Fail-closed corruption handling: malformed or corrupt store files (including broken revision or receipt referential integrity) halt startup rather than silently dropping or resetting state.
    - Transactional in-memory queue that serializes all mutation operations, keeping an in-memory index for low-latency queries while guaranteeing durability.
    - Deterministic JSON comparison (`canonicalJsonEqual`) ensuring idempotent result submissions are recognized even if payload keys are permutated.
 2. **Decision Service**:
    - Manages session lifecycle (`active`, `broken-binding`, `completed`) and compare-and-swap executor rebinding.
    - Revisions are automatically tracked: creating a task for an existing kind automatically supersedes earlier non-terminal tasks of that kind.
-   - Leases use monotonic token generation, UTC expiry validation, and heartbeat extension.
+   - Leases use monotonic token generation, UTC expiry validation, heartbeat extension, and claim token validation on result/failure replay.
 3. **Localhost Web Agent Bridge**:
    - Built on native Node `http` (zero external dependencies).
    - Strict loopback listening (`127.0.0.1` by default).
-   - DNS rebinding defense: strictly verifies incoming `Host` header against allowed hostnames (`127.0.0.1`, `localhost`, and bound host:port).
-   - Bearer authentication support via constant-time comparison.
-   - Restricted CORS: preflight and requests with non-loopback origins are rejected.
+   - DNS rebinding defense: strictly verifies incoming `Host` header against allowed loopback hostnames (`127.0.0.1`, `localhost`, `[::1]`).
+   - Bearer authentication support via constant-time comparison (`crypto.timingSafeEqual` over SHA-256 digests).
+   - Strict Origin enforcement: preflight and requests with origins not in `allowedOrigins` are rejected with `403 Forbidden` before routing.
    - 1MB body size limit with graceful 413 draining to avoid socket resets.
-   - Standard REST endpoints: `GET /v1/tasks/next`, `POST /v1/tasks/:id/claim`, `POST /v1/tasks/:id/start`, `POST /v1/tasks/:id/heartbeat`, `POST /v1/tasks/:id/result`, `POST /v1/tasks/:id/fail`, `GET /v1/sessions/:id`, `PUT /v1/sessions/:id/binding`, `POST /v1/sessions/:id/rebind`, control endpoints `POST /v1/tasks`, `POST /v1/sessions`, cancel, supersede, complete, reopen.
+   - Standard REST endpoints: `GET /v1/tasks/next`, `POST /v1/tasks/:id/claim`, `POST /v1/tasks/:id/start`, `POST /v1/tasks/:id/heartbeat`, `POST /v1/tasks/:id/result`, `POST /v1/tasks/:id/fail`, `GET /v1/tasks/:id`, `GET /v1/tasks/:id/result`, `GET /v1/tasks/:id/receipt`, `GET /v1/sessions/:id`, `PUT /v1/sessions/:id/binding`, `POST /v1/sessions/:id/rebind`, control endpoints `POST /v1/tasks`, `POST /v1/sessions`, cancel, supersede, complete, reopen.
 4. **CLI Integration**:
-   - `symphony decision bridge --store <dir> [--port <port>] [--host <host>] [--token <token>] [--cors-origin <origin>] [--default-lease-ttl <ms>]` integrated into `@symphony/cli`.
+   - `symphony decision bridge --store <dir> [--port <port>] [--token <token>] [--ttl <seconds>]` integrated into `@symphony/cli`.
 
 ## Alternatives considered
 

@@ -20,6 +20,8 @@ export {
   type SubmitFailureRequest,
   type SubmitFailureResponse,
   type NextTaskResponse,
+  type GetTaskResultResponse,
+  type GetTaskReceiptResponse,
   type PutBindingRequest,
   type RebindSessionRequest,
   type CreateSessionRequest,
@@ -37,6 +39,7 @@ export {
   DecisionNotFoundError,
   DecisionValidationError,
   DecisionUnauthorizedError,
+  DecisionForbiddenError,
   DecisionPayloadTooLargeError,
 } from "./errors";
 

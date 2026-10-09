@@ -15,6 +15,7 @@ import {
   UnsupportedStoreVersionError,
   DecisionValidationError,
 } from "./errors";
+import { canonicalJsonEqual } from "./canonical-json";
 import { StoreLock } from "./lock";
 import {
   DECISION_STORE_SCHEMA_VERSION,
@@ -74,6 +75,9 @@ export function validateSubmissionReceipt(value: unknown): SubmissionReceipt {
   if (typeof r["claimOwner"] !== "string" || r["claimOwner"].trim() === "") {
     throw new DecisionValidationError("Invalid receipt claimOwner");
   }
+  if (typeof r["claimToken"] !== "string" || r["claimToken"].trim() === "") {
+    throw new DecisionValidationError("Invalid receipt claimToken");
+  }
   if (typeof r["acceptedAtMs"] !== "number" || !Number.isSafeInteger(r["acceptedAtMs"])) {
     throw new DecisionValidationError("Invalid receipt acceptedAtMs");
   }
@@ -86,62 +90,197 @@ export function validateSubmissionReceipt(value: unknown): SubmissionReceipt {
 }
 
 export function validateStoreRecord(record: DecisionStoreRecord): void {
+  if (typeof record !== "object" || record === null) {
+    throw new CorruptedStoreError("Expected store record object");
+  }
   if (record.schemaVersion !== DECISION_STORE_SCHEMA_VERSION) {
     throw new UnsupportedStoreVersionError(record.schemaVersion);
   }
   if (typeof record.transactionSequence !== "number" || record.transactionSequence < 0) {
     throw new CorruptedStoreError("Invalid transaction sequence");
   }
+  if (typeof record.sessions !== "object" || record.sessions === null) {
+    throw new CorruptedStoreError("sessions table must be an object");
+  }
+  if (typeof record.tasks !== "object" || record.tasks === null) {
+    throw new CorruptedStoreError("tasks table must be an object");
+  }
+  if (typeof record.results !== "object" || record.results === null) {
+    throw new CorruptedStoreError("results table must be an object");
+  }
+  if (typeof record.failures !== "object" || record.failures === null) {
+    throw new CorruptedStoreError("failures table must be an object");
+  }
+  if (typeof record.receipts !== "object" || record.receipts === null) {
+    throw new CorruptedStoreError("receipts table must be an object");
+  }
+  if (typeof record.revisions !== "object" || record.revisions === null) {
+    throw new CorruptedStoreError("revisions table must be an object");
+  }
+  if (typeof record.operationReceipts !== "object" || record.operationReceipts === null) {
+    throw new CorruptedStoreError("operationReceipts table must be an object");
+  }
 
   // Validate sessions
-  for (const session of Object.values(record.sessions)) {
+  for (const [key, session] of Object.entries(record.sessions)) {
+    if (key !== session.id) {
+      throw new CorruptedStoreError(`Session key "${key}" does not match session id "${session.id}"`);
+    }
     parseDecisionSession(session);
   }
 
   // Validate tasks
-  for (const task of Object.values(record.tasks)) {
+  for (const [key, task] of Object.entries(record.tasks)) {
+    if (key !== task.id) {
+      throw new CorruptedStoreError(`Task key "${key}" does not match task id "${task.id}"`);
+    }
     parseDecisionTask(task);
     if (!record.sessions[task.sessionId]) {
       throw new CorruptedStoreError(`Task ${task.id} references non-existent session ${task.sessionId}`);
     }
   }
 
+  // Validate revisions table
+  for (const [revKey, revVal] of Object.entries(record.revisions)) {
+    if (typeof revVal !== "number" || !Number.isSafeInteger(revVal) || revVal < 0) {
+      throw new CorruptedStoreError(`Invalid revision value for key "${revKey}"`);
+    }
+  }
+
+  // Check that every task's revision is <= the stored revision for its revision key
+  for (const task of Object.values(record.tasks)) {
+    const revKey =
+      task.kind === "plan"
+        ? `plan:${task.sessionId}`
+        : `review:${task.sessionId}:${task.target.repository}:${task.target.prNumber}`;
+    const storedRev = record.revisions[revKey];
+    if (storedRev === undefined || storedRev < task.revision) {
+      throw new CorruptedStoreError(
+        `Task "${task.id}" has revision ${task.revision} but store revision index has ${storedRev ?? "undefined"}`
+      );
+    }
+  }
+
   // Validate results
-  for (const result of Object.values(record.results)) {
+  for (const [key, result] of Object.entries(record.results)) {
+    if (key !== result.taskId) {
+      throw new CorruptedStoreError(`Result key "${key}" does not match result.taskId "${result.taskId}"`);
+    }
     parseDecisionResult(result);
     const task = record.tasks[result.taskId];
     if (!task) {
       throw new CorruptedStoreError(`Result ${result.taskId} references non-existent task`);
     }
+    if (task.sessionId !== result.sessionId) {
+      throw new CorruptedStoreError(`Result ${result.taskId} sessionId does not match task sessionId`);
+    }
+    if (task.revision !== result.revision) {
+      throw new CorruptedStoreError(`Result ${result.taskId} revision does not match task revision`);
+    }
+    if (task.kind !== result.kind) {
+      throw new CorruptedStoreError(`Result ${result.taskId} kind does not match task kind`);
+    }
+    if (task.kind === "review" && result.kind === "review") {
+      if (!canonicalJsonEqual(task.target, result.target)) {
+        throw new CorruptedStoreError(`Result ${result.taskId} review target does not match task target`);
+      }
+    }
+    if (task.status !== "completed" && task.status !== "superseded") {
+      throw new CorruptedStoreError(`Result exists for task ${task.id} which is in status "${task.status}"`);
+    }
   }
 
   // Validate failures
-  for (const failure of Object.values(record.failures)) {
+  for (const [key, failure] of Object.entries(record.failures)) {
+    if (key !== failure.taskId) {
+      throw new CorruptedStoreError(`Failure key "${key}" does not match failure.taskId "${failure.taskId}"`);
+    }
     validateDecisionTaskFailure(failure);
     const task = record.tasks[failure.taskId];
     if (!task) {
       throw new CorruptedStoreError(`Failure ${failure.taskId} references non-existent task`);
     }
+    if (task.sessionId !== failure.sessionId) {
+      throw new CorruptedStoreError(`Failure ${failure.taskId} sessionId does not match task sessionId`);
+    }
+    if (task.revision !== failure.revision) {
+      throw new CorruptedStoreError(`Failure ${failure.taskId} revision does not match task revision`);
+    }
+    if (task.status !== "failed" && task.status !== "superseded") {
+      throw new CorruptedStoreError(`Failure exists for task ${task.id} which is in status "${task.status}"`);
+    }
   }
 
   // Validate receipts
-  for (const receipt of Object.values(record.receipts)) {
+  for (const [key, receipt] of Object.entries(record.receipts)) {
+    if (key !== receipt.taskId) {
+      throw new CorruptedStoreError(`Receipt key "${key}" does not match receipt.taskId "${receipt.taskId}"`);
+    }
     validateSubmissionReceipt(receipt);
     const task = record.tasks[receipt.taskId];
     if (!task) {
       throw new CorruptedStoreError(`Receipt ${receipt.taskId} references non-existent task`);
+    }
+    if (receipt.type === "result") {
+      const res = record.results[key];
+      if (!res || !canonicalJsonEqual(res, receipt.payload)) {
+        throw new CorruptedStoreError(`Receipt ${key} payload does not match stored result`);
+      }
+    } else {
+      const fail = record.failures[key];
+      if (!fail || !canonicalJsonEqual(fail, receipt.payload)) {
+        throw new CorruptedStoreError(`Receipt ${key} payload does not match stored failure`);
+      }
     }
   }
 
   // Check terminal tasks have corresponding facts
   for (const task of Object.values(record.tasks)) {
     if (task.status === "completed") {
-      if (!record.results[task.id] && !record.receipts[task.id]) {
+      if (!record.results[task.id] || !record.receipts[task.id]) {
         throw new CorruptedStoreError(`Completed task ${task.id} has no persisted result or receipt`);
       }
     } else if (task.status === "failed") {
-      if (!record.failures[task.id] && !record.receipts[task.id]) {
+      if (!record.failures[task.id] || !record.receipts[task.id]) {
         throw new CorruptedStoreError(`Failed task ${task.id} has no persisted failure or receipt`);
+      }
+    } else if (
+      task.status === "pending" ||
+      task.status === "claimed" ||
+      task.status === "running" ||
+      task.status === "cancelled"
+    ) {
+      if (record.results[task.id] || record.failures[task.id]) {
+        throw new CorruptedStoreError(`Non-terminal task ${task.id} has unexpected result or failure`);
+      }
+    }
+  }
+
+  // Validate operationReceipts
+  for (const [key, op] of Object.entries(record.operationReceipts)) {
+    if (key !== op.operationKey) {
+      throw new CorruptedStoreError(
+        `Operation receipt key "${key}" does not match operationKey "${op.operationKey}"`
+      );
+    }
+    if (op.schemaVersion !== 1) {
+      throw new CorruptedStoreError("Invalid operation receipt schemaVersion");
+    }
+    if (!record.sessions[op.sessionId]) {
+      throw new CorruptedStoreError(`Operation receipt references non-existent session ${op.sessionId}`);
+    }
+    if (op.kind === "create-plan-task" || op.kind === "create-review-task") {
+      const t = record.tasks[op.entityId];
+      if (!t) {
+        throw new CorruptedStoreError(`Operation receipt references non-existent task ${op.entityId}`);
+      }
+      if (t.sessionId !== op.sessionId) {
+        throw new CorruptedStoreError(`Operation receipt task sessionId does not match receipt sessionId`);
+      }
+    } else if (op.kind === "rebind-session") {
+      const s = record.sessions[op.entityId];
+      if (!s) {
+        throw new CorruptedStoreError(`Operation receipt references non-existent session ${op.entityId}`);
       }
     }
   }
@@ -162,7 +301,7 @@ export function createEmptyStoreRecord(): DecisionStoreRecord {
 }
 
 export class DurableDecisionStore {
-  readonly storeDir: string;
+  private readonly storeDir: string;
   private readonly storePath: string;
   private readonly lock: StoreLock;
   private state: DecisionStoreRecord = createEmptyStoreRecord();
@@ -326,7 +465,7 @@ export class DurableDecisionStore {
 
       await fs.rename(tempPath, this.storePath);
 
-      // Sync directory if supported
+      // Sync directory
       try {
         const dirHandle = await fs.open(this.storeDir, "r");
         try {
@@ -334,8 +473,20 @@ export class DurableDecisionStore {
         } finally {
           await dirHandle.close();
         }
-      } catch {
-        // Platform directory sync may not be supported on all filesystems
+      } catch (dirErr: unknown) {
+        const code = (dirErr as NodeJS.ErrnoException).code;
+        if (
+          code === "EISDIR" ||
+          code === "ENOTSUP" ||
+          code === "EOPNOTSUPP" ||
+          code === "EINVAL" ||
+          (code === "EPERM" && process.platform === "win32")
+        ) {
+          // Documented unsupported directory fsync on specific platform/filesystem
+        } else {
+          // Real I/O error (e.g. EIO) must propagate and poison store
+          throw dirErr;
+        }
       }
     } catch (err: unknown) {
       try {

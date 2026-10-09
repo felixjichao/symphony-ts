@@ -130,32 +130,135 @@ The `@symphony/decision` package implements durable storage, task coordination s
 
 ### Storage and Process Concurrency
 
-- **Snapshot file**: All sessions, tasks, and results are persisted in a versioned JSON snapshot file (`snapshot.json`).
-- **Atomic persistence**: Writes write to `snapshot.json.tmp`, flush to disk, and atomically rename over `snapshot.json`, followed by directory fsync.
-- **Fail closed on corruption**: Startup verifies data integrity; malformed or unparseable files fail closed without silent reset.
-- **Single-writer process lock**: An advisory `store.lock` records owner PID and acquisition timestamp. Stale locks from terminated processes are safely recovered.
+- **Store file**: All sessions, tasks, and results are persisted in a versioned JSON store file (`store.json`).
+- **Atomic persistence**: Writes write to `store.json.tmp`, flush to disk, and atomically rename over `store.json`, followed by directory fsync. Real I/O errors (e.g. `EIO`) propagate and poison the store, failing subsequent writes.
+- **Fail closed on corruption**: Startup verifies data integrity across all tables, referential relations, revision indexes, and receipts; malformed or unparseable files fail closed with `CorruptedStoreError` without silent reset.
+- **Single-writer process lock**: An advisory `store.lock` records owner PID and acquisition timestamp. Stale locks from terminated processes are safely recovered using an atomic `store.reclaim.lock` mutex to prevent reclamation races.
+
+### Persistence Schema Envelope
+
+The `store.json` file adheres to schemaVersion `1` with the following envelope:
+
+```json
+{
+  "schemaVersion": 1,
+  "transactionSequence": 1,
+  "sessions": {
+    "<sessionId>": {
+      "schemaVersion": 1,
+      "id": "github:owner/repo#42",
+      "root": { "provider": "github", "key": "owner/repo#42" },
+      "status": "active",
+      "binding": {
+        "schemaVersion": 1,
+        "adapter": "browser-agent",
+        "externalSessionRef": "chat-001",
+        "resumeUri": null,
+        "generation": 1
+      },
+      "bindingGeneration": 1,
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000000000
+    }
+  },
+  "tasks": {
+    "<taskId>": {
+      "schemaVersion": 1,
+      "id": "github:owner/repo#42:plan:1",
+      "sessionId": "github:owner/repo#42",
+      "kind": "plan",
+      "revision": 1,
+      "status": "pending",
+      "lease": null,
+      "claimGeneration": 0,
+      "lastClaimToken": null,
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000000000
+    }
+  },
+  "results": {
+    "<taskId>": {
+      "schemaVersion": 1,
+      "kind": "plan",
+      "taskId": "github:owner/repo#42:plan:1",
+      "sessionId": "github:owner/repo#42",
+      "revision": 1,
+      "verdict": "ready",
+      "content": {
+        "plan": "Step 1",
+        "acceptanceCriteria": ["AC1"],
+        "risks": [],
+        "clarifications": []
+      },
+      "createdAtMs": 1700000000000
+    }
+  },
+  "failures": {
+    "<taskId>": {
+      "schemaVersion": 1,
+      "taskId": "github:owner/repo#42:plan:1",
+      "sessionId": "github:owner/repo#42",
+      "revision": 1,
+      "error": "Timeout",
+      "details": null,
+      "retryable": false,
+      "createdAtMs": 1700000000000
+    }
+  },
+  "receipts": {
+    "<taskId>": {
+      "schemaVersion": 1,
+      "taskId": "github:owner/repo#42:plan:1",
+      "type": "result",
+      "claimGeneration": 1,
+      "claimOwner": "worker-1",
+      "claimToken": "uuid-token",
+      "acceptedAtMs": 1700000000000,
+      "payload": {}
+    }
+  },
+  "revisions": {
+    "plan:github:owner/repo#42": 1
+  },
+  "operationReceipts": {
+    "op-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-1",
+      "kind": "create-plan-task",
+      "sessionId": "github:owner/repo#42",
+      "entityId": "github:owner/repo#42:plan:1",
+      "createdAtMs": 1700000000000
+    }
+  }
+}
+```
 
 ### Web Agent Bridge HTTP API
 
 The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Agents (Tampermonkey userscripts, browser extensions, or local tools):
 
-- `GET /v1/tasks/next?kinds=plan,review` — Fetch the next pending executable task.
-- `POST /v1/tasks/:id/claim` — Atomically claim lease with `{ owner, ttlMs }`.
-- `POST /v1/tasks/:id/start` — Mark task running with `{ claimToken }`.
-- `POST /v1/tasks/:id/heartbeat` — Extend lease expiration with `{ claimToken, ttlMs }`.
-- `POST /v1/tasks/:id/result` — Submit idempotent decision result with `{ claimToken, result }`.
-- `POST /v1/tasks/:id/fail` — Submit task failure with `{ claimToken, error }`.
+- `GET /v1/tasks/next` — Fetch the next pending executable task (204 if none).
+- `POST /v1/tasks/:id/claim` — Atomically claim lease with `{ owner, ttlMs? }`.
+- `POST /v1/tasks/:id/start` — Mark task running with `{ owner, token, generation }`.
+- `POST /v1/tasks/:id/heartbeat` — Extend lease expiration with `{ owner, token, generation, ttlMs? }`.
+- `POST /v1/tasks/:id/result` — Submit idempotent decision result with `{ owner, token, generation, result }`.
+- `POST /v1/tasks/:id/fail` — Submit task failure with `{ owner, token, generation, error, details?, retryable? }`.
+- `GET /v1/tasks/:id` — Retrieve task state.
+- `GET /v1/tasks/:id/result` — Retrieve persisted decision result.
+- `GET /v1/tasks/:id/receipt` — Retrieve immutable submission receipt.
+- `POST /v1/tasks/:id/cancel` — Cancel task.
+- `POST /v1/tasks/:id/supersede` — Supersede task.
+- `POST /v1/tasks` — Create a new task with `{ sessionId, kind, operationKey, target? }` (auto-supersedes earlier revisions of the same kind).
 - `GET /v1/sessions/:id` — Retrieve session status and binding.
-- `PUT /v1/sessions/:id/binding` — Bind or update executor binding.
-- `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check.
-- `POST /v1/tasks` — Create a new task (auto-supersedes earlier revisions of the same kind).
-- `POST /v1/sessions` — Create or retrieve an issue session.
+- `POST /v1/sessions` — Create or retrieve an issue session with `{ root }`.
+- `PUT /v1/sessions/:id/binding` — Bind or update executor binding with `{ adapter, externalSessionRef, resumeUri? }`.
+- `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check: `{ adapter, externalSessionRef, resumeUri?, expectedGeneration, operationKey? }`.
 
 Security boundaries:
 - Loopback-only binding (`127.0.0.1` by default).
-- DNS rebinding prevention via strict `Host` header checks (`127.0.0.1`, `localhost`, bound host:port).
-- Optional constant-time Bearer token authentication.
-- Restricted CORS: requests from non-loopback origins are rejected.
+- DNS rebinding prevention via strict `Host` header checks (`127.0.0.1`, `localhost`, `[::1]`).
+- Constant-time Bearer token authentication via SHA-256 digest comparison (`crypto.timingSafeEqual`).
+- Restrictive Origin enforcement: any request with an `Origin` header not explicitly listed in `allowedOrigins` is rejected with `403 Forbidden` before routing or execution (preventing unauthorized simple cross-origin requests and preflight requests).
 - 1MB body limit with graceful socket draining to avoid connection reset.
 
 ## Validation evidence

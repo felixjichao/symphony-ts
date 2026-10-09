@@ -12,6 +12,8 @@ import type {
   HeartbeatTaskRequest,
   HeartbeatTaskResponse,
   NextTaskResponse,
+  GetTaskResultResponse,
+  GetTaskReceiptResponse,
   PutBindingRequest,
   RebindSessionRequest,
   StartTaskRequest,
@@ -135,6 +137,20 @@ export class DecisionBridgeClient {
     return await this.request<{ task: DecisionTask }>(
       "GET",
       `/v1/tasks/${encodeURIComponent(taskId)}`
+    );
+  }
+
+  async getTaskResult(taskId: string): Promise<GetTaskResultResponse> {
+    return await this.request<GetTaskResultResponse>(
+      "GET",
+      `/v1/tasks/${encodeURIComponent(taskId)}/result`
+    );
+  }
+
+  async getTaskReceipt(taskId: string): Promise<GetTaskReceiptResponse> {
+    return await this.request<GetTaskReceiptResponse>(
+      "GET",
+      `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
     );
   }
 

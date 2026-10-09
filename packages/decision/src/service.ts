@@ -155,6 +155,17 @@ export class DecisionService {
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
       if (op) {
+        if (
+          op.kind !== "rebind-session" ||
+          op.sessionId !== sessionId ||
+          (op.bindingGeneration !== undefined &&
+            op.bindingGeneration !== params.expectedGeneration &&
+            op.bindingGeneration !== params.expectedGeneration + 1)
+        ) {
+          throw new DecisionConflictError(
+            `Operation key "${params.operationKey}" was already used for a different operation`
+          );
+        }
         const existing = this.store.getSession(sessionId);
         if (existing) return existing;
       }
@@ -164,6 +175,17 @@ export class DecisionService {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
+          if (
+            op.kind !== "rebind-session" ||
+            op.sessionId !== sessionId ||
+            (op.bindingGeneration !== undefined &&
+              op.bindingGeneration !== params.expectedGeneration &&
+              op.bindingGeneration !== params.expectedGeneration + 1)
+          ) {
+            throw new DecisionConflictError(
+              `Operation key "${params.operationKey}" was already used for a different operation`
+            );
+          }
           const current = draft.sessions[sessionId];
           if (current) return current;
         }
@@ -198,6 +220,8 @@ export class DecisionService {
           schemaVersion: 1,
           operationKey: params.operationKey,
           kind: "rebind-session",
+          sessionId,
+          bindingGeneration: nextGen,
           entityId: sessionId,
           createdAtMs: now,
         };
@@ -249,6 +273,11 @@ export class DecisionService {
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
       if (op) {
+        if (op.kind !== "create-plan-task" || op.sessionId !== sessionId) {
+          throw new DecisionConflictError(
+            `Operation key "${params.operationKey}" was already used for a different operation`
+          );
+        }
         const existing = this.store.getTask(op.entityId);
         if (existing) return existing;
       }
@@ -258,6 +287,11 @@ export class DecisionService {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
+          if (op.kind !== "create-plan-task" || op.sessionId !== sessionId) {
+            throw new DecisionConflictError(
+              `Operation key "${params.operationKey}" was already used for a different operation`
+            );
+          }
           const existing = draft.tasks[op.entityId];
           if (existing) return existing;
         }
@@ -303,6 +337,7 @@ export class DecisionService {
           schemaVersion: 1,
           operationKey: params.operationKey,
           kind: "create-plan-task",
+          sessionId,
           entityId: id,
           createdAtMs: now,
         };
@@ -321,6 +356,15 @@ export class DecisionService {
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
       if (op) {
+        if (
+          op.kind !== "create-review-task" ||
+          op.sessionId !== sessionId ||
+          !canonicalJsonEqual(op.target, params.target)
+        ) {
+          throw new DecisionConflictError(
+            `Operation key "${params.operationKey}" was already used for a different operation`
+          );
+        }
         const existing = this.store.getTask(op.entityId);
         if (existing) return existing;
       }
@@ -330,6 +374,15 @@ export class DecisionService {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
+          if (
+            op.kind !== "create-review-task" ||
+            op.sessionId !== sessionId ||
+            !canonicalJsonEqual(op.target, params.target)
+          ) {
+            throw new DecisionConflictError(
+              `Operation key "${params.operationKey}" was already used for a different operation`
+            );
+          }
           const existing = draft.tasks[op.entityId];
           if (existing) return existing;
         }
@@ -388,6 +441,8 @@ export class DecisionService {
           schemaVersion: 1,
           operationKey: params.operationKey,
           kind: "create-review-task",
+          sessionId,
+          target: params.target,
           entityId: id,
           createdAtMs: now,
         };
@@ -399,6 +454,18 @@ export class DecisionService {
 
   getTask(id: string): DecisionTask | null {
     return this.store.getTask(id);
+  }
+
+  getResult(taskId: string): DecisionResult | null {
+    return this.store.getResult(taskId);
+  }
+
+  getFailure(taskId: string): DecisionTaskFailure | null {
+    return this.store.getFailure(taskId);
+  }
+
+  getReceipt(taskId: string): SubmissionReceipt | null {
+    return this.store.getReceipt(taskId);
   }
 
   getAllTasks(): DecisionTask[] {
@@ -568,6 +635,7 @@ export class DecisionService {
           receipt.type === "result" &&
           receipt.claimOwner === params.owner &&
           receipt.claimGeneration === params.generation &&
+          receipt.claimToken === params.token &&
           canonicalJsonEqual(receipt.payload, params.result)
         ) {
           return {
@@ -613,6 +681,7 @@ export class DecisionService {
         type: "result",
         claimGeneration: params.generation,
         claimOwner: params.owner,
+        claimToken: params.token,
         acceptedAtMs: now,
         payload: params.result,
       };
@@ -647,7 +716,13 @@ export class DecisionService {
           receipt.type === "failure" &&
           receipt.claimOwner === params.owner &&
           receipt.claimGeneration === params.generation &&
-          (receipt.payload as DecisionTaskFailure).error === params.error
+          receipt.claimToken === params.token &&
+          (receipt.payload as DecisionTaskFailure).error === params.error &&
+          (receipt.payload as DecisionTaskFailure).retryable === (params.retryable ?? false) &&
+          canonicalJsonEqual(
+            (receipt.payload as DecisionTaskFailure).details,
+            params.details ?? null
+          )
         ) {
           return {
             receipt,
@@ -701,6 +776,7 @@ export class DecisionService {
         type: "failure",
         claimGeneration: params.generation,
         claimOwner: params.owner,
+        claimToken: params.token,
         acceptedAtMs: now,
         payload: failure,
       };

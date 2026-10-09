@@ -145,6 +145,54 @@ describe("DecisionBridge HTTP server", () => {
       expect(submitRes.result.verdict).toBe("approve");
       expect(submitRes.superseded).toBe(false);
 
+      // Verify getTaskResult and getTaskReceipt via HTTP client
+      const taskResultGet = await client.getTaskResult(taskRes.task.id);
+      expect(taskResultGet.result.verdict).toBe("approve");
+      expect(taskResultGet.result.taskId).toBe(taskRes.task.id);
+
+      const taskReceiptGet = await client.getTaskReceipt(taskRes.task.id);
+      expect(taskReceiptGet.receipt.type).toBe("result");
+      expect(taskReceiptGet.receipt.taskId).toBe(taskRes.task.id);
+      expect(taskReceiptGet.receipt.claimToken).toBe(claimRes.lease.token);
+
+      // Origin checks
+      // 1. Allowed origin preflight and simple request
+      const allowedPreflight = await fetch(`${baseUrl}/v1/tasks/next`, {
+        method: "OPTIONS",
+        headers: { Origin: "http://localhost:3000" },
+      });
+      expect(allowedPreflight.status).toBe(204);
+      expect(allowedPreflight.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
+
+      // 2. Disallowed origin simple request and preflight
+      const disallowedPreflight = await fetch(`${baseUrl}/v1/tasks/next`, {
+        method: "OPTIONS",
+        headers: { Origin: "https://attacker.example" },
+      });
+      expect(disallowedPreflight.status).toBe(403);
+
+      const disallowedPost = await fetch(`${baseUrl}/v1/sessions`, {
+        method: "POST",
+        headers: {
+          Origin: "https://attacker.example",
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ root }),
+      });
+      expect(disallowedPost.status).toBe(403);
+
+      // Token comparison checks (timing safe equal against different lengths)
+      const wrongLengthTokenRes = await fetch(`${baseUrl}/v1/tasks/next`, {
+        headers: { Authorization: "Bearer short" },
+      });
+      expect(wrongLengthTokenRes.status).toBe(401);
+
+      const sameLengthWrongTokenRes = await fetch(`${baseUrl}/v1/tasks/next`, {
+        headers: { Authorization: `Bearer ${token.slice(0, -1)}x` },
+      });
+      expect(sameLengthWrongTokenRes.status).toBe(401);
+
       // Rebind session
       const rebindRes = await client.rebindSession(sessionRes.session.id, {
         adapter: "browser-agent-v2",

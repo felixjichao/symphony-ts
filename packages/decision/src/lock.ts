@@ -12,6 +12,7 @@ export interface LockMetadata {
 
 export class StoreLock {
   private readonly lockPath: string;
+  private readonly reclaimLockPath: string;
   private readonly storeDir: string;
   private acquired = false;
   private exitHandler: (() => void) | null = null;
@@ -19,6 +20,7 @@ export class StoreLock {
   constructor(storeDir: string) {
     this.storeDir = storeDir;
     this.lockPath = path.join(storeDir, "store.lock");
+    this.reclaimLockPath = path.join(storeDir, "store.reclaim.lock");
   }
 
   isAcquired(): boolean {
@@ -32,7 +34,7 @@ export class StoreLock {
 
     await fs.mkdir(this.storeDir, { recursive: true });
 
-    const maxAttempts = 2;
+    const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const metadata: LockMetadata = {
@@ -61,13 +63,17 @@ export class StoreLock {
         }
 
         // Lock file already exists. Inspect if it is stale.
-        const stale = await this.inspectExistingLock();
-        if (stale && attempt < maxAttempts) {
-          try {
-            await fs.unlink(this.lockPath);
-          } catch {
-            // Unlink failure; will retry or fail on next attempt.
+        const staleMeta = await this.inspectExistingLock();
+        if (staleMeta && attempt < maxAttempts) {
+          const reclaimed = await this.reclaimStaleLock(staleMeta);
+          if (reclaimed) {
+            continue;
           }
+        }
+
+        if (attempt < maxAttempts) {
+          // Brief pause before retry
+          await new Promise((r) => setTimeout(r, 20));
           continue;
         }
 
@@ -78,31 +84,97 @@ export class StoreLock {
     }
   }
 
-  private async inspectExistingLock(): Promise<boolean> {
+  private async reclaimStaleLock(expected: LockMetadata): Promise<boolean> {
+    let reclaimHandle: fs.FileHandle | null = null;
+    try {
+      reclaimHandle = await fs.open(this.reclaimLockPath, "wx");
+      const meta: LockMetadata = {
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAtMs: Date.now(),
+      };
+      await reclaimHandle.writeFile(JSON.stringify(meta), "utf8");
+      await reclaimHandle.sync();
+    } catch (err: unknown) {
+      const nodeError = err as NodeJS.ErrnoException;
+      if (nodeError.code === "EEXIST") {
+        // Another process is currently reclaiming or holding reclaim lock.
+        // Check if reclaim lock itself is stale (> 5s or dead PID on same host):
+        try {
+          const recContent = await fs.readFile(this.reclaimLockPath, "utf8");
+          const recMeta = JSON.parse(recContent) as LockMetadata;
+          if (recMeta.hostname === os.hostname() && typeof recMeta.pid === "number") {
+            try {
+              process.kill(recMeta.pid, 0);
+            } catch (kErr: unknown) {
+              if ((kErr as NodeJS.ErrnoException).code === "ESRCH") {
+                await fs.unlink(this.reclaimLockPath).catch(() => {});
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        }
+        return false;
+      }
+      throw err;
+    }
+
+    try {
+      // Re-read lockPath while holding the exclusive reclaim lock
+      const current = await this.readLockMetadata();
+      if (
+        current &&
+        current.pid === expected.pid &&
+        current.hostname === expected.hostname &&
+        current.acquiredAtMs === expected.acquiredAtMs
+      ) {
+        // Still matches the exact inspected stale lock; safe to unlink
+        await fs.unlink(this.lockPath);
+        return true;
+      }
+      return false;
+    } finally {
+      if (reclaimHandle) {
+        await reclaimHandle.close().catch(() => {});
+        await fs.unlink(this.reclaimLockPath).catch(() => {});
+      }
+    }
+  }
+
+  private async readLockMetadata(): Promise<LockMetadata | null> {
     try {
       const content = await fs.readFile(this.lockPath, "utf8");
-      const metadata = JSON.parse(content) as LockMetadata;
+      return JSON.parse(content) as LockMetadata;
+    } catch {
+      return null;
+    }
+  }
+
+  private async inspectExistingLock(): Promise<LockMetadata | null> {
+    try {
+      const metadata = await this.readLockMetadata();
+      if (!metadata) return null;
 
       if (metadata.hostname === os.hostname() && typeof metadata.pid === "number") {
         try {
           // Check if process is running
           process.kill(metadata.pid, 0);
-          // If kill succeeds, process is running
-          return false;
+          // Process is alive
+          return null;
         } catch (killError: unknown) {
           const err = killError as NodeJS.ErrnoException;
           if (err.code === "ESRCH") {
             // Process does not exist; lock is stale
-            return true;
+            return metadata;
           }
           // EPERM means process exists but we lack permission to signal it
-          return false;
+          return null;
         }
       }
-      return false;
+      return null;
     } catch {
-      // If lock file is unreadable or malformed, do not silently overwrite
-      return false;
+      return null;
     }
   }
 
@@ -115,9 +187,8 @@ export class StoreLock {
     this.acquired = false;
 
     try {
-      const content = await fs.readFile(this.lockPath, "utf8");
-      const metadata = JSON.parse(content) as LockMetadata;
-      if (metadata.pid === process.pid && metadata.hostname === os.hostname()) {
+      const metadata = await this.readLockMetadata();
+      if (metadata && metadata.pid === process.pid && metadata.hostname === os.hostname()) {
         await fs.unlink(this.lockPath);
       }
     } catch {
