@@ -102,3 +102,7 @@ readiness 用真实 request/session/transcript/prompt/after_run marker，无固�
 `lifecycle.test.ts` 使用真实 config/host/loop，受控 watcher/poll/retry ports 核对资源归零；先制造真实 failed attempt 的 retry，停止后重放已捕获 callbacks 验证无 tracker request、新提交或 dispatch。startup 和 watcher-close 故障仍释放其他资源；shell tests 检查自己安装的 handlers、failure priority。M6.4 的回归装配保留，仅将依赖构造时自动 monitoring 的用例改为显式 start + 不自动执行 poll 的 scheduler。
 
 逐项文件、用例名、命令见 [M6 Core 索引](conformance.md#m65-core-证据索引)。M6 Core 已完成并通过 main CI，验收记录见上述索引；本地 gate 不替代 main CI。当前进度与 deferred 见 [status.md](status.md)。
+
+## Decision protocol extension
+
+`npm test -w @symphony/domain` covers v1 parsing, task/session transitions, lease fencing, binding generation and exact HEAD authorization in `src/decision.test.ts`. Protocol and caller/store boundaries: [decision-protocol.md](decision-protocol.md); extension evidence: [conformance.md](conformance.md#decision-plane-extension-evidence-nest-99--github-94). Final validation remains `npm run gate`.

@@ -15,6 +15,10 @@
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
 
+## Decision Plane extension
+
+NEST-99 / GitHub #94 adds provider-neutral v1 contracts, strict runtime validation and pure task/session/lease/binding transitions in domain. Exact HEAD approval and supersession have unit evidence; [protocol](decision-protocol.md) defines persistence boundaries. Durable store, bridge, adapters, Plan dispatch and Review merge gate remain unimplemented; current orchestration and delivery are unchanged.
+
 ## 已完成能力
 
 ### M0–M6 Core

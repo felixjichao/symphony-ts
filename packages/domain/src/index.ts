@@ -22,7 +22,7 @@
  * 建模约定（camelCase ↔ SPEC snake_case 映射、nullable vs optional、readonly 策略、
  * 不透明句柄）见包 `README.md` 与
  * `notes/accepted/architecture/2026-09-27-domain-contracts.md`。
- * 本包不含业务行为：解析 / 校验归 config，归一化动作归 tracker，provisioning 归
+ * Core 业务行为保持原归属；Decision extension 仅含纯协议校验与转换。配置解析 / 校验归 config，归一化动作归 tracker，provisioning 归
  * workspace，状态机与调度归 orchestrator。
  */
 
@@ -97,3 +97,21 @@ export {
   serializePrOwnershipMarker,
   validatePrOwnership,
 } from "./delivery";
+
+// Decision Plane extension: pure protocol contracts, independent of Symphony §7.
+export type {
+  DecisionSessionStatus, DecisionTaskStatus, DecisionWorkItemRef, ExecutorBinding,
+  DecisionSession, DecisionReviewTarget, DecisionLease, DecisionPlanTask,
+  DecisionReviewTask, DecisionTask, DecisionPlanResult, DecisionReviewFinding,
+  DecisionReviewResult, DecisionResult,
+} from "./decision";
+export {
+  DECISION_SCHEMA_VERSION, decisionSessionId, githubDecisionRoot, decisionTaskId,
+  parseDecisionReviewTarget, parseExecutorBinding, parseDecisionSession,
+  parseDecisionLease, parseDecisionTask, parseDecisionResult,
+  validateDecisionResultForTask, claimDecisionTask, startDecisionTask,
+  completeDecisionTask, failDecisionTask, releaseExpiredDecisionTask,
+  cancelDecisionTask, supersedeDecisionTask, isDecisionReviewApproved,
+  rebindDecisionSession, breakDecisionBinding, completeDecisionSession,
+  reopenDecisionSession,
+} from "./decision";
