@@ -124,12 +124,246 @@ exists. Breaking changes (including adding fields to this strict format) require
 new schema version and explicit migration before readers accept it. Unknown versions
 are rejected. Migration execution and durable recovery belong to subsequent work.
 
+## Durable Store and Web Agent Bridge (NEST-100 / #95)
+
+The `@symphony/decision` package implements durable storage, task coordination service, and localhost HTTP bridge for Web Agents and local controllers. Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-store-bridge.md).
+
+### Storage and Process Concurrency
+
+- **Store file**: All sessions, tasks, and results are persisted in a versioned JSON store file (`store.json`).
+- **Atomic persistence**: Writes write to `store.json.tmp`, flush to disk, and atomically rename over `store.json`, followed by directory fsync. Real I/O errors (e.g. `EIO`) propagate and poison the store, failing subsequent writes.
+- **Fail closed on corruption**: Startup verifies data integrity across all tables, referential relations, revision indexes, and receipts; malformed or unparseable files fail closed with `CorruptedStoreError` without silent reset.
+- **Single-writer process lock**: An advisory `store.lock` records owner PID and acquisition timestamp. Stale locks from terminated processes are safely recovered using an atomic `store.reclaim.lock` mutex to prevent reclamation races.
+
+### Persistence Schema Envelope
+
+The `store.json` file adheres to schemaVersion `1` and passes all integrity checks enforced by `validateStoreRecord`. The canonical envelope structure is:
+
+```json
+{
+  "schemaVersion": 1,
+  "transactionSequence": 2,
+  "sessions": {
+    "github:owner/repo#42": {
+      "schemaVersion": 1,
+      "id": "github:owner/repo#42",
+      "root": {
+        "provider": "github",
+        "key": "owner/repo#42"
+      },
+      "status": "active",
+      "binding": {
+        "schemaVersion": 1,
+        "adapter": "browser-agent",
+        "externalSessionRef": "chat-002",
+        "resumeUri": null,
+        "generation": 2
+      },
+      "bindingGeneration": 2,
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000001000
+    }
+  },
+  "tasks": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
+      "schemaVersion": 1,
+      "id": "github%3Aowner%2Frepo%2342:plan:1",
+      "sessionId": "github:owner/repo#42",
+      "kind": "plan",
+      "revision": 1,
+      "status": "completed",
+      "lease": null,
+      "claimGeneration": 1,
+      "lastClaimToken": "00000000-0000-0000-0000-000000000001",
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000000500
+    },
+    "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567": {
+      "schemaVersion": 1,
+      "id": "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567",
+      "sessionId": "github:owner/repo#42",
+      "kind": "review",
+      "revision": 1,
+      "status": "pending",
+      "target": {
+        "repository": "owner/repo",
+        "prNumber": 42,
+        "headSha": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "lease": null,
+      "claimGeneration": 0,
+      "lastClaimToken": null,
+      "createdAtMs": 1700000000600,
+      "updatedAtMs": 1700000000600
+    }
+  },
+  "results": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
+      "schemaVersion": 1,
+      "kind": "plan",
+      "taskId": "github%3Aowner%2Frepo%2342:plan:1",
+      "sessionId": "github:owner/repo#42",
+      "revision": 1,
+      "verdict": "ready",
+      "content": {
+        "plan": "Step 1",
+        "acceptanceCriteria": ["AC1"],
+        "risks": [],
+        "clarifications": []
+      },
+      "createdAtMs": 1700000000500
+    }
+  },
+  "failures": {},
+  "receipts": {
+    "github%3Aowner%2Frepo%2342:plan:1": {
+      "schemaVersion": 1,
+      "taskId": "github%3Aowner%2Frepo%2342:plan:1",
+      "type": "result",
+      "claimGeneration": 1,
+      "claimOwner": "worker-1",
+      "claimToken": "00000000-0000-0000-0000-000000000001",
+      "acceptedAtMs": 1700000000500,
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "plan",
+        "taskId": "github%3Aowner%2Frepo%2342:plan:1",
+        "sessionId": "github:owner/repo#42",
+        "revision": 1,
+        "verdict": "ready",
+        "content": {
+          "plan": "Step 1",
+          "acceptanceCriteria": ["AC1"],
+          "risks": [],
+          "clarifications": []
+        },
+        "createdAtMs": 1700000000500
+      }
+    }
+  },
+  "revisions": {
+    "plan:github:owner/repo#42": 1,
+    "review:github:owner/repo#42:owner/repo:42": 1
+  },
+  "operationReceipts": {
+    "op-plan-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-plan-1",
+      "kind": "create-plan-task",
+      "sessionId": "github:owner/repo#42",
+      "entityId": "github%3Aowner%2Frepo%2342:plan:1",
+      "createdAtMs": 1700000000000
+    },
+    "op-rev-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-rev-1",
+      "kind": "create-review-task",
+      "sessionId": "github:owner/repo#42",
+      "target": {
+        "repository": "owner/repo",
+        "prNumber": 42,
+        "headSha": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "entityId": "github%3Aowner%2Frepo%2342:review:1:owner%2Frepo:42:0123456789abcdef0123456789abcdef01234567",
+      "createdAtMs": 1700000000600
+    },
+    "op-rebind-1": {
+      "schemaVersion": 1,
+      "operationKey": "op-rebind-1",
+      "kind": "rebind-session",
+      "sessionId": "github:owner/repo#42",
+      "bindingGeneration": 2,
+      "expectedGeneration": 1,
+      "adapter": "browser-agent",
+      "externalSessionRef": "chat-002",
+      "resumeUri": null,
+      "resultingSession": {
+        "schemaVersion": 1,
+        "id": "github:owner/repo#42",
+        "root": {
+          "provider": "github",
+          "key": "owner/repo#42"
+        },
+        "status": "active",
+        "binding": {
+          "schemaVersion": 1,
+          "adapter": "browser-agent",
+          "externalSessionRef": "chat-002",
+          "resumeUri": null,
+          "generation": 2
+        },
+        "bindingGeneration": 2,
+        "createdAtMs": 1700000000000,
+        "updatedAtMs": 1700000001000
+      },
+      "entityId": "github:owner/repo#42",
+      "createdAtMs": 1700000001000
+    }
+  }
+}
+```
+
+#### Snapshot Integrity & Mutual Exclusion Facts
+
+The store validator enforces fail-closed consistency across all records:
+
+- **Canonical Task IDs**: Task IDs are generated deterministically using `decisionTaskId(...)`, which URL-encodes session IDs and review repository paths (e.g. `github%3Aowner%2Frepo%2342:plan:1`). Handcrafted IDs that deviate from domain encoding fail closed on startup.
+- **Terminal Status Mutual Exclusivity**:
+  - `completed` tasks MUST have a corresponding record in `results` and `receipts`, and MUST NOT have a record in `failures`.
+  - `failed` tasks MUST have a corresponding record in `failures` and `receipts`, and MUST NOT have a record in `results`.
+  - Non-terminal tasks (`pending`, `claimed`, `running`, `cancelled`) MUST NOT have any entries in `results` or `failures`.
+- **Receipt Consistency**: Each `SubmissionReceipt` verifies that:
+  - `receipt.taskId` matches the task ID key.
+  - `receipt.claimGeneration === task.claimGeneration`.
+  - `receipt.claimToken === task.lastClaimToken`.
+  - `receipt.payload` canonically matches stored `results[taskId]` or `failures[taskId]`.
+- **Operation Receipts**:
+  - `create-plan-task`: Stores `entityId` referencing the created plan task (`task.kind === "plan"`), with no target.
+  - `create-review-task`: Stores `entityId` and `target`, validating `task.kind === "review"` and canonical equality between `receipt.target` and `task.target`.
+  - `rebind-session`: Stores `entityId`, `expectedGeneration`, `bindingGeneration`, `adapter`, `externalSessionRef`, `resumeUri`, and `resultingSession` (the historical session state generated by that rebind). When replaying an existing `operationKey`, full parameter identity is enforced; conflicting payloads return HTTP 409 Conflict without modifying session state.
+
+
+### Web Agent Bridge HTTP API
+
+The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Agents (Tampermonkey userscripts, browser extensions, or local tools):
+
+- `GET /v1/tasks/next` — Fetch the next pending executable task (204 if none).
+- `POST /v1/tasks/:id/claim` — Atomically claim lease with `{ owner, ttlMs? }`.
+- `POST /v1/tasks/:id/start` — Mark task running with `{ owner, token, generation }`.
+- `POST /v1/tasks/:id/heartbeat` — Extend lease expiration with `{ owner, token, generation, ttlMs? }`.
+- `POST /v1/tasks/:id/result` — Submit idempotent decision result with `{ owner, token, generation, result }`.
+- `POST /v1/tasks/:id/fail` — Submit task failure with `{ owner, token, generation, error, details?, retryable? }`.
+- `GET /v1/tasks/:id` — Retrieve task state.
+- `GET /v1/tasks/:id/result` — Retrieve persisted decision result.
+- `GET /v1/tasks/:id/receipt` — Retrieve immutable submission receipt.
+- `POST /v1/tasks/:id/cancel` — Cancel task.
+- `POST /v1/tasks/:id/supersede` — Supersede task.
+- `POST /v1/tasks` — Create a new task with `{ sessionId, kind, operationKey, target? }` (auto-supersedes earlier revisions of the same kind).
+- `GET /v1/sessions/:id` — Retrieve session status and binding.
+- `POST /v1/sessions` — Create or retrieve an issue session with `{ root }`.
+- `PUT /v1/sessions/:id/binding` — Bind or update executor binding with `{ adapter, externalSessionRef, resumeUri? }`.
+- `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check: `{ adapter, externalSessionRef, resumeUri?, expectedGeneration, operationKey? }`.
+
+Security boundaries:
+- Loopback-only binding (`127.0.0.1` by default).
+- DNS rebinding prevention via strict `Host` header checks (`127.0.0.1`, `localhost`, `[::1]`).
+- Constant-time Bearer token authentication via SHA-256 digest comparison (`crypto.timingSafeEqual`).
+- Restrictive Origin enforcement: any request with an `Origin` header not explicitly listed in `allowedOrigins` is rejected with `403 Forbidden` before routing or execution (preventing unauthorized simple cross-origin requests and preflight requests).
+- 1MB body limit with graceful socket draining to avoid connection reset.
+
 ## Validation evidence
 
 `packages/domain/src/decision.test.ts` imports only the public package entry point.
 It covers the complete task transition table, session transitions, all six verdicts,
 identity mismatch, same-root multiple PRs, exact SHA approval and A → B → A,
 expiry and claim fencing, binding generation/recovery, strict nested validation
-and JSON round trips. Run `npm test -w @symphony/domain`, `npm run typecheck`, then
-`npm run gate`. These tests prove protocol rules; no external executor or GitHub
-write integration is claimed.
+and JSON round trips.
+
+`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence,
+decision service lease coordination and automatic supersession, and the HTTP bridge
+(DNS rebinding defense, CORS restrictions, bearer authentication, body limits, and REST routes).
+
+CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `apps/cli/src/bin.test.ts`.
+
+Run `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`,
+`npm run typecheck`, then `npm run gate`.

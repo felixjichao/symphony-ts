@@ -4,8 +4,8 @@ import {
   type DecisionReviewTarget, type DecisionLease, type ExecutorBinding,
   githubDecisionRoot, decisionSessionId, decisionTaskId, parseDecisionTask,
   parseDecisionResult, parseDecisionSession, parseExecutorBinding, parseDecisionLease,
-  parseDecisionReviewTarget, claimDecisionTask, startDecisionTask, completeDecisionTask,
-  failDecisionTask, cancelDecisionTask, supersedeDecisionTask, releaseExpiredDecisionTask,
+  parseDecisionReviewTarget, claimDecisionTask, startDecisionTask, heartbeatDecisionTask,
+  completeDecisionTask, failDecisionTask, cancelDecisionTask, supersedeDecisionTask, releaseExpiredDecisionTask,
   validateDecisionResultForTask, isDecisionReviewApproved, rebindDecisionSession,
   breakDecisionBinding, completeDecisionSession, reopenDecisionSession,
 } from "./index";
@@ -137,6 +137,27 @@ describe("Decision task transition table", () => {
     for (const patch of [{ token: "foreign" }, { owner: "foreign" }, { generation: 2 }, { expiresAtMs: 101 }]) expect(() => completeDecisionTask(running(), result(), { ...lease, ...patch }, 4)).toThrow();
     expect(() => completeDecisionTask(running(), { ...result(), createdAtMs: 5 }, lease, 4)).toThrow();
     expect(() => startDecisionTask(inStatus("claimed"), lease, 0)).toThrow();
+  });
+  it("heartbeat extends live lease expiry and rejects stale claims or past expiry", () => {
+    const cl = inStatus("claimed");
+    const hbClaimed = heartbeatDecisionTask(cl, lease, 150, 10);
+    expect(hbClaimed.status).toBe("claimed");
+    expect(hbClaimed.lease?.expiresAtMs).toBe(150);
+    expect(hbClaimed.updatedAtMs).toBe(10);
+
+    const rn = running();
+    const hbRunning = heartbeatDecisionTask(rn, lease, 200, 15);
+    expect(hbRunning.status).toBe("running");
+    expect(hbRunning.lease?.expiresAtMs).toBe(200);
+    expect(hbRunning.updatedAtMs).toBe(15);
+
+    for (const status of statuses.filter(s => s !== "claimed" && s !== "running")) {
+      expect(() => heartbeatDecisionTask(inStatus(status), lease, 200, 15)).toThrow();
+    }
+    expect(() => heartbeatDecisionTask(rn, lease, 200, 100)).toThrow();
+    expect(() => heartbeatDecisionTask(rn, lease, 15, 15)).toThrow();
+    expect(() => heartbeatDecisionTask(rn, lease, 10, 15)).toThrow();
+    expect(() => heartbeatDecisionTask(rn, { ...lease, token: "wrong" }, 200, 15)).toThrow();
   });
 });
 

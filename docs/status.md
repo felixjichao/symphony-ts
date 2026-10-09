@@ -17,7 +17,9 @@
 
 ## Decision Plane extension
 
-NEST-99 / GitHub #94 adds provider-neutral v1 contracts, strict runtime validation and pure task/session/lease/binding transitions in domain. Exact HEAD approval and supersession have unit evidence; [protocol](decision-protocol.md) defines persistence boundaries. Durable store, bridge, adapters, Plan dispatch and Review merge gate remain unimplemented; current orchestration and delivery are unchanged.
+- NEST-99 / GitHub #94: provider-neutral v1 contracts, strict runtime validation and pure task/session/lease/binding transitions in `@symphony/domain`. Exact HEAD approval and supersession have unit evidence; [protocol](decision-protocol.md) defines persistence boundaries.
+- NEST-100 / GitHub #95: durable task/session snapshot store, single-writer process lock (`store.lock`), lease coordination, and localhost Web Agent Bridge HTTP server in `@symphony/decision` and `symphony decision bridge` in `@symphony/cli`.
+- External adapters, Plan dispatch, and Review merge gate remain separate work; current orchestration and delivery are unchanged.
 
 ## 已完成能力
 

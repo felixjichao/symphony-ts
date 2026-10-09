@@ -274,6 +274,14 @@ export function startDecisionTask(task: DecisionTask, lease: DecisionLease, now:
   requireValue(task.status === "claimed", "only claimed tasks can start");
   return parseDecisionTask({ ...task, status: "running", updatedAtMs: now });
 }
+export function heartbeatDecisionTask(task: DecisionTask, lease: DecisionLease, newExpiry: UtcTimestampMs, now: UtcTimestampMs): DecisionTask {
+  parseDecisionTask(task); parseDecisionLease(lease); checkNow(task.updatedAtMs, now); checkLease(task, lease, now);
+  requireValue(task.status === "claimed" || task.status === "running", "only leased tasks can heartbeat");
+  timestamp(newExpiry);
+  requireValue(newExpiry > now, "heartbeat expiry must be in the future");
+  const updatedLease: DecisionLease = { ...task.lease!, expiresAtMs: newExpiry };
+  return parseDecisionTask({ ...task, lease: updatedLease, updatedAtMs: now });
+}
 export function completeDecisionTask(task: DecisionTask, result: DecisionResult, lease: DecisionLease, now: UtcTimestampMs): DecisionTask {
   validateDecisionResultForTask(task, result); checkNow(task.updatedAtMs, now); checkLease(task, lease, now);
   requireValue(task.status === "running" && result.createdAtMs <= now, "only running tasks with a current result can complete");

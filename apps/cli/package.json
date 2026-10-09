@@ -18,6 +18,7 @@
     "@symphony/agent": "*",
     "@symphony/config": "*",
     "@symphony/domain": "*",
+    "@symphony/decision": "*",
     "@symphony/observability": "*",
     "@symphony/orchestrator": "*",
     "@symphony/tracker": "*",

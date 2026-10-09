@@ -62,6 +62,17 @@ describe("parseCliArgs", () => {
       subcommandArgs: ["land", "--opt-in"],
     });
   });
+
+  it("recognizes decision bridge subcommand and arguments", () => {
+    expect(parseCliArgs(["decision", "bridge", "--store", "/data", "--port", "4040"])).toEqual({
+      subcommand: "decision-bridge",
+      subcommandArgs: ["--store", "/data", "--port", "4040"],
+    });
+    expect(parseCliArgs(["decision-bridge", "--store", "/data"])).toEqual({
+      subcommand: "decision-bridge",
+      subcommandArgs: ["--store", "/data"],
+    });
+  });
 });
 
 

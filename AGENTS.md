@@ -39,6 +39,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 | Codex app-server 交互、prompt 组装、session 事件流 | `packages/agent` | §10、§12 |
 | retry policy、polling / 调度 / reconciliation、runtime state | `packages/orchestrator` | §7、§8、§14 |
 | 结构化日志、状态出口（dashboard / HTTP surface） | `packages/observability` | §13 |
+| Decision 任务与会话持久化、Web Agent Bridge | `packages/decision` | §4、Decision 扩展 |
 | CLI 子命令、进程装配 / 生命周期 | `apps/cli` | §17、§18 |
 
 依赖方向（下游可依赖上游，反向禁止）：
@@ -47,10 +48,11 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 domain              ← 共享领域契约，不依赖任何包
 config / tracker    → domain
 workspace           → domain
+decision            → domain
 agent               → domain + config + workspace
 orchestrator        → domain + config + tracker + workspace + agent
 observability       → domain（以及只读 runtime snapshot 契约）
-apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability
+apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability + decision
 ```
 
 两条硬约束（最常见错误）：

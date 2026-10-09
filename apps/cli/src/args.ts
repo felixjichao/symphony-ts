@@ -1,7 +1,7 @@
 import path from "node:path";
 
 export interface ParsedCliArgs {
-  readonly subcommand?: "repo-bootstrap" | "delivery" | "delivery-skill" | "dogfood" | undefined;
+  readonly subcommand?: "repo-bootstrap" | "delivery" | "delivery-skill" | "dogfood" | "decision-bridge" | undefined;
   readonly subcommandArgs?: readonly string[] | undefined;
   readonly workflowPath?: string | undefined;
   readonly help?: boolean | undefined;
@@ -11,6 +11,18 @@ export interface ParsedCliArgs {
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   if (argv.length > 0) {
     const first = argv[0];
+    if (first === "decision" && argv[1] === "bridge") {
+      return {
+        subcommand: "decision-bridge",
+        subcommandArgs: argv.slice(2),
+      };
+    }
+    if (first === "decision-bridge") {
+      return {
+        subcommand: "decision-bridge",
+        subcommandArgs: argv.slice(1),
+      };
+    }
     if (first === "repo-bootstrap" || first === "bootstrap-repo") {
       return {
         subcommand: "repo-bootstrap",

@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Decision store and bridge](accepted/architecture/2026-10-09-decision-store-bridge.md) — durable task/session snapshot store, cross-process lock, and localhost Web Agent Bridge (NEST-100 / #95).
 - [Decision contracts](accepted/architecture/2026-10-08-decision-contracts.md) — provider-neutral v1 session/task/result/binding, pure validation and exact SHA approval (NEST-99 / #94).
 
 - [accepted/tooling/2026-10-08-architecture-diagrams.md](accepted/tooling/2026-10-08-architecture-diagrams.md) — canonical 架构图的源/产物契约与 docs gate 校验（NEST-96 / #91）：四张图以 `docs/diagrams/source/*.html` 为唯一可编辑源、提交对应 `.svg`，`scripts/export-diagrams.mjs` 以零依赖确定性抽取内嵌 SVG，`docs-check` 校验源/产物配对、产物与源一致及必需文档引用；仅复用 diagram-design 视觉语法，PNG/浏览器不进默认 gate。

@@ -47,6 +47,13 @@ describe("CLI binary child process execution (§17.7 / §18.1)", () => {
     expect(result.signal).toBeNull();
     expect(result.stdout).toContain(arg === "--help" ? "Usage: symphony" : pkg.version);
   });
+  it("prints decision bridge help through real child process", async () => {
+    const proc = startProcess(["decision", "bridge", "--help"]);
+    const result = await proc.result;
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toContain("Usage: symphony decision bridge --store <dir>");
+  });
   it.each([
     ["absolute", "SIGINT"], ["relative", "SIGTERM"], ["default", "SIGINT"],
   ] as const)("loads %s path and gracefully stops on %s", async (mode, signal) => {

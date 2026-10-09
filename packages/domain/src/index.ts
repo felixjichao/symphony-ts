@@ -110,8 +110,8 @@ export {
   parseDecisionReviewTarget, parseExecutorBinding, parseDecisionSession,
   parseDecisionLease, parseDecisionTask, parseDecisionResult,
   validateDecisionResultForTask, claimDecisionTask, startDecisionTask,
-  completeDecisionTask, failDecisionTask, releaseExpiredDecisionTask,
-  cancelDecisionTask, supersedeDecisionTask, isDecisionReviewApproved,
-  rebindDecisionSession, breakDecisionBinding, completeDecisionSession,
-  reopenDecisionSession,
+  heartbeatDecisionTask, completeDecisionTask, failDecisionTask,
+  releaseExpiredDecisionTask, cancelDecisionTask, supersedeDecisionTask,
+  isDecisionReviewApproved, rebindDecisionSession, breakDecisionBinding,
+  completeDecisionSession, reopenDecisionSession,
 } from "./decision";

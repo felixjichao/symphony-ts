@@ -215,9 +215,9 @@ credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).
 
-## Decision Plane extension evidence (NEST-99 / GitHub #94)
+## Decision Plane extension evidence (NEST-99 / #94 & NEST-100 / #95)
 
-This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. No store, bridge, executor or delivery integration is claimed. [Protocol](decision-protocol.md).
+This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. [Protocol](decision-protocol.md).
 
 | Capability | Evidence |
 |---|---|
@@ -225,5 +225,10 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Legal/illegal lifecycle, claim expiry, stale submission fencing | same file: Decision task transition table |
 | Approval exact session/repository/PR/HEAD; SHA A → B → A supersession | same file: Exact revision review authorization |
 | Binding loss/rebind generation; completion and explicit reopen | same file: Session lifecycle and executor continuity |
+| Cross-process store lock with stale PID detection & recovery | `packages/decision/src/lock.test.ts`: StoreLock process exclusivity |
+| Durable snapshot persistence, atomic rename & fsync, fail closed on corrupt data | `packages/decision/src/store.test.ts`: DurableDecisionStore persistence |
+| Decision service session lifecycle, CAS rebind, auto-supersession & lease claims | `packages/decision/src/service.test.ts`: DecisionService |
+| Web Agent Bridge HTTP server (loopback, DNS rebinding guard, bearer auth, CORS, REST endpoints) | `packages/decision/src/bridge.test.ts`: DecisionBridge HTTP server |
+| CLI `symphony decision bridge` execution, argument parsing, and child process lifecycle | `apps/cli/src/args.test.ts`, `apps/cli/src/decision-bridge-cli.test.ts`, `apps/cli/src/bin.test.ts` |
 
-Validation commands: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Tests use the public domain entry point. Atomic store guarantees and external integration require future evidence.
+Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
