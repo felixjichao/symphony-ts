@@ -138,16 +138,53 @@ export class StoreLock {
       }
     }
 
-    // Process is dead. Atomically retire the stale reclaim lock via hardlink tombstone.
-    const tombstone = `${this.reclaimLockPath}.retired.${existing.pid}.${existing.acquiredAtMs}.${existing.nonce || "0"}`;
+    return await this.atomicRetireAndReplace(this.reclaimLockPath, existing, reclaimMeta);
+  }
+
+  private async atomicRetireAndReplace(
+    targetPath: string,
+    expected: LockMetadata,
+    newMeta: LockMetadata
+  ): Promise<boolean> {
+    const tombstone = `${targetPath}.retired.${expected.pid}.${expected.acquiredAtMs}.${expected.nonce || "0"}`;
+    let linked = false;
     try {
-      await fs.link(this.reclaimLockPath, tombstone);
-    } catch {
+      await fs.link(targetPath, tombstone);
+      linked = true;
+    } catch (err: unknown) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      if (nodeErr.code === "EEXIST") {
+        // Tombstone already exists. Check if this is a previous reclaimer crash between link and unlink.
+        const stLock = await fs.stat(targetPath).catch(() => null);
+        const stTomb = await fs.stat(tombstone).catch(() => null);
+        if (stLock && stTomb && stLock.ino === stTomb.ino) {
+          const tombContent = await fs.readFile(tombstone, "utf8").catch(() => null);
+          if (tombContent) {
+            try {
+              const tombMeta = JSON.parse(tombContent) as LockMetadata;
+              if (
+                tombMeta.pid === expected.pid &&
+                tombMeta.hostname === expected.hostname &&
+                tombMeta.acquiredAtMs === expected.acquiredAtMs
+              ) {
+                // Verified: target and tombstone point to the exact same inode of the dead process.
+                // The previous reclaimer crashed before unlinking. It is safe to resume retirement.
+                linked = true;
+              }
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      }
+    }
+
+    if (!linked) {
       return false;
     }
 
     // Inode and identity verification
-    const stLock = await fs.stat(this.reclaimLockPath).catch(() => null);
+    const stLock = await fs.stat(targetPath).catch(() => null);
     const stTomb = await fs.stat(tombstone).catch(() => null);
     if (!stLock || !stTomb || stLock.ino !== stTomb.ino) {
       return false;
@@ -160,9 +197,9 @@ export class StoreLock {
     try {
       const tombMeta = JSON.parse(tombContent) as LockMetadata;
       if (
-        tombMeta.pid !== existing.pid ||
-        tombMeta.hostname !== existing.hostname ||
-        tombMeta.acquiredAtMs !== existing.acquiredAtMs
+        tombMeta.pid !== expected.pid ||
+        tombMeta.hostname !== expected.hostname ||
+        tombMeta.acquiredAtMs !== expected.acquiredAtMs
       ) {
         return false;
       }
@@ -170,14 +207,14 @@ export class StoreLock {
       return false;
     }
 
-    // Safe to unlink the retired reclaim lock
-    await fs.unlink(this.reclaimLockPath).catch(() => {});
+    // Safe to unlink the retired lock
+    await fs.unlink(targetPath).catch(() => {});
 
-    // Acquire reclaim lock via O_CREAT | O_EXCL
+    // Acquire lock via O_CREAT | O_EXCL
     try {
-      const handle = await fs.open(this.reclaimLockPath, "wx");
+      const handle = await fs.open(targetPath, "wx");
       try {
-        await handle.writeFile(JSON.stringify(reclaimMeta, null, 2), "utf8");
+        await handle.writeFile(JSON.stringify(newMeta, null, 2), "utf8");
         await handle.sync();
       } finally {
         await handle.close();
@@ -215,41 +252,6 @@ export class StoreLock {
         }
       }
 
-      // Atomically retire the stale main lock via hardlink tombstone
-      const tombstone = `${this.lockPath}.retired.${current.pid}.${current.acquiredAtMs}.${current.nonce || "0"}`;
-      try {
-        await fs.link(this.lockPath, tombstone);
-      } catch {
-        return false;
-      }
-
-      // Inode and identity verification
-      const stLock = await fs.stat(this.lockPath).catch(() => null);
-      const stTomb = await fs.stat(tombstone).catch(() => null);
-      if (!stLock || !stTomb || stLock.ino !== stTomb.ino) {
-        return false;
-      }
-
-      const tombContent = await fs.readFile(tombstone, "utf8").catch(() => null);
-      if (!tombContent) {
-        return false;
-      }
-      try {
-        const tombMeta = JSON.parse(tombContent) as LockMetadata;
-        if (
-          tombMeta.pid !== current.pid ||
-          tombMeta.hostname !== current.hostname ||
-          tombMeta.acquiredAtMs !== current.acquiredAtMs
-        ) {
-          return false;
-        }
-      } catch {
-        return false;
-      }
-
-      // Safe to unlink the retired main lock
-      await fs.unlink(this.lockPath).catch(() => {});
-
       const myMainMeta: LockMetadata = {
         pid: process.pid,
         hostname: os.hostname(),
@@ -257,18 +259,7 @@ export class StoreLock {
         nonce: lockNonce,
       };
 
-      try {
-        const handle = await fs.open(this.lockPath, "wx");
-        try {
-          await handle.writeFile(JSON.stringify(myMainMeta, null, 2), "utf8");
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
-        return true;
-      } catch {
-        return false;
-      }
+      return await this.atomicRetireAndReplace(this.lockPath, current, myMainMeta);
     } finally {
       try {
         const check = await this.readReclaimMetadata();

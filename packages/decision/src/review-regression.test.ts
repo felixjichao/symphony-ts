@@ -739,10 +739,12 @@ describe("Review blocker regressions", () => {
         return originalLink(...args);
       });
 
-      const results = await Promise.allSettled([
-        a.acquire().then(() => firstAcquired()),
-        b.acquire().then(() => firstAcquired()),
-      ]);
+      const pA = a.acquire().then(() => firstAcquired());
+      // Ensure A enters the link barrier before B begins
+      await new Promise((r) => setTimeout(r, 5));
+      const pB = b.acquire().then(() => firstAcquired());
+
+      const results = await Promise.allSettled([pA, pB]);
 
       const acquiredList = [a, b].filter((l) => l.isAcquired());
       expect(acquiredList).toHaveLength(1);
@@ -766,6 +768,55 @@ describe("Review blocker regressions", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  for (const targetName of ["store.lock", "store.reclaim.lock"]) {
+    it(`safely recovers after a reclaimer crashes with a linked ${targetName} tombstone`, async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-r5-crash-"));
+      const dead = { pid: 999999, hostname: os.hostname(), acquiredAtMs: 1, nonce: "dead-owner" };
+      expect(() => process.kill(dead.pid, 0)).toThrow();
+      const target = path.join(dir, targetName);
+      const tomb = `${target}.retired.${dead.pid}.${dead.acquiredAtMs}.${dead.nonce}`;
+      try {
+        await fs.writeFile(path.join(dir, "store.lock"), JSON.stringify(dead));
+        if (targetName !== "store.lock") {
+          await fs.writeFile(target, JSON.stringify(dead));
+        } else {
+          await fs.writeFile(
+            path.join(dir, "store.reclaim.lock"),
+            JSON.stringify({ ...dead, nonce: "dead-reclaimer" })
+          );
+        }
+        await fs.link(target, tomb);
+        expect((await fs.stat(target)).ino).toBe((await fs.stat(tomb)).ino);
+
+        // First restart: recovers from crash residue and successfully acquires
+        const lock1 = new StoreLock(dir);
+        await expect(lock1.acquire()).resolves.toBeUndefined();
+        expect(lock1.isAcquired()).toBe(true);
+
+        const currentMeta = JSON.parse(await fs.readFile(path.join(dir, "store.lock"), "utf8"));
+        expect(currentMeta.pid).toBe(process.pid);
+        expect(currentMeta.hostname).toBe(os.hostname());
+
+        // Inode has been updated to the new lock (not the old tombstone inode)
+        expect((await fs.stat(path.join(dir, "store.lock"))).ino).not.toBe(
+          (await fs.stat(tomb)).ino
+        );
+
+        // Safe release
+        await lock1.release();
+        expect(lock1.isAcquired()).toBe(false);
+
+        // Second restart: new instance acquires cleanly
+        const lock2 = new StoreLock(dir);
+        await expect(lock2.acquire()).resolves.toBeUndefined();
+        expect(lock2.isAcquired()).toBe(true);
+        await lock2.release();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 
