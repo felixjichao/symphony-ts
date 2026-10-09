@@ -326,20 +326,62 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
       if (!s) {
         throw new CorruptedStoreError(`Operation receipt references non-existent session ${op.entityId}`);
       }
-      if (op.resultingSession) {
-        parseDecisionSession(op.resultingSession);
-        if (op.resultingSession.id !== op.sessionId) {
-          throw new CorruptedStoreError(`Operation receipt resultingSession id does not match sessionId`);
-        }
-        if (op.bindingGeneration !== undefined && op.resultingSession.bindingGeneration !== op.bindingGeneration) {
-          throw new CorruptedStoreError(
-            `Operation receipt resultingSession bindingGeneration does not match bindingGeneration`
-          );
-        }
+      if (typeof op.adapter !== "string" || op.adapter.trim().length === 0) {
+        throw new CorruptedStoreError(`Operation receipt missing or invalid adapter`);
+      }
+      if (typeof op.externalSessionRef !== "string" || op.externalSessionRef.trim().length === 0) {
+        throw new CorruptedStoreError(`Operation receipt missing or invalid externalSessionRef`);
+      }
+      if (op.resumeUri !== null && typeof op.resumeUri !== "string") {
+        throw new CorruptedStoreError(`Operation receipt invalid resumeUri`);
+      }
+      if (
+        typeof op.expectedGeneration !== "number" ||
+        !Number.isSafeInteger(op.expectedGeneration) ||
+        op.expectedGeneration < 0
+      ) {
+        throw new CorruptedStoreError(`Operation receipt missing or invalid expectedGeneration`);
+      }
+      if (
+        typeof op.bindingGeneration !== "number" ||
+        !Number.isSafeInteger(op.bindingGeneration)
+      ) {
+        throw new CorruptedStoreError(`Operation receipt missing or invalid bindingGeneration`);
+      }
+      if (op.bindingGeneration !== op.expectedGeneration + 1) {
+        throw new CorruptedStoreError(
+          `Operation receipt bindingGeneration must equal expectedGeneration + 1`
+        );
+      }
+      if (!op.resultingSession) {
+        throw new CorruptedStoreError(`Operation receipt missing resultingSession`);
+      }
+      parseDecisionSession(op.resultingSession);
+      if (op.resultingSession.id !== op.sessionId) {
+        throw new CorruptedStoreError(`Operation receipt resultingSession id does not match sessionId`);
+      }
+      if (op.resultingSession.bindingGeneration !== op.bindingGeneration) {
+        throw new CorruptedStoreError(
+          `Operation receipt resultingSession bindingGeneration does not match bindingGeneration`
+        );
+      }
+      if (!op.resultingSession.binding) {
+        throw new CorruptedStoreError(`Operation receipt resultingSession has no binding`);
+      }
+      if (
+        op.resultingSession.binding.adapter !== op.adapter ||
+        op.resultingSession.binding.externalSessionRef !== op.externalSessionRef ||
+        op.resultingSession.binding.resumeUri !== op.resumeUri ||
+        op.resultingSession.binding.generation !== op.bindingGeneration
+      ) {
+        throw new CorruptedStoreError(
+          `Operation receipt resultingSession binding does not match receipt fields`
+        );
       }
     } else {
+      const unknownKind = (op as unknown as { kind?: unknown }).kind;
       throw new CorruptedStoreError(
-        `Unknown operation receipt kind: ${String((op as Record<string, unknown>)["kind"])}`
+        `Unknown operation receipt kind: ${String(unknownKind)}`
       );
     }
   }

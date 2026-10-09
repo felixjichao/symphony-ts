@@ -154,33 +154,23 @@ export class DecisionService {
   ): Promise<DecisionSession> {
     const checkRebindOp = (op: OperationReceipt): DecisionSession => {
       const genMatches =
-        (op.expectedGeneration === undefined ||
-          params.expectedGeneration === op.expectedGeneration ||
-          params.expectedGeneration === op.bindingGeneration) &&
-        (op.bindingGeneration === undefined ||
-          op.bindingGeneration === params.expectedGeneration ||
-          op.bindingGeneration === params.expectedGeneration + 1);
+        params.expectedGeneration === op.expectedGeneration ||
+        params.expectedGeneration === op.bindingGeneration;
 
       if (
         op.kind !== "rebind-session" ||
         op.sessionId !== sessionId ||
         !genMatches ||
-        (op.adapter !== undefined && op.adapter !== params.adapter) ||
-        (op.externalSessionRef !== undefined && op.externalSessionRef !== params.externalSessionRef) ||
-        (op.resumeUri !== undefined && op.resumeUri !== params.resumeUri)
+        op.adapter !== params.adapter ||
+        op.externalSessionRef !== params.externalSessionRef ||
+        op.resumeUri !== params.resumeUri ||
+        !op.resultingSession
       ) {
         throw new DecisionConflictError(
           `Operation key "${params.operationKey}" was already used for a different operation`
         );
       }
-      if (op.resultingSession) {
-        return op.resultingSession;
-      }
-      const existing = this.store.getSession(sessionId);
-      if (existing) return existing;
-      throw new DecisionConflictError(
-        `Operation key "${params.operationKey}" references non-existent session "${sessionId}"`
-      );
+      return op.resultingSession;
     };
 
     if (params.operationKey) {
@@ -194,34 +184,7 @@ export class DecisionService {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
-          const genMatches =
-            (op.expectedGeneration === undefined ||
-              params.expectedGeneration === op.expectedGeneration ||
-              params.expectedGeneration === op.bindingGeneration) &&
-            (op.bindingGeneration === undefined ||
-              op.bindingGeneration === params.expectedGeneration ||
-              op.bindingGeneration === params.expectedGeneration + 1);
-
-          if (
-            op.kind !== "rebind-session" ||
-            op.sessionId !== sessionId ||
-            !genMatches ||
-            (op.adapter !== undefined && op.adapter !== params.adapter) ||
-            (op.externalSessionRef !== undefined && op.externalSessionRef !== params.externalSessionRef) ||
-            (op.resumeUri !== undefined && op.resumeUri !== params.resumeUri)
-          ) {
-            throw new DecisionConflictError(
-              `Operation key "${params.operationKey}" was already used for a different operation`
-            );
-          }
-          if (op.resultingSession) {
-            return op.resultingSession;
-          }
-          const current = draft.sessions[sessionId];
-          if (current) return current;
-          throw new DecisionConflictError(
-            `Operation key "${params.operationKey}" references non-existent session "${sessionId}"`
-          );
+          return checkRebindOp(op);
         }
       }
 

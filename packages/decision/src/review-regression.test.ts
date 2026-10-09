@@ -591,4 +591,114 @@ describe("Review blocker regressions", () => {
     };
     expect(() => validateStoreRecord(record as unknown as DecisionStoreRecord)).not.toThrow();
   });
+
+  it("fails closed on corrupted or stripped rebind operation receipt fields on restart", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-r3-rebind-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    try {
+      await store.open();
+      const service = new DecisionService(store, { clock: () => 1000 });
+      const session = await service.createSession(githubDecisionRoot("owner", "repo", 95));
+      await service.putBinding(session.id, {
+        adapter: "browser",
+        externalSessionRef: "one",
+        resumeUri: null,
+      });
+      await service.rebindSession(session.id, {
+        adapter: "browser",
+        externalSessionRef: "two",
+        resumeUri: null,
+        expectedGeneration: 1,
+        operationKey: "rebind",
+      });
+      await store.close();
+
+      const filename = path.join(dir, "store.json");
+      const originalRaw = JSON.parse(await fs.readFile(filename, "utf8"));
+
+      for (const field of [
+        "adapter",
+        "externalSessionRef",
+        "expectedGeneration",
+        "bindingGeneration",
+        "resultingSession",
+      ]) {
+        const corrupted = JSON.parse(JSON.stringify(originalRaw));
+        delete corrupted.operationReceipts.rebind[field];
+        await fs.writeFile(filename, JSON.stringify(corrupted));
+
+        const reopenStore = new DurableDecisionStore({ storeDir: dir });
+        await expect(reopenStore.open()).rejects.toThrow(CorruptedStoreError);
+        await reopenStore.close();
+      }
+    } finally {
+      await store.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prevents dual lock acquisition when three instances race on stale main and reclaim locks", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-r3-lock-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    const c = new StoreLock(dir);
+    try {
+      const dead = JSON.stringify({ pid: 999999, hostname: os.hostname(), acquiredAtMs: 1 });
+      await fs.writeFile(main, dead);
+      await fs.writeFile(reclaim, dead);
+
+      const results = await Promise.allSettled([a.acquire(), b.acquire(), c.acquire()]);
+      const acquiredCount =
+        (a.isAcquired() ? 1 : 0) + (b.isAcquired() ? 1 : 0) + (c.isAcquired() ? 1 : 0);
+      expect(acquiredCount).toBe(1);
+
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(rejected).toHaveLength(2);
+      for (const rej of rejected) {
+        if (rej.status === "rejected") {
+          expect(rej.reason).toBeInstanceOf(DecisionStoreLockError);
+        }
+      }
+    } finally {
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await c.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("guarantees mutual exclusion with staggered three-instance concurrency on stale locks", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review101-r3-staggered-"));
+    const main = path.join(dir, "store.lock");
+    const reclaim = path.join(dir, "store.reclaim.lock");
+    const a = new StoreLock(dir);
+    const b = new StoreLock(dir);
+    const c = new StoreLock(dir);
+    try {
+      const dead = JSON.stringify({ pid: 999999, hostname: os.hostname(), acquiredAtMs: 1 });
+      await fs.writeFile(main, dead);
+      await fs.writeFile(reclaim, dead);
+
+      // Start A, wait 5ms, start B, wait 15ms, start C
+      const pa = a.acquire().then(() => "a", (e) => e);
+      await new Promise((r) => setTimeout(r, 5));
+      const pb = b.acquire().then(() => "b", (e) => e);
+      await new Promise((r) => setTimeout(r, 15));
+      const pc = c.acquire().then(() => "c", (e) => e);
+
+      const results = await Promise.all([pa, pb, pc]);
+      const acquiredList = [a, b, c].filter((lock) => lock.isAcquired());
+      expect(acquiredList).toHaveLength(1);
+
+      const successfulNames = results.filter((r) => r === "a" || r === "b" || r === "c");
+      expect(successfulNames).toHaveLength(1);
+    } finally {
+      await a.release().catch(() => {});
+      await b.release().catch(() => {});
+      await c.release().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

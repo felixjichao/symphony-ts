@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,6 +9,7 @@ export interface LockMetadata {
   readonly pid: number;
   readonly hostname: string;
   readonly acquiredAtMs: number;
+  readonly nonce?: string;
 }
 
 export class StoreLock {
@@ -15,6 +17,7 @@ export class StoreLock {
   private readonly reclaimLockPath: string;
   private readonly storeDir: string;
   private acquired = false;
+  private currentNonce: string | null = null;
   private exitHandler: (() => void) | null = null;
 
   constructor(storeDir: string) {
@@ -36,13 +39,15 @@ export class StoreLock {
 
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const metadata: LockMetadata = {
-          pid: process.pid,
-          hostname: os.hostname(),
-          acquiredAtMs: Date.now(),
-        };
+      const myNonce = crypto.randomUUID();
+      const metadata: LockMetadata = {
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAtMs: Date.now(),
+        nonce: myNonce,
+      };
 
+      try {
         const handle = await fs.open(this.lockPath, "wx");
         try {
           await handle.writeFile(JSON.stringify(metadata, null, 2), "utf8");
@@ -52,6 +57,7 @@ export class StoreLock {
         }
 
         this.acquired = true;
+        this.currentNonce = myNonce;
         this.installExitHandler();
         return;
       } catch (error: unknown) {
@@ -65,15 +71,19 @@ export class StoreLock {
         // Lock file already exists. Inspect if it is stale.
         const staleMeta = await this.inspectExistingLock();
         if (staleMeta && attempt < maxAttempts) {
-          const reclaimed = await this.reclaimStaleLock(staleMeta);
+          const reclaimed = await this.reclaimStaleLock(staleMeta, myNonce);
           if (reclaimed) {
-            continue;
+            this.acquired = true;
+            this.currentNonce = myNonce;
+            this.installExitHandler();
+            return;
           }
         }
 
         if (attempt < maxAttempts) {
-          // Brief pause before retry
-          await new Promise((r) => setTimeout(r, 20));
+          // Jittered backoff before retry
+          const jitter = 10 + Math.floor(Math.random() * 20);
+          await new Promise((r) => setTimeout(r, jitter));
           continue;
         }
 
@@ -84,112 +94,157 @@ export class StoreLock {
     }
   }
 
-  private async reclaimStaleLock(expected: LockMetadata): Promise<boolean> {
-    const myMeta: LockMetadata = {
+  private async acquireReclaimMutex(reclaimNonce: string): Promise<boolean> {
+    const reclaimMeta: LockMetadata = {
       pid: process.pid,
       hostname: os.hostname(),
       acquiredAtMs: Date.now(),
+      nonce: reclaimNonce,
     };
-    let reclaimHandle: fs.FileHandle | null = null;
+
     try {
-      reclaimHandle = await fs.open(this.reclaimLockPath, "wx");
-      await reclaimHandle.writeFile(JSON.stringify(myMeta), "utf8");
-      await reclaimHandle.sync();
+      const handle = await fs.open(this.reclaimLockPath, "wx");
+      try {
+        await handle.writeFile(JSON.stringify(reclaimMeta, null, 2), "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      return true;
     } catch (err: unknown) {
       const nodeError = err as NodeJS.ErrnoException;
-      if (nodeError.code === "EEXIST") {
-        // Another process is currently reclaiming or holding reclaim lock.
-        // Check if reclaim lock itself is stale (dead PID on same host):
-        try {
-          const recContent = await fs.readFile(this.reclaimLockPath, "utf8");
-          const recMeta = JSON.parse(recContent) as LockMetadata;
-          if (recMeta.hostname === os.hostname() && typeof recMeta.pid === "number") {
-            try {
-              process.kill(recMeta.pid, 0);
-              // Process is ALIVE; cannot reclaim
-            } catch (kErr: unknown) {
-              if ((kErr as NodeJS.ErrnoException).code === "ESRCH") {
-                // The holder of reclaimLockPath is DEAD.
-                // Reclaim it atomically without racing direct unlinks:
-                const cleanupTmp = `${this.reclaimLockPath}.clean.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-                try {
-                  await fs.rename(this.reclaimLockPath, cleanupTmp);
-                  try {
-                    const movedContent = await fs.readFile(cleanupTmp, "utf8");
-                    const movedMeta = JSON.parse(movedContent) as LockMetadata;
-                    if (
-                      movedMeta.pid === recMeta.pid &&
-                      movedMeta.hostname === recMeta.hostname &&
-                      movedMeta.acquiredAtMs === recMeta.acquiredAtMs
-                    ) {
-                      await fs.unlink(cleanupTmp);
-                    } else {
-                      // Unexpected content; put it back
-                      await fs.rename(cleanupTmp, this.reclaimLockPath).catch(() => {});
-                    }
-                  } catch {
-                    await fs.unlink(cleanupTmp).catch(() => {});
-                  }
-                } catch {
-                  // Another process already renamed or unlinked it; ignore
-                }
-              }
-            }
-          }
-        } catch {
-          // Ignore
-        }
+      if (nodeError.code !== "EEXIST") {
         return false;
       }
-      throw err;
+    }
+
+    // reclaimLockPath exists; check if it is stale
+    const existing = await this.readReclaimMetadata();
+    if (!existing) {
+      return false;
+    }
+
+    if (existing.hostname !== os.hostname() || typeof existing.pid !== "number") {
+      return false;
     }
 
     try {
-      // Re-read lockPath while holding the exclusive reclaim lock
+      process.kill(existing.pid, 0);
+      return false; // Process is alive
+    } catch (killErr: unknown) {
+      const kErr = killErr as NodeJS.ErrnoException;
+      if (kErr.code !== "ESRCH") {
+        return false;
+      }
+    }
+
+    // Process is dead. Atomically replace the stale reclaim lock with candidate file
+    const candPath = `${this.reclaimLockPath}.cand.${process.pid}.${Date.now()}.${reclaimNonce}.tmp`;
+    try {
+      await fs.writeFile(candPath, JSON.stringify(reclaimMeta, null, 2), "utf8");
+
+      // Verify reclaimLockPath still matches before replacing
+      const beforeRename = await this.readReclaimMetadata();
+      if (
+        !beforeRename ||
+        beforeRename.pid !== existing.pid ||
+        beforeRename.hostname !== existing.hostname ||
+        beforeRename.acquiredAtMs !== existing.acquiredAtMs
+      ) {
+        await fs.unlink(candPath).catch(() => {});
+        return false;
+      }
+
+      await fs.rename(candPath, this.reclaimLockPath);
+
+      // Settling delay: allow any in-flight concurrent renames to land
+      await new Promise((r) => setTimeout(r, 25));
+
+      // Verify that our candidate is the active, settled reclaim lock
+      const verified = await this.readReclaimMetadata();
+      if (
+        verified &&
+        verified.pid === process.pid &&
+        verified.hostname === os.hostname() &&
+        verified.nonce === reclaimNonce
+      ) {
+        return true;
+      }
+
+      return false;
+    } catch {
+      await fs.unlink(candPath).catch(() => {});
+      return false;
+    }
+  }
+
+  private async reclaimStaleLock(expected: LockMetadata, lockNonce: string): Promise<boolean> {
+    const reclaimNonce = crypto.randomUUID();
+    const gotMutex = await this.acquireReclaimMutex(reclaimNonce);
+    if (!gotMutex) {
+      return false;
+    }
+
+    try {
       const current = await this.readLockMetadata();
       if (
-        current &&
-        current.pid === expected.pid &&
-        current.hostname === expected.hostname &&
-        current.acquiredAtMs === expected.acquiredAtMs
+        !current ||
+        current.pid !== expected.pid ||
+        current.hostname !== expected.hostname ||
+        current.acquiredAtMs !== expected.acquiredAtMs
       ) {
-        // Still matches the exact inspected stale lock; atomically rename before unlinking
-        const cleanupMain = `${this.lockPath}.clean.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-        try {
-          await fs.rename(this.lockPath, cleanupMain);
-          await fs.unlink(cleanupMain);
-          return true;
-        } catch {
+        return false;
+      }
+
+      try {
+        process.kill(current.pid, 0);
+        return false; // Alive!
+      } catch (kErr: unknown) {
+        if ((kErr as NodeJS.ErrnoException).code !== "ESRCH") {
           return false;
         }
       }
-      return false;
-    } finally {
-      if (reclaimHandle) {
-        await reclaimHandle.close().catch(() => {});
-        // Safely remove reclaimLockPath only if it still belongs to this process!
-        const releaseTmp = `${this.reclaimLockPath}.rel.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-        try {
-          await fs.rename(this.reclaimLockPath, releaseTmp);
-          try {
-            const relContent = await fs.readFile(releaseTmp, "utf8");
-            const relMeta = JSON.parse(relContent) as LockMetadata;
-            if (
-              relMeta.pid === process.pid &&
-              relMeta.hostname === os.hostname() &&
-              relMeta.acquiredAtMs === myMeta.acquiredAtMs
-            ) {
-              await fs.unlink(releaseTmp);
-            } else {
-              // Not ours, put back
-              await fs.rename(releaseTmp, this.reclaimLockPath).catch(() => {});
-            }
-          } catch {
-            await fs.unlink(releaseTmp).catch(() => {});
-          }
-        } catch {
-          // If rename failed (already unlinked/moved), ignore
+
+      const myMainMeta: LockMetadata = {
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAtMs: Date.now(),
+        nonce: lockNonce,
+      };
+
+      const candMainPath = `${this.lockPath}.cand.${process.pid}.${Date.now()}.${lockNonce}.tmp`;
+      try {
+        await fs.writeFile(candMainPath, JSON.stringify(myMainMeta, null, 2), "utf8");
+        await fs.rename(candMainPath, this.lockPath);
+
+        const verified = await this.readLockMetadata();
+        if (
+          verified &&
+          verified.pid === process.pid &&
+          verified.hostname === os.hostname() &&
+          verified.nonce === lockNonce
+        ) {
+          return true;
         }
+
+        return false;
+      } catch {
+        await fs.unlink(candMainPath).catch(() => {});
+        return false;
+      }
+    } finally {
+      try {
+        const check = await this.readReclaimMetadata();
+        if (
+          check &&
+          check.pid === process.pid &&
+          check.hostname === os.hostname() &&
+          check.nonce === reclaimNonce
+        ) {
+          await fs.unlink(this.reclaimLockPath).catch(() => {});
+        }
+      } catch {
+        // Ignore
       }
     }
   }
@@ -197,6 +252,15 @@ export class StoreLock {
   private async readLockMetadata(): Promise<LockMetadata | null> {
     try {
       const content = await fs.readFile(this.lockPath, "utf8");
+      return JSON.parse(content) as LockMetadata;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readReclaimMetadata(): Promise<LockMetadata | null> {
+    try {
+      const content = await fs.readFile(this.reclaimLockPath, "utf8");
       return JSON.parse(content) as LockMetadata;
     } catch {
       return null;
@@ -240,14 +304,13 @@ export class StoreLock {
 
     try {
       const metadata = await this.readLockMetadata();
-      if (metadata && metadata.pid === process.pid && metadata.hostname === os.hostname()) {
-        const releaseTmp = `${this.lockPath}.rel.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-        try {
-          await fs.rename(this.lockPath, releaseTmp);
-          await fs.unlink(releaseTmp);
-        } catch {
-          // Best-effort cleanup
-        }
+      if (
+        metadata &&
+        metadata.pid === process.pid &&
+        metadata.hostname === os.hostname() &&
+        (this.currentNonce ? metadata.nonce === this.currentNonce : true)
+      ) {
+        await fs.unlink(this.lockPath).catch(() => {});
       }
     } catch {
       // Best-effort cleanup
@@ -262,14 +325,12 @@ export class StoreLock {
           if (fsSync.existsSync(this.lockPath)) {
             const content = fsSync.readFileSync(this.lockPath, "utf8");
             const meta = JSON.parse(content) as LockMetadata;
-            if (meta.pid === process.pid && meta.hostname === os.hostname()) {
-              const releaseTmp = `${this.lockPath}.exit.${process.pid}.${Date.now()}.tmp`;
-              try {
-                fsSync.renameSync(this.lockPath, releaseTmp);
-                fsSync.unlinkSync(releaseTmp);
-              } catch {
-                // Ignore
-              }
+            if (
+              meta.pid === process.pid &&
+              meta.hostname === os.hostname() &&
+              (this.currentNonce ? meta.nonce === this.currentNonce : true)
+            ) {
+              fsSync.unlinkSync(this.lockPath);
             }
           }
         } catch {
