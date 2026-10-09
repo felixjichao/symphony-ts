@@ -90,8 +90,11 @@ export function extractSymphonyResultPayload(rawText: string): unknown {
   } catch (err) {
     throw new DecisionAdapterError({
       code: "malformed_output",
-      message: `Malformed JSON in symphony-result code block: ${(err as Error).message}`,
-      rawDetails: content,
+      message: "Malformed JSON in symphony-result code block",
+      rawDetails: {
+        errorName: (err as Error).name,
+        contentLength: content.length,
+      },
       cause: err,
     });
   }
@@ -111,7 +114,9 @@ export function normalizeDecisionResult(payload: unknown, task?: DecisionTask): 
     throw new DecisionAdapterError({
       code: "malformed_output",
       message: `Invalid DecisionResult envelope: ${(err as Error).message}`,
-      rawDetails: payload,
+      rawDetails: {
+        reason: (err as Error).message,
+      },
       cause: err,
     });
   }

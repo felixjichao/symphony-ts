@@ -24,6 +24,8 @@ import {
   executeTaskWithAdapter,
   DurableDecisionStore,
   DecisionService,
+  DecisionConflictError,
+  type DecisionTaskFailure,
 } from "./index";
 
 const root = githubDecisionRoot("owner", "repo", 42);
@@ -793,6 +795,394 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
       await bridge.stop();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists lifecycle failures during inspectBinding, createSession, and resumeSession across store restart", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-lifecycle-fail-"));
+    try {
+      const store1 = new DurableDecisionStore({ storeDir: tempDir });
+      await store1.open();
+      const service1 = new DecisionService(store1);
+
+      // --- Scenario A: inspectBinding fails with human_required (e.g. login/CAPTCHA) ---
+      const sessionA = await service1.createSession(root);
+      const taskA = await service1.createPlanTask(sessionA.id, { operationKey: "op:plan:a" });
+      const claimA = await service1.claimTask(taskA.id, { owner: "worker-1" });
+
+      const inspectFailAdapter = new FakeDecisionExecutorAdapter({
+        inspectError: new DecisionAdapterError({
+          code: "human_required",
+          message: "Login / CAPTCHA required during inspectBinding",
+        }),
+      });
+
+      const outcomeA = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: inspectFailAdapter,
+        task: claimA.task,
+        session: claimA.session,
+        lease: claimA.lease,
+        context: connectorContext,
+      });
+
+      expect(outcomeA.status).toBe("failed");
+      if (outcomeA.status === "failed") {
+        expect(outcomeA.failure.error).toBe("human_required");
+        expect(outcomeA.receipt.type).toBe("failure");
+      }
+
+      // --- Scenario B: createSession fails with execution_failed (retryable network drop) ---
+      const sessionB = await service1.createSession(githubDecisionRoot("owner", "repo", 43));
+      const taskB = await service1.createPlanTask(sessionB.id, { operationKey: "op:plan:b" });
+      const claimB = await service1.claimTask(taskB.id, { owner: "worker-1" });
+
+      const createFailAdapter = new FakeDecisionExecutorAdapter({
+        createSessionError: new DecisionAdapterError({
+          code: "execution_failed",
+          message: "Network drop during createSession",
+          retryable: true,
+          suggestedAction: "retry",
+        }),
+      });
+
+      const outcomeB = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: createFailAdapter,
+        task: claimB.task,
+        session: claimB.session,
+        lease: claimB.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionB.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeB.status).toBe("failed");
+      if (outcomeB.status === "failed") {
+        expect(outcomeB.failure.error).toBe("execution_failed");
+        expect(outcomeB.failure.retryable).toBe(true);
+      }
+
+      // --- Scenario C: resumeSession fails with binding_broken ---
+      let sessionC = await service1.createSession(githubDecisionRoot("owner", "repo", 44));
+      sessionC = await service1.putBinding(sessionC.id, {
+        adapter: "fake-executor",
+        externalSessionRef: "ext-c-1",
+        resumeUri: null,
+      });
+      const taskC = await service1.createPlanTask(sessionC.id, { operationKey: "op:plan:c" });
+      const claimC = await service1.claimTask(taskC.id, { owner: "worker-1" });
+
+      const resumeFailAdapter = new FakeDecisionExecutorAdapter({
+        resumeSessionError: new DecisionAdapterError({
+          code: "binding_broken",
+          message: "Session expired on remote provider during resumeSession",
+        }),
+      });
+
+      const outcomeC = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: resumeFailAdapter,
+        task: claimC.task,
+        session: claimC.session,
+        lease: claimC.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionC.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeC.status).toBe("failed");
+      if (outcomeC.status === "failed") {
+        expect(outcomeC.failure.error).toBe("binding_broken");
+      }
+
+      // --- Scenario D: unusable binding that cannot be rebound (needsRebind: false) ---
+      let sessionD = await service1.createSession(githubDecisionRoot("owner", "repo", 45));
+      sessionD = await service1.putBinding(sessionD.id, {
+        adapter: "fake-executor",
+        externalSessionRef: "ext-d-1",
+        resumeUri: null,
+      });
+      const taskD = await service1.createPlanTask(sessionD.id, { operationKey: "op:plan:d" });
+      const claimD = await service1.claimTask(taskD.id, { owner: "worker-1" });
+
+      const unrecoverableAdapter = new FakeDecisionExecutorAdapter({
+        inspectBindingStatus: "unusable",
+        inspectBindingNeedsRebind: false,
+        inspectBindingReason: "Account terminated permanently",
+      });
+
+      const outcomeD = await executeTaskWithAdapter({
+        controller: service1,
+        adapter: unrecoverableAdapter,
+        task: claimD.task,
+        session: claimD.session,
+        lease: claimD.lease,
+        context: {
+          strategy: "connector",
+          workItem: sessionD.root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+      });
+
+      expect(outcomeD.status).toBe("failed");
+      if (outcomeD.status === "failed") {
+        expect(outcomeD.failure.error).toBe("binding_broken");
+      }
+
+      // Close store and reopen fresh instance to prove durability
+      await store1.close();
+
+      const store2 = new DurableDecisionStore({ storeDir: tempDir });
+      await store2.open();
+      const service2 = new DecisionService(store2);
+
+      const reloadedA = service2.getTask(taskA.id);
+      expect(reloadedA?.status).toBe("failed");
+      expect((service2.getReceipt(taskA.id)?.payload as DecisionTaskFailure)?.error).toBe("human_required");
+
+      const reloadedB = service2.getTask(taskB.id);
+      expect(reloadedB?.status).toBe("failed");
+      expect((service2.getReceipt(taskB.id)?.payload as DecisionTaskFailure)?.error).toBe("execution_failed");
+
+      const reloadedC = service2.getTask(taskC.id);
+      expect(reloadedC?.status).toBe("failed");
+      expect((service2.getReceipt(taskC.id)?.payload as DecisionTaskFailure)?.error).toBe("binding_broken");
+
+      const reloadedD = service2.getTask(taskD.id);
+      expect(reloadedD?.status).toBe("failed");
+      expect((service2.getReceipt(taskD.id)?.payload as DecisionTaskFailure)?.error).toBe("binding_broken");
+
+      await store2.close();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rethrows controller authority errors on stale lease or CAS rebind conflict without recording adapter failure", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-authority-test-"));
+    try {
+      const store = new DurableDecisionStore({ storeDir: tempDir });
+      await store.open();
+      const service = new DecisionService(store);
+
+      // 1. Stale lease during startTask
+      const session1 = await service.createSession(root);
+      const task1 = await service.createPlanTask(session1.id, { operationKey: "op:plan:auth:1" });
+      const claim1 = await service.claimTask(task1.id, { owner: "worker-1" });
+
+      const staleLease = {
+        ...claim1.lease,
+        token: "completely-invalid-stale-token",
+      };
+
+      const adapter1 = new FakeDecisionExecutorAdapter();
+      await expect(
+        executeTaskWithAdapter({
+          controller: service,
+          adapter: adapter1,
+          task: claim1.task,
+          session: claim1.session,
+          lease: staleLease,
+          context: connectorContext,
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Task must remain in claimed state — NOT failed!
+      const storedTask1 = service.getTask(task1.id);
+      expect(storedTask1?.status).toBe("claimed");
+      expect(service.getReceipt(task1.id)).toBeNull();
+
+      // 2. CAS conflict during rebindSession
+      let session2 = await service.createSession(githubDecisionRoot("owner", "repo", 43));
+      session2 = await service.putBinding(session2.id, {
+        adapter: "fake-executor",
+        externalSessionRef: "chat-gen-1",
+        resumeUri: null,
+      });
+      expect(session2.bindingGeneration).toBe(1);
+
+      const task2 = await service.createPlanTask(session2.id, { operationKey: "op:plan:auth:2" });
+      const claim2 = await service.claimTask(task2.id, { owner: "worker-1" });
+
+      // Simulate a concurrent worker advancing binding generation to 2 behind our back
+      await service.rebindSession(session2.id, {
+        adapter: "concurrent-worker-adapter",
+        externalSessionRef: "chat-gen-2",
+        resumeUri: null,
+        expectedGeneration: 1,
+      });
+
+      // Now coordinator encounters an unusable binding and attempts to rebind with expectedGeneration: 1 (stale)
+      const rebindAdapter = new FakeDecisionExecutorAdapter({
+        inspectBindingStatus: "unusable",
+        inspectBindingNeedsRebind: true,
+        inspectBindingReason: "Old session dropped",
+      });
+
+      await expect(
+        executeTaskWithAdapter({
+          controller: service,
+          adapter: rebindAdapter,
+          task: claim2.task,
+          session: claim2.session, // Session at generation 1
+          lease: claim2.lease,
+          context: {
+            strategy: "connector",
+            workItem: session2.root,
+            repository: "owner/repo",
+            prNumber: null,
+            headSha: null,
+          },
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Task must remain in claimed state — NOT failed!
+      const storedTask2 = service.getTask(task2.id);
+      expect(storedTask2?.status).toBe("claimed");
+      expect(service.getReceipt(task2.id)).toBeNull();
+
+      await store.close();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces safe bounded diagnostics and prevents secrets or raw content from leaking into store.json", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-secret-test-"));
+    try {
+      const store = new DurableDecisionStore({ storeDir: tempDir });
+      await store.open();
+      const service = new DecisionService(store);
+
+      const session = await service.createSession(root);
+      const task = await service.createPlanTask(session.id, { operationKey: "op:plan:secret:1" });
+      const claim = await service.claimTask(task.id, { owner: "worker-1" });
+
+      const SECRET = "TOP_SECRET_SESSION_TOKEN_ABC_XYZ_987";
+      const PRIVATE_PROMPT = "Confidential customer prompt data";
+
+      // Adapter returns malformed JSON with private prompt and secret in the output
+      const rawTextOutput = [
+        "Thought: Let me evaluate this secretly.",
+        `Private data: ${PRIVATE_PROMPT}`,
+        "```symphony-result",
+        `{ "secret": "${SECRET}", "malformed_json": missing_quotes_here }`,
+        "```",
+      ].join("\n");
+
+      const leakyAdapter = new FakeDecisionExecutorAdapter({
+        rawTextOutput,
+      });
+
+      const outcome = await executeTaskWithAdapter({
+        controller: service,
+        adapter: leakyAdapter,
+        task: claim.task,
+        session: claim.session,
+        lease: claim.lease,
+        context: connectorContext,
+      });
+
+      expect(outcome.status).toBe("failed");
+      if (outcome.status === "failed") {
+        expect(outcome.failure.error).toBe("malformed_output");
+      }
+
+      await store.close();
+
+      // Read raw store.json from disk
+      const storeContent = await fs.readFile(path.join(tempDir, "store.json"), "utf8");
+
+      // Verify that SECRET and PRIVATE_PROMPT are nowhere in store.json!
+      expect(storeContent.includes(SECRET)).toBe(false);
+      expect(storeContent.includes(PRIVATE_PROMPT)).toBe(false);
+
+      // Verify that only bounded whitelist diagnostics are present
+      expect(storeContent).toContain('"errorName": "SyntaxError"');
+      expect(storeContent).toContain('"contentLength":');
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cross-issue context at coordinator entrypoint before touching adapter or mutating task", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-cross-issue-test-"));
+    try {
+      const store = new DurableDecisionStore({ storeDir: tempDir });
+      await store.open();
+      const service = new DecisionService(store);
+
+      const session = await service.createSession(root); // github:owner/repo#42
+      const task = await service.createPlanTask(session.id, { operationKey: "op:plan:cross:1" });
+      const claim = await service.claimTask(task.id, { owner: "worker-1" });
+
+      const adapter = new FakeDecisionExecutorAdapter();
+
+      // 1. Cross-repo connector context
+      const crossRepoConnectorContext: DecisionConnectorContext = {
+        strategy: "connector",
+        workItem: githubDecisionRoot("other", "different-repo", 99),
+        repository: "other/different-repo",
+        prNumber: null,
+        headSha: null,
+      };
+
+      await expect(
+        executeTaskWithAdapter({
+          controller: service,
+          adapter,
+          task: claim.task,
+          session: claim.session,
+          lease: claim.lease,
+          context: crossRepoConnectorContext,
+        })
+      ).rejects.toThrow(/context workItem mismatch with session root/);
+
+      // 2. Cross-issue materialized context
+      const crossIssueMaterializedContext: DecisionMaterializedContext = {
+        ...materializedContext,
+        issue: {
+          ...materializedContext.issue,
+          number: 99, // Mismatched issue number
+        },
+      };
+
+      await expect(
+        executeTaskWithAdapter({
+          controller: service,
+          adapter,
+          task: claim.task,
+          session: claim.session,
+          lease: claim.lease,
+          context: crossIssueMaterializedContext,
+        })
+      ).rejects.toThrow(/materialized issue number mismatch with session root issue number/);
+
+      // Verify adapter was NEVER touched
+      expect(adapter.inspectCalls).toHaveLength(0);
+      expect(adapter.createSessionCalls).toHaveLength(0);
+      expect(adapter.resumeSessionCalls).toHaveLength(0);
+      expect(adapter.executeTaskCalls).toHaveLength(0);
+
+      // Verify task in store remains in claimed state, no receipt created
+      const storedTask = service.getTask(task.id);
+      expect(storedTask?.status).toBe("claimed");
+      expect(service.getReceipt(task.id)).toBeNull();
+
+      await store.close();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -19,16 +19,17 @@ However:
 We introduce the executor adapter boundary and context strategy contracts across `@symphony/domain` and `@symphony/decision`:
 
 1. **Adapter Interface (`DecisionExecutorAdapter`)**:
-   - `inspectBinding(session)`: Inspects existing binding credentials for validity.
-   - `createSession(root, options)`: Creates an external conversation/session and returns binding metadata (`adapter`, `externalSessionRef`, `resumeUri`).
-   - `resumeSession(session, options)`: Revalidates or recovers an existing session.
+   - `inspectBinding(session, options)`: Inspects existing binding credentials for validity.
+   - `createSession(session, options)`: Creates an external conversation/session and returns binding metadata (`adapter`, `externalSessionRef`, `resumeUri`).
+   - `resumeSession(session, binding, options)`: Revalidates or recovers an existing session with live binding.
    - `executeTask(request, options)`: Executes a plan or review task with the bound executor and provided context strategy.
-   - `normalizeResult(task, rawOutput)`: Extracts and strictly normalizes the model's output into a typed `DecisionResult`.
+   - `normalizeResult(rawResult, task)`: Optional hook to normalize model output into a typed `DecisionResult`.
 
 2. **Context Strategies (`DecisionContextBundle`)**:
-   - **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (provider, key, url), `repository`, optional `prNumber`, and optional `headSha`. Used when the executor navigates GitHub directly.
-   - **`materialized` strategy** (`DecisionMaterializedContext`): Explicitly bundled markdown artifacts containing `issue` (title, description, author), optional `plan`, optional `pr` (number, title, branch, baseSha, headSha), optional `diff` (git patch text), optional `ciStatus`, optional `instructions`, optional `priorReviews`, and optional `findings`.
+   - **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (`{ provider, key }`), `repository`, `prNumber` (`number | null`), and `headSha` (`string | null`). Used when the executor navigates GitHub directly.
+   - **`materialized` strategy** (`DecisionMaterializedContext`): Explicitly bundled markdown artifacts containing `workItem` (`{ provider, key }`), `repository`, `issue` (`{ repository, number, title, body }`), nullable `plan`, nullable `pullRequest`, nullable `diff`, nullable `ci`, nullable `repositoryInstructions`, `previousReviews`, and `unresolvedFindings`.
    - Context is packaged inside `DecisionExecutionRequest { task, session, context }`, keeping `DecisionTask` records lightweight and strictly versioned.
+   - Strict work-item validation enforces that `context.workItem` matches `session.root`, GitHub repository/issue numbers match the session root, and review targets match the context repository.
 
 3. **Machine-Readable Result Extraction**:
    - Fenced code block: ````symphony-result` containing valid JSON representing `DecisionPlanResult` or `DecisionReviewResult`.
@@ -36,7 +37,7 @@ We introduce the executor adapter boundary and context strategy contracts across
    - **Fail-Closed Semantics**: If the last block is missing, unclosed, contains malformed JSON, or fails schema validation, extraction immediately throws `DecisionAdapterError`. It NEVER falls back to earlier valid blocks.
    - **Identity Verification**: Extracted result must match `task.id`, `task.sessionId`, `task.revision`, and for reviews `task.target` (repository, PR number, and full 40-char head SHA). Specific error codes (`revision_mismatch`, `target_mismatch`, `task_mismatch`) are reported.
 
-4. **Structured Error Diagnostics (`DecisionAdapterErrorCode`)**:
+4. **Structured Error Diagnostics & Bounded Whitelisting (`DecisionAdapterErrorCode`)**:
    - `malformed_output`: Missing or invalid `symphony-result` JSON.
    - `task_mismatch`: Result taskId/sessionId does not match claimed task.
    - `revision_mismatch`: Result revision does not match task revision.
@@ -47,6 +48,7 @@ We introduce the executor adapter boundary and context strategy contracts across
    - `unsupported_strategy`: Executor adapter does not support the requested context strategy.
    - `unsupported_task_kind`: Executor does not support plan or review tasks.
    - `cancelled`: Execution cancelled via abort signal.
+   - **Safe Bounded Diagnostics**: Parser error messages and persisted `rawDetails` never embed raw fenced content or model transcripts; metadata is strictly filtered to bounded scalar fields (`errorName`, `contentLength`, `reason`, expected/actual identity pairs) preventing sensitive token leakage into durable failure receipts.
 
 5. **Browser-Safe Distribution**:
    - Entry point `@symphony/decision/adapter` contains zero `node:*` built-in dependencies. Browser extensions or userscripts can import extractor, fake adapter, and types directly.

@@ -9,7 +9,13 @@ import {
   type DecisionResult,
   type DecisionContextBundle,
   type DecisionExecutorAdapter,
+  type DecisionAdapterErrorCode,
+  type DecisionBindingInspectionResult,
+  type DecisionSessionCreationResult,
+  type DecisionSessionResumeResult,
+  type DecisionExecutionOutcome,
   DecisionAdapterError,
+  validateDecisionContextForTask,
 } from "@symphony/domain";
 import type {
   DecisionTaskFailure,
@@ -93,13 +99,92 @@ export async function executeTaskWithAdapter(
   let currentSession = options.session;
   let handle: unknown;
 
+  // Enforce work-item and task context consistency at the execution entry point (Blocker 2)
+  validateDecisionContextForTask(context, task, currentSession);
+
+  // Helper to record structured failure if adapter lifecycle or execution fails (Blocker 1 & 3)
+  const recordFailure = async (err: unknown): Promise<TaskExecutionFailureOutcome> => {
+    let errorCode: DecisionAdapterErrorCode = "execution_failed";
+    let retryable = false;
+    let safeDetails: Record<string, unknown> = {};
+
+    if (err instanceof DecisionAdapterError) {
+      errorCode = err.code;
+      retryable = err.retryable;
+      safeDetails = {
+        code: err.code,
+        message: err.message,
+        suggestedAction: err.suggestedAction,
+        ...(err.observedGeneration !== undefined ? { observedGeneration: err.observedGeneration } : {}),
+      };
+      if (err.details && typeof err.details === "object") {
+        const raw = err.details["rawDetails"];
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          const rawObj = raw as Record<string, unknown>;
+          const sanitizedRaw: Record<string, unknown> = {};
+          for (const key of [
+            "errorName",
+            "contentLength",
+            "reason",
+            "expectedKind",
+            "actualKind",
+            "expectedSessionId",
+            "actualSessionId",
+            "expectedRevision",
+            "actualRevision",
+            "expectedTarget",
+            "actualTarget",
+          ]) {
+            if (key in rawObj && rawObj[key] !== undefined) {
+              sanitizedRaw[key] = rawObj[key];
+            }
+          }
+          if (Object.keys(sanitizedRaw).length > 0) {
+            safeDetails["rawDetails"] = sanitizedRaw;
+          }
+        }
+      }
+    } else if (err instanceof Error) {
+      safeDetails = { message: err.message, name: err.name };
+    }
+
+    const submission = await controller.submitFailure(task.id, {
+      owner: lease.owner,
+      token: lease.token,
+      generation: lease.generation,
+      error: errorCode,
+      details: safeDetails,
+      retryable,
+    });
+
+    return {
+      status: "failed",
+      failure: submission.failure,
+      receipt: submission.receipt,
+      superseded: submission.superseded,
+      session: currentSession,
+      error: err,
+    };
+  };
+
   // 1. Inspect and ensure session binding
-  const inspection = await adapter.inspectBinding(currentSession, { signal });
+  let inspection: DecisionBindingInspectionResult;
+  try {
+    inspection = await adapter.inspectBinding(currentSession, { signal });
+  } catch (err) {
+    return await recordFailure(err);
+  }
 
   if (inspection.status === "none") {
-    const created = await adapter.createSession(currentSession, { signal });
+    let created: DecisionSessionCreationResult;
+    try {
+      created = await adapter.createSession(currentSession, { signal });
+    } catch (err) {
+      return await recordFailure(err);
+    }
     handle = created.handle;
     if (controller.putBinding) {
+      // Controller authority call: errors rethrow
       const boundRes = await controller.putBinding(currentSession.id, {
         adapter: created.binding.adapter,
         externalSessionRef: created.binding.externalSessionRef,
@@ -112,13 +197,19 @@ export async function executeTaskWithAdapter(
     }
   } else if (inspection.status === "unusable") {
     if (inspection.needsRebind) {
-      const created = await adapter.createSession(currentSession, { signal });
+      let created: DecisionSessionCreationResult;
+      try {
+        created = await adapter.createSession(currentSession, { signal });
+      } catch (err) {
+        return await recordFailure(err);
+      }
       handle = created.handle;
       if (controller.rebindSession) {
         const expectedGen = inspection.observedGeneration ?? currentSession.bindingGeneration;
         const opKey = options.operationKeyPrefix
           ? `${options.operationKeyPrefix}:rebind:${expectedGen + 1}`
           : undefined;
+        // Controller authority call: CAS conflict or store error rethrows directly
         const reboundRes = await controller.rebindSession(currentSession.id, {
           adapter: created.binding.adapter,
           externalSessionRef: created.binding.externalSessionRef,
@@ -132,20 +223,26 @@ export async function executeTaskWithAdapter(
             : (reboundRes as DecisionSession);
       }
     } else {
-      throw new DecisionAdapterError({
+      const brokenErr = new DecisionAdapterError({
         code: "binding_broken",
         message: inspection.reason,
         suggestedAction: "rebind",
         observedGeneration: inspection.observedGeneration,
       });
+      return await recordFailure(brokenErr);
     }
   } else {
     // status === "usable"
-    const resumed = await adapter.resumeSession(currentSession, inspection.binding, { signal });
+    let resumed: DecisionSessionResumeResult;
+    try {
+      resumed = await adapter.resumeSession(currentSession, inspection.binding, { signal });
+    } catch (err) {
+      return await recordFailure(err);
+    }
     handle = resumed.handle;
   }
 
-  // 2. Start the task under lease
+  // 2. Start the task under lease (controller authority call: errors rethrow)
   await controller.startTask(task.id, {
     owner: lease.owner,
     token: lease.token,
@@ -153,8 +250,9 @@ export async function executeTaskWithAdapter(
   });
 
   // 3. Execute the task
+  let executionOutcome: DecisionExecutionOutcome;
   try {
-    const executionOutcome = await adapter.executeTask(
+    executionOutcome = await adapter.executeTask(
       {
         task,
         session: currentSession,
@@ -165,51 +263,23 @@ export async function executeTaskWithAdapter(
         handle,
       }
     );
-
-    // 4. Submit result
-    const submission = await controller.submitResult(task.id, {
-      owner: lease.owner,
-      token: lease.token,
-      generation: lease.generation,
-      result: executionOutcome.result,
-    });
-
-    return {
-      status: "completed",
-      result: submission.result,
-      receipt: submission.receipt,
-      superseded: submission.superseded,
-      session: currentSession,
-    };
   } catch (err) {
-    let errorCode = "execution_failed";
-    let retryable = false;
-    let details: unknown = null;
-
-    if (err instanceof DecisionAdapterError) {
-      errorCode = err.code;
-      retryable = err.retryable;
-      details = err.details;
-    } else if (err instanceof Error) {
-      details = { message: err.message, name: err.name };
-    }
-
-    const submission = await controller.submitFailure(task.id, {
-      owner: lease.owner,
-      token: lease.token,
-      generation: lease.generation,
-      error: errorCode,
-      details,
-      retryable,
-    });
-
-    return {
-      status: "failed",
-      failure: submission.failure,
-      receipt: submission.receipt,
-      superseded: submission.superseded,
-      session: currentSession,
-      error: err,
-    };
+    return await recordFailure(err);
   }
+
+  // 4. Submit result (controller authority call)
+  const submission = await controller.submitResult(task.id, {
+    owner: lease.owner,
+    token: lease.token,
+    generation: lease.generation,
+    result: executionOutcome.result,
+  });
+
+  return {
+    status: "completed",
+    result: submission.result,
+    receipt: submission.receipt,
+    superseded: submission.superseded,
+    session: currentSession,
+  };
 }

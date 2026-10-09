@@ -117,7 +117,7 @@ describe("Decision Context Strategies", () => {
       headSha: "0123456789abcdef0123456789abcdef01234567",
     };
     expect(() => validateDecisionContextForTask(wrongRepoContext, reviewTask)).toThrow(
-      /connector review context repository\/prNumber\/headSha mismatch/
+      /context repository mismatch with session root repository/
     );
   });
 
@@ -262,6 +262,130 @@ describe("Decision Context Strategies", () => {
         context: connectorContext,
       })
     ).toThrow(/task sessionId mismatch/);
+  });
+
+  it("enforces work-item consistency and rejects cross-issue contexts for plan and review tasks", () => {
+    const foreignRoot = githubDecisionRoot("other", "repo", 99);
+
+    // 1. Plan with connector context pointing to different workItem
+    const crossWorkItemConnector: DecisionConnectorContext = {
+      strategy: "connector",
+      workItem: foreignRoot,
+      repository: "owner/repo",
+      prNumber: null,
+      headSha: null,
+    };
+    expect(() => validateDecisionContextForTask(crossWorkItemConnector, planTask, baseSession)).toThrow(
+      /context workItem mismatch with session root/
+    );
+
+    // 2. Plan with connector context having mismatched repository
+    const crossRepoConnector: DecisionConnectorContext = {
+      strategy: "connector",
+      workItem: root,
+      repository: "other/repo",
+      prNumber: null,
+      headSha: null,
+    };
+    expect(() => validateDecisionContextForTask(crossRepoConnector, planTask, baseSession)).toThrow(
+      /context repository mismatch with session root repository/
+    );
+
+    // 3. Plan with materialized context having cross-issue in issue field
+    const crossIssueMaterialized: DecisionMaterializedContext = {
+      strategy: "materialized",
+      workItem: root,
+      repository: "owner/repo",
+      issue: {
+        repository: "other/repo",
+        number: 99,
+        title: "Wrong Issue",
+        body: "Wrong Body",
+      },
+      plan: null,
+      pullRequest: null,
+      diff: null,
+      ci: null,
+      repositoryInstructions: null,
+      previousReviews: [],
+      unresolvedFindings: [],
+    };
+    expect(() => validateDecisionContextForTask(crossIssueMaterialized, planTask, baseSession)).toThrow(
+      /materialized issue repository mismatch with session root repository/
+    );
+
+    const crossIssueNumberMaterialized: DecisionMaterializedContext = {
+      ...crossIssueMaterialized,
+      issue: {
+        repository: "owner/repo",
+        number: 99, // session is for 42
+        title: "Wrong Number",
+        body: "Wrong Body",
+      },
+    };
+    expect(() => validateDecisionContextForTask(crossIssueNumberMaterialized, planTask, baseSession)).toThrow(
+      /materialized issue number mismatch with session root issue number/
+    );
+
+    // 4. Review with cross-issue workItem in connector context
+    const crossWorkItemReviewConnector: DecisionConnectorContext = {
+      strategy: "connector",
+      workItem: foreignRoot,
+      repository: "owner/repo",
+      prNumber: 42,
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+    };
+    expect(() => validateDecisionContextForTask(crossWorkItemReviewConnector, reviewTask, baseSession)).toThrow(
+      /context workItem mismatch with session root/
+    );
+
+    // 5. Review with cross-issue in materialized context
+    const crossIssueReviewMaterialized: DecisionMaterializedContext = {
+      strategy: "materialized",
+      workItem: root,
+      repository: "owner/repo",
+      issue: {
+        repository: "owner/repo",
+        number: 99, // session root is 42
+        title: "Wrong Issue",
+        body: "Wrong Body",
+      },
+      plan: null,
+      pullRequest: {
+        repository: "owner/repo",
+        prNumber: 42,
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+        baseRef: "main",
+        headRef: "feat/42",
+        title: "PR 42",
+        body: "Closes #42",
+      },
+      diff: null,
+      ci: null,
+      repositoryInstructions: null,
+      previousReviews: [],
+      unresolvedFindings: [],
+    };
+    expect(() => validateDecisionContextForTask(crossIssueReviewMaterialized, reviewTask, baseSession)).toThrow(
+      /materialized issue number mismatch with session root issue number/
+    );
+
+    // 6. parseDecisionExecutionRequest rejects cross-issue requests
+    expect(() =>
+      parseDecisionExecutionRequest({
+        task: planTask,
+        session: baseSession,
+        context: crossWorkItemConnector,
+      })
+    ).toThrow(/context workItem mismatch with session root/);
+
+    expect(() =>
+      parseDecisionExecutionRequest({
+        task: planTask,
+        session: baseSession,
+        context: crossIssueNumberMaterialized,
+      })
+    ).toThrow(/materialized issue number mismatch with session root issue number/);
   });
 });
 

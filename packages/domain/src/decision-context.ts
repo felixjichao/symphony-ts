@@ -20,6 +20,7 @@ import {
   parseDecisionResult,
   parseDecisionTask,
   parseDecisionSession,
+  parseDecisionSessionRootFromId,
 } from "./decision";
 
 export type DecisionContextStrategyKind = "connector" | "materialized";
@@ -297,9 +298,54 @@ export function parseDecisionContextBundle(value: unknown): DecisionContextBundl
   };
 }
 
-export function validateDecisionContextForTask(context: DecisionContextBundle, task: DecisionTask): void {
+export function validateDecisionContextForTask(
+  context: DecisionContextBundle,
+  task: DecisionTask,
+  session?: DecisionSession
+): void {
   parseDecisionTask(task);
   parseDecisionContextBundle(context);
+
+  if (session !== undefined) {
+    parseDecisionSession(session);
+    requireValue(task.sessionId === session.id, "task sessionId mismatch with session id");
+    requireValue(
+      context.workItem.provider === session.root.provider &&
+      context.workItem.key === session.root.key,
+      "context workItem mismatch with session root"
+    );
+  } else {
+    const expectedRoot = parseDecisionSessionRootFromId(task.sessionId);
+    requireValue(
+      context.workItem.provider === expectedRoot.provider &&
+      context.workItem.key === expectedRoot.key,
+      "context workItem mismatch with task session root"
+    );
+  }
+
+  const effectiveRoot = session !== undefined ? session.root : parseDecisionSessionRootFromId(task.sessionId);
+  if (effectiveRoot.provider === "github") {
+    const match = /^(.*)#([1-9][0-9]*)$/.exec(effectiveRoot.key);
+    requireValue(match !== null, "invalid GitHub issue key in session root");
+    const expectedRepo = match[1]!;
+    const expectedIssueNum = Number(match[2]);
+
+    requireValue(
+      context.repository === expectedRepo,
+      "context repository mismatch with session root repository"
+    );
+
+    if (context.strategy === "materialized") {
+      requireValue(
+        context.issue.repository === expectedRepo,
+        "materialized issue repository mismatch with session root repository"
+      );
+      requireValue(
+        context.issue.number === expectedIssueNum,
+        "materialized issue number mismatch with session root issue number"
+      );
+    }
+  }
 
   if (task.kind === "review") {
     if (context.strategy === "connector") {
@@ -343,8 +389,7 @@ export function parseDecisionExecutionRequest(value: unknown): DecisionExecution
   const session = parseDecisionSession(obj["session"]);
   const context = parseDecisionContextBundle(obj["context"]);
 
-  requireValue(task.sessionId === session.id, "task sessionId mismatch with session id");
-  validateDecisionContextForTask(context, task);
+  validateDecisionContextForTask(context, task, session);
 
   return { task, session, context };
 }

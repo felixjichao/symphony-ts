@@ -113,7 +113,7 @@ export {
   heartbeatDecisionTask, completeDecisionTask, failDecisionTask,
   releaseExpiredDecisionTask, cancelDecisionTask, supersedeDecisionTask,
   isDecisionReviewApproved, rebindDecisionSession, breakDecisionBinding,
-  completeDecisionSession, reopenDecisionSession,
+  completeDecisionSession, reopenDecisionSession, parseDecisionSessionRootFromId,
 } from "./decision";
 
 // Decision Plane executor adapter & context strategies (NEST-101 / #96)

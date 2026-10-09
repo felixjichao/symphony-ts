@@ -51,6 +51,13 @@ export interface FakeAdapterOptions {
   /** Injected binding inspection behavior */
   readonly inspectBindingStatus?: "usable" | "unusable" | "none" | undefined;
   readonly inspectBindingReason?: string | undefined;
+  readonly inspectBindingNeedsRebind?: boolean | undefined;
+  /** Injected error in binding inspection */
+  readonly inspectError?: Error | undefined;
+  /** Injected error in session creation */
+  readonly createSessionError?: Error | undefined;
+  /** Injected error in session resumption */
+  readonly resumeSessionError?: Error | undefined;
   /** Injected error in session creation or resumption */
   readonly sessionError?: Error | undefined;
   /** Custom clock */
@@ -85,6 +92,10 @@ export class FakeDecisionExecutorAdapter implements DecisionExecutorAdapter<Fake
     options?.signal?.throwIfAborted();
     this.inspectCalls.push(session);
 
+    if (this.options.inspectError) {
+      throw this.options.inspectError;
+    }
+
     if (this.options.sessionError) {
       throw this.options.sessionError;
     }
@@ -105,7 +116,7 @@ export class FakeDecisionExecutorAdapter implements DecisionExecutorAdapter<Fake
         return {
           status: "unusable",
           reason: this.options.inspectBindingReason ?? "Injected unusable binding state",
-          needsRebind: true,
+          needsRebind: this.options.inspectBindingNeedsRebind ?? true,
           observedGeneration: session.binding?.generation ?? session.bindingGeneration,
         };
       }
@@ -120,7 +131,7 @@ export class FakeDecisionExecutorAdapter implements DecisionExecutorAdapter<Fake
       return {
         status: "unusable",
         reason: `Adapter mismatch: session bound to ${session.binding.adapter}, expected ${this.name}`,
-        needsRebind: true,
+        needsRebind: this.options.inspectBindingNeedsRebind ?? true,
         observedGeneration: session.binding.generation,
       };
     }
@@ -142,6 +153,10 @@ export class FakeDecisionExecutorAdapter implements DecisionExecutorAdapter<Fake
   ): Promise<DecisionSessionCreationResult<FakeAdapterHandle>> {
     options?.signal?.throwIfAborted();
     this.createSessionCalls.push(session);
+
+    if (this.options.createSessionError) {
+      throw this.options.createSessionError;
+    }
 
     if (this.options.sessionError) {
       throw this.options.sessionError;
@@ -174,6 +189,10 @@ export class FakeDecisionExecutorAdapter implements DecisionExecutorAdapter<Fake
   ): Promise<DecisionSessionResumeResult<FakeAdapterHandle>> {
     options?.signal?.throwIfAborted();
     this.resumeSessionCalls.push({ session, binding });
+
+    if (this.options.resumeSessionError) {
+      throw this.options.resumeSessionError;
+    }
 
     if (this.options.sessionError) {
       throw this.options.sessionError;

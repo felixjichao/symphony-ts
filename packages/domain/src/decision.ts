@@ -159,11 +159,15 @@ export function parseDecisionReviewTarget(value: unknown): DecisionReviewTarget 
   requireValue(typeof target["headSha"] === "string" && /^[0-9a-f]{40}$/.test(target["headSha"]), "expected full lowercase HEAD SHA");
   return value as DecisionReviewTarget;
 }
+export function parseDecisionSessionRootFromId(sessionId: string): DecisionWorkItemRef {
+  string(sessionId);
+  const colon = sessionId.indexOf(":");
+  requireValue(colon > 0, "invalid session id");
+  return validateRoot({ provider: sessionId.slice(0, colon), key: sessionId.slice(colon + 1) });
+}
 function validateSessionId(value: unknown): asserts value is string {
   string(value);
-  const colon = value.indexOf(":");
-  requireValue(colon > 0, "invalid session id");
-  validateRoot({ provider: value.slice(0, colon), key: value.slice(colon + 1) });
+  parseDecisionSessionRootFromId(value);
 }
 export function decisionTaskId(task: Pick<DecisionTask, "sessionId" | "kind" | "revision"> & { readonly target?: DecisionReviewTarget }): string {
   validateSessionId(task.sessionId); integer(task.revision, 1); oneOf(task.kind, ["plan", "review"]);

@@ -358,24 +358,44 @@ The `@symphony/decision/adapter` entrypoint and `@symphony/domain` export the pr
 ### DecisionExecutorAdapter interface
 
 ```ts
-interface DecisionExecutorAdapter {
-  readonly adapterName: string;
-  readonly supportedStrategies: readonly DecisionContextStrategy[];
-  readonly supportedTaskKinds: readonly DecisionTaskKind[];
+interface DecisionExecutorAdapter<THandle = unknown> {
+  readonly name: string;
+  readonly supportedTaskKinds: readonly ("plan" | "review")[];
+  readonly supportedContextStrategies: readonly DecisionContextStrategyKind[];
 
-  inspectBinding(session: DecisionSession): Promise<DecisionBindingInspectionResult>;
-  createSession(root: DecisionSessionRoot, options?: DecisionExecutionOptions): Promise<DecisionSessionCreationResult>;
-  resumeSession(session: DecisionSession, options?: DecisionExecutionOptions): Promise<DecisionSessionResumeResult>;
-  executeTask(request: DecisionExecutionRequest, options?: DecisionExecutionOptions): Promise<DecisionExecutionOutcome>;
-  normalizeResult(task: DecisionTask, rawOutput: string): Promise<DecisionResult>;
+  inspectBinding(
+    session: DecisionSession,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionBindingInspectionResult<THandle>>;
+
+  createSession(
+    session: DecisionSession,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionSessionCreationResult<THandle>>;
+
+  resumeSession(
+    session: DecisionSession,
+    binding: ExecutorBinding,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionSessionResumeResult<THandle>>;
+
+  executeTask(
+    request: DecisionExecutionRequest,
+    options?: DecisionExecutionOptions
+  ): Promise<DecisionExecutionOutcome>;
+
+  normalizeResult?(
+    rawResult: unknown,
+    task: DecisionTask
+  ): DecisionResult;
 }
 ```
 
 ### Context strategies
 
 Execution requests decouple task persistence from prompt assembly via `DecisionExecutionRequest`:
-- **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (provider, key, url), `repository`, optional `prNumber`, and optional `headSha`. Ideal for web-based agents that navigate GitHub directly via browser automation.
-- **`materialized` strategy** (`DecisionMaterializedContext`): Explicit pre-bundled artifacts containing `issue` (title, description, author), optional `plan`, optional `pr` (number, title, branch, baseSha, headSha), optional `diff`, optional `ciStatus`, optional `instructions`, optional `priorReviews`, and optional `findings`. Ideal for API or offline models without autonomous web navigation.
+- **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (`{ provider, key }`), `repository`, `prNumber` (`number | null`), and `headSha` (`string | null`). Ideal for web-based agents that navigate GitHub directly via browser automation.
+- **`materialized` strategy** (`DecisionMaterializedContext`): Explicit pre-bundled artifacts containing `workItem` (`{ provider, key }`), `repository`, `issue` (`{ repository, number, title, body }`), nullable `plan` (`DecisionMaterializedPlan | null`), nullable `pullRequest` (`DecisionMaterializedPullRequest | null`), nullable `diff` (`DecisionMaterializedDiff | null`), nullable `ci` (`DecisionMaterializedCi | null`), nullable `repositoryInstructions` (`string | null`), `previousReviews` (`readonly DecisionReviewResult[]`), and `unresolvedFindings` (`readonly DecisionReviewFinding[]`). Ideal for API or offline models without autonomous web navigation.
 
 ### Machine-readable result extraction
 
