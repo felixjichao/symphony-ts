@@ -60,19 +60,43 @@ The bundle includes the complete Tampermonkey metadata block (`// ==UserScript==
 
 ## Manual Task Scheduling & Smoke Testing
 
-To schedule a task on the localhost bridge manually for smoke testing or verification:
+To schedule a task on the localhost bridge manually for smoke testing or verification (from an empty store to an executable pending task):
 
 ```bash
-# 1. Inspect next pending task
+# 1. Create a Decision session for a work item
+curl -s -X POST http://127.0.0.1:4040/v1/sessions \
+  -H "Authorization: Bearer secret-bridge-token" \
+  -H "Content-Type: application/json" \
+  -d '{"root":{"provider":"github","key":"owner/repo#1"}}'
+# Output: {"session":{"id":"github:owner/repo#1",...}}
+
+# 2. Create a plan task for the session
+curl -s -X POST http://127.0.0.1:4040/v1/tasks \
+  -H "Authorization: Bearer secret-bridge-token" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId":"github:owner/repo#1","kind":"plan","operationKey":"op-smoke-1"}'
+# Output: {"task":{"id":"github%3Aowner%2Frepo%231:plan:1",...}}
+
+# Note: The canonical task ID contains URL-safe encoding (e.g. "github%3Aowner%2Frepo%231:plan:1").
+# When passing the task ID in HTTP route path segments, encode it with encodeURIComponent
+# (producing "github%253Aowner%252Frepo%25231%3Aplan%3A1") so the server decodes it back to the exact ID.
+
+# 3. Deliver task context (required before task can be executed)
+curl -s -X PUT http://127.0.0.1:4040/v1/tasks/github%253Aowner%252Frepo%25231%3Aplan%3A1/context \
+  -H "Authorization: Bearer secret-bridge-token" \
+  -H "Content-Type: application/json" \
+  -d '{"context":{"strategy":"connector","workItem":{"provider":"github","key":"owner/repo#1"},"repository":"owner/repo","prNumber":null,"headSha":null}}'
+
+# 4. Verify task is pending and ready to be claimed by the driver
 curl -s -H "Authorization: Bearer secret-bridge-token" \
   http://127.0.0.1:4040/v1/tasks/next
 
-# 2. Or query an existing task status and receipt
+# 5. Query task status and receipt after driver execution
 curl -s -H "Authorization: Bearer secret-bridge-token" \
-  http://127.0.0.1:4040/v1/tasks/github%3Aowner%2Frepo%231%3Aplan%3A1
+  http://127.0.0.1:4040/v1/tasks/github%253Aowner%252Frepo%25231%3Aplan%3A1
 
 curl -s -H "Authorization: Bearer secret-bridge-token" \
-  http://127.0.0.1:4040/v1/tasks/github%3Aowner%2Frepo%231%3Aplan%3A1/receipt
+  http://127.0.0.1:4040/v1/tasks/github%253Aowner%252Frepo%25231%3Aplan%3A1/receipt
 ```
 
 ## Execution & Smoke Walkthrough

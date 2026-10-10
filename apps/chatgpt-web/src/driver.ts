@@ -26,6 +26,26 @@ import {
   isCheckpointExpired,
 } from "./checkpoint";
 import { ChatGptWebAdapter, type ChatGptWebAdapterOptions } from "./adapter";
+import { findStopButton, getAllAssistantTurns } from "./probes";
+
+function isValidMatchingResultReceipt(
+  receipt: SubmissionReceipt,
+  lease: { owner: string; token: string; generation: number },
+  expectedResult?: DecisionResult | null
+): boolean {
+  if (!receipt || receipt.type !== "result") return false;
+  if (receipt.claimOwner !== lease.owner) return false;
+  if (receipt.claimToken !== lease.token) return false;
+  if (receipt.claimGeneration !== lease.generation) return false;
+  if (expectedResult) {
+    const payload = receipt.payload as DecisionResult;
+    if (payload.taskId !== expectedResult.taskId) return false;
+    if (payload.sessionId !== expectedResult.sessionId) return false;
+    if (payload.revision !== expectedResult.revision) return false;
+    if (payload.kind !== expectedResult.kind) return false;
+  }
+  return true;
+}
 
 export interface DecisionTabDriverOptions {
   readonly transport: BridgeTransport;
@@ -129,8 +149,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         superseded: boolean;
       }>("POST", `/v1/tasks/${encodeURIComponent(taskId)}/result`, params);
 
-      // Upon confirmed receipt from bridge, checkpoint can safely be cleared
-      this.checkpointStore.delete();
+      // Upon confirmed valid result receipt from bridge, checkpoint can safely be cleared
+      if (res.receipt?.type === "result" && !res.superseded) {
+        this.checkpointStore.delete();
+      }
       return res;
     } catch (err: unknown) {
       // In case of network packet loss on return, query authoritative receipt before failing
@@ -140,12 +162,19 @@ export class DecisionTabDriver implements DecisionTaskController {
           `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
         );
         if (receiptRes?.receipt) {
-          this.checkpointStore.delete();
-          return {
-            receipt: receiptRes.receipt,
-            result: params.result,
-            superseded: false,
-          };
+          const receipt = receiptRes.receipt;
+          const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+          if (
+            isValidMatchingResultReceipt(receipt, params, params.result) &&
+            !isSuperseded
+          ) {
+            this.checkpointStore.delete();
+            return {
+              receipt,
+              result: receipt.payload as DecisionResult,
+              superseded: false,
+            };
+          }
         }
       } catch {
         // Receipt fetch also failed, keep candidateResult in checkpoint for retry
@@ -372,17 +401,56 @@ export class DecisionTabDriver implements DecisionTaskController {
           "GET",
           `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`
         );
-        this.checkpointStore.delete();
-        return {
-          status: "completed",
-          result: (cp.candidateResult ?? receiptRes.receipt.payload) as DecisionResult,
-          receipt: receiptRes.receipt,
-          superseded: false,
-          session: sessionRes?.session ?? ({} as DecisionSession),
-        };
+        if (receiptRes?.receipt) {
+          const receipt = receiptRes.receipt;
+          const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+          if (
+            isValidMatchingResultReceipt(
+              receipt,
+              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+              cp.candidateResult as DecisionResult | undefined
+            )
+          ) {
+            this.checkpointStore.delete();
+            return {
+              status: "completed",
+              result: receipt.payload as DecisionResult,
+              receipt,
+              superseded: isSuperseded,
+              session: sessionRes?.session ?? ({} as DecisionSession),
+            };
+          }
+          if (isSuperseded) {
+            this.checkpointStore.delete();
+            return null;
+          }
+        }
       } catch {
         // Receipt fetch failed
       }
+    }
+
+    if (taskRes?.task?.status === "failed") {
+      const receiptRes = await this.transport
+        .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
+        .catch(() => null);
+      this.checkpointStore.delete();
+      if (receiptRes?.receipt && receiptRes.receipt.type === "failure") {
+        return {
+          status: "failed",
+          failure: receiptRes.receipt.payload as DecisionTaskFailure,
+          receipt: receiptRes.receipt,
+          superseded: typeof receiptRes.receipt.supersededAtMs === "number" && receiptRes.receipt.supersededAtMs > 0,
+          session: sessionRes?.session ?? ({} as DecisionSession),
+          error: new Error("Task failed on bridge"),
+        };
+      }
+      return null;
+    }
+
+    if (taskRes?.task?.status === "superseded") {
+      this.checkpointStore.delete();
+      return null;
     }
 
     // 2. If candidateResult was extracted, idempotently re-submit result
@@ -401,21 +469,53 @@ export class DecisionTabDriver implements DecisionTaskController {
           superseded: submitRes.superseded,
           session: sessionRes?.session ?? ({} as DecisionSession),
         };
-      } catch {
-        // If re-submission failed, check whether bridge actually completed it
+      } catch (submitErr) {
+        // Re-submission failed. Check whether bridge recorded it or if it failed/superseded
+        const freshTask = await this.transport
+          .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
+          .catch(() => null);
         const receiptRes = await this.transport
           .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
           .catch(() => null);
+
         if (receiptRes?.receipt) {
-          this.checkpointStore.delete();
-          return {
-            status: "completed",
-            result: cp.candidateResult as DecisionResult,
-            receipt: receiptRes.receipt,
-            superseded: false,
-            session: sessionRes?.session ?? ({} as DecisionSession),
-          };
+          const receipt = receiptRes.receipt;
+          const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+          if (
+            isValidMatchingResultReceipt(
+              receipt,
+              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+              cp.candidateResult as DecisionResult
+            ) &&
+            !isSuperseded
+          ) {
+            this.checkpointStore.delete();
+            return {
+              status: "completed",
+              result: receipt.payload as DecisionResult,
+              receipt,
+              superseded: false,
+              session: sessionRes?.session ?? ({} as DecisionSession),
+            };
+          }
+          if (receipt.type === "failure" || freshTask?.task?.status === "failed") {
+            this.checkpointStore.delete();
+            return {
+              status: "failed",
+              failure: (receipt.type === "failure" ? receipt.payload : undefined) as DecisionTaskFailure,
+              receipt,
+              superseded: isSuperseded,
+              session: sessionRes?.session ?? ({} as DecisionSession),
+              error: submitErr,
+            };
+          }
+          if (isSuperseded || freshTask?.task?.status === "superseded") {
+            this.checkpointStore.delete();
+            return null;
+          }
         }
+        // Transport error while task remains active; keep candidateResult in checkpoint for retry
+        throw submitErr;
       }
     }
 
@@ -463,7 +563,85 @@ export class DecisionTabDriver implements DecisionTaskController {
       expiresAtMs: renewedExpiry,
     };
 
-    // 4. If step was "waiting_response", resume waiting for existing response WITHOUT resending prompt!
+    // 4. Handle checkpoint steps
+    if (cp.step === "navigating") {
+      const globalWindow = (globalThis as unknown as { window?: { location?: { href?: string; assign(url: string): void } } }).window;
+      if (globalWindow && cp.targetUri && globalWindow.location?.href !== cp.targetUri) {
+        globalWindow.location?.assign(cp.targetUri);
+      }
+    }
+
+    if (cp.step === "prompt_submitting") {
+      this.activeTask = taskRes.task;
+      this.activeSession = sessionRes.session;
+      this.activeLease = lease;
+      this.activeAbortController = new AbortController();
+      const signal = this.activeAbortController.signal;
+
+      this.startHeartbeat(taskRes.task, lease, () => {
+        this.activeAbortController?.abort();
+      });
+
+      try {
+        const adapterWithProbes = this.adapter as unknown as {
+          confirmPromptSubmitted?: (opts: { baselineCount: number; signal?: AbortSignal }) => Promise<boolean>;
+          isPromptConfirmedSent?: (doc?: unknown, baselineCount?: number) => boolean;
+        };
+        let isConfirmedSent = false;
+        if (typeof adapterWithProbes.confirmPromptSubmitted === "function") {
+          isConfirmedSent = await adapterWithProbes.confirmPromptSubmitted({
+            baselineCount: cp.baselineCount ?? 0,
+            signal,
+          }).catch(() => false);
+        } else if (typeof adapterWithProbes.isPromptConfirmedSent === "function") {
+          isConfirmedSent = adapterWithProbes.isPromptConfirmedSent(undefined, cp.baselineCount ?? 0);
+        } else if (typeof (globalThis as unknown as { document?: Document }).document !== "undefined") {
+          const doc = (globalThis as unknown as { document: Document }).document;
+          const count = cp.baselineCount ?? 0;
+          isConfirmedSent = findStopButton(doc) !== null || getAllAssistantTurns(doc).length > count;
+        }
+
+        if (isConfirmedSent) {
+          this.updateCheckpointStep("waiting_response", { baselineCount: cp.baselineCount ?? 0 });
+          return await this.resumeWaitingResponse(
+            taskRes.task,
+            sessionRes.session,
+            lease,
+            cp.baselineCount ?? 0,
+            signal
+          );
+        } else {
+          // Cannot confirm prompt was sent! Fail safely and hand off to human to prevent duplicate execution
+          const failRes = await this.submitFailure(taskRes.task.id, {
+            owner: lease.owner,
+            token: lease.token,
+            generation: lease.generation,
+            error: "human_required",
+            details: {
+              message:
+                "Uncertain prompt submission state during recovery (prompt_submitting could not be confirmed as sent); manual intervention required to prevent duplicate execution",
+            },
+            retryable: false,
+          });
+          this.checkpointStore.delete();
+          return {
+            status: "failed",
+            failure: failRes.failure,
+            receipt: failRes.receipt,
+            superseded: failRes.superseded,
+            session: sessionRes.session,
+            error: new Error("Uncertain prompt submission state during recovery"),
+          };
+        }
+      } finally {
+        this.stopHeartbeat();
+        this.activeAbortController = null;
+        this.activeTask = null;
+        this.activeSession = null;
+        this.activeLease = null;
+      }
+    }
+
     if (
       cp.step === "waiting_response" &&
       typeof cp.baselineCount === "number" &&
@@ -480,50 +658,13 @@ export class DecisionTabDriver implements DecisionTaskController {
       });
 
       try {
-        const execution = await this.adapter.waitForExistingResponse(taskRes.task, {
-          baselineCount: cp.baselineCount,
-          signal,
-        });
-
-        const submitRes = await this.submitResult(taskRes.task.id, {
-          owner: lease.owner,
-          token: lease.token,
-          generation: lease.generation,
-          result: execution.result,
-        });
-
-        this.checkpointStore.delete();
-        return {
-          status: "completed",
-          result: submitRes.result,
-          receipt: submitRes.receipt,
-          superseded: submitRes.superseded,
-          session: sessionRes.session,
-        };
-      } catch (err) {
-        if (!signal.aborted) {
-          const failRes = await this.submitFailure(taskRes.task.id, {
-            owner: lease.owner,
-            token: lease.token,
-            generation: lease.generation,
-            error: "execution_failed",
-            details: { message: "Failed waiting for response during checkpoint recovery" },
-            retryable: true,
-          }).catch(() => null);
-
-          this.checkpointStore.delete();
-          if (failRes) {
-            return {
-              status: "failed",
-              failure: failRes.failure,
-              receipt: failRes.receipt,
-              superseded: failRes.superseded,
-              session: sessionRes.session,
-              error: err,
-            };
-          }
-        }
-        throw err;
+        return await this.resumeWaitingResponse(
+          taskRes.task,
+          sessionRes.session,
+          lease,
+          cp.baselineCount,
+          signal
+        );
       } finally {
         this.stopHeartbeat();
         this.activeAbortController = null;
@@ -536,6 +677,118 @@ export class DecisionTabDriver implements DecisionTaskController {
     // 5. Normal claimed / started execution
     const context = await this.fetchContext(taskRes.task.id);
     return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
+  }
+
+  private async resumeWaitingResponse(
+    task: DecisionTask,
+    session: DecisionSession,
+    lease: DecisionLease,
+    baselineCount: number,
+    signal: AbortSignal
+  ): Promise<TaskExecutionOutcome> {
+    const adapterWithWait = this.adapter as unknown as {
+      waitForExistingResponse?: (
+        task: DecisionTask,
+        opts: { baselineCount: number; signal?: AbortSignal }
+      ) => Promise<{ result: DecisionResult }>;
+    };
+    if (typeof adapterWithWait.waitForExistingResponse !== "function") {
+      throw new Error("Adapter does not support waitForExistingResponse");
+    }
+
+    let execution: { result: DecisionResult };
+    try {
+      execution = await adapterWithWait.waitForExistingResponse!(task, {
+        baselineCount,
+        signal,
+      });
+    } catch (modelErr) {
+      if (!signal.aborted) {
+        const failRes = await this.submitFailure(task.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          error: "execution_failed",
+          details: { message: "Failed waiting for response during checkpoint recovery" },
+          retryable: true,
+        }).catch(() => null);
+
+        this.checkpointStore.delete();
+        if (failRes) {
+          return {
+            status: "failed",
+            failure: failRes.failure,
+            receipt: failRes.receipt,
+            superseded: failRes.superseded,
+            session,
+            error: modelErr,
+          };
+        }
+      }
+      throw modelErr;
+    }
+
+    // Model extraction succeeded! Immediately persist candidateResult in checkpoint!
+    this.updateCheckpointStep("result_extracted", { candidateResult: execution.result });
+
+    // Submit candidate result (separate try-catch from model execution)
+    try {
+      const submitRes = await this.submitResult(task.id, {
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+        result: execution.result,
+      });
+
+      return {
+        status: "completed",
+        result: submitRes.result,
+        receipt: submitRes.receipt,
+        superseded: submitRes.superseded,
+        session,
+      };
+    } catch (submitErr) {
+      // Transport error during submission! DO NOT mark failed! DO NOT delete checkpoint!
+      // Check if bridge already accepted it (authoritative receipt):
+      const receiptRes = await this.transport
+        .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(task.id)}/receipt`)
+        .catch(() => null);
+
+      if (receiptRes?.receipt) {
+        const receipt = receiptRes.receipt;
+        const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+        if (
+          isValidMatchingResultReceipt(receipt, lease, execution.result) &&
+          !isSuperseded
+        ) {
+          this.checkpointStore.delete();
+          return {
+            status: "completed",
+            result: receipt.payload as DecisionResult,
+            receipt,
+            superseded: false,
+            session,
+          };
+        }
+        if (receipt.type === "failure") {
+          this.checkpointStore.delete();
+          return {
+            status: "failed",
+            failure: receipt.payload as DecisionTaskFailure,
+            receipt,
+            superseded: isSuperseded,
+            session,
+            error: submitErr,
+          };
+        }
+        if (isSuperseded) {
+          this.checkpointStore.delete();
+          throw new Error("Task was superseded on bridge during result submission");
+        }
+      }
+      // Re-throw so driver can retry submitting candidateResult on next runOnce/polling cycle!
+      throw submitErr;
+    }
   }
 
   async executeClaimedTask(

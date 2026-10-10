@@ -20,6 +20,7 @@ import {
   findComposerElement,
   setComposerText,
   findSendButton,
+  findStopButton,
   getAllAssistantTurns,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
@@ -124,6 +125,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         // If the browser tab is on an existing conversation, navigate to root / new chat
         const origin = (win.location as { origin?: string }).origin || this.origin;
         const newChatUrl = new URL("/", origin).href;
+        this.stepListener?.("navigating", { targetUri: newChatUrl });
         win.location.assign(newChatUrl);
 
         // Wait for route to actually change to new chat
@@ -247,6 +249,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       const currentConvId = extractConversationIdFromUrl(currentUrl);
 
       if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
+        this.stepListener?.("navigating", { targetUri: binding.resumeUri, targetConvId });
         win.location.assign(binding.resumeUri);
       }
 
@@ -409,5 +412,33 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     const result = extractResultFromAssistantTurn(assistantTurn, task);
     return { result };
+  }
+
+  isPromptConfirmedSent(docSupplierOrDoc?: Document | (() => Document), baselineCount?: number): boolean {
+    const doc =
+      typeof docSupplierOrDoc === "function"
+        ? docSupplierOrDoc()
+        : (docSupplierOrDoc ?? this.docSupplier());
+    const count = baselineCount ?? 0;
+    if (findStopButton(doc) !== null) return true;
+    if (getAllAssistantTurns(doc).length > count) return true;
+    return false;
+  }
+
+  async confirmPromptSubmitted(options: {
+    baselineCount: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
+    const timeout = options.timeoutMs ?? 2000;
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (options.signal?.aborted) return false;
+      if (this.isPromptConfirmedSent(undefined, options.baselineCount)) {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 200)));
+    }
+    return this.isPromptConfirmedSent(undefined, options.baselineCount);
   }
 }
