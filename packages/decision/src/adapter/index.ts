@@ -24,3 +24,8 @@ export {
   type TaskExecutionFailureOutcome,
   type TaskExecutionOutcome,
 } from "./coordinator";
+
+export type {
+  SubmissionReceipt,
+  DecisionTaskFailure,
+} from "../types";

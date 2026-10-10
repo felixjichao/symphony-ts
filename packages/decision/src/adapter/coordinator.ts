@@ -49,7 +49,14 @@ export interface DecisionTaskController {
 
   putBinding?(
     sessionId: string,
-    params: { adapter: string; externalSessionRef: string; resumeUri: string | null }
+    params: {
+      adapter: string;
+      externalSessionRef: string;
+      resumeUri: string | null;
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
+    }
   ): Promise<DecisionSession | { session: DecisionSession }>;
 
   rebindSession?(
@@ -60,6 +67,9 @@ export interface DecisionTaskController {
       resumeUri: string | null;
       expectedGeneration: number;
       operationKey?: string;
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
     }
   ): Promise<DecisionSession | { session: DecisionSession }>;
 }
@@ -383,6 +393,9 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
         adapter: created.binding.adapter,
         externalSessionRef: created.binding.externalSessionRef,
         resumeUri: created.binding.resumeUri,
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
       });
       currentSession =
         boundRes && typeof boundRes === "object" && "session" in boundRes
@@ -410,6 +423,9 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
           resumeUri: created.binding.resumeUri,
           expectedGeneration: expectedGen,
           ...(opKey ? { operationKey: opKey } : {}),
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
         });
         currentSession =
           reboundRes && typeof reboundRes === "object" && "session" in reboundRes

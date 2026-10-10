@@ -436,4 +436,117 @@ describe("DecisionService", () => {
       await cleanup();
     }
   });
+
+  it("handles task context publishing, retrieval, and consistency validation", async () => {
+    const { service, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 95);
+      const session = await service.createSession(root);
+      const task = await service.createPlanTask(session.id, { operationKey: "context-test" });
+
+      const context = {
+        strategy: "connector" as const,
+        workItem: root,
+        repository: "felixjichao/symphony-ts",
+        prNumber: null,
+        headSha: null,
+      };
+
+      const putRes = await service.putTaskContext(task.id, context);
+      expect(putRes).toEqual(context);
+
+      const retrieved = service.getTaskContext(task.id);
+      expect(retrieved).toEqual(context);
+
+      // Inconsistent context fails validation
+      const badContext = {
+        strategy: "connector" as const,
+        workItem: githubDecisionRoot("other", "repo", 1),
+        repository: "other/repo",
+        prNumber: null,
+        headSha: null,
+      };
+      await expect(service.putTaskContext(task.id, badContext)).rejects.toThrow();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("enforces session execution mutual exclusion and lease-fenced binding updates", async () => {
+    const { service, clock, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 95);
+      const session = await service.createSession(root);
+      const task1 = await service.createPlanTask(session.id, { operationKey: "mutex-1" });
+      const target: DecisionReviewTarget = {
+        repository: "felixjichao/symphony-ts",
+        prNumber: 95,
+        headSha: "a".repeat(40),
+      };
+      const task2 = await service.createReviewTask(session.id, { target, operationKey: "mutex-2" });
+
+      // Claim task1
+      const claim1 = await service.claimTask(task1.id, { owner: "worker-1", ttlMs: 60_000 });
+
+      // Attempting to claim task2 in same session while task1 is actively leased fails with 409
+      await expect(
+        service.claimTask(task2.id, { owner: "worker-2", ttlMs: 60_000 })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Stale owner credentials fail binding update
+      await expect(
+        service.putBinding(session.id, {
+          adapter: "chatgpt-web",
+          externalSessionRef: "c-1",
+          resumeUri: null,
+          owner: "worker-wrong",
+          token: "wrong-token",
+          generation: 1,
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Current lease holder succeeds
+      const bound = await service.putBinding(session.id, {
+        adapter: "chatgpt-web",
+        externalSessionRef: "c-1",
+        resumeUri: null,
+        owner: "worker-1",
+        token: claim1.lease.token,
+        generation: claim1.lease.generation,
+      });
+      expect(bound.bindingGeneration).toBe(1);
+
+      // After task1 lease expires, task2 can be claimed
+      clock.advance(70_000);
+      const claim2 = await service.claimTask(task2.id, { owner: "worker-2", ttlMs: 60_000 });
+      expect(claim2.task.id).toBe(task2.id);
+
+      // Worker 1 can no longer rebind with expired credentials
+      await expect(
+        service.rebindSession(session.id, {
+          adapter: "chatgpt-web",
+          externalSessionRef: "c-2",
+          resumeUri: null,
+          expectedGeneration: 1,
+          owner: "worker-1",
+          token: claim1.lease.token,
+          generation: claim1.lease.generation,
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Worker 2 rebind succeeds
+      const rebound = await service.rebindSession(session.id, {
+        adapter: "chatgpt-web",
+        externalSessionRef: "c-2",
+        resumeUri: null,
+        expectedGeneration: 1,
+        owner: "worker-2",
+        token: claim2.lease.token,
+        generation: claim2.lease.generation,
+      });
+      expect(rebound.bindingGeneration).toBe(2);
+    } finally {
+      await cleanup();
+    }
+  });
 });

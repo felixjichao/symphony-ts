@@ -16,12 +16,15 @@ import {
   reopenDecisionSession,
   validateDecisionResultForTask,
   parseDecisionReviewTarget,
+  parseDecisionContextBundle,
+  validateDecisionContextForTask,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
   type DecisionLease,
   type DecisionReviewTarget,
   type DecisionWorkItemRef,
+  type DecisionContextBundle,
   type UtcTimestampMs,
 } from "@symphony/domain";
 import { canonicalJsonEqual } from "./canonical-json";
@@ -95,12 +98,52 @@ export class DecisionService {
 
   async putBinding(
     sessionId: string,
-    params: { adapter: string; externalSessionRef: string; resumeUri: string | null }
+    params: {
+      adapter: string;
+      externalSessionRef: string;
+      resumeUri: string | null;
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
+    }
   ): Promise<DecisionSession> {
     return await this.store.transaction((draft) => {
       const session = draft.sessions[sessionId];
       if (!session) {
         throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
+      }
+
+      const now = this.clock();
+
+      if (params.owner !== undefined || params.token !== undefined || params.generation !== undefined) {
+        const activeLeaseTask = Object.values(draft.tasks).find(
+          (t) =>
+            t.sessionId === sessionId &&
+            (t.status === "claimed" || t.status === "running") &&
+            t.lease &&
+            now < t.lease.expiresAtMs
+        );
+        if (activeLeaseTask && activeLeaseTask.lease) {
+          if (
+            activeLeaseTask.lease.owner !== params.owner ||
+            activeLeaseTask.lease.token !== params.token ||
+            activeLeaseTask.lease.generation !== params.generation
+          ) {
+            throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
+          }
+        } else {
+          for (const t of Object.values(draft.tasks)) {
+            if (t.sessionId === sessionId && t.lease && t.lease.owner === params.owner) {
+              if (
+                t.lease.token !== params.token ||
+                t.lease.generation !== params.generation ||
+                now >= t.lease.expiresAtMs
+              ) {
+                throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
+              }
+            }
+          }
+        }
       }
 
       if (session.binding !== null) {
@@ -121,7 +164,6 @@ export class DecisionService {
         throw new DecisionConflictError("Cannot bind a completed session; reopen first");
       }
 
-      const now = this.clock();
       const nextGen = session.bindingGeneration === 0 ? 1 : session.bindingGeneration + 1;
       const updated: DecisionSession = {
         ...session,
@@ -150,6 +192,9 @@ export class DecisionService {
       resumeUri: string | null;
       expectedGeneration: number;
       operationKey?: string | undefined;
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
     }
   ): Promise<DecisionSession> {
     const checkRebindOp = (op: OperationReceipt): DecisionSession => {
@@ -193,13 +238,45 @@ export class DecisionService {
         throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
       }
 
+      const now = this.clock();
+
+      if (params.owner !== undefined || params.token !== undefined || params.generation !== undefined) {
+        const activeLeaseTask = Object.values(draft.tasks).find(
+          (t) =>
+            t.sessionId === sessionId &&
+            (t.status === "claimed" || t.status === "running") &&
+            t.lease &&
+            now < t.lease.expiresAtMs
+        );
+        if (activeLeaseTask && activeLeaseTask.lease) {
+          if (
+            activeLeaseTask.lease.owner !== params.owner ||
+            activeLeaseTask.lease.token !== params.token ||
+            activeLeaseTask.lease.generation !== params.generation
+          ) {
+            throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
+          }
+        } else {
+          for (const t of Object.values(draft.tasks)) {
+            if (t.sessionId === sessionId && t.lease && t.lease.owner === params.owner) {
+              if (
+                t.lease.token !== params.token ||
+                t.lease.generation !== params.generation ||
+                now >= t.lease.expiresAtMs
+              ) {
+                throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
+              }
+            }
+          }
+        }
+      }
+
       if (session.bindingGeneration !== params.expectedGeneration) {
         throw new DecisionConflictError(
           `Compare-and-swap failed: expected bindingGeneration ${params.expectedGeneration}, but current is ${session.bindingGeneration}`
         );
       }
 
-      const now = this.clock();
       const nextGen = session.bindingGeneration + 1;
       const binding = {
         schemaVersion: 1 as const,
@@ -270,7 +347,7 @@ export class DecisionService {
 
   async createPlanTask(
     sessionId: string,
-    params: { operationKey: string }
+    params: { operationKey?: string } = {}
   ): Promise<DecisionTask> {
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
@@ -301,7 +378,7 @@ export class DecisionService {
 
       const session = draft.sessions[sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
-      if (session.status !== "active") {
+      if (session.status !== "active" && session.status !== "broken-binding") {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
 
@@ -351,7 +428,7 @@ export class DecisionService {
 
   async createReviewTask(
     sessionId: string,
-    params: { target: DecisionReviewTarget; operationKey: string }
+    params: { target: DecisionReviewTarget; operationKey?: string }
   ): Promise<DecisionTask> {
     parseDecisionReviewTarget(params.target);
 
@@ -392,7 +469,7 @@ export class DecisionService {
 
       const session = draft.sessions[sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
-      if (session.status !== "active") {
+      if (session.status !== "active" && session.status !== "broken-binding") {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
 
@@ -474,6 +551,26 @@ export class DecisionService {
     return this.store.getAllTasks();
   }
 
+  async putTaskContext(taskId: string, context: DecisionContextBundle): Promise<DecisionContextBundle> {
+    const parsed = parseDecisionContextBundle(context);
+    return await this.store.transaction((draft) => {
+      const task = draft.tasks[taskId];
+      if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
+
+      const session = draft.sessions[task.sessionId];
+      if (!session) throw new DecisionNotFoundError(`Session "${task.sessionId}" not found`);
+
+      validateDecisionContextForTask(parsed, task, session);
+
+      draft.contexts[taskId] = parsed;
+      return parsed;
+    });
+  }
+
+  getTaskContext(taskId: string): DecisionContextBundle | null {
+    return this.store.getContext(taskId);
+  }
+
   async getNextTask(): Promise<NextTaskResponse | null> {
     // Perform lazy expiry cleanup in a lightweight transaction if needed
     const now = this.clock();
@@ -502,7 +599,7 @@ export class DecisionService {
       .filter((t) => {
         if (t.status !== "pending") return false;
         const s = this.store.getSession(t.sessionId);
-        return s !== null && s.status === "active";
+        return s !== null && (s.status === "active" || s.status === "broken-binding");
       })
       .sort((a, b) => {
         if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
@@ -527,15 +624,33 @@ export class DecisionService {
 
       const session = draft.sessions[task.sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${task.sessionId}" not found`);
-      if (session.status !== "active") {
+      if (session.status !== "active" && session.status !== "broken-binding") {
         throw new DecisionConflictError(`Cannot claim task for session in status "${session.status}"`);
       }
 
       const now = this.clock();
-      // Lazy release if expired
-      if ((task.status === "claimed" || task.status === "running") && task.lease && now >= task.lease.expiresAtMs) {
-        task = releaseExpiredDecisionTask(task, now);
-        draft.tasks[taskId] = task;
+
+      // Lazy release all expired leased tasks in the store
+      for (const t of Object.values(draft.tasks)) {
+        if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
+          draft.tasks[t.id] = releaseExpiredDecisionTask(t, now);
+        }
+      }
+      task = draft.tasks[taskId]!;
+
+      // Session execution mutual exclusion: no concurrent active execution within the same session
+      for (const otherTask of Object.values(draft.tasks)) {
+        if (
+          otherTask.sessionId === task.sessionId &&
+          otherTask.id !== taskId &&
+          (otherTask.status === "claimed" || otherTask.status === "running") &&
+          otherTask.lease &&
+          now < otherTask.lease.expiresAtMs
+        ) {
+          throw new DecisionConflictError(
+            `Session "${task.sessionId}" already has an actively executing task "${otherTask.id}" under lease`
+          );
+        }
       }
 
       if (task.status !== "pending") {

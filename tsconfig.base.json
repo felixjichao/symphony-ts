@@ -22,7 +22,8 @@
       "@symphony/agent": ["./packages/agent/src/index.ts"],
       "@symphony/observability": ["./packages/observability/src/index.ts"],
       "@symphony/decision": ["./packages/decision/src/index.ts"],
-      "@symphony/decision/adapter": ["./packages/decision/src/adapter/index.ts"]
+      "@symphony/decision/adapter": ["./packages/decision/src/adapter/index.ts"],
+      "@symphony/chatgpt-web": ["./apps/chatgpt-web/src/index.ts"]
     }
   }
 }

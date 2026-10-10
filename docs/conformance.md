@@ -215,7 +215,7 @@ credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).
 
-## Decision Plane extension evidence (NEST-99 / #94, NEST-100 / #95 & NEST-101 / #96)
+## Decision Plane extension evidence (NEST-99 / #94, NEST-100 / #95, NEST-101 / #96 & NEST-102 / #97)
 
 This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. [Protocol](decision-protocol.md).
 
@@ -233,5 +233,11 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Context strategies (connector vs. materialized) & typed execution requests | `packages/domain/src/decision-context.test.ts`: Decision context bundle validation |
 | Machine-readable result extraction (`symphony-result` fenced blocks, last-block rule, fail-closed) | `packages/decision/src/adapter.test.ts`: Result Extractor and Protocol Verification |
 | Fake executor adapter, simulated lifecycle, CAS rebind, and error injection | `packages/decision/src/adapter.test.ts`: FakeDecisionExecutorAdapter and Coordinator |
+| Provider-neutral task execution context API (`PUT/GET /v1/tasks/:id/context`) & durable storage | `packages/decision/src/bridge.test.ts`, `packages/decision/src/service.test.ts`, `packages/decision/src/store.test.ts` |
+| Session execution mutual exclusion & lease-fenced binding updates | `packages/decision/src/service.test.ts`: DecisionService claim mutual exclusion and lease fencing |
+| ChatGPT Web adapter & centralized DOM probes (composer, send, stop, streaming wait, conversation URL) | `apps/chatgpt-web/test/probes.test.ts`: DOM Probes; `apps/chatgpt-web/test/adapter.test.ts`: ChatGptWebAdapter |
+| Prompt templates (bootstrap, plan, review SHA binding, continuation header, handoff summary) | `apps/chatgpt-web/test/prompts.test.ts`: Prompt Templates and Contracts |
+| Decision tab driver, loopback transport (GM/Fetch), and navigation checkpoint recovery | `apps/chatgpt-web/test/transport.test.ts`, `apps/chatgpt-web/test/checkpoint.test.ts`, `apps/chatgpt-web/test/driver.test.ts` |
+| Multi-turn fixture (Plan → Review SHA-A → Review SHA-B) & broken-binding rollover (N → N+1) | `apps/chatgpt-web/test/fixture-e2e.test.ts`: Decision Multi-Turn Fixture and Rollover (E2E) |
 
-Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
+Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
