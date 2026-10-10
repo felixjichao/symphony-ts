@@ -1,0 +1,51 @@
+
+> @symphony/agent@0.1.0 test
+> vitest run src/delivery/delivery-skill-runner.test.ts
+
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+
+ ❯ src/delivery/delivery-skill-runner.test.ts (24 tests | 2 failed) 20ms
+   × Codex Delivery + Land Workflow Skill Runner > repairCommand (reference profile): CI 失败 → 执行 --repair-cmd → 新 SHA → green → land 4ms
+     → actual value must be number or bigint, received "undefined"
+   × Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 3 & 4: review requests changes -> command repair，新 SHA 和 supersession 0ms
+     → actual value must be number or bigint, received "undefined"
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > repairCommand (reference profile): CI 失败 → 执行 --repair-cmd → 新 SHA → green → land
+TypeError: actual value must be number or bigint, received "undefined"
+ ❯ src/delivery/delivery-skill-runner.test.ts:673:83
+    671|     // 修复入口确实被执行，且不是凭空成功：修复后产生了新的 SHA 并再次…
+    672|     expect(runner.execCalls.map((c) => c.command)).toContain("npm run …
+    673|     expect(runner.execCalls.find(c => c.command === "npm run ci:fix")?…
+       |                                                                                   ^
+    674|     const pushCalls = runner.gitCalls.filter((c) => c.args[0] === "pus…
+    675|     expect(pushCalls.length).toBeGreaterThanOrEqual(2);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 3 & 4: review requests changes -> command repair，新 SHA 和 supersession
+TypeError: actual value must be number or bigint, received "undefined"
+ ❯ src/delivery/delivery-skill-runner.test.ts:1511:33
+    1509|         const call = runner.execCalls.find(c => c.command === "codex-r…
+    1510|         receivedFeedback = call?.env?.["SYMPHONY_REVIEW_FINDINGS"] ?? …
+    1511|         expect(call?.timeoutMs).toBeGreaterThan(60_000);
+       |                                 ^
+    1512|         expect(call?.timeoutMs).toBeLessThanOrEqual(300_000);
+    1513|       }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 22 passed (24)
+   Start at  23:36:24
+   Duration  608ms (transform 241ms, setup 0ms, collect 252ms, tests 20ms, environment 0ms, prepare 88ms)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+npm error workspace @symphony/agent@0.1.0
+npm error location /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+npm error command failed
+npm error command sh -c vitest run src/delivery/delivery-skill-runner.test.ts

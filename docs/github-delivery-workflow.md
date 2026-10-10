@@ -66,6 +66,10 @@ open issue + symphony-ready
   → CI inspect
        ├─ failed → run --repair-cmd → re-validate → push again (bounded)
        └─ green + mergeable
+  → Review Gate (SHA-bound review task)
+       ├─ changes_requested → run --repair-cmd with findings → re-validate → push again (bounded)
+       ├─ needs_human → operator handoff
+       └─ approve (exact HEAD SHA verified)
   → squash merge (opt-in only)
   → Fixes #N closes the issue
   → Symphony tracker refresh sees closed
@@ -169,6 +173,9 @@ Four layers keep automatic landing scoped to opt-in Symphony work:
 4. **Check policy** — landing requires the PR to be open, mergeable, and every
    required and observed check to be successful. Pending, failing, zero, or
    unknown checks fail closed.
+5. **Review Gate** — landing requires independent review approval bound to the
+   current PR `headSha`. Any commit/HEAD change invalidates prior approval.
+   Missing gate, `changes_requested`, `needs_human`, or reviewer errors fail closed.
 
 There is no "scan open PRs and merge them" mode.
 
@@ -225,7 +232,7 @@ The delivery protocol itself is documented in the
 ## Not in scope
 
 This profile does not add dashboards, HTTP surfaces, SSH workers, multiple
-providers, durable scheduler state, a review-approval gate, or a PR/CI state
+providers, durable scheduler state, or a PR/CI state
 machine inside the orchestrator. The end-to-end real GitHub + real Codex dogfood
 is implemented as an opt-in harness; see
 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md) and the target

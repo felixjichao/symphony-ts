@@ -1,0 +1,17 @@
+
+> @symphony/agent@0.1.0 test
+> vitest run src/delivery/delivery-skill-runner.test.ts src/delivery/git-gh-runner.test.ts src/delivery/delivery-review-regressions.test.ts
+
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+
+ ✓ src/delivery/git-gh-runner.test.ts (6 tests) 2ms
+ ✓ src/delivery/delivery-skill-runner.test.ts (24 tests) 17ms
+ ✓ src/delivery/delivery-review-regressions.test.ts (28 tests) 1992ms
+   ✓ third-review delivery regressions > commits source without runtime state: {"tracked":true,"staged":true,"repair":true} 301ms
+
+ Test Files  3 passed (3)
+      Tests  58 passed (58)
+   Start at  23:41:11
+   Duration  2.45s (transform 280ms, setup 0ms, collect 374ms, tests 2.01s, environment 0ms, prepare 189ms)
+
