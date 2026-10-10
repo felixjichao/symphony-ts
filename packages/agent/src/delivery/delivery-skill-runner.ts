@@ -431,6 +431,10 @@ export async function runDeliverySkill(
     return initialSpentWaitSeconds + Math.floor((now() - startTimeMs) / 1000);
   };
 
+  // Real Codex repair can exceed the subprocess runner's default 60 seconds.
+  // Bound it by the existing persisted delivery deadline instead.
+  const getRepairTimeoutMs = (): number => Math.max(1, (deadlineTimestampMs ?? startTimeMs) - now());
+
   const persistCurrentState = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
     if (!stateStorage) return;
     try {
@@ -1107,7 +1111,7 @@ export async function runDeliverySkill(
             const repairRes = await runner.exec(
               options.repairCommand,
               options.cwd,
-              undefined,
+              getRepairTimeoutMs(),
               { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagResult.diagnostics },
             );
             repairSuccess = repairRes.exitCode === 0;
@@ -1543,7 +1547,7 @@ export async function runDeliverySkill(
               const repRes = await runner.exec(
                 options.repairCommand,
                 options.cwd,
-                undefined,
+                getRepairTimeoutMs(),
                 { SYMPHONY_REVIEW_FINDINGS: findingSummary },
               );
               repairSuccess = repRes.exitCode === 0;
