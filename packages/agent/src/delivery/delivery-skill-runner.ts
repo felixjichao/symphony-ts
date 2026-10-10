@@ -1261,15 +1261,32 @@ export async function runDeliverySkill(
 
     let patch = "";
     const patchFiles: string[] = [];
-    const diffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
-    if (diffRes.exitCode !== 0) {
-      return haltDispatch(
-        "manual_intervention_required",
-        `Failed to fetch PR diff for #${prNumber}: ${diffRes.stderr || "exit code " + diffRes.exitCode}`,
+
+    // Prioritize commit-pinned diff via git to ensure diff is strictly bound to currentHeadSha
+    let diffRes = await runner.git(
+      ["diff", `${context.baseBranch}...${currentHeadSha}`],
+      options.cwd,
+    );
+    if (diffRes.exitCode !== 0 && !context.baseBranch.startsWith("origin/")) {
+      diffRes = await runner.git(
+        ["diff", `origin/${context.baseBranch}...${currentHeadSha}`],
+        options.cwd,
       );
     }
 
-    patch = diffRes.stdout || "";
+    if (diffRes.exitCode === 0 && diffRes.stdout && diffRes.stdout.trim().length > 0) {
+      patch = diffRes.stdout;
+    } else {
+      const prDiffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
+      if (prDiffRes.exitCode !== 0) {
+        return haltDispatch(
+          "manual_intervention_required",
+          `Failed to fetch PR diff for #${prNumber}: ${prDiffRes.stderr || "exit code " + prDiffRes.exitCode}`,
+        );
+      }
+      patch = prDiffRes.stdout || "";
+    }
+
     const m = patch.match(/^diff --git a\/(.+?) b\//gm);
     if (m) {
       for (const line of m) {
@@ -1278,9 +1295,28 @@ export async function runDeliverySkill(
       }
     }
 
+    // Verify diff integrity: ensure touched files belong to the target commit (or baseBranch if deleted)
+    if (patchFiles.length > 0) {
+      for (const f of patchFiles) {
+        const inHead = await runner.git(["cat-file", "-e", `${currentHeadSha}:${f}`], options.cwd);
+        if (inHead.exitCode !== 0) {
+          const inBase = await runner.git(["cat-file", "-e", `${context.baseBranch}:${f}`], options.cwd);
+          if (inBase.exitCode !== 0) {
+            const inOriginBase = await runner.git(["cat-file", "-e", `origin/${context.baseBranch}:${f}`], options.cwd);
+            if (inOriginBase.exitCode !== 0) {
+              return haltDispatch(
+                "manual_intervention_required",
+                `PR diff integrity verification failed: touched file "${f}" does not exist in target commit ${currentHeadSha} or base branch ${context.baseBranch}. Possible floating HEAD or foreign diff detected.`,
+              );
+            }
+          }
+        }
+      }
+    }
+
     let repositoryInstructions: string | null = null;
     try {
-      const agentsRes = await runner.git(["show", "HEAD:AGENTS.md"], options.cwd);
+      const agentsRes = await runner.git(["show", `${currentHeadSha}:AGENTS.md`], options.cwd);
       if (agentsRes.exitCode === 0 && agentsRes.stdout) {
         repositoryInstructions = agentsRes.stdout;
       }

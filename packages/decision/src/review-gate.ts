@@ -2,7 +2,6 @@ import {
   parseDecisionSessionRootFromId,
   type DecisionContextBundle,
   type DecisionReviewTarget,
-  type DecisionReviewTask,
   type DecisionTask,
   type DeliveryReviewApprovalResult,
   type DeliveryReviewGate,
@@ -41,22 +40,6 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         session = await this.service.createSession(root);
       }
 
-      // Check existing active or completed review tasks for this exact target
-      const existingTasks = this.service.getTasksForSession(sessionId);
-      const activeOrDone = existingTasks.find(
-        (t): t is DecisionReviewTask =>
-          t.kind === "review" &&
-          t.target.repository === target.repository &&
-          t.target.prNumber === target.prNumber &&
-          t.target.headSha === target.headSha &&
-          t.status !== "superseded" &&
-          t.status !== "cancelled" &&
-          t.status !== "failed",
-      );
-      if (activeOrDone) {
-        return activeOrDone;
-      }
-
       return await this.service.createReviewTask(sessionId, {
         target,
         ...(context !== undefined ? { context } : {}),
@@ -72,21 +55,6 @@ export class DecisionReviewGate implements DeliveryReviewGate {
       } catch {
         const root = parseDecisionSessionRootFromId(sessionId);
         await this.client.createSession(root);
-      }
-
-      const { tasks } = await this.client.getTasksForSession(sessionId);
-      const activeOrDone = tasks.find(
-        (t): t is DecisionReviewTask =>
-          t.kind === "review" &&
-          t.target.repository === target.repository &&
-          t.target.prNumber === target.prNumber &&
-          t.target.headSha === target.headSha &&
-          t.status !== "superseded" &&
-          t.status !== "cancelled" &&
-          t.status !== "failed",
-      );
-      if (activeOrDone) {
-        return activeOrDone;
       }
 
       const res = await this.client.createTask({

@@ -331,4 +331,49 @@ describe("DecisionReviewGate", () => {
       await fs.rm(bridgeTmpDir, { recursive: true, force: true });
     }
   });
+
+  it("concurrent ensureReviewTask for the same target reuses task atomically without bumping revision or superseding", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-concurrent-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      // Concurrent ensureReviewTask calls with empty initial state
+      const [task1, task2] = await Promise.all([
+        httpGate.ensureReviewTask(sessionId, targetA),
+        httpGate.ensureReviewTask(sessionId, targetA),
+      ]);
+
+      expect(task1.id).toBe(task2.id);
+      expect(task1.revision).toBe(1);
+      expect(task2.revision).toBe(1);
+      expect(task1.status).toBe("pending");
+      expect(task2.status).toBe("pending");
+
+      // Verify that stored task is active and not superseded
+      const stored = bridgeService.getTask(task1.id);
+      expect(stored?.status).toBe("pending");
+      expect(stored?.revision).toBe(1);
+
+      // Repeated ensure (retry) returns the same task
+      const retryTask = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(retryTask.id).toBe(task1.id);
+      expect(retryTask.revision).toBe(1);
+      expect(retryTask.status).toBe("pending");
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
+  });
 });
+

@@ -31,8 +31,18 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
-    if (args[0] === "show" && args[1] === "HEAD:AGENTS.md") {
+    if (args[0] === "show" && typeof args[1] === "string" && (args[1] === "HEAD:AGENTS.md" || args[1].endsWith(":AGENTS.md"))) {
       return { stdout: "# Symphony Workspace Rules", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "cat-file" && args[1] === "-e") {
+      const ref = args[2] ?? "";
+      if (ref.includes("b-only.ts") && !ref.startsWith("b".repeat(40))) {
+        return { stdout: "", stderr: "fatal: path 'b-only.ts' does not exist in commit", exitCode: 1 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
     }
     const next = this.gitResponses.shift();
     let res: DeliverySubprocessResult;
@@ -1801,6 +1811,71 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(result.status).toBe("blocked");
       expect(result.reason).toBe("manual_intervention_required");
       expect(result.handoffMarkdown).toContain("Pre-merge CI check policy re-evaluation failed");
+      expect(runner.ghCalls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
+    });
+
+    it("验收 10 (diff 与 commit SHA 绑定与完整性校验): PR diff 混入非目标 SHA 的变更文件时阻止发布审查并安全终止", async () => {
+      const cwd = createTempCwd();
+      const runner = new MockDeliveryRunner();
+      const originalGh = runner.gh.bind(runner);
+      runner.gh = async (args, dir) => {
+        if (args[0] === "pr" && args[1] === "diff") {
+          return { stdout: "diff --git a/b-only.ts b/b-only.ts\n+SHA-B-only change\n", stderr: "", exitCode: 0 };
+        }
+        return originalGh(args, dir);
+      };
+      setupPreMutationSuccess(runner);
+
+      // PR exists at shaA
+      runner.ghResponses.push({
+        stdout: JSON.stringify([
+          {
+            number: 85,
+            url: "https://github.com/felixjichao/symphony-ts/pull/85",
+            title: "feat: delivery",
+            state: "OPEN",
+            headRefOid: shaA,
+            body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          },
+        ]),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+      runner.gitResponses.push({ stdout: `${shaA}\n`, stderr: "", exitCode: 0 }); // rev-parse
+
+      // CI green
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          headRefOid: shaA,
+          mergeable: "MERGEABLE",
+          state: "OPEN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      // Halt calls
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      const reviewGate = new MockReviewGate();
+      const result = await runDeliverySkill({
+        ...getBaseOptions(cwd),
+        reviewGate,
+        runner,
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toBe("manual_intervention_required");
+      expect(result.handoffMarkdown).toContain("PR diff integrity verification failed");
+      expect(result.handoffMarkdown).toContain("b-only.ts");
+      expect(reviewGate.ensureReviewTaskCallCount).toBe(0);
       expect(runner.ghCalls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
     });
   });

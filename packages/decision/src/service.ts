@@ -464,6 +464,32 @@ export class DecisionService {
       }
 
       const now = this.clock();
+
+      // Check if an active/usable review task already exists for this exact target in this session
+      const existingTask = Object.values(draft.tasks).find(
+        (t): t is DecisionReviewTask =>
+          t.sessionId === sessionId &&
+          t.kind === "review" &&
+          t.target.repository.toLowerCase() === params.target.repository.toLowerCase() &&
+          t.target.prNumber === params.target.prNumber &&
+          t.target.headSha === params.target.headSha &&
+          (t.status === "pending" || t.status === "running")
+      );
+      if (existingTask) {
+        if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+          draft.operationReceipts[params.operationKey] = {
+            schemaVersion: 1,
+            operationKey: params.operationKey,
+            kind: "create-review-task",
+            sessionId,
+            target: params.target,
+            entityId: existingTask.id,
+            createdAtMs: now,
+          };
+        }
+        return existingTask;
+      }
+
       const revKey = `review:${sessionId}:${params.target.repository}:${params.target.prNumber}`;
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
