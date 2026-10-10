@@ -80,6 +80,14 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     this.stepListener = listener;
   }
 
+  getWindow(): Window | null {
+    return this.winSupplier();
+  }
+
+  getDocument(): Document {
+    return this.docSupplier();
+  }
+
   async inspectBinding(
     session: DecisionSession,
     _options: { signal?: AbortSignal | undefined } = {}

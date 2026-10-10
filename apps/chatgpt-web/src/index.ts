@@ -5,3 +5,4 @@ export * from './checkpoint.js';
 export * from './extractor.js';
 export * from './adapter.js';
 export * from './driver.js';
+export * from './canonical-json.js';

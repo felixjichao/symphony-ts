@@ -17,7 +17,7 @@ import {
   type SubmissionReceipt,
   type DecisionTaskFailure,
 } from "@symphony/decision/adapter";
-import { type BridgeTransport } from "./transport";
+import { BridgeHttpError, type BridgeTransport } from "./transport";
 import {
   type CheckpointStore,
   type DriverCheckpoint,
@@ -27,6 +27,7 @@ import {
 } from "./checkpoint";
 import { ChatGptWebAdapter, type ChatGptWebAdapterOptions } from "./adapter";
 import { findStopButton, getAllAssistantTurns } from "./probes";
+import { canonicalJsonEqual } from "./canonical-json";
 
 function isValidMatchingResultReceipt(
   receipt: SubmissionReceipt,
@@ -38,11 +39,7 @@ function isValidMatchingResultReceipt(
   if (receipt.claimToken !== lease.token) return false;
   if (receipt.claimGeneration !== lease.generation) return false;
   if (expectedResult) {
-    const payload = receipt.payload as DecisionResult;
-    if (payload.taskId !== expectedResult.taskId) return false;
-    if (payload.sessionId !== expectedResult.sessionId) return false;
-    if (payload.revision !== expectedResult.revision) return false;
-    if (payload.kind !== expectedResult.kind) return false;
+    if (!canonicalJsonEqual(receipt.payload, expectedResult)) return false;
   }
   return true;
 }
@@ -175,9 +172,20 @@ export class DecisionTabDriver implements DecisionTaskController {
               superseded: false,
             };
           }
+          if (receipt.type === "result" && !isValidMatchingResultReceipt(receipt, params, params.result)) {
+            // Explicit conflict: bridge already accepted a different result receipt
+            throw new BridgeHttpError(
+              `Conflict: bridge already accepted a different result receipt for task "${taskId}"`,
+              "conflict",
+              409
+            );
+          }
         }
-      } catch {
-        // Receipt fetch also failed, keep candidateResult in checkpoint for retry
+      } catch (receiptErr: unknown) {
+        if (receiptErr instanceof BridgeHttpError && receiptErr.status === 409) {
+          throw receiptErr;
+        }
+        // Receipt fetch also failed (transient network failure), keep candidateResult in checkpoint for retry
       }
       throw err;
     }
@@ -341,10 +349,23 @@ export class DecisionTabDriver implements DecisionTaskController {
             (this.activeLease as { expiresAtMs: number }).expiresAtMs = hbRes.expiresAtMs;
           }
         }
-      } catch {
-        // Heartbeat failed: lease lost, expired, or superseded
-        this.stopHeartbeat();
-        if (onExpired) onExpired();
+      } catch (hbErr: unknown) {
+        if (
+          hbErr instanceof BridgeHttpError &&
+          (hbErr.status === 404 || hbErr.status === 409 || hbErr.status === 410)
+        ) {
+          // Authoritative lease lost or superseded on bridge
+          this.stopHeartbeat();
+          if (onExpired) onExpired();
+          return;
+        }
+        // Transient network failure during heartbeat:
+        // Only stop heartbeat and abort if local lease has actually expired
+        const currentExpiry = this.activeLease?.expiresAtMs ?? lease.expiresAtMs;
+        if (Date.now() >= currentExpiry) {
+          this.stopHeartbeat();
+          if (onExpired) onExpired();
+        }
       }
     }, this.heartbeatIntervalMs);
   }
@@ -386,14 +407,51 @@ export class DecisionTabDriver implements DecisionTaskController {
       return null;
     }
 
-    // 1. Check task status on bridge FIRST without requiring heartbeat/lease renewal!
-    const taskRes = await this.transport
-      .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
-      .catch(() => null);
+    // 1. Check task status and session on bridge FIRST without requiring heartbeat/lease renewal!
+    let taskRes: { task: DecisionTask } | null = null;
+    try {
+      taskRes = await this.transport.request<{ task: DecisionTask }>(
+        "GET",
+        `/v1/tasks/${encodeURIComponent(cp.taskId)}`
+      );
+    } catch (err: unknown) {
+      if (err instanceof BridgeHttpError && (err.status === 404 || err.status === 410)) {
+        this.checkpointStore.delete();
+        return null;
+      }
+      if (err instanceof BridgeHttpError && err.status === 409) {
+        this.checkpointStore.delete();
+        return null;
+      }
+      // Transient network or server error!
+      if (!isCheckpointExpired(cp, Date.now())) {
+        throw err;
+      }
+      this.checkpointStore.delete();
+      return null;
+    }
 
-    const sessionRes = await this.transport
-      .request<{ session: DecisionSession }>("GET", `/v1/sessions/${encodeURIComponent(cp.sessionId)}`)
-      .catch(() => null);
+    let sessionRes: { session: DecisionSession } | null = null;
+    try {
+      sessionRes = await this.transport.request<{ session: DecisionSession }>(
+        "GET",
+        `/v1/sessions/${encodeURIComponent(cp.sessionId)}`
+      );
+    } catch (err: unknown) {
+      if (err instanceof BridgeHttpError && (err.status === 404 || err.status === 410)) {
+        this.checkpointStore.delete();
+        return null;
+      }
+      if (err instanceof BridgeHttpError && err.status === 409) {
+        this.checkpointStore.delete();
+        return null;
+      }
+      if (!isCheckpointExpired(cp, Date.now())) {
+        throw err;
+      }
+      this.checkpointStore.delete();
+      return null;
+    }
 
     if (taskRes?.task?.status === "completed") {
       try {
@@ -424,9 +482,31 @@ export class DecisionTabDriver implements DecisionTaskController {
             this.checkpointStore.delete();
             return null;
           }
+          if (
+            cp.candidateResult &&
+            receipt.type === "result" &&
+            !isValidMatchingResultReceipt(
+              receipt,
+              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+              cp.candidateResult as DecisionResult
+            )
+          ) {
+            // Explicit conflict: task completed on bridge with a different result payload!
+            // Do NOT delete checkpoint, report conflict!
+            throw new BridgeHttpError(
+              `Conflict: task "${cp.taskId}" completed on bridge with a different result payload than candidate result`,
+              "conflict",
+              409
+            );
+          }
         }
-      } catch {
-        // Receipt fetch failed
+      } catch (receiptErr: unknown) {
+        if (receiptErr instanceof BridgeHttpError && receiptErr.status === 409) {
+          throw receiptErr;
+        }
+        if (!isCheckpointExpired(cp, Date.now())) {
+          throw receiptErr;
+        }
       }
     }
 
@@ -469,7 +549,10 @@ export class DecisionTabDriver implements DecisionTaskController {
           superseded: submitRes.superseded,
           session: sessionRes?.session ?? ({} as DecisionSession),
         };
-      } catch (submitErr) {
+      } catch (submitErr: unknown) {
+        if (submitErr instanceof BridgeHttpError && submitErr.status === 409) {
+          throw submitErr;
+        }
         // Re-submission failed. Check whether bridge recorded it or if it failed/superseded
         const freshTask = await this.transport
           .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
@@ -506,12 +589,26 @@ export class DecisionTabDriver implements DecisionTaskController {
               receipt,
               superseded: isSuperseded,
               session: sessionRes?.session ?? ({} as DecisionSession),
-              error: submitErr,
+              error: submitErr instanceof Error ? submitErr : new Error(String(submitErr)),
             };
           }
           if (isSuperseded || freshTask?.task?.status === "superseded") {
             this.checkpointStore.delete();
             return null;
+          }
+          if (
+            receipt.type === "result" &&
+            !isValidMatchingResultReceipt(
+              receipt,
+              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+              cp.candidateResult as DecisionResult
+            )
+          ) {
+            throw new BridgeHttpError(
+              `Conflict: task "${cp.taskId}" already accepted a different result receipt than candidate result`,
+              "conflict",
+              409
+            );
           }
         }
         // Transport error while task remains active; keep candidateResult in checkpoint for retry
@@ -545,10 +642,22 @@ export class DecisionTabDriver implements DecisionTaskController {
           savedAtMs: Date.now(),
         });
       }
-    } catch {
-      // Lease lost, expired, or superseded
-      this.checkpointStore.delete();
-      return null;
+    } catch (hbErr: unknown) {
+      if (
+        hbErr instanceof BridgeHttpError &&
+        (hbErr.status === 404 || hbErr.status === 409 || hbErr.status === 410)
+      ) {
+        // Authoritative lease lost or superseded on bridge
+        this.checkpointStore.delete();
+        return null;
+      }
+      // Transient network or server error during heartbeat:
+      // If local lease is still valid (not expired), do NOT delete checkpoint!
+      if (isCheckpointExpired(cp, Date.now())) {
+        this.checkpointStore.delete();
+        return null;
+      }
+      // Local lease is unexpired: renewedExpiry stays cp.leaseExpiresAtMs
     }
 
     if (!taskRes?.task || !sessionRes?.session) {
@@ -565,9 +674,11 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 4. Handle checkpoint steps
     if (cp.step === "navigating") {
-      const globalWindow = (globalThis as unknown as { window?: { location?: { href?: string; assign(url: string): void } } }).window;
-      if (globalWindow && cp.targetUri && globalWindow.location?.href !== cp.targetUri) {
-        globalWindow.location?.assign(cp.targetUri);
+      const win =
+        (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
+        (globalThis as unknown as { window?: Window }).window;
+      if (win && cp.targetUri && win.location && win.location.href !== cp.targetUri) {
+        win.location.assign(cp.targetUri);
       }
     }
 
@@ -785,6 +896,13 @@ export class DecisionTabDriver implements DecisionTaskController {
           this.checkpointStore.delete();
           throw new Error("Task was superseded on bridge during result submission");
         }
+        if (receipt.type === "result" && !isValidMatchingResultReceipt(receipt, lease, execution.result)) {
+          throw new BridgeHttpError(
+            `Conflict: task "${task.id}" already accepted a different result receipt than extracted result`,
+            "conflict",
+            409
+          );
+        }
       }
       // Re-throw so driver can retry submitting candidateResult on next runOnce/polling cycle!
       throw submitErr;
@@ -834,9 +952,13 @@ export class DecisionTabDriver implements DecisionTaskController {
       if (signal.aborted) {
         throw err;
       }
-      // If candidate result exists, DO NOT delete checkpoint so it can be idempotently recovered
+      // If candidate result exists or currently navigating, DO NOT delete checkpoint so it can be recovered
       const currentCp = this.checkpointStore.get();
-      if (currentCp?.candidateResult || currentCp?.step === "result_extracted") {
+      if (
+        currentCp?.candidateResult ||
+        currentCp?.step === "result_extracted" ||
+        currentCp?.step === "navigating"
+      ) {
         throw err;
       }
       // For other unhandled fatal errors, clean up
