@@ -15,17 +15,21 @@ export const SELECTORS = {
     "button[data-testid='send-button']",
     "button[aria-label='Send prompt']",
     "button[aria-label='Send message']",
+    "button[aria-label='发送']",
+    "button[aria-label='提交']",
     "form button[type='submit']",
   ],
   stopButton: [
     "button[data-testid='stop-button']",
     "button[aria-label='Stop generating']",
     "button[aria-label='Stop streaming']",
+    "button[aria-label='停止']",
   ],
   assistantTurn: [
     "article[data-testid^='conversation-turn-'] [data-message-author-role='assistant']",
     "[data-message-author-role='assistant']",
     "article.agent-turn",
+    "[data-markdown-text-style='assistant-message']",
   ],
   codeBlock: [
     "pre code.language-symphony-result",
@@ -109,13 +113,20 @@ export interface ExtractedCodeBlock {
 
 export function extractCodeBlocksFromTurn(turn: HTMLElement): ExtractedCodeBlock[] {
   const blocks: ExtractedCodeBlock[] = [];
-  const codeElements = turn.querySelectorAll("pre code");
-  for (const el of Array.from(codeElements)) {
+  // Query block containers together to preserve DOM order for last-block fencing.
+  const containers = turn.querySelectorAll("pre, [data-markdown-copy='code-block']");
+  for (const container of Array.from(containers)) {
+    const el = container.querySelector("code");
+    if (!el) continue;
     let language = "";
     const className = el.className || "";
     const match = /language-([a-zA-Z0-9_-]+)/.exec(className);
     if (match) {
       language = match[1] ?? "";
+    }
+    if (!language && container.getAttribute("data-markdown-copy") === "code-block") {
+      const header = container.querySelector("[data-markdown-copy='exclude']");
+      language = header?.querySelector("div")?.textContent?.trim() ?? "";
     }
     const content = el.textContent || "";
     blocks.push({ language, content });
@@ -155,6 +166,7 @@ export interface WaitForCompletionOptions {
   readonly doc?: Document | undefined;
   readonly baselineCount?: number | undefined;
   readonly baselineTurn?: HTMLElement | null | undefined;
+  readonly isCompletionCandidate?: ((turn: HTMLElement) => boolean) | undefined;
   readonly checkIntervalMs?: number | undefined;
   readonly stabilizationMs?: number | undefined;
   readonly timeoutMs?: number | undefined;
@@ -215,7 +227,8 @@ export async function waitForStreamingCompletion(
       // 1. Stop button is not active (model has finished generating/streaming)
       // 2. We have non-empty assistant text
       // 3. The text has remained stable for at least stabilizationMs
-      if (!stopButton && currentText.trim().length > 0) {
+      if (!stopButton && currentText.trim().length > 0 &&
+          (!options.isCompletionCandidate || options.isCompletionCandidate(targetTurn))) {
         const stableDuration = Date.now() - lastChangeAt;
         if (stableDuration >= stabilizationMs) {
           return targetTurn;

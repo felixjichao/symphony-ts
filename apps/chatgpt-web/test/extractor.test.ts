@@ -76,6 +76,28 @@ describe("extractResultFromAssistantTurn strict fail-closed contract", () => {
     ).toThrow(DecisionAdapterError);
   });
 
+  it("extracts labeled code surfaces and rejects a malformed last surface", () => {
+    const turn = new MockElement("div");
+    const appendSurface = (content: string) => {
+      const surface = new MockElement("div", { "data-markdown-copy": "code-block" });
+      const header = new MockElement("div", { "data-markdown-copy": "exclude" });
+      const label = new MockElement("div");
+      label.textContent = "symphony-result";
+      header.appendChild(label);
+      const code = new MockElement("code");
+      code.textContent = content;
+      surface.appendChild(header);
+      surface.appendChild(code);
+      turn.appendChild(surface);
+    };
+    appendSurface(validResultJson);
+    expect(extractResultFromAssistantTurn(turn as unknown as HTMLElement, planTask).verdict)
+      .toBe("ready");
+    appendSurface("{malformed}");
+    expect(() => extractResultFromAssistantTurn(turn as unknown as HTMLElement, planTask))
+      .toThrow(DecisionAdapterError);
+  });
+
   it("fails closed when turn has no symphony-result blocks", () => {
     const turn = new MockElement("div");
     turn.textContent = "Here is some prose without any code blocks.";

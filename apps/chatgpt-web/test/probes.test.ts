@@ -56,6 +56,15 @@ describe("DOM Probes and URL utilities", () => {
     expect(findStopButton(doc as unknown as Document)).not.toBeNull();
   });
 
+  it("locates Chinese send buttons without test IDs", () => {
+    for (const label of ["发送", "提交"]) {
+      const doc = new MockDocument();
+      const button = new MockElement("button", { "aria-label": label });
+      doc.body.appendChild(button);
+      expect(findSendButton(doc as unknown as Document)).toBe(button);
+    }
+  });
+
   it("locates latest assistant turn and extracts code blocks", () => {
     const doc = new MockDocument();
     const turn1 = new MockElement("article", { "data-testid": "conversation-turn-1" });
@@ -83,6 +92,29 @@ describe("DOM Probes and URL utilities", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.language).toBe("symphony-result");
     expect(blocks[0]?.content).toBe('{"verdict":"approve"}');
+  });
+
+  it("reads current ChatGPT assistant markdown and labeled code surfaces", () => {
+    const doc = new MockDocument();
+    const turn = new MockElement("div", { "data-markdown-text-style": "assistant-message" });
+    const surface = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label = new MockElement("div");
+    label.textContent = "symphony-result";
+    header.appendChild(label);
+    surface.appendChild(header);
+    const code = new MockElement("code");
+    code.textContent = '{"schemaVersion":1}';
+    surface.appendChild(code);
+    turn.appendChild(surface);
+    doc.body.appendChild(turn);
+    const stop = new MockElement("button", { "aria-label": "停止" });
+    doc.body.appendChild(stop);
+    expect(findLatestAssistantTurn(doc as unknown as Document)).toBe(turn);
+    expect(findStopButton(doc as unknown as Document)).toBe(stop);
+    expect(extractCodeBlocksFromTurn(turn as unknown as HTMLElement)).toEqual([
+      { language: "symphony-result", content: '{"schemaVersion":1}' },
+    ]);
   });
 
   it("extracts conversation ID from URLs and constructs resume URLs", () => {
