@@ -19,7 +19,7 @@ import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-run
 class MockDeliveryRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly ghCalls: Array<{ args: readonly string[]; cwd: string }> = [];
-  readonly execCalls: Array<{ command: string; cwd: string }> = [];
+  readonly execCalls: Array<{ command: string; cwd: string; timeoutMs: number | undefined; env: Record<string, string> | undefined }> = [];
 
   gitResponses: Array<DeliverySubprocessResult | ((args: readonly string[]) => DeliverySubprocessResult)> = [];
   ghResponses: Array<DeliverySubprocessResult | ((args: readonly string[]) => DeliverySubprocessResult)> = [];
@@ -181,8 +181,8 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
     return next ?? { stdout: "", stderr: "", exitCode: 0 };
   }
 
-  async exec(command: string, cwd: string): Promise<DeliverySubprocessResult> {
-    this.execCalls.push({ command, cwd });
+  async exec(command: string, cwd: string, timeoutMs?: number, env?: Record<string, string>): Promise<DeliverySubprocessResult> {
+    this.execCalls.push({ command, cwd, timeoutMs, env });
     const next = this.execResponses.shift();
     if (typeof next === "function") {
       return next(command);
@@ -663,6 +663,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       ...getBaseOptions(cwd),
       runner,
       repairCommand: "npm run ci:fix",
+      maxWaitSeconds: 300,
     });
 
     expect(result.status).toBe("completed");
@@ -670,6 +671,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(result.mergeSha).toBe("mergedsha-repair-cmd");
     // 修复入口确实被执行，且不是凭空成功：修复后产生了新的 SHA 并再次 push。
     expect(runner.execCalls.map((c) => c.command)).toContain("npm run ci:fix");
+    expect(runner.execCalls.find(c => c.command === "npm run ci:fix")?.timeoutMs).toBeGreaterThan(60_000);
     const pushCalls = runner.gitCalls.filter((c) => c.args[0] === "push");
     expect(pushCalls.length).toBeGreaterThanOrEqual(2);
   });
@@ -1386,7 +1388,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(reviewGate.ensureReviewTaskCallCount).toBe(2);
     });
 
-    it("验收 3 & 4: review requests changes -> findings 进入 repair loop，新 SHA 生成新 ReviewTask，旧任务被废弃 (superseded)", async () => {
+    it.each(["function", "command"] as const)("验收 3 & 4: review requests changes -> %s repair，新 SHA 和 supersession", async mode => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
       setupPreMutationSuccess(runner);
@@ -1407,7 +1409,10 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
         exitCode: 0,
       });
 
-      runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+      runner.execResponses.push(() => {
+        if (mode === "command") testClock += 70_000; // Real coding/validation already spent part of the deadline.
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      }); // validation
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
       runner.gitResponses.push({ stdout: `${shaA}\n`, stderr: "", exitCode: 0 }); // rev-parse
@@ -1445,6 +1450,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       });
 
       // Repair operations for review feedback:
+      if (mode === "command") runner.execResponses.push({ stdout: "Codex repair complete", stderr: "", exitCode: 0 });
       runner.execResponses.push({ stdout: "validation after review repair ok", stderr: "", exitCode: 0 }); // validation
       runner.gitResponses.push({ stdout: " M src/service.ts\n", stderr: "", exitCode: 0 }); // diff check
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git add
@@ -1494,15 +1500,22 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
         reviewGate,
-        repairFn: async (feedback) => {
+        maxWaitSeconds: 300,
+        ...(mode === "function" ? { repairFn: async (feedback: string) => {
           receivedFeedback = feedback;
           return true;
-        },
+        } } : { repairCommand: "codex-review-repair" }),
         runner,
       });
 
       expect(result.status).toBe("completed");
       expect(result.headSha).toBe(shaB);
+      if (mode === "command") {
+        const call = runner.execCalls.find(c => c.command === "codex-review-repair");
+        receivedFeedback = call?.env?.["SYMPHONY_REVIEW_FINDINGS"] ?? "";
+        expect(call?.timeoutMs).toBeGreaterThan(60_000);
+        expect(call?.timeoutMs).toBe(230_000);
+      }
       expect(receivedFeedback).toContain("Found null pointer exception risk");
       expect(reviewGate.supersedeReviewTaskCallCount).toBe(1);
       expect(reviewGate.supersededTaskIds).toContain(`task-review-test-${shaA}`);

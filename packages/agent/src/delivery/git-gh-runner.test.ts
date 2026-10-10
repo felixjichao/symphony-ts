@@ -31,3 +31,26 @@ describe("git-gh-runner credential sanitization", () => {
     expect(sanitized).toContain("http://***:***@git.example.com/repo");
   });
 });
+
+// Real Pulls API responses contain HTTPS URLs followed by git@ SSH URLs.
+describe("structured GitHub output", () => {
+  it("preserves compact JSON and SHA fields when HTTPS and SSH URLs coexist", () => {
+    const response = {
+      url: "https://api.github.com/repos/owner/repo/pulls/19",
+      head: { sha: "a".repeat(40), repo: { html_url: "https://github.com/owner/repo", ssh_url: "git@github.com:owner/repo.git" } },
+      base: { sha: "b".repeat(40) },
+      body: "Reviewer @owner must check this commit",
+    };
+    const input = JSON.stringify(response);
+    const output = sanitizeCredentials(input);
+    expect(output).toBe(input);
+    expect(JSON.parse(output)).toEqual(response);
+  });
+
+  it("redacts actual credentials without crossing JSON string boundaries", () => {
+    const input = JSON.stringify({ url: "https://user:secret@github.com/owner/repo.git", next: "https://github.com/owner/repo", ssh: "git@github.com:owner/repo.git" });
+    const output = sanitizeCredentials(input);
+    expect(output).not.toContain("user:secret");
+    expect(JSON.parse(output)).toEqual({ url: "https://***:***@github.com/owner/repo.git", next: "https://github.com/owner/repo", ssh: "git@github.com:owner/repo.git" });
+  });
+});
