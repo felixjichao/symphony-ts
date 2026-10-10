@@ -122,6 +122,19 @@ describe("DecisionBridge HTTP server", () => {
       });
       expect(hbRes.expiresAtMs).toBeGreaterThan(Date.now());
 
+      // Context PUT and GET
+      const contextPayload = {
+        strategy: "connector" as const,
+        workItem: root,
+        repository: "felixjichao/symphony-ts",
+        prNumber: 95,
+        headSha: "f".repeat(40),
+      };
+      const putCtx = await client.putTaskContext(taskRes.task.id, contextPayload);
+      expect(putCtx.context).toEqual(contextPayload);
+      const getCtx = await client.getTaskContext(taskRes.task.id);
+      expect(getCtx.context).toEqual(contextPayload);
+
       // Submit result
       const reviewResult: DecisionReviewResult = {
         schemaVersion: 1,

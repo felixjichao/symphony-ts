@@ -15,11 +15,13 @@ describe("Decision Bridge CLI", () => {
       "--port", "5050",
       "--token", "secret",
       "--ttl", "60",
+      "--allowed-origins", "https://chatgpt.com,https://chat.openai.com",
     ]);
     expect(parsed.storeDir).toBe("/data/store");
     expect(parsed.port).toBe(5050);
     expect(parsed.authToken).toBe("secret");
     expect(parsed.ttlSeconds).toBe(60);
+    expect(parsed.allowedOrigins).toEqual(["https://chatgpt.com", "https://chat.openai.com"]);
     expect(parsed.help).toBe(false);
 
     const helpParsed = parseDecisionBridgeArgs(["--help"]);

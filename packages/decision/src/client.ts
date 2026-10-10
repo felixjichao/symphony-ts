@@ -2,6 +2,7 @@ import type {
   DecisionSession,
   DecisionTask,
   DecisionWorkItemRef,
+  DecisionContextBundle,
 } from "@symphony/domain";
 import { DecisionStoreError } from "./errors";
 import type {
@@ -14,6 +15,9 @@ import type {
   NextTaskResponse,
   GetTaskResultResponse,
   GetTaskReceiptResponse,
+  PutTaskContextRequest,
+  PutTaskContextResponse,
+  GetTaskContextResponse,
   PutBindingRequest,
   RebindSessionRequest,
   StartTaskRequest,
@@ -151,6 +155,22 @@ export class DecisionBridgeClient {
     return await this.request<GetTaskReceiptResponse>(
       "GET",
       `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
+    );
+  }
+
+  async putTaskContext(taskId: string, context: DecisionContextBundle): Promise<PutTaskContextResponse> {
+    const payload: PutTaskContextRequest = { context };
+    return await this.request<PutTaskContextResponse>(
+      "PUT",
+      `/v1/tasks/${encodeURIComponent(taskId)}/context`,
+      payload
+    );
+  }
+
+  async getTaskContext(taskId: string): Promise<GetTaskContextResponse> {
+    return await this.request<GetTaskContextResponse>(
+      "GET",
+      `/v1/tasks/${encodeURIComponent(taskId)}/context`
     );
   }
 

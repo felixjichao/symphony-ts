@@ -12,6 +12,7 @@ export interface DecisionBridgeParsedArgs {
   readonly port?: number | undefined;
   readonly authToken?: string | undefined;
   readonly ttlSeconds?: number | undefined;
+  readonly allowedOrigins?: readonly string[] | undefined;
   readonly help?: boolean | undefined;
 }
 
@@ -20,6 +21,7 @@ export function parseDecisionBridgeArgs(argv: readonly string[]): DecisionBridge
   let port: number | undefined;
   let authToken: string | undefined;
   let ttlSeconds: number | undefined;
+  let allowedOrigins: string[] | undefined;
   let help = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -46,10 +48,18 @@ export function parseDecisionBridgeArgs(argv: readonly string[]): DecisionBridge
       if (next !== undefined && /^\d+$/.test(next)) {
         ttlSeconds = Number(next);
       }
+    } else if (arg === "--allowed-origins") {
+      const next = argv[++i];
+      if (next !== undefined && !next.startsWith("-")) {
+        allowedOrigins = next
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
     }
   }
 
-  return { storeDir, port, authToken, ttlSeconds, help };
+  return { storeDir, port, authToken, ttlSeconds, allowedOrigins, help };
 }
 
 export async function runDecisionBridgeCli(
@@ -63,11 +73,12 @@ export async function runDecisionBridgeCli(
     io.stdout.write(
       "Usage: symphony decision bridge --store <dir> [options]\n\n" +
       "Options:\n" +
-      "  --store <dir>      Path to durable decision store directory (required)\n" +
-      "  --port <port>      Loopback port to bind (default: 4040)\n" +
-      "  --token <token>    Bearer authorization token (optional, or DECISION_BRIDGE_TOKEN env)\n" +
-      "  --ttl <seconds>    Default task claim TTL in seconds (default: 120)\n" +
-      "  -h, --help         Show this help message\n"
+      "  --store <dir>             Path to durable decision store directory (required)\n" +
+      "  --port <port>             Loopback port to bind (default: 4040)\n" +
+      "  --token <token>           Bearer authorization token (optional, or DECISION_BRIDGE_TOKEN env)\n" +
+      "  --ttl <seconds>           Default task claim TTL in seconds (default: 120)\n" +
+      "  --allowed-origins <urls>  Comma-separated allowed CORS origins (optional, or DECISION_BRIDGE_ALLOWED_ORIGINS env)\n" +
+      "  -h, --help                Show this help message\n"
     );
     return 0;
   }
@@ -78,6 +89,12 @@ export async function runDecisionBridgeCli(
   }
 
   const token = parsed.authToken ?? process.env.DECISION_BRIDGE_TOKEN;
+  const envOrigins = process.env.DECISION_BRIDGE_ALLOWED_ORIGINS
+    ? process.env.DECISION_BRIDGE_ALLOWED_ORIGINS.split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : undefined;
+  const allowedOrigins = parsed.allowedOrigins ?? envOrigins;
 
   let bridge: DecisionBridge;
   try {
@@ -86,6 +103,7 @@ export async function runDecisionBridgeCli(
       port: parsed.port ?? 4040,
       host: "127.0.0.1",
       authToken: token,
+      allowedOrigins,
       defaultClaimTtlMs: parsed.ttlSeconds !== undefined ? parsed.ttlSeconds * 1000 : undefined,
     });
   } catch (err: unknown) {

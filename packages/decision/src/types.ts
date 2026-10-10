@@ -5,6 +5,7 @@ import type {
   DecisionLease,
   DecisionReviewTarget,
   DecisionWorkItemRef,
+  DecisionContextBundle,
   UtcTimestampMs,
 } from "@symphony/domain";
 
@@ -59,6 +60,7 @@ export interface DecisionStoreRecord {
   readonly receipts: Record<string, SubmissionReceipt>;
   readonly revisions: Record<string, number>;
   readonly operationReceipts: Record<string, OperationReceipt>;
+  readonly contexts: Record<string, DecisionContextBundle>;
 }
 
 export interface DecisionStoreConfig {
@@ -147,10 +149,25 @@ export interface GetTaskReceiptResponse {
   readonly receipt: SubmissionReceipt;
 }
 
+export interface PutTaskContextRequest {
+  readonly context: DecisionContextBundle;
+}
+
+export interface PutTaskContextResponse {
+  readonly context: DecisionContextBundle;
+}
+
+export interface GetTaskContextResponse {
+  readonly context: DecisionContextBundle;
+}
+
 export interface PutBindingRequest {
   readonly adapter: string;
   readonly externalSessionRef: string;
   readonly resumeUri: string | null;
+  readonly owner?: string | undefined;
+  readonly token?: string | undefined;
+  readonly generation?: number | undefined;
 }
 
 export interface RebindSessionRequest {
@@ -159,6 +176,9 @@ export interface RebindSessionRequest {
   readonly resumeUri: string | null;
   readonly expectedGeneration: number;
   readonly operationKey?: string | undefined;
+  readonly owner?: string | undefined;
+  readonly token?: string | undefined;
+  readonly generation?: number | undefined;
 }
 
 export interface CreateSessionRequest {

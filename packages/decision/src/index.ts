@@ -27,7 +27,7 @@ export {
   type CreateSessionRequest,
   type CreateTaskRequest,
   type BridgeErrorEnvelope,
-} from "./types";
+} from "./types.js";
 
 export {
   DecisionStoreError,
@@ -41,20 +41,20 @@ export {
   DecisionUnauthorizedError,
   DecisionForbiddenError,
   DecisionPayloadTooLargeError,
-} from "./errors";
+} from "./errors.js";
 
-export { canonicalJsonEqual, canonicalJsonStringify } from "./canonical-json";
-export { StoreLock, type LockMetadata } from "./lock";
+export { canonicalJsonEqual, canonicalJsonStringify } from "./canonical-json.js";
+export { StoreLock, type LockMetadata } from "./lock.js";
 export {
   DurableDecisionStore,
   createEmptyStoreRecord,
   validateStoreRecord,
   validateDecisionTaskFailure,
   validateSubmissionReceipt,
-} from "./store";
-export { DecisionService } from "./service";
-export { DecisionBridge } from "./bridge";
-export { DecisionBridgeClient, type DecisionBridgeClientOptions } from "./client";
+} from "./store.js";
+export { DecisionService } from "./service.js";
+export { DecisionBridge } from "./bridge.js";
+export { DecisionBridgeClient, type DecisionBridgeClientOptions } from "./client.js";
 
 // Executor adapter abstraction and context strategies (NEST-101 / #96)
 export {
@@ -71,5 +71,5 @@ export {
   type TaskExecutionSuccessOutcome,
   type TaskExecutionFailureOutcome,
   type TaskExecutionOutcome,
-} from "./adapter";
+} from "./adapter/index.js";
 

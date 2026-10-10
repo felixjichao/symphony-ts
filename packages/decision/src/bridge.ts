@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import {
   parseDecisionReviewTarget,
+  type DecisionContextBundle,
   type DecisionResult,
   type DecisionWorkItemRef,
 } from "@symphony/domain";
@@ -339,6 +340,33 @@ export class DecisionBridge {
       return;
     }
 
+    // PUT /v1/tasks/:id/context
+    const putContextMatch = /^\/v1\/tasks\/([^/]+)\/context$/.exec(pathname);
+    if (method === "PUT" && putContextMatch) {
+      const id = decodeURIComponent(putContextMatch[1]!);
+      const body = await this.readJsonBody(req);
+      if (!body || typeof body !== "object") {
+        throw new DecisionValidationError("context request body must be an object");
+      }
+      const ctx = (body as Record<string, unknown>)["context"];
+      if (!ctx || typeof ctx !== "object") {
+        throw new DecisionValidationError("context field is required");
+      }
+      const context = await this.service.putTaskContext(id, ctx as unknown as DecisionContextBundle);
+      this.sendJson(res, 200, { context });
+      return;
+    }
+
+    // GET /v1/tasks/:id/context
+    const getContextMatch = /^\/v1\/tasks\/([^/]+)\/context$/.exec(pathname);
+    if (method === "GET" && getContextMatch) {
+      const id = decodeURIComponent(getContextMatch[1]!);
+      const context = this.service.getTaskContext(id);
+      if (!context) throw new DecisionNotFoundError(`Context for task "${id}" not found`);
+      this.sendJson(res, 200, { context });
+      return;
+    }
+
     // GET /v1/tasks/:id
     const taskGetMatch = /^\/v1\/tasks\/([^/]+)$/.exec(pathname);
     if (method === "GET" && taskGetMatch) {
@@ -417,10 +445,16 @@ export class DecisionBridge {
         throw new DecisionValidationError("binding requires adapter and externalSessionRef");
       }
       const resumeUri = b["resumeUri"] === null || typeof b["resumeUri"] === "string" ? b["resumeUri"] : null;
+      const owner = typeof b["owner"] === "string" ? b["owner"] : undefined;
+      const token = typeof b["token"] === "string" ? b["token"] : undefined;
+      const generation = typeof b["generation"] === "number" ? b["generation"] : undefined;
       const session = await this.service.putBinding(id, {
         adapter: b["adapter"],
         externalSessionRef: b["externalSessionRef"],
         resumeUri,
+        ...(owner ? { owner } : {}),
+        ...(token ? { token } : {}),
+        ...(generation !== undefined ? { generation } : {}),
       });
       this.sendJson(res, 200, { session });
       return;
@@ -441,12 +475,18 @@ export class DecisionBridge {
       }
       const resumeUri = b["resumeUri"] === null || typeof b["resumeUri"] === "string" ? b["resumeUri"] : null;
       const operationKey = typeof b["operationKey"] === "string" ? b["operationKey"] : undefined;
+      const owner = typeof b["owner"] === "string" ? b["owner"] : undefined;
+      const token = typeof b["token"] === "string" ? b["token"] : undefined;
+      const generation = typeof b["generation"] === "number" ? b["generation"] : undefined;
       const session = await this.service.rebindSession(id, {
         adapter: b["adapter"],
         externalSessionRef: b["externalSessionRef"],
         resumeUri,
         expectedGeneration: b["expectedGeneration"],
         operationKey,
+        ...(owner ? { owner } : {}),
+        ...(token ? { token } : {}),
+        ...(generation !== undefined ? { generation } : {}),
       });
       this.sendJson(res, 200, { session });
       return;

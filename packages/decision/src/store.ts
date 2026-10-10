@@ -6,9 +6,12 @@ import {
   parseDecisionTask,
   parseDecisionResult,
   parseDecisionReviewTarget,
+  parseDecisionContextBundle,
+  validateDecisionContextForTask,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
+  type DecisionContextBundle,
 } from "@symphony/domain";
 import {
   CorruptedStoreError,
@@ -385,6 +388,25 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
       );
     }
   }
+
+  // Validate contexts
+  if (record.contexts !== undefined) {
+    if (typeof record.contexts !== "object" || record.contexts === null) {
+      throw new CorruptedStoreError("contexts table must be an object if present");
+    }
+    for (const [key, ctx] of Object.entries(record.contexts)) {
+      const task = record.tasks[key];
+      if (!task) {
+        throw new CorruptedStoreError(`Context ${key} references non-existent task`);
+      }
+      const session = record.sessions[task.sessionId];
+      if (!session) {
+        throw new CorruptedStoreError(`Task for context ${key} references non-existent session ${task.sessionId}`);
+      }
+      const parsedCtx = parseDecisionContextBundle(ctx);
+      validateDecisionContextForTask(parsedCtx, task, session);
+    }
+  }
 }
 
 export function createEmptyStoreRecord(): DecisionStoreRecord {
@@ -398,6 +420,7 @@ export function createEmptyStoreRecord(): DecisionStoreRecord {
     receipts: {},
     revisions: {},
     operationReceipts: {},
+    contexts: {},
   };
 }
 
@@ -459,7 +482,7 @@ export class DurableDecisionStore {
       throw new CorruptedStoreError(`Store file validation failed: ${(valErr as Error).message}`);
     }
 
-    this.state = candidate;
+    this.state = candidate.contexts === undefined ? { ...candidate, contexts: {} } : candidate;
   }
 
   async close(): Promise<void> {
@@ -518,6 +541,21 @@ export class DurableDecisionStore {
 
   getRevision(key: string): number {
     return this.state.revisions[key] ?? 0;
+  }
+
+  getContext(taskId: string): DecisionContextBundle | null {
+    const c = this.state.contexts?.[taskId];
+    return c ? structuredClone(c) : null;
+  }
+
+  getAllContexts(): Record<string, DecisionContextBundle> {
+    const res: Record<string, DecisionContextBundle> = {};
+    if (this.state.contexts) {
+      for (const [k, v] of Object.entries(this.state.contexts)) {
+        res[k] = structuredClone(v);
+      }
+    }
+    return res;
   }
 
   async transaction<T>(mutator: (draft: DecisionStoreRecord) => T | Promise<T>): Promise<T> {
