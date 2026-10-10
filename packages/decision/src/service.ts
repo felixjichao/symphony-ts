@@ -465,15 +465,30 @@ export class DecisionService {
 
       const now = this.clock();
 
-      // Check if an active/usable review task already exists for this exact target in this session
+      // Check if an active or reusable review task already exists for this exact target in this session
       const existingTask = Object.values(draft.tasks).find(
-        (t): t is DecisionReviewTask =>
-          t.sessionId === sessionId &&
-          t.kind === "review" &&
-          t.target.repository.toLowerCase() === params.target.repository.toLowerCase() &&
-          t.target.prNumber === params.target.prNumber &&
-          t.target.headSha === params.target.headSha &&
-          (t.status === "pending" || t.status === "running")
+        (t): t is DecisionReviewTask => {
+          if (
+            t.sessionId !== sessionId ||
+            t.kind !== "review" ||
+            t.target.repository.toLowerCase() !== params.target.repository.toLowerCase() ||
+            t.target.prNumber !== params.target.prNumber ||
+            t.target.headSha !== params.target.headSha
+          ) {
+            return false;
+          }
+          if (t.status === "superseded" || t.status === "failed" || t.status === "cancelled") {
+            return false;
+          }
+          if (t.status === "pending" || t.status === "claimed" || t.status === "running") {
+            return true;
+          }
+          if (t.status === "completed") {
+            const res = draft.results[t.id];
+            return Boolean(res && res.kind === "review" && res.verdict === "approve");
+          }
+          return false;
+        }
       );
       if (existingTask) {
         if (params.operationKey && !draft.operationReceipts[params.operationKey]) {

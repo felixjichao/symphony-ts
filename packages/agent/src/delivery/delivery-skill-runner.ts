@@ -1233,8 +1233,10 @@ export async function runDeliverySkill(
 
     let prTitle = "";
     let prBody = "";
+    let baseRefOid = "";
+    let baseRefName = "";
     const pv = await runner.gh(
-      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body,headRefOid"],
+      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body,headRefOid,baseRefOid,baseRefName"],
       options.cwd,
     );
     if (pv.exitCode !== 0) {
@@ -1252,6 +1254,8 @@ export async function runDeliverySkill(
       }
       prTitle = p.title ?? "";
       prBody = p.body ?? "";
+      baseRefOid = p.baseRefOid ?? "";
+      baseRefName = p.baseRefName ?? "";
     } catch (err) {
       return haltDispatch(
         "manual_intervention_required",
@@ -1261,32 +1265,63 @@ export async function runDeliverySkill(
 
     let patch = "";
     const patchFiles: string[] = [];
+    let baseCommit = baseRefOid;
+    if (!baseCommit) {
+      const revParseBase = await runner.git(
+        ["rev-parse", `origin/${context.baseBranch}`],
+        options.cwd,
+      );
+      if (revParseBase.exitCode === 0 && revParseBase.stdout.trim()) {
+        baseCommit = revParseBase.stdout.trim();
+      } else {
+        baseCommit = context.baseBranch;
+      }
+    }
 
-    // Prioritize commit-pinned diff via git to ensure diff is strictly bound to currentHeadSha
+    // Strictly obtain diff pinned to fixed base and head commits (never query floating PR HEAD)
     let diffRes = await runner.git(
-      ["diff", `${context.baseBranch}...${currentHeadSha}`],
+      ["diff", `${baseCommit}...${currentHeadSha}`],
       options.cwd,
     );
-    if (diffRes.exitCode !== 0 && !context.baseBranch.startsWith("origin/")) {
+    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && baseRefName) {
+      diffRes = await runner.git(
+        ["diff", `origin/${baseRefName}...${currentHeadSha}`],
+        options.cwd,
+      );
+    }
+    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && context.baseBranch) {
+      diffRes = await runner.git(
+        ["diff", `${context.baseBranch}...${currentHeadSha}`],
+        options.cwd,
+      );
+    }
+    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && context.baseBranch && !context.baseBranch.startsWith("origin/")) {
       diffRes = await runner.git(
         ["diff", `origin/${context.baseBranch}...${currentHeadSha}`],
         options.cwd,
       );
     }
-
-    if (diffRes.exitCode === 0 && diffRes.stdout && diffRes.stdout.trim().length > 0) {
-      patch = diffRes.stdout;
-    } else {
-      const prDiffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
-      if (prDiffRes.exitCode !== 0) {
-        return haltDispatch(
-          "manual_intervention_required",
-          `Failed to fetch PR diff for #${prNumber}: ${prDiffRes.stderr || "exit code " + prDiffRes.exitCode}`,
-        );
-      }
-      patch = prDiffRes.stdout || "";
+    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && baseRefOid) {
+      // Fallback to GitHub commit compare API pinned to the exact commits
+      diffRes = await runner.gh(
+        [
+          "api",
+          `repos/${context.repo}/compare/${baseRefOid}...${currentHeadSha}`,
+          "--header",
+          "Accept: application/vnd.github.v3.diff",
+        ],
+        options.cwd,
+      );
     }
 
+    if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to obtain commit-pinned diff between base (${baseCommit}) and head (${currentHeadSha}) for PR #${prNumber}: ${diffRes.stderr || (diffRes.exitCode !== 0 ? "exit code " + diffRes.exitCode : "commit-pinned diff is empty")}`,
+      );
+    }
+
+    patch = diffRes.stdout || "";
     const m = patch.match(/^diff --git a\/(.+?) b\//gm);
     if (m) {
       for (const line of m) {
@@ -1295,18 +1330,18 @@ export async function runDeliverySkill(
       }
     }
 
-    // Verify diff integrity: ensure touched files belong to the target commit (or baseBranch if deleted)
+    // Verify diff integrity: ensure touched files belong to the target commit (or base commit if deleted)
     if (patchFiles.length > 0) {
       for (const f of patchFiles) {
         const inHead = await runner.git(["cat-file", "-e", `${currentHeadSha}:${f}`], options.cwd);
         if (inHead.exitCode !== 0) {
-          const inBase = await runner.git(["cat-file", "-e", `${context.baseBranch}:${f}`], options.cwd);
+          const inBase = await runner.git(["cat-file", "-e", `${baseCommit}:${f}`], options.cwd);
           if (inBase.exitCode !== 0) {
             const inOriginBase = await runner.git(["cat-file", "-e", `origin/${context.baseBranch}:${f}`], options.cwd);
             if (inOriginBase.exitCode !== 0) {
               return haltDispatch(
                 "manual_intervention_required",
-                `PR diff integrity verification failed: touched file "${f}" does not exist in target commit ${currentHeadSha} or base branch ${context.baseBranch}. Possible floating HEAD or foreign diff detected.`,
+                `PR diff integrity verification failed: touched file "${f}" does not exist in target commit ${currentHeadSha} or base commit ${baseCommit}. Possible floating HEAD or foreign diff detected.`,
               );
             }
           }

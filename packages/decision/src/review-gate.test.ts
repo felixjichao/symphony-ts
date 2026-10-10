@@ -7,6 +7,7 @@ import {
   type DecisionReviewTarget,
   type DecisionMaterializedContext,
   type DecisionReviewTask,
+  type UtcTimestampMs,
 } from "@symphony/domain";
 import { DurableDecisionStore } from "./store.js";
 import { DecisionService } from "./service.js";
@@ -370,6 +371,72 @@ describe("DecisionReviewGate", () => {
       expect(retryTask.id).toBe(task1.id);
       expect(retryTask.revision).toBe(1);
       expect(retryTask.status).toBe("pending");
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses claimed and completed (approve) tasks on re-entry/retry without superseding or invalidating lease/approval", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-claimed-completed-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      // Step 1: Ensure initial task
+      const first = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(first.status).toBe("pending");
+
+      // Step 2: Claim task -> status becomes "claimed"
+      const { lease } = await bridgeService.claimTask(first.id, { owner: "reviewer" });
+      expect(bridgeService.getTask(first.id)?.status).toBe("claimed");
+
+      // Step 3: Re-entering ensureReviewTask reuses the claimed task without superseding or breaking lease
+      const second = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(second.id).toBe(first.id);
+      expect(second.status).toBe("claimed");
+      expect(bridgeService.getTask(first.id)?.status).toBe("claimed");
+
+      // Step 4: The original reviewer can start and submit result with their lease
+      await bridgeService.startTask(first.id, lease);
+      await bridgeService.submitResult(first.id, {
+        ...lease,
+        result: {
+          schemaVersion: 1,
+          taskId: first.id,
+          sessionId,
+          kind: "review",
+          revision: first.revision,
+          createdAtMs: clockTime as UtcTimestampMs,
+          target: targetA,
+          verdict: "approve",
+          findings: [],
+        },
+      });
+
+      // Step 5: Verify approval is granted
+      const approval = await httpGate.verifyReviewApproval({ ...targetA, sessionId });
+      expect(approval.approved).toBe(true);
+
+      // Step 6: Re-entering ensureReviewTask on completed approved task reuses it
+      const third = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(third.id).toBe(first.id);
+      expect(third.status).toBe("completed");
+
+      // Step 7: Approval remains true and valid
+      const approvalAfter = await httpGate.verifyReviewApproval({ ...targetA, sessionId });
+      expect(approvalAfter.approved).toBe(true);
+      expect(bridgeService.getTask(first.id)?.status).toBe("completed");
     } finally {
       await bridge.stop();
       await fs.rm(bridgeTmpDir, { recursive: true, force: true });

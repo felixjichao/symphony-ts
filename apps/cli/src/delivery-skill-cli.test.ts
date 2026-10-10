@@ -23,6 +23,13 @@ class MockCliRunner implements DeliveryGitGhRunner {
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
+    if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
+      return {
+        stdout: "diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        stderr: "",
+        exitCode: 0,
+      };
+    }
     return this.gitResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
 
@@ -41,7 +48,17 @@ class MockCliRunner implements DeliveryGitGhRunner {
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
     if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
-      return { stdout: JSON.stringify({ title: "feat: delivery", body: "pr body", headRefOid: "sha123" }), stderr: "", exitCode: 0 };
+      return {
+        stdout: JSON.stringify({
+          title: "feat: delivery",
+          body: "pr body",
+          headRefOid: "sha123",
+          baseRefOid: "basesha123",
+          baseRefName: "main",
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
     }
     if (args[0] === "pr" && args[1] === "diff") {
       return { stdout: "", stderr: "", exitCode: 0 };

@@ -35,7 +35,13 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
       return { stdout: "# Symphony Workspace Rules", stderr: "", exitCode: 0 };
     }
     if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
-      return { stdout: "", stderr: "", exitCode: 0 };
+      const commitRange = args.find((a) => typeof a === "string" && a.includes("..."))!;
+      const [_baseSha, headSha] = commitRange.split("...");
+      return {
+        stdout: `diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1 +1 @@\n-old\n+new in ${headSha}\n`,
+        stderr: "",
+        exitCode: 0,
+      };
     }
     if (args[0] === "cat-file" && args[1] === "-e") {
       const ref = args[2] ?? "";
@@ -80,6 +86,8 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
           title: "feat: delivery",
           body: "pr body",
           headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
+          baseRefOid: "73f055c6a2d07ddd45a120bd29915b94d5346663",
+          baseRefName: "main",
         }),
         stderr: "",
         exitCode: 0,
@@ -1677,7 +1685,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(result.handoffMarkdown).toContain("Auto-merge requires review gate verification, but no review gate is configured");
     });
 
-    it("验收 8 (diff 获取失败 fail-closed): gh pr diff 返回 503 时安全终止并请求人工介入，绝不发布空 diff", async () => {
+    it("验收 8 (diff 获取失败 fail-closed): commit-pinned diff 获取失败时安全终止并请求人工介入，绝不发布空 diff 或浮动 diff", async () => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
       setupPreMutationSuccess(runner);
@@ -1715,10 +1723,17 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
         exitCode: 0,
       });
 
-      // Override gh for diff to return 503 error
+      // Override git and gh to simulate failure to obtain commit-pinned diff
+      const origGit = runner.git.bind(runner);
+      runner.git = async (args, dir) => {
+        if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
+          return { stdout: "", stderr: "fatal: ambiguous argument", exitCode: 1 };
+        }
+        return origGit(args, dir);
+      };
       const origGh = runner.gh.bind(runner);
       runner.gh = async (args, dir) => {
-        if (args[0] === "pr" && args[1] === "diff") {
+        if (args[0] === "api" && args.some((a) => typeof a === "string" && a.includes("compare"))) {
           return { stdout: "", stderr: "HTTP 503 Service Unavailable", exitCode: 1 };
         }
         return origGh(args, dir);
@@ -1738,7 +1753,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
 
       expect(result.status).toBe("blocked");
       expect(result.reason).toBe("manual_intervention_required");
-      expect(result.handoffMarkdown).toContain("Failed to fetch PR diff for #85");
+      expect(result.handoffMarkdown).toContain("Failed to obtain commit-pinned diff");
       expect(reviewGate.ensureReviewTaskCallCount).toBe(0); // 未发布审查
     });
 
@@ -1817,12 +1832,12 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     it("验收 10 (diff 与 commit SHA 绑定与完整性校验): PR diff 混入非目标 SHA 的变更文件时阻止发布审查并安全终止", async () => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
-      const originalGh = runner.gh.bind(runner);
-      runner.gh = async (args, dir) => {
-        if (args[0] === "pr" && args[1] === "diff") {
+      const origGit = runner.git.bind(runner);
+      runner.git = async (args, dir) => {
+        if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
           return { stdout: "diff --git a/b-only.ts b/b-only.ts\n+SHA-B-only change\n", stderr: "", exitCode: 0 };
         }
-        return originalGh(args, dir);
+        return origGit(args, dir);
       };
       setupPreMutationSuccess(runner);
 
