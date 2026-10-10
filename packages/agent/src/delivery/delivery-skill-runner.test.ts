@@ -1388,7 +1388,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(reviewGate.ensureReviewTaskCallCount).toBe(2);
     });
 
-    it.each(["function", "command"] as const)("验收 3 & 4: review requests changes -> %s repair，新 SHA 和 supersession", async mode => {
+    it.each(["function", "command", "resumed-command"] as const)("验收 3 & 4: review requests changes -> %s repair，新 SHA 和 supersession", async mode => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
       setupPreMutationSuccess(runner);
@@ -1410,7 +1410,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       });
 
       runner.execResponses.push(() => {
-        if (mode === "command") testClock += 70_000; // Real coding/validation already spent part of the deadline.
+        if (mode !== "function") testClock += 70_000; // Real coding/validation already spent part of the deadline.
         return { stdout: "ok", stderr: "", exitCode: 0 };
       }); // validation
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
@@ -1450,7 +1450,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       });
 
       // Repair operations for review feedback:
-      if (mode === "command") runner.execResponses.push({ stdout: "Codex repair complete", stderr: "", exitCode: 0 });
+      if (mode !== "function") runner.execResponses.push({ stdout: "Codex repair complete", stderr: "", exitCode: 0 });
       runner.execResponses.push({ stdout: "validation after review repair ok", stderr: "", exitCode: 0 }); // validation
       runner.gitResponses.push({ stdout: " M src/service.ts\n", stderr: "", exitCode: 0 }); // diff check
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git add
@@ -1497,10 +1497,19 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       runner.ghResponses.push({ stdout: JSON.stringify({ state: "CLOSED" }), stderr: "", exitCode: 0 });
 
       let receivedFeedback = "";
+      const savedDeadline = testClock + 300_000;
+      const writtenStates: PersistedDeliveryState[] = [];
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
         reviewGate,
-        maxWaitSeconds: 300,
+        maxWaitSeconds: mode === "resumed-command" ? 500 : 300,
+        ...(mode === "resumed-command" ? {
+          resume: true,
+          stateStorage: {
+            readState: async () => ({ repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80", spentRepairs: 1, spentWaitSeconds: 0, deadlineTimestampMs: savedDeadline, isPaused: true, lastUpdated: new Date(testClock).toISOString() }),
+            writeState: async (state: PersistedDeliveryState) => { writtenStates.push(state); },
+          },
+        } : {}),
         ...(mode === "function" ? { repairFn: async (feedback: string) => {
           receivedFeedback = feedback;
           return true;
@@ -1510,7 +1519,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
 
       expect(result.status).toBe("completed");
       expect(result.headSha).toBe(shaB);
-      if (mode === "command") {
+      if (mode !== "function") {
         const call = runner.execCalls.find(c => c.command === "codex-review-repair");
         receivedFeedback = call?.env?.["SYMPHONY_REVIEW_FINDINGS"] ?? "";
         expect(call?.timeoutMs).toBeGreaterThan(60_000);
@@ -1520,7 +1529,11 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(reviewGate.supersedeReviewTaskCallCount).toBe(1);
       expect(reviewGate.supersededTaskIds).toContain(`task-review-test-${shaA}`);
       expect(reviewGate.ensureReviewTaskCallCount).toBe(2);
-      expect(result.spentRepairs).toBe(1);
+      expect(result.spentRepairs).toBe(mode === "resumed-command" ? 2 : 1);
+      if (mode === "resumed-command") {
+        expect(writtenStates.length).toBeGreaterThan(0);
+        expect(writtenStates.every(state => state.deadlineTimestampMs === savedDeadline)).toBe(true);
+      }
     });
 
     it("验收 5: needs_human -> 进入交付交接 (review_needs_human)，绝不自动 merge", async () => {

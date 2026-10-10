@@ -43,3 +43,9 @@ Target [issue #18](https://github.com/felixjichao/symphony-delivery-dogfood/issu
 - [Full root gate](root-gate.log) exited 1 in existing short native hook/termination tests in agent/workspace. These failures are retained, not treated as a green full gate. Target GitHub CI is separately verified green on both exact delivered HEADs.
 - This proves the recovered controlled-fault real integration chain and records its operator involvement. It does not approve or merge product PR #104/#105 or authorize any product repository merge.
 - Exports remove lease/claim credentials and redact authentication strings. Result payloads remain unchanged. Only the two relevant Codex sessions' tool calls/outputs and assistant completion text are included; system/developer prompts, reasoning, unrelated sessions and account-sidebar screenshots are excluded. Screenshots remain local for the operator.
+
+## PR #104 integration follow-up
+
+PR #104 incorporates the delivery fixes and historical evidence from PR #106 at fixed commit `46d5ed5fe946011d4275de86e24f7121fb17524d` (fix commit `5b4fba6`). Historical exports above remain unchanged, including the failed root gate and manual recovery. Integration regression additionally covers resumed command repair retaining a persisted absolute deadline and spent repair count even when the new invocation increases `maxWaitSeconds`.
+
+The successful real browser runtime depended on [PR #105](https://github.com/felixjichao/symphony-ts/pull/105) at `d4fb8dbf208d6c20d545ac54b1d206e24900ec19`. Those Web adapter changes are independently owned and reviewed in #105; they are not included in #104. Production adoption of the demonstrated real chain requires both PRs. A green local gate for integrated #104 neither overwrites the historical failed gate nor independently approves #105.
