@@ -193,6 +193,7 @@ export interface CreateTaskRequest {
   readonly operationKey?: string | undefined;
   readonly context?: DecisionContextBundle | undefined;
   readonly supersedeSessionReviews?: boolean | undefined;
+  readonly forceNewRevision?: boolean | undefined;
 }
 
 export interface VerifyReviewApprovalRequest {

@@ -438,11 +438,13 @@ export class DecisionBridge {
         const target = parseDecisionReviewTarget(b["target"]);
         const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
         const supersedeSessionReviews = Boolean(b["supersedeSessionReviews"]);
+        const forceNewRevision = Boolean(b["forceNewRevision"]);
         const task = await this.service.createReviewTask(b["sessionId"], {
           target,
           context,
           ...(operationKey !== undefined ? { operationKey } : {}),
           supersedeSessionReviews,
+          ...(forceNewRevision ? { forceNewRevision: true } : {}),
         });
         this.sendJson(res, 201, { task });
         return;

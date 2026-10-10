@@ -1233,10 +1233,9 @@ export async function runDeliverySkill(
 
     let prTitle = "";
     let prBody = "";
-    let baseRefOid = "";
     let baseRefName = "";
     const pv = await runner.gh(
-      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body,headRefOid,baseRefOid,baseRefName"],
+      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body,headRefOid,baseRefName"],
       options.cwd,
     );
     if (pv.exitCode !== 0) {
@@ -1254,7 +1253,6 @@ export async function runDeliverySkill(
       }
       prTitle = p.title ?? "";
       prBody = p.body ?? "";
-      baseRefOid = p.baseRefOid ?? "";
       baseRefName = p.baseRefName ?? "";
     } catch (err) {
       return haltDispatch(
@@ -1263,50 +1261,66 @@ export async function runDeliverySkill(
       );
     }
 
-    let patch = "";
-    const patchFiles: string[] = [];
-    let baseCommit = baseRefOid;
-    if (!baseCommit) {
-      const revParseBase = await runner.git(
-        ["rev-parse", `origin/${context.baseBranch}`],
-        options.cwd,
-      );
-      if (revParseBase.exitCode === 0 && revParseBase.stdout.trim()) {
-        baseCommit = revParseBase.stdout.trim();
-      } else {
-        baseCommit = context.baseBranch;
-      }
-    }
-
-    // Strictly obtain diff pinned to fixed base and head commits (never query floating PR HEAD)
-    let diffRes = await runner.git(
-      ["diff", `${baseCommit}...${currentHeadSha}`],
+    // Query verified server base and head SHA via GitHub Pulls API
+    let baseSha = "";
+    const pullRes = await runner.gh(
+      ["api", `repos/${context.repo}/pulls/${prNumber}`],
       options.cwd,
     );
-    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && baseRefName) {
+    if (pullRes.exitCode !== 0) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to fetch PR details via GitHub API for #${prNumber}: ${pullRes.stderr || "exit code " + pullRes.exitCode}`,
+      );
+    }
+    try {
+      const pullData = JSON.parse(pullRes.stdout || "{}");
+      baseSha = pullData.base?.sha ?? "";
+      const apiHeadSha = pullData.head?.sha ?? "";
+      if (apiHeadSha && apiHeadSha !== currentHeadSha) {
+        log(`[delivery-skill] PR API HEAD (${apiHeadSha}) moved from expected ${currentHeadSha}. Re-entering CI...`);
+        currentHeadSha = apiHeadSha;
+        continue delivery_loop;
+      }
+      if (!prTitle) prTitle = pullData.title ?? "";
+      if (!prBody) prBody = pullData.body ?? "";
+      if (!baseRefName) baseRefName = pullData.base?.ref ?? "";
+    } catch (err) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to parse PR API response for #${prNumber}: ${String(err)}`,
+      );
+    }
+
+    if (!baseSha) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to resolve server base SHA for PR #${prNumber}.`,
+      );
+    }
+
+    let patch = "";
+    const patchFiles: string[] = [];
+
+    // Strictly obtain diff pinned to verified fixed base SHA and head SHA (never query floating branches or floating PR HEAD)
+    let diffRes = await runner.git(
+      ["diff", `${baseSha}...${currentHeadSha}`],
+      options.cwd,
+    );
+    if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
+      // If local git is missing objects (e.g. shallow clone), attempt fetch of baseSha
+      await runner.git(["fetch", "origin", baseSha], options.cwd);
       diffRes = await runner.git(
-        ["diff", `origin/${baseRefName}...${currentHeadSha}`],
+        ["diff", `${baseSha}...${currentHeadSha}`],
         options.cwd,
       );
     }
-    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && context.baseBranch) {
-      diffRes = await runner.git(
-        ["diff", `${context.baseBranch}...${currentHeadSha}`],
-        options.cwd,
-      );
-    }
-    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && context.baseBranch && !context.baseBranch.startsWith("origin/")) {
-      diffRes = await runner.git(
-        ["diff", `origin/${context.baseBranch}...${currentHeadSha}`],
-        options.cwd,
-      );
-    }
-    if ((diffRes.exitCode !== 0 || !diffRes.stdout?.trim()) && baseRefOid) {
-      // Fallback to GitHub commit compare API pinned to the exact commits
+    if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
+      // Fallback to GitHub commit compare API pinned strictly to verified baseSha and currentHeadSha
       diffRes = await runner.gh(
         [
           "api",
-          `repos/${context.repo}/compare/${baseRefOid}...${currentHeadSha}`,
+          `repos/${context.repo}/compare/${baseSha}...${currentHeadSha}`,
           "--header",
           "Accept: application/vnd.github.v3.diff",
         ],
@@ -1317,7 +1331,7 @@ export async function runDeliverySkill(
     if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
       return haltDispatch(
         "manual_intervention_required",
-        `Failed to obtain commit-pinned diff between base (${baseCommit}) and head (${currentHeadSha}) for PR #${prNumber}: ${diffRes.stderr || (diffRes.exitCode !== 0 ? "exit code " + diffRes.exitCode : "commit-pinned diff is empty")}`,
+        `Failed to obtain commit-pinned diff between base (${baseSha}) and head (${currentHeadSha}) for PR #${prNumber}: ${diffRes.stderr || (diffRes.exitCode !== 0 ? "exit code " + diffRes.exitCode : "commit-pinned diff is empty")}`,
       );
     }
 
@@ -1335,15 +1349,12 @@ export async function runDeliverySkill(
       for (const f of patchFiles) {
         const inHead = await runner.git(["cat-file", "-e", `${currentHeadSha}:${f}`], options.cwd);
         if (inHead.exitCode !== 0) {
-          const inBase = await runner.git(["cat-file", "-e", `${baseCommit}:${f}`], options.cwd);
+          const inBase = await runner.git(["cat-file", "-e", `${baseSha}:${f}`], options.cwd);
           if (inBase.exitCode !== 0) {
-            const inOriginBase = await runner.git(["cat-file", "-e", `origin/${context.baseBranch}:${f}`], options.cwd);
-            if (inOriginBase.exitCode !== 0) {
-              return haltDispatch(
-                "manual_intervention_required",
-                `PR diff integrity verification failed: touched file "${f}" does not exist in target commit ${currentHeadSha} or base commit ${baseCommit}. Possible floating HEAD or foreign diff detected.`,
-              );
-            }
+            return haltDispatch(
+              "manual_intervention_required",
+              `PR diff integrity verification failed: touched file "${f}" does not exist in target commit ${currentHeadSha} or base commit ${baseSha}. Possible floating HEAD or foreign diff detected.`,
+            );
           }
         }
       }

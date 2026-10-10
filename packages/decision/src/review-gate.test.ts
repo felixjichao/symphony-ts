@@ -442,5 +442,121 @@ describe("DecisionReviewGate", () => {
       await fs.rm(bridgeTmpDir, { recursive: true, force: true });
     }
   });
+
+  it("reuses completed task with needs_human verdict without superseding or creating pending task", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-needs-human-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      const first = await httpGate.ensureReviewTask(sessionId, targetA);
+      const { lease } = await bridgeService.claimTask(first.id, { owner: "reviewer" });
+      await bridgeService.startTask(first.id, lease);
+      await bridgeService.submitResult(first.id, {
+        ...lease,
+        result: {
+          schemaVersion: 1,
+          taskId: first.id,
+          sessionId,
+          kind: "review",
+          revision: first.revision,
+          createdAtMs: clockTime as UtcTimestampMs,
+          target: targetA,
+          verdict: "needs_human",
+          findings: [],
+        },
+      });
+
+      // Re-entering ensureReviewTask on completed needs_human task reuses it
+      const next = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(next.id).toBe(first.id);
+      expect(next.status).toBe("completed");
+      expect(bridgeService.getTask(first.id)?.status).toBe("completed");
+
+      // getReviewStatus recovers the durable needs_human verdict
+      const statusRes = await httpGate.getReviewStatus(next.id);
+      expect(statusRes.status).toBe("completed");
+      expect(statusRes.result?.verdict).toBe("needs_human");
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses completed task with changes_requested verdict without superseding or creating pending task", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-changes-requested-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      const first = await httpGate.ensureReviewTask(sessionId, targetA);
+      const { lease } = await bridgeService.claimTask(first.id, { owner: "reviewer" });
+      await bridgeService.startTask(first.id, lease);
+      await bridgeService.submitResult(first.id, {
+        ...lease,
+        result: {
+          schemaVersion: 1,
+          taskId: first.id,
+          sessionId,
+          kind: "review",
+          revision: first.revision,
+          createdAtMs: clockTime as UtcTimestampMs,
+          target: targetA,
+          verdict: "changes_requested",
+          findings: [
+            {
+              severity: "blocker",
+              message: "Fix needed",
+              location: "src/index.ts:1",
+            },
+          ],
+        },
+      });
+
+      // Re-entering ensureReviewTask reuses the completed task and recovers findings
+      const next = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(next.id).toBe(first.id);
+      expect(next.status).toBe("completed");
+      expect(bridgeService.getTask(first.id)?.status).toBe("completed");
+
+      const statusRes = await httpGate.getReviewStatus(next.id);
+      expect(statusRes.status).toBe("completed");
+      expect(statusRes.result?.kind).toBe("review");
+      if (statusRes.result && statusRes.result.kind === "review") {
+        expect(statusRes.result.verdict).toBe("changes_requested");
+        expect(statusRes.result.findings).toHaveLength(1);
+      }
+
+      // Explicitly forcing new revision creates a fresh task and supersedes previous
+      const freshTask = await httpGate.ensureReviewTask(sessionId, targetA, undefined, { forceNewRevision: true });
+      expect(freshTask.id).not.toBe(first.id);
+      expect(freshTask.revision).toBe(first.revision + 1);
+      expect(freshTask.status).toBe("pending");
+      expect(bridgeService.getTask(first.id)?.status).toBe("superseded");
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
+  });
 });
 

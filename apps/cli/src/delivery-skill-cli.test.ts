@@ -47,13 +47,30 @@ class MockCliRunner implements DeliveryGitGhRunner {
     if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
+    if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("pulls/")) {
+      return {
+        stdout: JSON.stringify({
+          title: "feat: delivery",
+          body: "pr body",
+          base: {
+            sha: "basesha123",
+            ref: "main",
+          },
+          head: {
+            sha: "sha123",
+            ref: "symphony/GH-80",
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
     if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return {
         stdout: JSON.stringify({
           title: "feat: delivery",
           body: "pr body",
           headRefOid: "sha123",
-          baseRefOid: "basesha123",
           baseRefName: "main",
         }),
         stderr: "",

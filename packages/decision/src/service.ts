@@ -414,6 +414,7 @@ export class DecisionService {
       context?: DecisionContextBundle | undefined;
       operationKey?: string | undefined;
       supersedeSessionReviews?: boolean | undefined;
+      forceNewRevision?: boolean | undefined;
     }
   ): Promise<DecisionTask> {
     parseDecisionReviewTarget(params.target);
@@ -465,7 +466,11 @@ export class DecisionService {
 
       const now = this.clock();
 
-      // Check if an active or reusable review task already exists for this exact target in this session
+      // Check if an active or reusable review task already exists for this exact target in this session.
+      // If forceNewRevision is requested or if a new operationKey is explicitly specified,
+      // we do not reuse a completed task, treating it as an explicit advancement to a new round.
+      const isExplicitNewRound = Boolean(params.forceNewRevision || (params.operationKey && !draft.operationReceipts[params.operationKey]));
+
       const existingTask = Object.values(draft.tasks).find(
         (t): t is DecisionReviewTask => {
           if (
@@ -484,8 +489,9 @@ export class DecisionService {
             return true;
           }
           if (t.status === "completed") {
+            if (isExplicitNewRound) return false;
             const res = draft.results[t.id];
-            return Boolean(res && res.kind === "review" && res.verdict === "approve");
+            return Boolean(res && res.kind === "review");
           }
           return false;
         }

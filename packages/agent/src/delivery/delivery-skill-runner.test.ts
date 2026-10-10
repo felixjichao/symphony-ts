@@ -80,13 +80,30 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
     if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
+    if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("pulls/")) {
+      return {
+        stdout: JSON.stringify({
+          title: "feat: delivery",
+          body: "pr body",
+          base: {
+            sha: "73f055c6a2d07ddd45a120bd29915b94d5346663",
+            ref: "main",
+          },
+          head: {
+            sha: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
+            ref: "symphony/GH-80",
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
     if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return {
         stdout: JSON.stringify({
           title: "feat: delivery",
           body: "pr body",
           headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
-          baseRefOid: "73f055c6a2d07ddd45a120bd29915b94d5346663",
           baseRefName: "main",
         }),
         stderr: "",
