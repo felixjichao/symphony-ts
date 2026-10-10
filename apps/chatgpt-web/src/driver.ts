@@ -423,12 +423,8 @@ export class DecisionTabDriver implements DecisionTaskController {
         this.checkpointStore.delete();
         return null;
       }
-      // Transient network or server error!
-      if (!isCheckpointExpired(cp, Date.now())) {
-        throw err;
-      }
-      this.checkpointStore.delete();
-      return null;
+      // Transient network or server error: preserve checkpoint and throw to allow retry
+      throw err;
     }
 
     let sessionRes: { session: DecisionSession } | null = null;
@@ -446,66 +442,54 @@ export class DecisionTabDriver implements DecisionTaskController {
         this.checkpointStore.delete();
         return null;
       }
-      if (!isCheckpointExpired(cp, Date.now())) {
-        throw err;
-      }
-      this.checkpointStore.delete();
-      return null;
+      // Transient network or server error: preserve checkpoint and throw to allow retry
+      throw err;
     }
 
     if (taskRes?.task?.status === "completed") {
-      try {
-        const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
-          "GET",
-          `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`
-        );
-        if (receiptRes?.receipt) {
-          const receipt = receiptRes.receipt;
-          const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
-          if (
-            isValidMatchingResultReceipt(
-              receipt,
-              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
-              cp.candidateResult as DecisionResult | undefined
-            )
-          ) {
-            this.checkpointStore.delete();
-            return {
-              status: "completed",
-              result: receipt.payload as DecisionResult,
-              receipt,
-              superseded: isSuperseded,
-              session: sessionRes?.session ?? ({} as DecisionSession),
-            };
-          }
-          if (isSuperseded) {
-            this.checkpointStore.delete();
-            return null;
-          }
-          if (
-            cp.candidateResult &&
-            receipt.type === "result" &&
-            !isValidMatchingResultReceipt(
-              receipt,
-              { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
-              cp.candidateResult as DecisionResult
-            )
-          ) {
-            // Explicit conflict: task completed on bridge with a different result payload!
-            // Do NOT delete checkpoint, report conflict!
-            throw new BridgeHttpError(
-              `Conflict: task "${cp.taskId}" completed on bridge with a different result payload than candidate result`,
-              "conflict",
-              409
-            );
-          }
+      const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
+        "GET",
+        `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`
+      );
+      if (receiptRes?.receipt) {
+        const receipt = receiptRes.receipt;
+        const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+        if (
+          isValidMatchingResultReceipt(
+            receipt,
+            { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+            cp.candidateResult as DecisionResult | undefined
+          )
+        ) {
+          this.checkpointStore.delete();
+          return {
+            status: "completed",
+            result: receipt.payload as DecisionResult,
+            receipt,
+            superseded: isSuperseded,
+            session: sessionRes?.session ?? ({} as DecisionSession),
+          };
         }
-      } catch (receiptErr: unknown) {
-        if (receiptErr instanceof BridgeHttpError && receiptErr.status === 409) {
-          throw receiptErr;
+        if (isSuperseded) {
+          this.checkpointStore.delete();
+          return null;
         }
-        if (!isCheckpointExpired(cp, Date.now())) {
-          throw receiptErr;
+        if (
+          cp.candidateResult &&
+          receipt.type === "result" &&
+          !isValidMatchingResultReceipt(
+            receipt,
+            { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration },
+            cp.candidateResult as DecisionResult
+          )
+        ) {
+          // Explicit conflict: task completed on bridge with a different result payload!
+          // Do NOT delete checkpoint, report conflict!
+          throw new BridgeHttpError(
+            `Conflict: task "${cp.taskId}" completed on bridge with a different result payload than candidate result`,
+            "conflict",
+            409
+          );
         }
       }
     }

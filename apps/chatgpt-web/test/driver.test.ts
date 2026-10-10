@@ -1069,6 +1069,168 @@ describe("DecisionTabDriver", () => {
     expect(cpStore.get()).not.toBeNull();
   });
 
+  it.each(["task", "session"] as const)(
+    "preserves candidate checkpoint across transient %s GET error even when local lease is expired (U1)",
+    async (endpoint) => {
+      const cpStore = new MemoryCheckpointStore();
+      const expectedResult: DecisionResult = {
+        schemaVersion: 1,
+        taskId: sampleTask.id,
+        sessionId: sampleTask.sessionId,
+        kind: "plan",
+        revision: 1,
+        verdict: "ready",
+        content: { plan: "Test Plan", acceptanceCriteria: [], risks: [], clarifications: [] },
+        createdAtMs: Date.now(),
+      };
+
+      cpStore.set({
+        schemaVersion: 1,
+        tabId: "driver-tab",
+        taskId: sampleTask.id,
+        sessionId: sampleTask.sessionId,
+        leaseOwner: "driver-1",
+        leaseToken: "tok-1",
+        leaseGeneration: 1,
+        leaseExpiresAtMs: Date.now() - 10_000, // Local lease expired!
+        bindingGeneration: 0,
+        step: "result_extracted",
+        attemptId: "att-1",
+        savedAtMs: Date.now(),
+        candidateResult: expectedResult,
+      });
+
+      let failGet = true;
+      const mockTransport: BridgeTransport = {
+        baseUrl: "http://127.0.0.1:4545",
+        authToken: "test",
+        request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+          if (
+            failGet &&
+            method === "GET" &&
+            (endpoint === "task" ? path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}` : path.includes("/sessions/"))
+          ) {
+            throw new BridgeHttpError("Transient network failure during GET", "network_error", 0);
+          }
+          if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+            return { task: { ...sampleTask, status: "completed" } } as unknown as T;
+          }
+          if (method === "GET" && path.includes("/sessions/")) {
+            return { session: sampleSession } as unknown as T;
+          }
+          if (method === "GET" && path.includes("/receipt")) {
+            return {
+              receipt: {
+                schemaVersion: 1,
+                taskId: sampleTask.id,
+                type: "result",
+                claimGeneration: 1,
+                claimOwner: "driver-1",
+                claimToken: "tok-1",
+                acceptedAtMs: Date.now(),
+                payload: expectedResult,
+              },
+            } as unknown as T;
+          }
+          return {} as unknown as T;
+        }),
+      };
+
+      const driver = new DecisionTabDriver({
+        transport: mockTransport,
+        checkpointStore: cpStore,
+        ownerId: "driver-1",
+      });
+
+      // Transient GET failure MUST reject and preserve candidate checkpoint!
+      await expect(driver.resumeCheckpointIfAvailable()).rejects.toThrow("Transient network failure");
+      expect(cpStore.get()).not.toBeNull();
+      expect(cpStore.get()?.candidateResult).toEqual(expectedResult);
+
+      // Once network recovers, next runOnce/resumption successfully confirms completed receipt!
+      failGet = false;
+      const outcome = await driver.runOnce();
+      expect(outcome?.status).toBe("completed");
+      expect(cpStore.get()).toBeNull();
+    }
+  );
+
+  it("preserves candidate checkpoint across transient receipt GET error on completed task with expired local lease (U1)", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: { plan: "Test Plan", acceptanceCriteria: [], risks: [], clarifications: [] },
+      createdAtMs: Date.now(),
+    };
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() - 10_000,
+      bindingGeneration: 0,
+      step: "result_extracted",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      candidateResult: expectedResult,
+    });
+
+    let failReceipt = true;
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "completed" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/receipt")) {
+          if (failReceipt) {
+            throw new BridgeHttpError("Transient network failure during receipt check", "network_error", 0);
+          }
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      ownerId: "driver-1",
+    });
+
+    await expect(driver.resumeCheckpointIfAvailable()).rejects.toThrow("Transient network failure");
+    expect(cpStore.get()).not.toBeNull();
+
+    failReceipt = false;
+    const outcome = await driver.runOnce();
+    expect(outcome?.status).toBe("completed");
+    expect(cpStore.get()).toBeNull();
+  });
+
   it("recovers from navigating checkpoint when tab is reconstituted, waiting for route and composer readiness", async () => {
     const targetConvId = "67012345-abcd-ef01-2345-6789abcdef01";
     const targetUri = `https://chatgpt.com/c/${targetConvId}`;
