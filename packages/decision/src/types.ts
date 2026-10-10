@@ -190,6 +190,11 @@ export interface CreateTaskRequest {
   readonly kind: "plan" | "review";
   readonly target?: DecisionReviewTarget | undefined;
   readonly operationKey: string;
+  readonly context?: DecisionContextBundle | undefined;
+}
+
+export interface GetSessionTasksResponse {
+  readonly tasks: readonly DecisionTask[];
 }
 
 export interface BridgeErrorEnvelope {

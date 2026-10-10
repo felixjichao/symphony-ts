@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import {
   parseDecisionReviewTarget,
+  parseDecisionContextBundle,
   type DecisionContextBundle,
   type DecisionResult,
   type DecisionWorkItemRef,
@@ -415,14 +416,38 @@ export class DecisionBridge {
           throw new DecisionValidationError("review task requires target");
         }
         const target = parseDecisionReviewTarget(b["target"]);
+        const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
         const task = await this.service.createReviewTask(b["sessionId"], {
           target,
+          context,
           operationKey: b["operationKey"],
         });
         this.sendJson(res, 201, { task });
         return;
       }
       throw new DecisionValidationError("kind must be plan or review");
+    }
+
+    // GET /v1/sessions/:id/tasks
+    const sessionTasksMatch = /^\/v1\/sessions\/([^/]+)\/tasks$/.exec(pathname);
+    if (method === "GET" && sessionTasksMatch) {
+      const id = decodeURIComponent(sessionTasksMatch[1]!);
+      const session = this.service.getSession(id);
+      if (!session) throw new DecisionNotFoundError(`Session "${id}" not found`);
+      const tasks = this.service.getTasksForSession(id);
+      this.sendJson(res, 200, { tasks });
+      return;
+    }
+
+    // GET /v1/sessions/:id/reviews/latest
+    const sessionLatestReviewMatch = /^\/v1\/sessions\/([^/]+)\/reviews\/latest$/.exec(pathname);
+    if (method === "GET" && sessionLatestReviewMatch) {
+      const id = decodeURIComponent(sessionLatestReviewMatch[1]!);
+      const session = this.service.getSession(id);
+      if (!session) throw new DecisionNotFoundError(`Session "${id}" not found`);
+      const task = this.service.getLatestReviewTask(id);
+      this.sendJson(res, 200, { task });
+      return;
     }
 
     // GET /v1/sessions/:id

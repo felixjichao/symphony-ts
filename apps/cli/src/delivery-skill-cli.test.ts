@@ -4,7 +4,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runDeliverySkill, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
-import { formatPrBody } from "@symphony/domain";
+import {
+  formatPrBody,
+  type DecisionReviewTarget,
+  type DeliveryReviewGate,
+} from "@symphony/domain";
 
 import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
@@ -32,6 +36,18 @@ class MockCliRunner implements DeliveryGitGhRunner {
     }
     if (args[0] === "run") {
       return { stdout: "[]", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "issue" && args[1] === "view" && args.includes("title,body")) {
+      return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "pr" && args[1] === "view" && args.includes("title,body")) {
+      return { stdout: JSON.stringify({ title: "feat: delivery", body: "pr body" }), stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "pr" && args[1] === "diff") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "pr" && args[1] === "view" && args.includes("headRefOid") && !args.includes("statusCheckRollup")) {
+      return { stdout: JSON.stringify({ headRefOid: "sha123" }), stderr: "", exitCode: 0 };
     }
     return this.ghResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
@@ -70,6 +86,12 @@ describe("delivery-skill CLI", () => {
       "--resume",
       "--required-checks",
       "gate,lint",
+      "--bridge-url",
+      "http://127.0.0.1:4040",
+      "--bridge-token",
+      "secret-token",
+      "--session-id",
+      "github:owner/repo#80",
     ]);
 
     expect(parsed.action).toBe("run");
@@ -85,6 +107,9 @@ describe("delivery-skill CLI", () => {
     expect(parsed.optInLand).toBe(true);
     expect(parsed.resume).toBe(true);
     expect(parsed.requiredChecks).toEqual(["gate", "lint"]);
+    expect(parsed.bridgeUrl).toBe("http://127.0.0.1:4040");
+    expect(parsed.bridgeToken).toBe("secret-token");
+    expect(parsed.sessionId).toBe("github:owner/repo#80");
   });
 
   it("rejects non-integer or negative numeric values", () => {
@@ -243,6 +268,119 @@ describe("delivery-skill CLI", () => {
       stderr: { write: () => {} },
     };
 
+    const mockReviewGate: DeliveryReviewGate = {
+      ensureReviewTask: async (_sid: string, target: DecisionReviewTarget) => ({
+        schemaVersion: 1,
+        id: "task-1",
+        sessionId: "github:felixjichao/symphony-ts#80",
+        kind: "review",
+        revision: 1,
+        status: "completed",
+        lease: null,
+        claimGeneration: 1,
+        lastClaimToken: "token-1",
+        createdAtMs: 1_000_000,
+        updatedAtMs: 1_000_000,
+        target,
+      }),
+      getReviewStatus: async (taskId: string) => ({
+        taskId,
+        status: "completed",
+        result: {
+          schemaVersion: 1,
+          taskId,
+          sessionId: "github:felixjichao/symphony-ts#80",
+          kind: "review",
+          revision: 1,
+          createdAtMs: 1_000_000,
+          verdict: "approve",
+          target: {
+            repository: "felixjichao/symphony-ts",
+            prNumber: 80,
+            headSha: "sha123",
+          },
+          findings: [],
+        },
+      }),
+      verifyReviewApproval: async (target: DecisionReviewTarget) => ({
+        approved: true,
+        reason: "Approved in mock",
+        taskId: "task-1",
+        headSha: target.headSha,
+        verdict: "approve",
+      }),
+    };
+
+    const code = await runDeliverySkillCli(
+      [
+        "run",
+        "--repo",
+        "felixjichao/symphony-ts",
+        "--issue",
+        "80",
+        "--opt-in",
+        "--cwd",
+        tempDir,
+      ],
+      io,
+      runner,
+      mockReviewGate,
+    );
+
+    expect(code).toBe(0);
+    expect(stdout).toContain("successfully completed and landed PR #80");
+  });
+
+  it("fails closed when --opt-in is passed without review gate or bridge URL", async () => {
+    const tempDir = createTempDir();
+    const runner = new MockCliRunner();
+    runner.gitResponses.push({ stdout: "symphony/GH-80\n", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "https://github.com/felixjichao/symphony-ts.git\n", stderr: "", exitCode: 0 });
+    runner.ghResponses.push({ stdout: JSON.stringify({ state: "OPEN" }), stderr: "", exitCode: 0 });
+
+    runner.ghResponses.push({
+      stdout: JSON.stringify([
+        {
+          number: 80,
+          url: "https://github.com/felixjichao/symphony-ts/pull/80",
+          title: "feat: delivery",
+          state: "OPEN",
+          headRefOid: "sha123",
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+        },
+      ]),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "sha123\n", stderr: "", exitCode: 0 });
+
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "sha123",
+        mergeable: "MERGEABLE",
+        state: "OPEN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    // halt calls: edit, view labels, pr comment
+    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+    let stderr = "";
+    const io = {
+      stdout: { write: () => {} },
+      stderr: { write: (t: string) => { stderr += t; } },
+    };
+
     const code = await runDeliverySkillCli(
       [
         "run",
@@ -258,8 +396,8 @@ describe("delivery-skill CLI", () => {
       runner,
     );
 
-    expect(code).toBe(0);
-    expect(stdout).toContain("successfully completed and landed PR #80");
+    expect(code).toBe(1);
+    expect(stderr).toContain("blocked (manual_intervention_required)");
   });
 
   describe("FileDeliveryStateStorage", () => {

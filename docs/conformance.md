@@ -215,7 +215,7 @@ credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).
 
-## Decision Plane extension evidence (NEST-99 / #94, NEST-100 / #95, NEST-101 / #96 & NEST-102 / #97)
+## Decision Plane extension evidence (NEST-99 / #94, NEST-100 / #95, NEST-101 / #96, NEST-102 / #97 & NEST-103 / #98)
 
 This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. [Protocol](decision-protocol.md).
 
@@ -239,5 +239,6 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Prompt templates (bootstrap, plan, review SHA binding, continuation header, handoff summary) | `apps/chatgpt-web/test/prompts.test.ts`: Prompt Templates and Contracts |
 | Decision tab driver, loopback transport (GM/Fetch), and navigation checkpoint recovery | `apps/chatgpt-web/test/transport.test.ts`, `apps/chatgpt-web/test/checkpoint.test.ts`, `apps/chatgpt-web/test/driver.test.ts` |
 | Multi-turn fixture (Plan → Review SHA-A → Review SHA-B) & broken-binding rollover (N → N+1) | `apps/chatgpt-web/test/fixture-e2e.test.ts`: Decision Multi-Turn Fixture and Rollover (E2E) |
+| SHA-bound review gate before auto-merge (`DeliveryReviewGate`, `DecisionReviewGate`, polling, HEAD invalidation, `landPr` verification) | `packages/domain/src/delivery.test.ts`, `packages/decision/src/review-gate.test.ts`, `packages/tracker/src/github/delivery/delivery-service.test.ts`, `packages/agent/src/delivery/delivery-skill-runner.test.ts`, `apps/cli/src/delivery-skill-cli.test.ts`, `apps/cli/src/delivery-cli.test.ts` |
 
-Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
+Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/agent`, `npm test -w @symphony/tracker`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.

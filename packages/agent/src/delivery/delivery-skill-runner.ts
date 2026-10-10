@@ -1,12 +1,18 @@
 import {
+  decisionSessionId,
   evaluateChecksAutoMergePolicy,
   formatDeliveryHandoffMarkdown,
   formatPrBody,
+  githubDecisionRoot,
   validatePrOwnership,
   type CheckConclusion,
   type CheckState,
+  type DecisionMaterializedContext,
+  type DecisionReviewTarget,
+  type DecisionTask,
   type DeliveryContext,
   type DeliveryHandoff,
+  type DeliveryReviewStatusResult,
   type DeliverySkillConfig,
   type DeliverySkillResult,
   type PersistedDeliveryState,
@@ -867,290 +873,643 @@ export async function runDeliverySkill(
     }
   }
 
-  while (true) {
-    const elapsedWait = getElapsedWaitSeconds();
-    if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
-      return haltDispatch(
-        "ci_wait_timeout",
-        `Timed out waiting for CI checks after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
+  const repoParts = context.repo.split("/");
+  const resolvedSessionId =
+    options.sessionId ??
+    (repoParts.length === 2 && repoParts[0] && repoParts[1]
+      ? decisionSessionId(githubDecisionRoot(repoParts[0], repoParts[1], context.issueNumber))
+      : `github:${context.repo}#${context.issueNumber}`);
+  let lastReviewTaskId: string | null = null;
+
+  delivery_loop: while (true) {
+    let ciPassedChecks: PrCheck[] = [];
+    let ciReason = "";
+
+    while (true) {
+      const elapsedWait = getElapsedWaitSeconds();
+      if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
+        return haltDispatch(
+          "ci_wait_timeout",
+          `Timed out waiting for CI checks after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
+        );
+      }
+
+      // 在进入等待/轮询检查前立即持久化当前等待状态与绝对截止时间
+      await persistCurrentState();
+
+      // 采用 gh pr view --json statusCheckRollup,headRefOid,mergeable,state
+      // 兼容所有 gh 版本并绑定 headRefOid 与当前 head SHA
+      const prViewRes = await runner.gh(
+        ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid,statusCheckRollup,mergeable,state"],
+        options.cwd,
       );
-    }
 
-    // 在进入等待/轮询检查前立即持久化当前等待状态与绝对截止时间
-    await persistCurrentState();
+      if (prViewRes.exitCode !== 0) {
+        log(`[delivery-skill] Warning: Failed to fetch PR view for checks: ${prViewRes.stderr}. Retrying in ${pollInterval}s...`);
+        await persistCurrentState();
+        await sleep(pollInterval);
+        continue;
+      }
 
-    // 采用 gh pr view --json statusCheckRollup,headRefOid,mergeable,state
-    // 兼容所有 gh 版本并绑定 headRefOid 与当前 head SHA
-    const prViewRes = await runner.gh(
-      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid,statusCheckRollup,mergeable,state"],
-      options.cwd,
-    );
+      let prViewData: {
+        headRefOid?: string;
+        mergeable?: string;
+        state?: string;
+        statusCheckRollup?: Array<Record<string, unknown>>;
+      } = {};
 
-    if (prViewRes.exitCode !== 0) {
-      log(`[delivery-skill] Warning: Failed to fetch PR view for checks: ${prViewRes.stderr}. Retrying in ${pollInterval}s...`);
-      await persistCurrentState();
-      await sleep(pollInterval);
-      continue;
-    }
+      try {
+        prViewData = JSON.parse(prViewRes.stdout || "{}");
+      } catch (err) {
+        log(`[delivery-skill] Warning: Failed to parse PR view response: ${String(err)}`);
+        await persistCurrentState();
+        await sleep(pollInterval);
+        continue;
+      }
 
-    let prViewData: {
-      headRefOid?: string;
-      mergeable?: string;
-      state?: string;
-      statusCheckRollup?: Array<Record<string, unknown>>;
-    } = {};
+      // 严格核对 PR 上的 headRefOid 必须存在且与当前已推送 head SHA 完全一致
+      if (!prViewData.headRefOid || prViewData.headRefOid !== currentHeadSha) {
+        log(
+          `[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid ?? "missing"}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`,
+        );
+        await persistCurrentState();
+        await sleep(pollInterval);
+        continue;
+      }
 
-    try {
-      prViewData = JSON.parse(prViewRes.stdout || "{}");
-    } catch (err) {
-      log(`[delivery-skill] Warning: Failed to parse PR view response: ${String(err)}`);
-      await persistCurrentState();
-      await sleep(pollInterval);
-      continue;
-    }
+      const rawRollup = Array.isArray(prViewData.statusCheckRollup) ? prViewData.statusCheckRollup : [];
+      const parsedChecks: PrCheck[] = rawRollup.map((rc) => {
+        const name = String(rc["name"] || rc["context"] || "unnamed");
+        const typename = String(rc["__typename"] || "");
+        const detailsUrl = (rc["detailsUrl"] || rc["targetUrl"] || null) as string | null;
 
-    // 严格核对 PR 上的 headRefOid 必须存在且与当前已推送 head SHA 完全一致
-    if (!prViewData.headRefOid || prViewData.headRefOid !== currentHeadSha) {
-      log(
-        `[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid ?? "missing"}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`,
-      );
-      await persistCurrentState();
-      await sleep(pollInterval);
-      continue;
-    }
+        let state: CheckState = "PENDING";
+        let conclusion: CheckConclusion | null = null;
 
-    const rawRollup = Array.isArray(prViewData.statusCheckRollup) ? prViewData.statusCheckRollup : [];
-    const parsedChecks: PrCheck[] = rawRollup.map((rc) => {
-      const name = String(rc["name"] || rc["context"] || "unnamed");
-      const typename = String(rc["__typename"] || "");
-      const detailsUrl = (rc["detailsUrl"] || rc["targetUrl"] || null) as string | null;
-
-      let state: CheckState = "PENDING";
-      let conclusion: CheckConclusion | null = null;
-
-      if (typename === "StatusContext" || (!rc["status"] && rc["state"])) {
-        const stateStr = String(rc["state"] || "").toUpperCase();
-        if (stateStr === "SUCCESS") {
-          state = "COMPLETED";
-          conclusion = "SUCCESS";
-        } else if (stateStr === "FAILURE" || stateStr === "ERROR") {
-          state = "COMPLETED";
-          conclusion = "FAILURE";
-        } else if (stateStr === "PENDING") {
-          state = "PENDING";
-          conclusion = null;
-        }
-      } else {
-        const rawStatus = String(rc["status"] || "").toUpperCase();
-        const rawConclusion = String(rc["conclusion"] || "").toUpperCase();
-
-        if (rawStatus === "COMPLETED") {
-          state = "COMPLETED";
-          if (rawConclusion === "SUCCESS") {
+        if (typename === "StatusContext" || (!rc["status"] && rc["state"])) {
+          const stateStr = String(rc["state"] || "").toUpperCase();
+          if (stateStr === "SUCCESS") {
+            state = "COMPLETED";
             conclusion = "SUCCESS";
-          } else if (
-            rawConclusion === "FAILURE" ||
-            rawConclusion === "TIMED_OUT" ||
-            rawConclusion === "ACTION_REQUIRED"
-          ) {
+          } else if (stateStr === "FAILURE" || stateStr === "ERROR") {
+            state = "COMPLETED";
             conclusion = "FAILURE";
-          } else if (rawConclusion === "CANCELLED") {
-            conclusion = "CANCELLED";
-          } else if (rawConclusion === "SKIPPED") {
-            conclusion = "SKIPPED";
-          } else if (rawConclusion === "NEUTRAL") {
-            conclusion = "NEUTRAL";
-          } else {
-            conclusion = "UNKNOWN";
+          } else if (stateStr === "PENDING") {
+            state = "PENDING";
+            conclusion = null;
           }
         } else {
-          state = "PENDING";
-          conclusion = null;
-        }
-      }
+          const rawStatus = String(rc["status"] || "").toUpperCase();
+          const rawConclusion = String(rc["conclusion"] || "").toUpperCase();
 
-      const isRequired =
-        Boolean(rc["isRequired"]) ||
-        Boolean(effectiveRequiredChecks && effectiveRequiredChecks.includes(name));
-
-      return {
-        name,
-        workflowName: (rc["workflowName"] as string | null | undefined) ?? null,
-        state,
-        conclusion,
-        isRequired,
-        detailsUrl,
-      };
-    });
-
-    // 使用 canonical MVP.3 策略（required + observed checks 均须严格全 green）。
-    // 已配置但尚未出现在 rollup 的 required check 以 PENDING 合成，确保 fail-closed 等待。
-    const requiredPrChecks: PrCheck[] = (effectiveRequiredChecks ?? []).map((requiredName) => {
-      const observed = parsedChecks.find((c) => c.name === requiredName);
-      return (
-        observed ?? {
-          name: requiredName,
-          state: "PENDING",
-          conclusion: null,
-          isRequired: true,
-          detailsUrl: null,
-        }
-      );
-    });
-
-    const evaluation = evaluateChecksAutoMergePolicy(requiredPrChecks, parsedChecks);
-
-    // 6a. Checks Green -> 进入 Land 阶段
-    if (evaluation.canAutoMerge) {
-      log(`[delivery-skill] CI checks green! (${evaluation.reason})`);
-      break;
-    }
-
-    // 6b. Checks Failed -> 进入 Repair Loop
-    if (evaluation.status === "failing") {
-      const failedChecks = evaluation.failedOrPendingChecks.filter(
-        (c) =>
-          c.state === "COMPLETED" &&
-          (c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "UNKNOWN"),
-      );
-      if (failedChecks.length === 0) {
-        return haltDispatch(
-          "manual_intervention_required",
-          `CI checks block landing but no actionable failure is present: ${evaluation.reason}. Manual intervention required.`,
-        );
-      }
-      log(`[delivery-skill] CI checks failed: ${failedChecks.map((c) => c.name).join(", ")}`);
-      if (spentRepairs >= maxRepairs) {
-        return haltDispatch(
-          "ci_failed_max_repairs",
-          `CI failed on checks [${failedChecks.map((c) => c.name).join(", ")}] and reached max repair attempts (${spentRepairs}/${maxRepairs}).`,
-        );
-      }
-
-      // 提取真实失败日志诊断
-      const diagResult = await fetchCiFailureDiagnostics(
-        runner,
-        context.repo,
-        currentHeadSha ?? "",
-        failedChecks,
-        options.cwd,
-      );
-
-      // 区分 infra/permission 失败，避免无效消耗代码修复预算
-      if (diagResult.status === "permission_or_infra_failure") {
-        return haltDispatch(
-          "manual_intervention_required",
-          `CI failed or diagnostics retrieval blocked by permission/infrastructure error: ${diagResult.failureReason ?? diagResult.diagnostics.slice(0, 300)}. Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}`,
-        );
-      }
-
-      // 诊断不可获取时，带真实原因与 check URLs 安全交接，避免无日志盲修
-      if (diagResult.status === "unavailable") {
-        return haltDispatch(
-          "manual_intervention_required",
-          `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but failure diagnostics could not be retrieved (${diagResult.failureReason ?? "unknown"}). Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}. Halting for operator intervention.`,
-        );
-      }
-
-      // 如果未配置 repairFn 也未配置 repairCommand，绝不凭空宣称 repair 成功并重复空提交！
-      if (!options.repairFn && !options.repairCommand) {
-        return haltDispatch(
-          "ci_failed_max_repairs",
-          `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
-        );
-      }
-
-      spentRepairs++;
-      log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
-
-      // 在修复副作用执行前立即持久化预算消耗
-      await persistCurrentState({ spentRepairs });
-
-      let repairSuccess = false;
-      try {
-        if (options.repairFn) {
-          repairSuccess = await options.repairFn(diagResult.diagnostics);
-        } else if (options.repairCommand) {
-          log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
-          const repairRes = await runner.exec(
-            options.repairCommand,
-            options.cwd,
-            undefined,
-            { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagResult.diagnostics },
-          );
-          repairSuccess = repairRes.exitCode === 0;
-          if (!repairSuccess) {
-            log(`[delivery-skill] Repair command failed (${repairRes.exitCode}): ${repairRes.stderr || repairRes.stdout}`);
+          if (rawStatus === "COMPLETED") {
+            state = "COMPLETED";
+            if (rawConclusion === "SUCCESS") {
+              conclusion = "SUCCESS";
+            } else if (
+              rawConclusion === "FAILURE" ||
+              rawConclusion === "TIMED_OUT" ||
+              rawConclusion === "ACTION_REQUIRED"
+            ) {
+              conclusion = "FAILURE";
+            } else if (rawConclusion === "CANCELLED") {
+              conclusion = "CANCELLED";
+            } else if (rawConclusion === "SKIPPED") {
+              conclusion = "SKIPPED";
+            } else if (rawConclusion === "NEUTRAL") {
+              conclusion = "NEUTRAL";
+            } else {
+              conclusion = "UNKNOWN";
+            }
+          } else {
+            state = "PENDING";
+            conclusion = null;
           }
         }
-      } catch (err) {
-        return haltDispatch(
-          "ci_failed_max_repairs",
-          `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
+
+        const isRequired =
+          Boolean(rc["isRequired"]) ||
+          Boolean(effectiveRequiredChecks && effectiveRequiredChecks.includes(name));
+
+        return {
+          name,
+          workflowName: (rc["workflowName"] as string | null | undefined) ?? null,
+          state,
+          conclusion,
+          isRequired,
+          detailsUrl,
+        };
+      });
+
+      // 使用 canonical MVP.3 策略（required + observed checks 均须严格全 green）。
+      // 已配置但尚未出现在 rollup 的 required check 以 PENDING 合成，确保 fail-closed 等待。
+      const requiredPrChecks: PrCheck[] = (effectiveRequiredChecks ?? []).map((requiredName) => {
+        const observed = parsedChecks.find((c) => c.name === requiredName);
+        return (
+          observed ?? {
+            name: requiredName,
+            state: "PENDING",
+            conclusion: null,
+            isRequired: true,
+            detailsUrl: null,
+          }
         );
+      });
+
+      const evaluation = evaluateChecksAutoMergePolicy(requiredPrChecks, parsedChecks);
+
+      // 6a. Checks Green -> 进入 Review Gate
+      if (evaluation.canAutoMerge) {
+        log(`[delivery-skill] CI checks green! (${evaluation.reason})`);
+        ciPassedChecks = parsedChecks;
+        ciReason = evaluation.reason;
+        break;
       }
 
-      if (!repairSuccess) {
-        return haltDispatch(
-          "ci_failed_max_repairs",
-          `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagResult.diagnostics.slice(0, 300)}`,
+      // 6b. Checks Failed -> 进入 Repair Loop
+      if (evaluation.status === "failing") {
+        const failedChecks = evaluation.failedOrPendingChecks.filter(
+          (c) =>
+            c.state === "COMPLETED" &&
+            (c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "UNKNOWN"),
         );
-      }
-
-      // 修复完成后重新执行项目验证
-      if (options.validationCommand) {
-        log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
-        const valRes = await runner.exec(options.validationCommand, options.cwd);
-        if (valRes.exitCode !== 0) {
+        if (failedChecks.length === 0) {
+          return haltDispatch(
+            "manual_intervention_required",
+            `CI checks block landing but no actionable failure is present: ${evaluation.reason}. Manual intervention required.`,
+          );
+        }
+        log(`[delivery-skill] CI checks failed: ${failedChecks.map((c) => c.name).join(", ")}`);
+        if (spentRepairs >= maxRepairs) {
           return haltDispatch(
             "ci_failed_max_repairs",
-            `Project validation failed after repair attempt ${spentRepairs}: ${valRes.stderr || valRes.stdout}`,
+            `CI failed on checks [${failedChecks.map((c) => c.name).join(", ")}] and reached max repair attempts (${spentRepairs}/${maxRepairs}).`,
           );
+        }
+
+        // 提取真实失败日志诊断
+        const diagResult = await fetchCiFailureDiagnostics(
+          runner,
+          context.repo,
+          currentHeadSha ?? "",
+          failedChecks,
+          options.cwd,
+        );
+
+        // 区分 infra/permission 失败，避免无效消耗代码修复预算
+        if (diagResult.status === "permission_or_infra_failure") {
+          return haltDispatch(
+            "manual_intervention_required",
+            `CI failed or diagnostics retrieval blocked by permission/infrastructure error: ${diagResult.failureReason ?? diagResult.diagnostics.slice(0, 300)}. Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}`,
+          );
+        }
+
+        // 诊断不可获取时，带真实原因与 check URLs 安全交接，避免无日志盲修
+        if (diagResult.status === "unavailable") {
+          return haltDispatch(
+            "manual_intervention_required",
+            `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but failure diagnostics could not be retrieved (${diagResult.failureReason ?? "unknown"}). Check URLs: ${failedChecks.map((c) => c.detailsUrl).filter(Boolean).join(", ")}. Halting for operator intervention.`,
+          );
+        }
+
+        // 如果未配置 repairFn 也未配置 repairCommand，绝不凭空宣称 repair 成功并重复空提交！
+        if (!options.repairFn && !options.repairCommand) {
+          return haltDispatch(
+            "ci_failed_max_repairs",
+            `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
+          );
+        }
+
+        spentRepairs++;
+        log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
+
+        // 在修复副作用执行前立即持久化预算消耗
+        await persistCurrentState({ spentRepairs });
+
+        let repairSuccess = false;
+        try {
+          if (options.repairFn) {
+            repairSuccess = await options.repairFn(diagResult.diagnostics);
+          } else if (options.repairCommand) {
+            log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
+            const repairRes = await runner.exec(
+              options.repairCommand,
+              options.cwd,
+              undefined,
+              { SYMPHONY_CI_FAILURE_DIAGNOSTICS: diagResult.diagnostics },
+            );
+            repairSuccess = repairRes.exitCode === 0;
+            if (!repairSuccess) {
+              log(`[delivery-skill] Repair command failed (${repairRes.exitCode}): ${repairRes.stderr || repairRes.stdout}`);
+            }
+          }
+        } catch (err) {
+          return haltDispatch(
+            "ci_failed_max_repairs",
+            `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
+          );
+        }
+
+        if (!repairSuccess) {
+          return haltDispatch(
+            "ci_failed_max_repairs",
+            `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagResult.diagnostics.slice(0, 300)}`,
+          );
+        }
+
+        // 修复完成后重新执行项目验证
+        if (options.validationCommand) {
+          log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
+          const valRes = await runner.exec(options.validationCommand, options.cwd);
+          if (valRes.exitCode !== 0) {
+            return haltDispatch(
+              "ci_failed_max_repairs",
+              `Project validation failed after repair attempt ${spentRepairs}: ${valRes.stderr || valRes.stdout}`,
+            );
+          }
+        }
+
+        // 核对是否有代码改动
+        const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+        if (diffCheck.stdout.trim().length === 0) {
+          return haltDispatch(
+            "ci_failed_max_repairs",
+            `Repair attempt ${spentRepairs} produced no new working tree changes. Aborting empty repair loop.`,
+          );
+        }
+
+        await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
+        const fixCommitRes = await runner.git(
+          ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
+          options.cwd,
+        );
+        if (fixCommitRes.exitCode !== 0) {
+          return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
+        }
+
+        const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+        if (fixPushRes.exitCode !== 0) {
+          return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
+        }
+
+        const newHead = await runner.git(["rev-parse", "HEAD"], options.cwd);
+        const newHeadSha = newHead.stdout.trim();
+        if (newHeadSha === currentHeadSha) {
+          return haltDispatch("ci_failed_max_repairs", "Repair push did not produce a new HEAD SHA.");
+        }
+        currentHeadSha = newHeadSha;
+        log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Waiting for new CI run to start...`);
+
+        // 刷新持久化状态中的预算消耗
+        await persistCurrentState({ spentRepairs });
+
+        await sleep(pollInterval);
+        continue;
+      }
+
+      // 6c. Checks Pending -> 等待下一次轮询
+      log(`[delivery-skill] CI checks pending (${evaluation.reason}). Waiting ${pollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
+      await persistCurrentState();
+      await sleep(pollInterval);
+    }
+
+    // ----------------------------------------------------
+    // Sub-phase 6.2: Independent Review Gate
+    // ----------------------------------------------------
+    if (!options.reviewGate) {
+      if (options.optInLand === true) {
+        log("[delivery-skill] Auto-merge requires review gate verification, but no review gate is configured. Refusing auto-merge fail-closed.");
+        return haltDispatch(
+          "manual_intervention_required",
+          "Auto-merge requires review gate verification, but no review gate is configured. Refusing auto-merge fail-closed.",
+        );
+      }
+      log("[delivery-skill] No review gate configured and optInLand is not true. Proceeding to land phase.");
+      break delivery_loop;
+    }
+
+    log(`[delivery-skill] Entering Review Gate for PR #${prNumber} @ ${currentHeadSha}...`);
+
+    const reviewTarget: DecisionReviewTarget = {
+      repository: context.repo.toLowerCase(),
+      prNumber: prNumber!,
+      headSha: currentHeadSha!,
+    };
+
+    let issueTitle = "";
+    let issueBody = "";
+    try {
+      const iv = await runner.gh(["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "title,body"], options.cwd);
+      if (iv.exitCode === 0) {
+        const p = JSON.parse(iv.stdout || "{}");
+        issueTitle = p.title ?? "";
+        issueBody = p.body ?? "";
+      }
+    } catch {
+      // ignore
+    }
+
+    let prTitle = "";
+    let prBody = "";
+    try {
+      const pv = await runner.gh(["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body"], options.cwd);
+      if (pv.exitCode === 0) {
+        const p = JSON.parse(pv.stdout || "{}");
+        prTitle = p.title ?? "";
+        prBody = p.body ?? "";
+      }
+    } catch {
+      // ignore
+    }
+
+    let patch = "";
+    const patchFiles: string[] = [];
+    try {
+      const diffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
+      if (diffRes.exitCode === 0) {
+        patch = diffRes.stdout || "";
+        const m = patch.match(/^diff --git a\/(.+?) b\//gm);
+        if (m) {
+          for (const line of m) {
+            const f = line.replace(/^diff --git a\//, "").replace(/ b\/.*$/, "");
+            if (!patchFiles.includes(f)) patchFiles.push(f);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const reviewContext: DecisionMaterializedContext = {
+      strategy: "materialized",
+      workItem: { provider: "github", key: `${context.repo.toLowerCase()}#${context.issueNumber}` },
+      repository: context.repo.toLowerCase(),
+      issue: {
+        repository: context.repo.toLowerCase(),
+        number: context.issueNumber,
+        title: issueTitle,
+        body: issueBody,
+      },
+      plan: null,
+      pullRequest: {
+        repository: context.repo.toLowerCase(),
+        prNumber: prNumber!,
+        headSha: currentHeadSha!,
+        baseRef: context.baseBranch,
+        headRef: context.headBranch,
+        title: prTitle,
+        body: prBody,
+      },
+      diff: {
+        patch,
+        files: patchFiles,
+        truncated: false,
+      },
+      ci: {
+        state: "SUCCESS",
+        summary: ciReason || "CI checks passed",
+        checks: ciPassedChecks.map((c) => ({
+          name: c.name,
+          status: c.state,
+          conclusion: c.conclusion,
+          url: c.detailsUrl ?? null,
+        })),
+      },
+      repositoryInstructions: null,
+      previousReviews: [],
+      unresolvedFindings: [],
+    };
+
+    let reviewTask: DecisionTask;
+    try {
+      reviewTask = await options.reviewGate.ensureReviewTask(
+        resolvedSessionId,
+        reviewTarget,
+        reviewContext,
+      );
+      lastReviewTaskId = reviewTask.id;
+      log(`[delivery-skill] Ensured ReviewTask: ${reviewTask.id} (status: ${reviewTask.status})`);
+    } catch (err) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to ensure review task for PR #${prNumber} @ ${currentHeadSha}: ${String(err)}`,
+      );
+    }
+
+    const reviewPollInterval = options.reviewPollIntervalSeconds ?? pollInterval;
+
+    // Review status polling loop
+    while (true) {
+      const elapsedWait = getElapsedWaitSeconds();
+      if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
+        return haltDispatch(
+          "ci_wait_timeout",
+          `Timed out waiting for review after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
+        );
+      }
+
+      await persistCurrentState();
+
+      // Invariant check: re-read GitHub's current PR HEAD on each poll
+      const headCheckRes = await runner.gh(
+        ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid"],
+        options.cwd,
+      );
+      if (headCheckRes.exitCode === 0) {
+        try {
+          const headCheckObj = JSON.parse(headCheckRes.stdout || "{}");
+          if (headCheckObj.headRefOid && headCheckObj.headRefOid !== currentHeadSha) {
+            log(
+              `[delivery-skill] PR HEAD moved from ${currentHeadSha} to ${headCheckObj.headRefOid}. Superseding old review task ${reviewTask.id} and re-entering CI...`,
+            );
+            if (options.reviewGate.supersedeReviewTask) {
+              await options.reviewGate.supersedeReviewTask(reviewTask.id);
+            }
+            currentHeadSha = headCheckObj.headRefOid;
+            continue delivery_loop;
+          }
+        } catch {
+          // ignore
         }
       }
 
-      // 核对是否有代码改动
-      const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
-      if (diffCheck.stdout.trim().length === 0) {
+      let statusResult: DeliveryReviewStatusResult;
+      try {
+        statusResult = await options.reviewGate.getReviewStatus(reviewTask.id);
+      } catch (err) {
         return haltDispatch(
-          "ci_failed_max_repairs",
-          `Repair attempt ${spentRepairs} produced no new working tree changes. Aborting empty repair loop.`,
+          "manual_intervention_required",
+          `Failed to get review status for task ${reviewTask.id}: ${String(err)}`,
         );
       }
 
-      await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
-      const fixCommitRes = await runner.git(
-        ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
-        options.cwd,
-      );
-      if (fixCommitRes.exitCode !== 0) {
-        return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
+      if (statusResult.status === "completed") {
+        const reviewResult = statusResult.result;
+        if (!reviewResult || reviewResult.kind !== "review") {
+          return haltDispatch(
+            "manual_intervention_required",
+            `Review task ${reviewTask.id} completed with missing or malformed review result.`,
+          );
+        }
+
+        // Case A: Approved
+        if (reviewResult.verdict === "approve") {
+          if (reviewResult.target.headSha !== currentHeadSha) {
+            return haltDispatch(
+              "manual_intervention_required",
+              `Review approved SHA (${reviewResult.target.headSha}) does not match current PR HEAD SHA (${currentHeadSha}). Re-review required.`,
+            );
+          }
+
+          const approvalVerify = await options.reviewGate.verifyReviewApproval({
+            ...reviewTarget,
+            sessionId: resolvedSessionId,
+          });
+          if (!approvalVerify.approved) {
+            return haltDispatch(
+              "manual_intervention_required",
+              `Review approval verification failed: ${approvalVerify.reason}`,
+            );
+          }
+
+          log(`[delivery-skill] Review approved for HEAD ${currentHeadSha}! Proceeding to land.`);
+          break delivery_loop;
+        }
+
+        // Case B: Changes requested
+        if (reviewResult.verdict === "changes_requested") {
+          const findings = reviewResult.findings ?? [];
+          const findingSummary = findings
+            .map((f) => `[${f.severity.toUpperCase()}] ${f.location ? f.location + ": " : ""}${f.message}`)
+            .join("\n");
+          log(`[delivery-skill] Review requested changes:\n${findingSummary}`);
+
+          if (spentRepairs >= maxRepairs) {
+            return haltDispatch(
+              "review_changes_requested_max_repairs",
+              `Review requested changes:\n${findingSummary}\nReached max repair attempts (${spentRepairs}/${maxRepairs}).`,
+            );
+          }
+
+          if (!options.repairFn && !options.repairCommand) {
+            return haltDispatch(
+              "review_changes_requested_max_repairs",
+              `Review requested changes:\n${findingSummary}\nNo repairFn or repairCommand provided to execute repair. Halting dispatch.`,
+            );
+          }
+
+          spentRepairs++;
+          log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs} for review feedback...`);
+          await persistCurrentState({ spentRepairs });
+
+          let repairSuccess = false;
+          try {
+            if (options.repairFn) {
+              repairSuccess = await options.repairFn(findingSummary);
+            } else if (options.repairCommand) {
+              log(`[delivery-skill] Executing repair command for review: ${options.repairCommand}`);
+              const repRes = await runner.exec(
+                options.repairCommand,
+                options.cwd,
+                undefined,
+                { SYMPHONY_REVIEW_FINDINGS: findingSummary },
+              );
+              repairSuccess = repRes.exitCode === 0;
+              if (!repairSuccess) {
+                log(`[delivery-skill] Repair command failed (${repRes.exitCode}): ${repRes.stderr || repRes.stdout}`);
+              }
+            }
+          } catch (err) {
+            return haltDispatch(
+              "review_changes_requested_max_repairs",
+              `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
+            );
+          }
+
+          if (!repairSuccess) {
+            return haltDispatch(
+              "review_changes_requested_max_repairs",
+              `Repair attempt ${spentRepairs} failed to address review findings:\n${findingSummary}`,
+            );
+          }
+
+          if (options.validationCommand) {
+            log(`[delivery-skill] Re-running validation command after review repair: ${options.validationCommand}`);
+            const valRes = await runner.exec(options.validationCommand, options.cwd);
+            if (valRes.exitCode !== 0) {
+              return haltDispatch(
+                "review_changes_requested_max_repairs",
+                `Project validation failed after review repair attempt ${spentRepairs}: ${valRes.stderr || valRes.stdout}`,
+              );
+            }
+          }
+
+          const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+          if (diffCheck.stdout.trim().length === 0) {
+            return haltDispatch(
+              "review_changes_requested_max_repairs",
+              `Repair attempt ${spentRepairs} produced no new working tree changes. Aborting empty repair loop.`,
+            );
+          }
+
+          await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
+          const fixCommitRes = await runner.git(
+            ["commit", "--only", "-m", `fix(review): address review findings (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
+            options.cwd,
+          );
+          if (fixCommitRes.exitCode !== 0) {
+            return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
+          }
+
+          const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+          if (fixPushRes.exitCode !== 0) {
+            return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
+          }
+
+          const newHead = await runner.git(["rev-parse", "HEAD"], options.cwd);
+          const newHeadSha = newHead.stdout.trim();
+          if (newHeadSha === currentHeadSha) {
+            return haltDispatch("review_changes_requested_max_repairs", "Repair push did not produce a new HEAD SHA.");
+          }
+
+          if (options.reviewGate.supersedeReviewTask) {
+            await options.reviewGate.supersedeReviewTask(reviewTask.id);
+          }
+
+          currentHeadSha = newHeadSha;
+          log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Re-entering CI and review loop...`);
+
+          await persistCurrentState({ spentRepairs });
+          await sleep(pollInterval);
+          continue delivery_loop;
+        }
+
+        // Case C: Needs human
+        if (reviewResult.verdict === "needs_human") {
+          const findingSummary = reviewResult.findings?.map((f) => f.message).join("; ") || "Reviewer requested human intervention.";
+          return haltDispatch(
+            "review_needs_human",
+            `Review determined human intervention is required: ${findingSummary}`,
+          );
+        }
+
+        return haltDispatch(
+          "manual_intervention_required",
+          `Unexpected review verdict: ${String((reviewResult as { verdict?: string }).verdict)}`,
+        );
       }
 
-      const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
-      if (fixPushRes.exitCode !== 0) {
-        return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
+      if (statusResult.status === "failed" || statusResult.status === "cancelled" || statusResult.status === "superseded") {
+        return haltDispatch(
+          "manual_intervention_required",
+          `Review task ${reviewTask.id} entered ${statusResult.status} state: ${statusResult.error ?? "no error details"}. Halting dispatch.`,
+        );
       }
 
-      const newHead = await runner.git(["rev-parse", "HEAD"], options.cwd);
-      const newHeadSha = newHead.stdout.trim();
-      if (newHeadSha === currentHeadSha) {
-        return haltDispatch("ci_failed_max_repairs", "Repair push did not produce a new HEAD SHA.");
-      }
-      currentHeadSha = newHeadSha;
-      log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Waiting for new CI run to start...`);
-
-      // 刷新持久化状态中的预算消耗
-      await persistCurrentState({ spentRepairs });
-
-      await sleep(pollInterval);
-      continue;
+      log(`[delivery-skill] Review status: ${statusResult.status}. Waiting ${reviewPollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
+      await persistCurrentState();
+      await sleep(reviewPollInterval);
     }
-
-    // 6c. Checks Pending -> 等待下一次轮询
-    log(`[delivery-skill] CI checks pending (${evaluation.reason}). Waiting ${pollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
-    await persistCurrentState();
-    await sleep(pollInterval);
   }
 
   // ==========================================
@@ -1166,6 +1525,7 @@ export async function runDeliverySkill(
       prNumber,
       prUrl,
       headSha: currentHeadSha,
+      reviewTaskId: lastReviewTaskId,
       spentRepairs,
       spentWaitSeconds: getElapsedWaitSeconds(),
       reason: "ci_green_opt_in_disabled",
@@ -1174,6 +1534,27 @@ export async function runDeliverySkill(
 
   if (prNumber === null) {
     return haltDispatch("manual_intervention_required", "Cannot land without PR number.");
+  }
+
+  if (!options.reviewGate) {
+    return haltDispatch(
+      "manual_intervention_required",
+      "Auto-merge requires review gate verification, but no review gate is configured. Refusing auto-merge fail-closed.",
+    );
+  }
+
+  // Pre-merge verification of review approval
+  const preMergeApproval = await options.reviewGate.verifyReviewApproval({
+    repository: context.repo.toLowerCase(),
+    prNumber: prNumber,
+    headSha: currentHeadSha ?? "",
+    sessionId: resolvedSessionId,
+  });
+  if (!preMergeApproval.approved) {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Pre-merge review gate verification failed: ${preMergeApproval.reason}`,
+    );
   }
 
   // 校验 mergeability
@@ -1257,6 +1638,7 @@ export async function runDeliverySkill(
     prUrl,
     headSha: currentHeadSha,
     mergeSha,
+    reviewTaskId: lastReviewTaskId,
     spentRepairs,
     spentWaitSeconds: getElapsedWaitSeconds(),
     reason: "successfully_merged",

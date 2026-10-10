@@ -18,6 +18,7 @@ import {
   type CheckState,
   type ChecksEvaluationResult,
   type DeliveryContext,
+  type DeliveryReviewGate,
   type PrCheck,
   type PrMergeability,
   type PrRecord,
@@ -56,6 +57,8 @@ export interface LandPrOptions {
   readonly prNumber?: number | undefined;
   readonly expectedHeadSha?: string | undefined;
   readonly deleteBranch?: boolean | undefined;
+  readonly reviewGate?: DeliveryReviewGate | undefined;
+  readonly sessionId?: string | undefined;
 }
 
 export interface LandPrResult {
@@ -497,6 +500,12 @@ export class GitHubDeliveryService {
       });
     }
 
+    if (!options.reviewGate) {
+      throw new DeliveryError("Auto-merge refused: independent review gate is required before merge", {
+        code: "review_gate_required",
+      });
+    }
+
     // 1. Read fresh PR state
     const pr = await this.readPr(context, { prNumber: options.prNumber });
 
@@ -571,11 +580,29 @@ export class GitHubDeliveryService {
       });
     }
 
-    // 3. Re-read PR state after reading checks and immediately before merge
+    // 2.5 Verify Review Gate approval
+    const reviewResult = await options.reviewGate.verifyReviewApproval({
+      repository: context.repo,
+      prNumber: pr.number,
+      headSha: targetHeadSha,
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    });
+
+    if (!reviewResult.approved) {
+      throw new DeliveryError(
+        `Cannot auto-merge PR #${pr.number}: review gate approval verification failed: ${reviewResult.reason}`,
+        {
+          code: "review_not_approved",
+          details: { ...reviewResult },
+        },
+      );
+    }
+
+    // 3. Re-read PR state after reading checks and review approval and immediately before merge
     const rePr = await this.readPr(context, { prNumber: pr.number });
     if (rePr.headSha !== targetHeadSha) {
       throw new DeliveryError(
-        `PR head commit changed between check verification and merge: expected ${targetHeadSha}, current is ${rePr.headSha}`,
+        `PR head commit changed between check/review verification and merge: expected ${targetHeadSha}, current is ${rePr.headSha}`,
         {
           code: "head_changed",
           details: { expected: targetHeadSha, actual: rePr.headSha },

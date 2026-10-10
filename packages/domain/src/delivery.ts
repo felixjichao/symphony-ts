@@ -1,6 +1,8 @@
 /**
  * @symphony/domain — GitHub delivery and auto-merge policy types and pure functions (SPEC §11.5 / MVP.3).
  */
+import type { DecisionReviewTarget, DecisionTask, DecisionResult } from "./decision";
+import type { DecisionContextBundle } from "./decision-context";
 
 export interface DeliveryContext {
   readonly repo: string;
@@ -336,7 +338,9 @@ export type DeliveryErrorCode =
   | "merge_rejected"
   | "verification_unknown"
   | "opt_in_required"
-  | "pr_closed_unmerged";
+  | "pr_closed_unmerged"
+  | "review_gate_required"
+  | "review_not_approved";
 
 export interface DeliveryErrorOptions extends ErrorOptions {
   readonly code: DeliveryErrorCode;
@@ -355,6 +359,55 @@ export class DeliveryError extends Error {
   }
 }
 
+export interface DeliveryReviewApprovalResult {
+  readonly approved: boolean;
+  readonly reason: string;
+  readonly taskId?: string | undefined;
+  readonly sessionId?: string | undefined;
+  readonly headSha?: string | undefined;
+  readonly verdict?: "approve" | "changes_requested" | "needs_human" | "pending" | "none" | undefined;
+}
+
+export interface DeliveryReviewStatusResult {
+  readonly taskId: string;
+  readonly status: "pending" | "claimed" | "running" | "completed" | "failed" | "cancelled" | "superseded";
+  readonly result?: DecisionResult | null | undefined;
+  readonly error?: string | undefined;
+}
+
+export interface DeliveryReviewGate {
+  /**
+   * Ensure or create an active ReviewTask for the given delivery session and PR target,
+   * attaching the specified context atomically.
+   */
+  ensureReviewTask(
+    sessionId: string,
+    target: DecisionReviewTarget,
+    context?: DecisionContextBundle,
+    options?: { operationKey?: string },
+  ): Promise<DecisionTask>;
+
+  /**
+   * Poll or query the status/result of the review for the given task.
+   */
+  getReviewStatus(
+    taskId: string,
+  ): Promise<DeliveryReviewStatusResult>;
+
+  /**
+   * Pre-merge approval check (fail closed).
+   * Validates that task is completed, verdict is approve, and target PR & HEAD SHA match.
+   */
+  verifyReviewApproval(
+    target: DecisionReviewTarget & { readonly sessionId?: string },
+  ): Promise<DeliveryReviewApprovalResult>;
+
+  /**
+   * Supersede prior reviews when a new HEAD is pushed or when replacing PR.
+   */
+  supersedeReviewTask?(taskId: string): Promise<void>;
+}
+
 /**
  * @symphony/domain — GitHub Delivery MVP.2: Codex Delivery + Land Workflow Skill Contracts (SPEC §11.5 / MVP.2).
  *
@@ -369,7 +422,9 @@ export type DeliveryHandoffReason =
   | "unmergeable"
   | "manual_intervention_required"
   | "foreign_pr_conflict"
-  | "reconciliation_needed";
+  | "reconciliation_needed"
+  | "review_changes_requested_max_repairs"
+  | "review_needs_human";
 
 export interface DeliveryHandoff {
   readonly reason: DeliveryHandoffReason;
@@ -472,6 +527,9 @@ export interface DeliverySkillConfig {
   readonly optInLand?: boolean | undefined;
   readonly resume?: boolean | undefined;
   readonly requiredChecks?: readonly string[] | undefined;
+  readonly reviewGate?: DeliveryReviewGate | undefined;
+  readonly sessionId?: string | undefined;
+  readonly reviewPollIntervalSeconds?: number | undefined;
 }
 
 export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";
@@ -486,4 +544,5 @@ export interface DeliverySkillResult {
   readonly spentWaitSeconds: number;
   readonly reason: string;
   readonly handoffMarkdown?: string | undefined;
+  readonly reviewTaskId?: string | null | undefined;
 }

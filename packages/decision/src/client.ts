@@ -199,6 +199,20 @@ export class DecisionBridgeClient {
     );
   }
 
+  async getTasksForSession(sessionId: string): Promise<{ tasks: DecisionTask[] }> {
+    return await this.request<{ tasks: DecisionTask[] }>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/tasks`
+    );
+  }
+
+  async getLatestReviewTask(sessionId: string): Promise<{ task: DecisionTask | null }> {
+    return await this.request<{ task: DecisionTask | null }>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/reviews/latest`
+    );
+  }
+
   async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {
     const payload: CreateSessionRequest = { root };
     return await this.request<{ session: DecisionSession }>("POST", "/v1/sessions", payload);

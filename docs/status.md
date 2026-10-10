@@ -21,7 +21,8 @@
 - NEST-100 / GitHub #95: durable task/session snapshot store, single-writer process lock (`store.lock`), lease coordination, and localhost Web Agent Bridge HTTP server in `@symphony/decision` and `symphony decision bridge` in `@symphony/cli`.
 - NEST-101 / GitHub #96: executor adapter abstraction (`DecisionExecutorAdapter`), context strategies (`connector` vs `materialized`), machine-readable result extraction (````symphony-result` fenced JSON blocks with fail-closed last-block parsing), browser-safe entrypoint `@symphony/decision/adapter`, and deterministic `FakeDecisionExecutorAdapter`.
 - NEST-102 / GitHub #97: ChatGPT Web concrete executor adapter (`ChatGptWebAdapter`), Tampermonkey tab driver (`DecisionTabDriver`), multi-turn Plan → Review SHA-A → Review SHA-B execution, broken-binding rollover (N → N+1) with durable handoff in `apps/chatgpt-web`, provider-neutral context API (`PUT/GET /v1/tasks/:id/context`), session mutual exclusion, and lease-fenced binding updates in `@symphony/decision`.
-- Plan dispatch and Review merge gate remain separate work; current orchestration and delivery are unchanged.
+- NEST-103 / GitHub #98: SHA-bound independent review gate before auto-merge in `@symphony/domain` (`DeliveryReviewGate`), `@symphony/decision` (`DecisionReviewGate`), `@symphony/tracker` (`landPr` review verification), `@symphony/agent` (`runDeliverySkill` Phase 6 review gate loop, polling, HEAD invalidation, findings repair), and `@symphony/cli` (`symphony delivery-skill run` and `symphony pr land` review gate options).
+- Plan dispatch remains separate work; delivery auto-merge is now guarded by the SHA-bound review gate.
 
 ## 已完成能力
 

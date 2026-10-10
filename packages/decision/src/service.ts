@@ -406,7 +406,12 @@ export class DecisionService {
 
   async createReviewTask(
     sessionId: string,
-    params: { target: DecisionReviewTarget; operationKey?: string }
+    params: {
+      target: DecisionReviewTarget;
+      context?: DecisionContextBundle | undefined;
+      operationKey?: string;
+      supersedeSessionReviews?: boolean;
+    }
   ): Promise<DecisionTask> {
     parseDecisionReviewTarget(params.target);
 
@@ -456,13 +461,13 @@ export class DecisionService {
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
 
-      // Supersede previous review tasks for the same PR (including previously approved ones)
+      // Supersede previous review tasks (by default for same PR, or for all session reviews if requested)
       for (const t of Object.values(draft.tasks)) {
         if (
           t.sessionId === sessionId &&
           t.kind === "review" &&
-          t.target.repository === params.target.repository &&
-          t.target.prNumber === params.target.prNumber &&
+          (params.supersedeSessionReviews ||
+            (t.target.repository === params.target.repository && t.target.prNumber === params.target.prNumber)) &&
           t.status !== "superseded"
         ) {
           draft.tasks[t.id] = supersedeDecisionTask(t, now);
@@ -493,6 +498,12 @@ export class DecisionService {
 
       draft.tasks[id] = task;
 
+      if (params.context) {
+        const parsed = parseDecisionContextBundle(params.context);
+        validateDecisionContextForTask(parsed, task, session);
+        draft.contexts[id] = parsed;
+      }
+
       if (params.operationKey) {
         draft.operationReceipts[params.operationKey] = {
           schemaVersion: 1,
@@ -511,6 +522,17 @@ export class DecisionService {
 
   getTask(id: string): DecisionTask | null {
     return this.store.getTask(id);
+  }
+
+  getTasksForSession(sessionId: string): DecisionTask[] {
+    return this.store.getAllTasks().filter((t) => t.sessionId === sessionId);
+  }
+
+  getLatestReviewTask(sessionId: string): DecisionTask | null {
+    const tasks = this.getTasksForSession(sessionId)
+      .filter((t): t is DecisionTask & { kind: "review" } => t.kind === "review")
+      .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
+    return tasks[0] ?? null;
   }
 
   getResult(taskId: string): DecisionResult | null {
