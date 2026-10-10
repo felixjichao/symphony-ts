@@ -1,0 +1,37 @@
+{
+  "observedAt": "2026-10-10T15:42:42.243859+00:00",
+  "target": "felixjichao/symphony-delivery-dogfood",
+  "issue": 18,
+  "pr": 19,
+  "headA": "77e149bdcb07ed1ed56639f3472671ad3df54b3b",
+  "headB": "ac7a3106405c5389ba4adb864af72b165349e974",
+  "ciA": {
+    "conclusion": "success",
+    "databaseId": 38063730606,
+    "headSha": "77e149bdcb07ed1ed56639f3472671ad3df54b3b",
+    "status": "completed",
+    "url": "https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/38063730606"
+  },
+  "ciB": {
+    "conclusion": "success",
+    "databaseId": 38064474126,
+    "headSha": "ac7a3106405c5389ba4adb864af72b165349e974",
+    "status": "completed",
+    "url": "https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/38064474126"
+  },
+  "merge": {
+    "oid": "a8ec31e922955323954acf74c4ad7e030cb4afec"
+  },
+  "mergedAt": "2026-10-10T15:40:38Z",
+  "issueClosedAt": "2026-10-10T15:40:40Z",
+  "workspaceObservedBeforeCleanup": true,
+  "workspaceRemoved": true,
+  "rootSentinelPreserved": true,
+  "cleanupLog": [
+    "timestamp=\"2026-10-10T15:41:32.728Z\" severity=\"info\" event=\"workspace_cleanup\" outcome=\"completed\" reason=\"cleanup_completed\" issue_id=\"18\" issue_identifier=\"GH-18\" status=\"removed\""
+  ],
+  "operatorRecoveryRequired": true,
+  "repairAttemptsSpent": 2,
+  "uninterruptedRun": false,
+  "fullRootGatePassed": false
+}
