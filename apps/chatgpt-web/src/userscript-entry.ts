@@ -101,22 +101,73 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
     fontSize: "11px",
   });
 
-  const tokenInput = document.createElement("input");
-  tokenInput.id = "symphony-token-input";
-  tokenInput.type = "password";
-  tokenInput.placeholder = "Bearer Token (optional)";
-  tokenInput.value = token;
-  Object.assign(tokenInput.style, {
-    background: "#313244",
+  // Register Tampermonkey menu commands for isolated credential entry
+  if (typeof GM_registerMenuCommand === "function") {
+    GM_registerMenuCommand("Symphony: Set Bridge Bearer Token", () => {
+      const entered = prompt("Enter Symphony Bridge Bearer Token (persisted in Tampermonkey storage):", "");
+      if (entered !== null) {
+        token = entered.trim();
+        if (typeof GM_setValue === "function") {
+          GM_setValue("symphony_bridge_token", token);
+        }
+        updateTokenStatus();
+      }
+    });
+    GM_registerMenuCommand("Symphony: Clear Bridge Bearer Token", () => {
+      token = "";
+      if (typeof GM_setValue === "function") {
+        GM_setValue("symphony_bridge_token", "");
+      }
+      updateTokenStatus();
+    });
+  }
+
+  // Token status and configuration (credential is kept in storage and never stored in DOM properties)
+  const tokenRow = document.createElement("div");
+  tokenRow.style.display = "flex";
+  tokenRow.style.justifyContent = "space-between";
+  tokenRow.style.alignItems = "center";
+  tokenRow.style.padding = "2px 0";
+
+  const tokenLabel = document.createElement("span");
+  tokenLabel.id = "symphony-token-status";
+  tokenLabel.style.fontSize = "11px";
+
+  const tokenBtn = document.createElement("button");
+  tokenBtn.id = "symphony-configure-token-btn";
+  Object.assign(tokenBtn.style, {
+    background: "#45475a",
     color: "#cdd6f4",
-    border: "1px solid #45475a",
+    border: "none",
     borderRadius: "4px",
-    padding: "4px 8px",
-    fontSize: "11px",
+    padding: "3px 8px",
+    fontSize: "10px",
+    cursor: "pointer",
   });
 
+  const updateTokenStatus = () => {
+    tokenLabel.textContent = token ? "Token: Configured" : "Token: Not set";
+    tokenLabel.style.color = token ? "#a6e3a1" : "#a6adc8";
+    tokenBtn.textContent = token ? "Change Token" : "Set Token";
+  };
+  updateTokenStatus();
+
+  tokenBtn.addEventListener("click", () => {
+    const entered = prompt("Enter Symphony Bridge Bearer Token (persisted in Tampermonkey storage, never in page DOM):", "");
+    if (entered !== null) {
+      token = entered.trim();
+      if (typeof GM_setValue === "function") {
+        GM_setValue("symphony_bridge_token", token);
+      }
+      updateTokenStatus();
+    }
+  });
+
+  tokenRow.appendChild(tokenLabel);
+  tokenRow.appendChild(tokenBtn);
+
   settingsContainer.appendChild(urlInput);
-  settingsContainer.appendChild(tokenInput);
+  settingsContainer.appendChild(tokenRow);
 
   const btnRow = document.createElement("div");
   btnRow.style.display = "flex";
@@ -172,12 +223,15 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
 
   const start = async () => {
     try {
+      if (currentDriver) {
+        currentDriver.stop();
+        currentDriver = null;
+      }
+
       bridgeUrl = urlInput.value.trim() || "http://127.0.0.1:4040";
-      token = tokenInput.value.trim();
 
       if (typeof GM_setValue === "function") {
         GM_setValue("symphony_bridge_url", bridgeUrl);
-        GM_setValue("symphony_bridge_token", token);
       }
 
       const transport = createTransport(bridgeUrl, token);
@@ -189,6 +243,10 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         checkpointStore,
         adapter,
         onError: (err: Error) => {
+          if (currentDriver) {
+            currentDriver.stop();
+            currentDriver = null;
+          }
           updateUI(false, `Error: ${err.message}`, true);
         },
       });
@@ -196,10 +254,18 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
       updateUI(true, "Connecting & polling...");
       // Fire driver start in background
       currentDriver.start().catch((err: unknown) => {
+        if (currentDriver) {
+          currentDriver.stop();
+          currentDriver = null;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         updateUI(false, `Driver stopped on error: ${msg}`, true);
       });
     } catch (err: unknown) {
+      if (currentDriver) {
+        currentDriver.stop();
+        currentDriver = null;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       updateUI(false, `Failed to start: ${msg}`, true);
     }

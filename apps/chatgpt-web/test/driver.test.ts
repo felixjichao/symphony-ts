@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { DecisionTabDriver } from "../src/driver";
 import { MemoryCheckpointStore } from "../src/checkpoint";
+import { initSymphonyUserscript } from "../src/userscript-entry";
+import { MockDocument } from "./mock-dom";
 import type { BridgeTransport } from "../src/transport";
 import type { DecisionExecutorAdapter } from "@symphony/decision/adapter";
 import type {
@@ -309,5 +311,202 @@ describe("DecisionTabDriver", () => {
 
     expect(capturedError).not.toBeNull();
     expect(capturedError?.message).toContain("401");
+  });
+
+  it("recovers already completed task and receipt without requiring active lease (R4)", async () => {
+    const cpStore = new MemoryCheckpointStore({ tabId: "driver-tab" });
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 0,
+      step: "result_extracted",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      candidateResult: expectedResult,
+    });
+
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        // Heartbeat would fail with 409 because task is completed!
+        if (method === "POST" && path.includes("/heartbeat")) {
+          throw new Error("HTTP 409: Task is not claimed/running");
+        }
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "completed" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/receipt")) {
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      ownerId: "driver-1",
+    });
+
+    const outcome = await driver.resumeCheckpointIfAvailable();
+    expect(outcome?.status).toBe("completed");
+    if (outcome?.status === "completed") {
+      expect(outcome.result.verdict).toBe("ready");
+      expect(outcome.receipt.taskId).toBe(sampleTask.id);
+    }
+    // Checkpoint must be cleanly removed upon verified receipt
+    expect(cpStore.get()).toBeNull();
+  });
+
+  it("recovers waiting_response checkpoint by waiting for existing response without resending prompt (R3)", async () => {
+    const cpStore = new MemoryCheckpointStore({ tabId: "driver-tab" });
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 0,
+      step: "waiting_response",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      baselineCount: 1,
+    });
+
+    const mockAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"] as const,
+      supportedContextStrategies: ["connector", "materialized"] as const,
+      inspectBinding: vi.fn(),
+      createSession: vi.fn(),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn(), // MUST NOT be called!
+      waitForExistingResponse: vi.fn().mockResolvedValue({ result: expectedResult }),
+      setStepListener: vi.fn(),
+    };
+
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/heartbeat")) {
+          return { expiresAtMs: Date.now() + 100_000, ttlMs: 120_000 } as unknown as T;
+        }
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "running" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/result")) {
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+            result: expectedResult,
+            superseded: false,
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter as unknown as DecisionExecutorAdapter,
+      ownerId: "driver-1",
+    });
+
+    const outcome = await driver.resumeCheckpointIfAvailable();
+    expect(outcome?.status).toBe("completed");
+    expect(mockAdapter.executeTask).not.toHaveBeenCalled();
+    expect(mockAdapter.waitForExistingResponse).toHaveBeenCalled();
+  });
+
+  it("never exposes bearer token in page DOM inputs or attributes (R5)", () => {
+    const doc = new MockDocument();
+    const prevDoc = globalThis.document;
+    try {
+      globalThis.document = doc as unknown as Document;
+      initSymphonyUserscript({
+        authToken: "super-secret-token",
+        bridgeBaseUrl: "http://127.0.0.1:4040",
+      });
+
+      // Assert that no input element contains the token
+      expect(doc.querySelector("#symphony-token-input")).toBeNull();
+      const allElements = doc.querySelectorAll("*");
+      for (const el of allElements) {
+        expect(el.value).not.toBe("super-secret-token");
+        expect(el.textContent).not.toContain("super-secret-token");
+        expect(el.getAttribute("value")).not.toBe("super-secret-token");
+      }
+    } finally {
+      globalThis.document = prevDoc;
+    }
   });
 });

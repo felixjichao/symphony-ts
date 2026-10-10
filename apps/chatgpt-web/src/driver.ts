@@ -65,6 +65,12 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.pollIntervalMs = options.pollIntervalMs ?? 5_000;
     this.defaultClaimTtlMs = options.defaultClaimTtlMs ?? 120_000;
     this.onError = options.onError;
+
+    if (this.adapter instanceof ChatGptWebAdapter) {
+      this.adapter.setStepListener((step, meta) => {
+        this.updateCheckpointStep(step, meta);
+      });
+    }
   }
 
   // --- DecisionTaskController implementation for executeTaskWithAdapter ---
@@ -114,17 +120,38 @@ export class DecisionTabDriver implements DecisionTaskController {
     params: { owner: string; token: string; generation: number; result: DecisionResult }
   ): Promise<{ receipt: SubmissionReceipt; result: DecisionResult; superseded: boolean }> {
     // Persist candidate result before making network submission call
-    this.updateCheckpointStep("result_extracted", params.result);
+    this.updateCheckpointStep("result_extracted", { candidateResult: params.result });
 
-    const res = await this.transport.request<{
-      receipt: SubmissionReceipt;
-      result: DecisionResult;
-      superseded: boolean;
-    }>("POST", `/v1/tasks/${encodeURIComponent(taskId)}/result`, params);
+    try {
+      const res = await this.transport.request<{
+        receipt: SubmissionReceipt;
+        result: DecisionResult;
+        superseded: boolean;
+      }>("POST", `/v1/tasks/${encodeURIComponent(taskId)}/result`, params);
 
-    // Upon confirmed receipt from bridge, checkpoint can safely be cleared
-    this.checkpointStore.delete();
-    return res;
+      // Upon confirmed receipt from bridge, checkpoint can safely be cleared
+      this.checkpointStore.delete();
+      return res;
+    } catch (err: unknown) {
+      // In case of network packet loss on return, query authoritative receipt before failing
+      try {
+        const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
+          "GET",
+          `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
+        );
+        if (receiptRes?.receipt) {
+          this.checkpointStore.delete();
+          return {
+            receipt: receiptRes.receipt,
+            result: params.result,
+            superseded: false,
+          };
+        }
+      } catch {
+        // Receipt fetch also failed, keep candidateResult in checkpoint for retry
+      }
+      throw err;
+    }
   }
 
   async submitFailure(
@@ -203,7 +230,12 @@ export class DecisionTabDriver implements DecisionTaskController {
     task: DecisionTask,
     session: DecisionSession,
     lease: DecisionLease,
-    candidateResult?: unknown
+    meta?: {
+      candidateResult?: unknown;
+      baselineCount?: number;
+      targetUri?: string;
+      targetConvId?: string | null;
+    }
   ): void {
     const cp: DriverCheckpoint = {
       schemaVersion: 1,
@@ -218,32 +250,46 @@ export class DecisionTabDriver implements DecisionTaskController {
       step,
       attemptId: `${task.id}-${lease.generation}`,
       savedAtMs: Date.now(),
-      ...(candidateResult !== undefined ? { candidateResult } : {}),
+      ...(meta?.candidateResult !== undefined ? { candidateResult: meta.candidateResult } : {}),
+      ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
+      ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
+      ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
     };
     this.checkpointStore.set(cp);
   }
 
-  private updateCheckpointStep(step: DriverStep, candidateResult?: unknown): void {
-    if (!this.activeTask || !this.activeSession || !this.activeLease) {
-      const existing = this.checkpointStore.get();
-      if (existing) {
-        this.checkpointStore.set({
-          ...existing,
-          step,
-          savedAtMs: Date.now(),
-          ...(candidateResult !== undefined ? { candidateResult } : {}),
-        });
-      }
+  private updateCheckpointStep(
+    step: DriverStep,
+    meta?: {
+      candidateResult?: unknown;
+      baselineCount?: number;
+      targetUri?: string;
+      targetConvId?: string | null;
+    }
+  ): void {
+    const existing = this.checkpointStore.get();
+    if (existing) {
+      this.checkpointStore.set({
+        ...existing,
+        step,
+        savedAtMs: Date.now(),
+        ...(meta?.candidateResult !== undefined ? { candidateResult: meta.candidateResult } : {}),
+        ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
+        ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
+        ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+      });
       return;
     }
-    this.saveCheckpoint(step, this.activeTask, this.activeSession, this.activeLease, candidateResult);
+    if (this.activeTask && this.activeSession && this.activeLease) {
+      this.saveCheckpoint(step, this.activeTask, this.activeSession, this.activeLease, meta);
+    }
   }
 
   startHeartbeat(task: DecisionTask, lease: DecisionLease, onExpired?: () => void): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(async () => {
       try {
-        await this.transport.request(
+        const hbRes = await this.transport.request<{ expiresAtMs: number; ttlMs: number }>(
           "POST",
           `/v1/tasks/${encodeURIComponent(task.id)}/heartbeat`,
           {
@@ -253,6 +299,19 @@ export class DecisionTabDriver implements DecisionTaskController {
             ttlMs: this.defaultClaimTtlMs,
           }
         );
+        if (hbRes && typeof hbRes.expiresAtMs === "number") {
+          const cp = this.checkpointStore.get();
+          if (cp && cp.taskId === task.id) {
+            this.checkpointStore.set({
+              ...cp,
+              leaseExpiresAtMs: hbRes.expiresAtMs,
+              savedAtMs: Date.now(),
+            });
+          }
+          if (this.activeLease && this.activeLease.owner === lease.owner) {
+            (this.activeLease as { expiresAtMs: number }).expiresAtMs = hbRes.expiresAtMs;
+          }
+        }
       } catch {
         // Heartbeat failed: lease lost, expired, or superseded
         this.stopHeartbeat();
@@ -298,40 +357,16 @@ export class DecisionTabDriver implements DecisionTaskController {
       return null;
     }
 
-    if (isCheckpointExpired(cp, Date.now())) {
-      this.checkpointStore.delete();
-      return null;
-    }
+    // 1. Check task status on bridge FIRST without requiring heartbeat/lease renewal!
+    const taskRes = await this.transport
+      .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
+      .catch(() => null);
 
-    // Verify task status and active lease with bridge via heartbeat
-    try {
-      await this.transport.request(
-        "POST",
-        `/v1/tasks/${encodeURIComponent(cp.taskId)}/heartbeat`,
-        {
-          owner: cp.leaseOwner,
-          token: cp.leaseToken,
-          generation: cp.leaseGeneration,
-          ttlMs: this.defaultClaimTtlMs,
-        }
-      );
-    } catch {
-      // Stale or expired lease
-      this.checkpointStore.delete();
-      return null;
-    }
+    const sessionRes = await this.transport
+      .request<{ session: DecisionSession }>("GET", `/v1/sessions/${encodeURIComponent(cp.sessionId)}`)
+      .catch(() => null);
 
-    const taskRes = await this.transport.request<{ task: DecisionTask }>(
-      "GET",
-      `/v1/tasks/${encodeURIComponent(cp.taskId)}`
-    );
-    const sessionRes = await this.transport.request<{ session: DecisionSession }>(
-      "GET",
-      `/v1/sessions/${encodeURIComponent(cp.sessionId)}`
-    );
-
-    // 1. If task is already completed on the bridge, fetch and return receipt idempotently
-    if (taskRes.task.status === "completed") {
+    if (taskRes?.task?.status === "completed") {
       try {
         const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
           "GET",
@@ -343,39 +378,163 @@ export class DecisionTabDriver implements DecisionTaskController {
           result: (cp.candidateResult ?? receiptRes.receipt.payload) as DecisionResult,
           receipt: receiptRes.receipt,
           superseded: false,
-          session: sessionRes.session,
+          session: sessionRes?.session ?? ({} as DecisionSession),
         };
       } catch {
-        // Receipt fetch failed, proceed to normal flow
+        // Receipt fetch failed
       }
     }
 
     // 2. If candidateResult was extracted, idempotently re-submit result
-    if (cp.candidateResult && cp.step === "result_extracted") {
-      const submitRes = await this.submitResult(cp.taskId, {
-        owner: cp.leaseOwner,
-        token: cp.leaseToken,
-        generation: cp.leaseGeneration,
-        result: cp.candidateResult as DecisionResult,
-      });
-      return {
-        status: "completed",
-        result: submitRes.result,
-        receipt: submitRes.receipt,
-        superseded: submitRes.superseded,
-        session: sessionRes.session,
-      };
+    if (cp.candidateResult && (cp.step === "result_extracted" || cp.step === "waiting_response")) {
+      try {
+        const submitRes = await this.submitResult(cp.taskId, {
+          owner: cp.leaseOwner,
+          token: cp.leaseToken,
+          generation: cp.leaseGeneration,
+          result: cp.candidateResult as DecisionResult,
+        });
+        return {
+          status: "completed",
+          result: submitRes.result,
+          receipt: submitRes.receipt,
+          superseded: submitRes.superseded,
+          session: sessionRes?.session ?? ({} as DecisionSession),
+        };
+      } catch {
+        // If re-submission failed, check whether bridge actually completed it
+        const receiptRes = await this.transport
+          .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
+          .catch(() => null);
+        if (receiptRes?.receipt) {
+          this.checkpointStore.delete();
+          return {
+            status: "completed",
+            result: cp.candidateResult as DecisionResult,
+            receipt: receiptRes.receipt,
+            superseded: false,
+            session: sessionRes?.session ?? ({} as DecisionSession),
+          };
+        }
+      }
+    }
+
+    // 3. For ongoing uncompleted execution, verify checkpoint expiry & lease validity via heartbeat
+    if (isCheckpointExpired(cp, Date.now())) {
+      this.checkpointStore.delete();
+      return null;
+    }
+
+    let renewedExpiry = cp.leaseExpiresAtMs;
+    try {
+      const hbRes = await this.transport.request<{ expiresAtMs: number; ttlMs: number }>(
+        "POST",
+        `/v1/tasks/${encodeURIComponent(cp.taskId)}/heartbeat`,
+        {
+          owner: cp.leaseOwner,
+          token: cp.leaseToken,
+          generation: cp.leaseGeneration,
+          ttlMs: this.defaultClaimTtlMs,
+        }
+      );
+      if (hbRes && typeof hbRes.expiresAtMs === "number") {
+        renewedExpiry = hbRes.expiresAtMs;
+        this.checkpointStore.set({
+          ...cp,
+          leaseExpiresAtMs: renewedExpiry,
+          savedAtMs: Date.now(),
+        });
+      }
+    } catch {
+      // Lease lost, expired, or superseded
+      this.checkpointStore.delete();
+      return null;
+    }
+
+    if (!taskRes?.task || !sessionRes?.session) {
+      this.checkpointStore.delete();
+      return null;
     }
 
     const lease: DecisionLease = {
       owner: cp.leaseOwner,
       token: cp.leaseToken,
       generation: cp.leaseGeneration,
-      expiresAtMs: cp.leaseExpiresAtMs,
+      expiresAtMs: renewedExpiry,
     };
 
-    const context = await this.fetchContext(taskRes.task.id);
+    // 4. If step was "waiting_response", resume waiting for existing response WITHOUT resending prompt!
+    if (
+      cp.step === "waiting_response" &&
+      typeof cp.baselineCount === "number" &&
+      typeof (this.adapter as unknown as { waitForExistingResponse?: unknown }).waitForExistingResponse === "function"
+    ) {
+      this.activeTask = taskRes.task;
+      this.activeSession = sessionRes.session;
+      this.activeLease = lease;
+      this.activeAbortController = new AbortController();
+      const signal = this.activeAbortController.signal;
 
+      this.startHeartbeat(taskRes.task, lease, () => {
+        this.activeAbortController?.abort();
+      });
+
+      try {
+        const execution = await this.adapter.waitForExistingResponse(taskRes.task, {
+          baselineCount: cp.baselineCount,
+          signal,
+        });
+
+        const submitRes = await this.submitResult(taskRes.task.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          result: execution.result,
+        });
+
+        this.checkpointStore.delete();
+        return {
+          status: "completed",
+          result: submitRes.result,
+          receipt: submitRes.receipt,
+          superseded: submitRes.superseded,
+          session: sessionRes.session,
+        };
+      } catch (err) {
+        if (!signal.aborted) {
+          const failRes = await this.submitFailure(taskRes.task.id, {
+            owner: lease.owner,
+            token: lease.token,
+            generation: lease.generation,
+            error: "execution_failed",
+            details: { message: "Failed waiting for response during checkpoint recovery" },
+            retryable: true,
+          }).catch(() => null);
+
+          this.checkpointStore.delete();
+          if (failRes) {
+            return {
+              status: "failed",
+              failure: failRes.failure,
+              receipt: failRes.receipt,
+              superseded: failRes.superseded,
+              session: sessionRes.session,
+              error: err,
+            };
+          }
+        }
+        throw err;
+      } finally {
+        this.stopHeartbeat();
+        this.activeAbortController = null;
+        this.activeTask = null;
+        this.activeSession = null;
+        this.activeLease = null;
+      }
+    }
+
+    // 5. Normal claimed / started execution
+    const context = await this.fetchContext(taskRes.task.id);
     return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
   }
 
@@ -420,6 +579,11 @@ export class DecisionTabDriver implements DecisionTaskController {
     } catch (err: unknown) {
       // If error is an abort (e.g. from page navigation or timeout), preserve checkpoint for reload recovery
       if (signal.aborted) {
+        throw err;
+      }
+      // If candidate result exists, DO NOT delete checkpoint so it can be idempotently recovered
+      const currentCp = this.checkpointStore.get();
+      if (currentCp?.candidateResult || currentCp?.step === "result_extracted") {
         throw err;
       }
       // For other unhandled fatal errors, clean up

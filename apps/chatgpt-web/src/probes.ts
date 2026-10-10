@@ -189,12 +189,15 @@ export async function waitForStreamingCompletion(
     const turns = getAllAssistantTurns(doc);
     const stopButton = findStopButton(doc);
 
-    // Identify the target turn corresponding to this attempt
+    // Target turn MUST strictly be a newly appeared turn belonging to this send attempt:
+    // 1. Total turn count must strictly exceed baselineCount
+    // 2. The turn must not match baselineTurn if a baselineTurn was captured
     let targetTurn: HTMLElement | null = null;
     if (turns.length > baselineCount) {
-      targetTurn = turns[turns.length - 1] ?? null;
-    } else if (turns.length > 0 && turns[turns.length - 1] !== baselineTurn) {
-      targetTurn = turns[turns.length - 1] ?? null;
+      const candidate = turns[turns.length - 1] ?? null;
+      if (candidate && (!baselineTurn || candidate !== baselineTurn)) {
+        targetTurn = candidate;
+      }
     }
 
     if (targetTurn) {

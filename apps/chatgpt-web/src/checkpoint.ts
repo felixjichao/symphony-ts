@@ -5,6 +5,7 @@
 
 export type DriverStep =
   | "claimed"
+  | "navigating"
   | "started"
   | "prompt_submitting"
   | "waiting_response"
@@ -24,6 +25,9 @@ export interface DriverCheckpoint {
   readonly step: DriverStep;
   readonly attemptId: string;
   readonly savedAtMs: number;
+  readonly targetUri?: string | undefined;
+  readonly targetConvId?: string | null | undefined;
+  readonly baselineCount?: number | undefined;
   readonly candidateResult?: unknown | undefined;
 }
 

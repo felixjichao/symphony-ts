@@ -99,9 +99,14 @@ describe("ChatGptWebAdapter", () => {
     const win = new MockWindow();
     win.location.href = "https://chatgpt.com";
 
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
     const adapter = new ChatGptWebAdapter({
       doc: doc as unknown as Document,
       win: win as unknown as Window,
+      checkIntervalMs: 10,
+      timeoutMs: 500,
     });
 
     const binding = {

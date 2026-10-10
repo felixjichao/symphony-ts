@@ -140,4 +140,40 @@ describe("DOM Probes and URL utilities", () => {
       })
     ).rejects.toThrow("Aborted while waiting for assistant completion");
   });
+
+  it("waitForStreamingCompletion strictly requires a new assistant turn and does not accept old turn", async () => {
+    const doc = new MockDocument();
+    const oldTurn = new MockElement("div", { "data-message-author-role": "assistant" });
+    oldTurn.textContent = "Old assistant message from previous turn";
+    doc.body.appendChild(oldTurn);
+
+    // 1. With baselineCount: 1 and no new turn, waiter must timeout, never returning old turn
+    await expect(
+      waitForStreamingCompletion({
+        doc: doc as unknown as Document,
+        baselineCount: 1,
+        baselineTurn: oldTurn as unknown as HTMLElement,
+        checkIntervalMs: 10,
+        stabilizationMs: 20,
+        timeoutMs: 100,
+      })
+    ).rejects.toThrow("Timeout waiting for ChatGPT response after 100ms");
+
+    // 2. When a new turn appears, waiter returns the new turn
+    const newTurn = new MockElement("div", { "data-message-author-role": "assistant" });
+    newTurn.textContent = "New assistant response";
+    setTimeout(() => {
+      doc.body.appendChild(newTurn);
+    }, 30);
+
+    const result = await waitForStreamingCompletion({
+      doc: doc as unknown as Document,
+      baselineCount: 1,
+      baselineTurn: oldTurn as unknown as HTMLElement,
+      checkIntervalMs: 10,
+      stabilizationMs: 20,
+      timeoutMs: 500,
+    });
+    expect(result).toBe(newTurn);
+  });
 });

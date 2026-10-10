@@ -12,6 +12,8 @@ export class MockElement {
   textContent = "";
   disabled = false;
   className = "";
+  id = "";
+  style: Record<string, string> = {};
   private readonly eventListeners: Map<string, ((evt: { type: string }) => void)[]> = new Map();
 
   constructor(tagName: string, attributes: Record<string, string> = {}) {
@@ -69,7 +71,7 @@ export class MockElement {
     // Basic selector matching for test purposes
     if (selector.startsWith("#")) {
       const id = selector.slice(1);
-      return this.attributes.get("id") === id;
+      return this.id === id || this.attributes.get("id") === id;
     }
     if (selector.startsWith(".")) {
       const cls = selector.slice(1);
@@ -150,6 +152,10 @@ export class MockDocument {
 
   querySelectorAll(selector: string): MockElement[] {
     return this.body.querySelectorAll(selector);
+  }
+
+  getElementById(id: string): MockElement | null {
+    return this.querySelector(`#${id}`);
   }
 
   createElement(tagName: string): MockElement {

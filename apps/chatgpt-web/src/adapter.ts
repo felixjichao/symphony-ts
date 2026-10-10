@@ -11,6 +11,7 @@ import {
   type DecisionSessionResumeResult,
   type DecisionExecutionRequest,
   type DecisionExecutionOutcome,
+  type DecisionTask,
   type DecisionReviewTask,
   type DecisionContextStrategyKind,
   DecisionAdapterError,
@@ -19,7 +20,7 @@ import {
   findComposerElement,
   setComposerText,
   findSendButton,
-  countAssistantTurns,
+  getAllAssistantTurns,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
   buildConversationUrl,
@@ -32,6 +33,7 @@ import {
   formatHandoffPrompt,
 } from "./prompts";
 import { extractResultFromAssistantTurn } from "./extractor";
+import type { DriverStep } from "./checkpoint";
 
 export interface ChatGptWebAdapterOptions {
   readonly origin?: string | undefined;
@@ -62,6 +64,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly timeoutMs: number;
   private readonly stabilizationMs: number;
   private readonly checkIntervalMs: number;
+  private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null = null;
 
   constructor(options: ChatGptWebAdapterOptions = {}) {
     this.origin = options.origin ?? "https://chatgpt.com";
@@ -70,6 +73,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.stabilizationMs = options.stabilizationMs ?? 1000;
     this.checkIntervalMs = options.checkIntervalMs ?? 500;
+  }
+
+  setStepListener(listener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null): void {
+    this.stepListener = listener;
   }
 
   async inspectBinding(
@@ -108,7 +115,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     session: DecisionSession,
     options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionSessionCreationResult> {
-    const doc = this.docSupplier();
     const win = this.winSupplier();
 
     // 1. Ensure we are starting from a clean new conversation, not an existing thread
@@ -119,12 +125,28 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         const origin = (win.location as { origin?: string }).origin || this.origin;
         const newChatUrl = new URL("/", origin).href;
         win.location.assign(newChatUrl);
+
+        // Wait for route to actually change to new chat
+        const startWaitRoute = Date.now();
+        while (extractConversationIdFromUrl(win.location.href) !== null) {
+          if (options.signal?.aborted) {
+            throw new Error("Aborted while waiting for route navigation to new chat");
+          }
+          if (Date.now() - startWaitRoute > this.timeoutMs) {
+            throw new DecisionAdapterError({
+              code: "execution_failed",
+              message: "Timeout waiting for navigation to new chat",
+              suggestedAction: "retry",
+            });
+          }
+          await new Promise((r) => setTimeout(r, this.checkIntervalMs));
+        }
       }
     }
 
-    // Wait for composer element to be available and ready
+    // Wait for composer element to be available and ready in dynamic docSupplier
     const startWait = Date.now();
-    let composer = findComposerElement(doc);
+    let composer = findComposerElement(this.docSupplier());
     while (!composer) {
       if (options.signal?.aborted) {
         throw new Error("Aborted while waiting for ChatGPT composer");
@@ -137,11 +159,12 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         });
       }
       await new Promise((r) => setTimeout(r, this.checkIntervalMs));
-      composer = findComposerElement(doc);
+      composer = findComposerElement(this.docSupplier());
     }
 
     setComposerText(composer, BOOTSTRAP_PROMPT);
 
+    const doc = this.docSupplier();
     const sendBtn = findSendButton(doc);
     if (!sendBtn || sendBtn.disabled) {
       throw new DecisionAdapterError({
@@ -151,13 +174,16 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
-    const baselineCount = countAssistantTurns(doc);
+    const initialTurns = getAllAssistantTurns(doc);
+    const baselineCount = initialTurns.length;
+    const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
     sendBtn.click();
 
     // Wait for bootstrap response
     await waitForStreamingCompletion({
       doc,
       baselineCount,
+      baselineTurn,
       timeoutMs: this.timeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
@@ -215,7 +241,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     const win = this.winSupplier();
-    const doc = this.docSupplier();
     if (win && win.location && binding.resumeUri) {
       const currentUrl = win.location.href;
       const targetConvId = binding.externalSessionRef;
@@ -224,22 +249,40 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
         win.location.assign(binding.resumeUri);
       }
+
+      // Wait for route to actually match target conversation
+      const startWaitRoute = Date.now();
+      while (extractConversationIdFromUrl(win.location.href) !== targetConvId) {
+        if (options.signal?.aborted) {
+          throw new Error("Aborted while waiting for route navigation to conversation");
+        }
+        if (Date.now() - startWaitRoute > this.timeoutMs) {
+          throw new DecisionAdapterError({
+            code: "execution_failed",
+            message: `Timeout waiting for ChatGPT route navigation to conversation "${targetConvId}"`,
+            suggestedAction: "retry",
+          });
+        }
+        await new Promise((r) => setTimeout(r, this.checkIntervalMs));
+      }
     }
 
-    // Wait for composer ready on resumed page
-    if (doc) {
-      const startWait = Date.now();
-      let composer = findComposerElement(doc);
-      while (!composer) {
-        if (options.signal?.aborted) {
-          throw new Error("Aborted while resuming ChatGPT conversation");
-        }
-        if (Date.now() - startWait > Math.min(this.timeoutMs, 500)) {
-          break;
-        }
-        await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 50)));
-        composer = findComposerElement(doc);
+    // Wait for composer ready on resumed page dynamically
+    const startWait = Date.now();
+    let composer = findComposerElement(this.docSupplier());
+    while (!composer) {
+      if (options.signal?.aborted) {
+        throw new Error("Aborted while resuming ChatGPT conversation");
       }
+      if (Date.now() - startWait > this.timeoutMs) {
+        throw new DecisionAdapterError({
+          code: "execution_failed",
+          message: "Timeout waiting for ChatGPT prompt composer after session resume",
+          suggestedAction: "retry",
+        });
+      }
+      await new Promise((r) => setTimeout(r, this.checkIntervalMs));
+      composer = findComposerElement(this.docSupplier());
     }
 
     const handle: ChatGptWebHandle = {
@@ -309,13 +352,23 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
-    const baselineCount = countAssistantTurns(doc);
+    const initialTurns = getAllAssistantTurns(doc);
+    const baselineCount = initialTurns.length;
+    const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
+
+    // Report prompt submitting step to listener (e.g. driver checkpoint)
+    this.stepListener?.("prompt_submitting", { baselineCount });
+
     sendBtn.click();
+
+    // Report waiting response step
+    this.stepListener?.("waiting_response", { baselineCount });
 
     // Wait for streaming response to finish and get the specific new turn
     const assistantTurn = await waitForStreamingCompletion({
       doc,
       baselineCount,
+      baselineTurn,
       timeoutMs: this.timeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
@@ -333,5 +386,28 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     return {
       result,
     };
+  }
+
+  async waitForExistingResponse(
+    task: DecisionTask,
+    options: {
+      baselineCount: number;
+      baselineTurn?: HTMLElement | null | undefined;
+      signal?: AbortSignal | undefined;
+    }
+  ): Promise<DecisionExecutionOutcome> {
+    const doc = this.docSupplier();
+    const assistantTurn = await waitForStreamingCompletion({
+      doc,
+      baselineCount: options.baselineCount,
+      baselineTurn: options.baselineTurn,
+      timeoutMs: this.timeoutMs,
+      stabilizationMs: this.stabilizationMs,
+      checkIntervalMs: this.checkIntervalMs,
+      signal: options.signal,
+    });
+
+    const result = extractResultFromAssistantTurn(assistantTurn, task);
+    return { result };
   }
 }
