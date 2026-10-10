@@ -351,17 +351,104 @@ Security boundaries:
 - Restrictive Origin enforcement: any request with an `Origin` header not explicitly listed in `allowedOrigins` is rejected with `403 Forbidden` before routing or execution (preventing unauthorized simple cross-origin requests and preflight requests).
 - 1MB body limit with graceful socket draining to avoid connection reset.
 
+## Executor adapter boundary and context strategies
+
+The `@symphony/decision/adapter` entrypoint and `@symphony/domain/decision` subpath export the provider-neutral adapter layer and Decision Plane contracts for external model engines (such as Web ChatGPT, browser userscripts, or direct LLM APIs). Architectural rationale: [Agent Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md).
+
+> [!NOTE]
+> **Browser vs Server Runtime Entrypoints**:
+> - **Browser runtimes** (userscripts, Tampermonkey, WebExtension content scripts): MUST import adapter execution primitives from `@symphony/decision/adapter` and domain contracts/types from `@symphony/domain/decision`. These subpaths contain zero Node built-in dependencies (`node:crypto`, `node:fs`, etc.) and produce clean browser bundles without polyfills.
+> - **Server / Node.js runtimes** (CLI, orchestrator, localhost bridge): May import from the root `@symphony/domain` (which re-exports `@symphony/domain/decision` alongside Core workspace and config types) and `@symphony/decision`.
+
+### DecisionExecutorAdapter interface
+
+```ts
+interface DecisionExecutorAdapter<THandle = unknown> {
+  readonly name: string;
+  readonly supportedTaskKinds: readonly ("plan" | "review")[];
+  readonly supportedContextStrategies: readonly DecisionContextStrategyKind[];
+
+  inspectBinding(
+    session: DecisionSession,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionBindingInspectionResult<THandle>>;
+
+  createSession(
+    session: DecisionSession,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionSessionCreationResult<THandle>>;
+
+  resumeSession(
+    session: DecisionSession,
+    binding: ExecutorBinding,
+    options?: { readonly signal?: AbortSignal | undefined }
+  ): Promise<DecisionSessionResumeResult<THandle>>;
+
+  executeTask(
+    request: DecisionExecutionRequest,
+    options?: DecisionExecutionOptions
+  ): Promise<DecisionExecutionOutcome>;
+
+  normalizeResult?(
+    rawResult: unknown,
+    task: DecisionTask
+  ): DecisionResult;
+}
+```
+
+### Context strategies
+
+Execution requests decouple task persistence from prompt assembly via `DecisionExecutionRequest`:
+- **`connector` strategy** (`DecisionConnectorContext`): Minimal pointer bundle containing `workItem` (`{ provider, key }`), `repository`, `prNumber` (`number | null`), and `headSha` (`string | null`). Ideal for web-based agents that navigate GitHub directly via browser automation.
+- **`materialized` strategy** (`DecisionMaterializedContext`): Explicit pre-bundled artifacts containing `workItem` (`{ provider, key }`), `repository`, `issue` (`{ repository, number, title, body }`), nullable `plan` (`DecisionMaterializedPlan | null`), nullable `pullRequest` (`DecisionMaterializedPullRequest | null`), nullable `diff` (`DecisionMaterializedDiff | null`), nullable `ci` (`DecisionMaterializedCi | null`), nullable `repositoryInstructions` (`string | null`), `previousReviews` (`readonly DecisionReviewResult[]`), and `unresolvedFindings` (`readonly DecisionReviewFinding[]`). Ideal for API or offline models without autonomous web navigation.
+
+### Machine-readable result extraction
+
+Models return structured results enclosed within fenced code blocks:
+````markdown
+```symphony-result
+{
+  "schemaVersion": 1,
+  "taskId": "<task-id>",
+  "sessionId": "<session-id>",
+  "kind": "plan",
+  "revision": 1,
+  "verdict": "ready",
+  "content": {
+    "plan": "...",
+    "acceptanceCriteria": ["..."],
+    "risks": [],
+    "clarifications": []
+  },
+  "createdAtMs": 1728480000000
+}
+```
+````
+
+Extraction rules:
+1. **Last-block rule**: If multiple `symphony-result` blocks exist in the output (e.g. conversational self-correction), only the LAST block is extracted.
+2. **Fail-closed semantics**: If the last block is missing, unclosed, contains malformed JSON, or fails schema validation, extraction throws `DecisionAdapterError`. It NEVER falls back to earlier valid blocks.
+3. **Identity verification**: Result `taskId`, `sessionId`, `revision`, and review `target` must match the claimed task; mismatches throw `task_mismatch`, `revision_mismatch`, or `target_mismatch`.
+
+### Error classification
+
+`DecisionAdapterErrorCode`:
+- `malformed_output`: Missing, invalid, or unclosed `symphony-result` JSON.
+- `task_mismatch`: Result taskId or sessionId does not match claimed task.
+- `revision_mismatch`: Result revision does not match task revision.
+- `target_mismatch`: Review result target does not match task review target.
+- `binding_broken`: Executor session expired, disconnected, or unrecoverable.
+- `execution_failed`: Unhandled runtime execution exception.
+- `human_required`: Interactive barrier encountered (CAPTCHA, 2FA, login, rate limit).
+- `unsupported_strategy`: Requested context strategy not supported by adapter.
+- `unsupported_task_kind`: Task kind not supported by adapter.
+- `cancelled`: Execution aborted by caller.
+
 ## Validation evidence
 
-`packages/domain/src/decision.test.ts` imports only the public package entry point.
-It covers the complete task transition table, session transitions, all six verdicts,
-identity mismatch, same-root multiple PRs, exact SHA approval and A → B → A,
-expiry and claim fencing, binding generation/recovery, strict nested validation
-and JSON round trips.
+`packages/domain/src/decision.test.ts` and `packages/domain/src/decision-context.test.ts` cover domain validation, context parsing, task/session transitions, all six verdicts, and identity guards.
 
-`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence,
-decision service lease coordination and automatic supersession, and the HTTP bridge
-(DNS rebinding defense, CORS restrictions, bearer authentication, body limits, and REST routes).
+`packages/decision/src/*.test.ts` covers the lock recovery, atomic store persistence, lease coordination, HTTP bridge, adapter result extraction, last-block fail-closed semantics, and `FakeDecisionExecutorAdapter` execution with CAS rebind.
 
 CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `apps/cli/src/bin.test.ts`.
 

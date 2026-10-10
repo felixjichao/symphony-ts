@@ -215,7 +215,7 @@ credential-free. Real happy and repair
 results, including the failed-readback recovery caveat, are recorded in
 [the dogfood guide](github-delivery-dogfood.md#runtime-state-and-real-verification).
 
-## Decision Plane extension evidence (NEST-99 / #94 & NEST-100 / #95)
+## Decision Plane extension evidence (NEST-99 / #94, NEST-100 / #95 & NEST-101 / #96)
 
 This is a provider-neutral extension next to §4, not an additional official SPEC Core requirement. [Protocol](decision-protocol.md).
 
@@ -230,5 +230,8 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Decision service session lifecycle, CAS rebind, auto-supersession & lease claims | `packages/decision/src/service.test.ts`: DecisionService |
 | Web Agent Bridge HTTP server (loopback, DNS rebinding guard, bearer auth, CORS, REST endpoints) | `packages/decision/src/bridge.test.ts`: DecisionBridge HTTP server |
 | CLI `symphony decision bridge` execution, argument parsing, and child process lifecycle | `apps/cli/src/args.test.ts`, `apps/cli/src/decision-bridge-cli.test.ts`, `apps/cli/src/bin.test.ts` |
+| Context strategies (connector vs. materialized) & typed execution requests | `packages/domain/src/decision-context.test.ts`: Decision context bundle validation |
+| Machine-readable result extraction (`symphony-result` fenced blocks, last-block rule, fail-closed) | `packages/decision/src/adapter.test.ts`: Result Extractor and Protocol Verification |
+| Fake executor adapter, simulated lifecycle, CAS rebind, and error injection | `packages/decision/src/adapter.test.ts`: FakeDecisionExecutorAdapter and Coordinator |
 
 Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.

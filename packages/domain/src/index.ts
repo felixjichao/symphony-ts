@@ -99,19 +99,5 @@ export {
 } from "./delivery";
 
 // Decision Plane extension: pure protocol contracts, independent of Symphony §7.
-export type {
-  DecisionSessionStatus, DecisionTaskStatus, DecisionWorkItemRef, ExecutorBinding,
-  DecisionSession, DecisionReviewTarget, DecisionLease, DecisionPlanTask,
-  DecisionReviewTask, DecisionTask, DecisionPlanResult, DecisionReviewFinding,
-  DecisionReviewResult, DecisionResult,
-} from "./decision";
-export {
-  DECISION_SCHEMA_VERSION, decisionSessionId, githubDecisionRoot, decisionTaskId,
-  parseDecisionReviewTarget, parseExecutorBinding, parseDecisionSession,
-  parseDecisionLease, parseDecisionTask, parseDecisionResult,
-  validateDecisionResultForTask, claimDecisionTask, startDecisionTask,
-  heartbeatDecisionTask, completeDecisionTask, failDecisionTask,
-  releaseExpiredDecisionTask, cancelDecisionTask, supersedeDecisionTask,
-  isDecisionReviewApproved, rebindDecisionSession, breakDecisionBinding,
-  completeDecisionSession, reopenDecisionSession,
-} from "./decision";
+export * from "./decision-entry";
+
