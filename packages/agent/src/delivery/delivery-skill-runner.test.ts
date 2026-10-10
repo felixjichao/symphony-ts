@@ -26,10 +26,14 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
   execResponses: Array<DeliverySubprocessResult | ((command: string) => DeliverySubprocessResult)> = [];
 
   lastRevParseSha: string | null = null;
+  currentPrHead: string | null = null;
   headRefOidResponses: Array<DeliverySubprocessResult | ((args: readonly string[]) => DeliverySubprocessResult)> = [];
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
+    if (args[0] === "show" && args[1] === "HEAD:AGENTS.md") {
+      return { stdout: "# Symphony Workspace Rules", stderr: "", exitCode: 0 };
+    }
     const next = this.gitResponses.shift();
     let res: DeliverySubprocessResult;
     if (typeof next === "function") {
@@ -39,6 +43,7 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
     }
     if (args[0] === "rev-parse") {
       this.lastRevParseSha = res.stdout.trim();
+      this.currentPrHead = this.lastRevParseSha;
     }
     return res;
   }
@@ -56,20 +61,83 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
         ? { stdout: JSON.stringify([{ databaseId: 12345, name: "CI", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }]), stderr: "", exitCode: 0 }
         : { stdout: "test: assertion failed", stderr: "", exitCode: 0 };
     }
-    if (args[0] === "issue" && args[1] === "view" && args.includes("title,body")) {
+    if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
-    if (args[0] === "pr" && args[1] === "view" && args.includes("title,body")) {
-      return { stdout: JSON.stringify({ title: "feat: delivery", body: "pr body" }), stderr: "", exitCode: 0 };
+    if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
+      return {
+        stdout: JSON.stringify({
+          title: "feat: delivery",
+          body: "pr body",
+          headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
     }
     if (args[0] === "pr" && args[1] === "diff") {
       return { stdout: "", stderr: "", exitCode: 0 };
     }
+    if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("mergeable") && a.includes("statusCheckRollup"))) {
+      if (args.some((a) => a.includes("body"))) {
+        const next = this.ghResponses.shift();
+        const nextObj = typeof next === "object" && next !== null ? next : undefined;
+        const parsed = nextObj ? JSON.parse(nextObj.stdout || "{}") : {};
+        return {
+          stdout: JSON.stringify({
+            headRefOid: parsed.headRefOid ?? this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
+            state: parsed.state ?? "OPEN",
+            isDraft: parsed.isDraft ?? false,
+            mergeable: parsed.mergeable ?? "MERGEABLE",
+            body: parsed.body ?? "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+            statusCheckRollup: parsed.statusCheckRollup ?? [
+              { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+            ],
+            ...parsed,
+          }),
+          stderr: nextObj?.stderr ?? "",
+          exitCode: nextObj?.exitCode ?? 0,
+        };
+      }
+      if (this.ghResponses.length > 0) {
+        const next = this.ghResponses.shift()!;
+        if (typeof next === "function") return next(args);
+        try {
+          const p = JSON.parse(next.stdout || "{}");
+          if (p.headRefOid) this.currentPrHead = p.headRefOid;
+        } catch {
+          // ignore malformed stdout
+        }
+        return next;
+      }
+      return {
+        stdout: JSON.stringify({
+          headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          statusCheckRollup: [
+            { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
     if (args[0] === "pr" && args[1] === "view" && args.includes("headRefOid") && !args.includes("statusCheckRollup")) {
       const nextHead = this.headRefOidResponses.shift();
       if (typeof nextHead === "function") return nextHead(args);
-      if (nextHead) return nextHead;
-      return { stdout: JSON.stringify({ headRefOid: this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678" }), stderr: "", exitCode: 0 };
+      if (nextHead) {
+        try {
+          const p = JSON.parse(nextHead.stdout || "{}");
+          if (p.headRefOid) this.currentPrHead = p.headRefOid;
+        } catch {
+          // ignore malformed stdout
+        }
+        return nextHead;
+      }
+      return { stdout: JSON.stringify({ headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678" }), stderr: "", exitCode: 0 };
     }
     const next = this.ghResponses.shift();
     if (typeof next === "function") {
@@ -1597,6 +1665,143 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(result.status).toBe("blocked");
       expect(result.reason).toBe("manual_intervention_required");
       expect(result.handoffMarkdown).toContain("Auto-merge requires review gate verification, but no review gate is configured");
+    });
+
+    it("验收 8 (diff 获取失败 fail-closed): gh pr diff 返回 503 时安全终止并请求人工介入，绝不发布空 diff", async () => {
+      const cwd = createTempCwd();
+      const runner = new MockDeliveryRunner();
+      setupPreMutationSuccess(runner);
+
+      // PR at shaA
+      runner.ghResponses.push({
+        stdout: JSON.stringify([
+          {
+            number: 85,
+            url: "https://github.com/felixjichao/symphony-ts/pull/85",
+            title: "feat: delivery",
+            state: "OPEN",
+            headRefOid: shaA,
+            body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          },
+        ]),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+      runner.gitResponses.push({ stdout: `${shaA}\n`, stderr: "", exitCode: 0 }); // rev-parse
+
+      // CI green
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          headRefOid: shaA,
+          mergeable: "MERGEABLE",
+          state: "OPEN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      // Override gh for diff to return 503 error
+      const origGh = runner.gh.bind(runner);
+      runner.gh = async (args, dir) => {
+        if (args[0] === "pr" && args[1] === "diff") {
+          return { stdout: "", stderr: "HTTP 503 Service Unavailable", exitCode: 1 };
+        }
+        return origGh(args, dir);
+      };
+
+      // Halt calls
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      const reviewGate = new MockReviewGate();
+      const result = await runDeliverySkill({
+        ...getBaseOptions(cwd),
+        reviewGate,
+        runner,
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toBe("manual_intervention_required");
+      expect(result.handoffMarkdown).toContain("Failed to fetch PR diff for #85");
+      expect(reviewGate.ensureReviewTaskCallCount).toBe(0); // 未发布审查
+    });
+
+    it("验收 9 (Phase 7 Pre-merge 安全保护): 审查通过后但 merge 前 CI rerun 失败或 ownership 被篡改时阻止 merge", async () => {
+      const cwd = createTempCwd();
+      const runner = new MockDeliveryRunner();
+      setupPreMutationSuccess(runner);
+
+      // PR at shaA
+      runner.ghResponses.push({
+        stdout: JSON.stringify([
+          {
+            number: 85,
+            url: "https://github.com/felixjichao/symphony-ts/pull/85",
+            title: "feat: delivery",
+            state: "OPEN",
+            headRefOid: shaA,
+            body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          },
+        ]),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+      runner.gitResponses.push({ stdout: `${shaA}\n`, stderr: "", exitCode: 0 }); // rev-parse
+
+      // CI green in Phase 6
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          headRefOid: shaA,
+          mergeable: "MERGEABLE",
+          state: "OPEN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      // Review Gate approves shaA
+      const reviewGate = new MockReviewGate();
+
+      // Pre-merge verification in Phase 7: status check was re-run and failed!
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          headRefOid: shaA,
+          mergeable: "MERGEABLE",
+          state: "OPEN",
+          isDraft: false,
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "FAILURE" }],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      // Halt calls
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      const result = await runDeliverySkill({
+        ...getBaseOptions(cwd),
+        reviewGate,
+        runner,
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toBe("manual_intervention_required");
+      expect(result.handoffMarkdown).toContain("Pre-merge CI check policy re-evaluation failed");
+      expect(runner.ghCalls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
     });
   });
 });

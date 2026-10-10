@@ -340,7 +340,8 @@ export type DeliveryErrorCode =
   | "opt_in_required"
   | "pr_closed_unmerged"
   | "review_gate_required"
-  | "review_not_approved";
+  | "review_not_approved"
+  | "session_mismatch";
 
 export interface DeliveryErrorOptions extends ErrorOptions {
   readonly code: DeliveryErrorCode;

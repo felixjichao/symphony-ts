@@ -1,8 +1,6 @@
 import {
-  isDecisionReviewApproved,
   parseDecisionSessionRootFromId,
   type DecisionContextBundle,
-  type DecisionResult,
   type DecisionReviewTarget,
   type DecisionReviewTask,
   type DecisionTask,
@@ -63,6 +61,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         target,
         ...(context !== undefined ? { context } : {}),
         ...(options?.operationKey !== undefined ? { operationKey: options.operationKey } : {}),
+        supersedeSessionReviews: true,
       });
     }
 
@@ -90,13 +89,13 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         return activeOrDone;
       }
 
-      const opKey = options?.operationKey ?? `review:${sessionId}:${target.repository}:${target.prNumber}:${target.headSha}`;
       const res = await this.client.createTask({
         sessionId,
         kind: "review",
         target,
         ...(context !== undefined ? { context } : {}),
-        operationKey: opKey,
+        ...(options?.operationKey !== undefined ? { operationKey: options.operationKey } : {}),
+        supersedeSessionReviews: true,
       });
       return res.task;
     }
@@ -139,86 +138,37 @@ export class DecisionReviewGate implements DeliveryReviewGate {
   async verifyReviewApproval(
     target: DecisionReviewTarget & { readonly sessionId?: string },
   ): Promise<DeliveryReviewApprovalResult> {
-    const sessionId = target.sessionId ?? `github:${target.repository}#${target.prNumber}`;
-
-    let task: DecisionReviewTask | null = null;
-    let result: DecisionResult | null = null;
-
-    if (this.service) {
-      const tasks = this.service.getTasksForSession(sessionId);
-      const matching = tasks
-        .filter(
-          (t): t is DecisionReviewTask =>
-            t.kind === "review" &&
-            t.target.repository === target.repository &&
-            t.target.prNumber === target.prNumber &&
-            t.target.headSha === target.headSha &&
-            t.status === "completed",
-        )
-        .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
-      task = matching[0] ?? null;
-      if (task) {
-        result = this.service.getResult(task.id);
-      }
-    } else if (this.client) {
-      try {
-        const { tasks } = await this.client.getTasksForSession(sessionId);
-        const matching = tasks
-          .filter(
-            (t): t is DecisionReviewTask =>
-              t.kind === "review" &&
-              t.target.repository === target.repository &&
-              t.target.prNumber === target.prNumber &&
-              t.target.headSha === target.headSha &&
-              t.status === "completed",
-          )
-          .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
-        task = matching[0] ?? null;
-        if (task) {
-          const res = await this.client.getTaskResult(task.id);
-          result = res.result;
-        }
-      } catch {
-        // failed reading from bridge
-      }
+    if (!target.sessionId) {
+      throw new Error(
+        `verifyReviewApproval requires target.sessionId to prevent session derivation mismatch for PR #${target.prNumber}`,
+      );
     }
-
-    if (!task || !result) {
-      return {
-        approved: false,
-        reason: `No completed review task found for target PR #${target.prNumber} @ ${target.headSha}`,
-        headSha: target.headSha,
-        sessionId,
-      };
-    }
-
-    const approved = isDecisionReviewApproved(task, result, {
-      sessionId,
+    const sessionId = target.sessionId;
+    const reviewTarget: DecisionReviewTarget = {
       repository: target.repository,
       prNumber: target.prNumber,
       headSha: target.headSha,
-    });
+    };
 
-    if (approved) {
-      return {
-        approved: true,
-        reason: "Review approved",
-        taskId: task.id,
-        sessionId,
-        headSha: target.headSha,
-        verdict: "approve",
-      };
+    if (this.service) {
+      return this.service.verifyReviewApproval(sessionId, reviewTarget);
     }
 
-    const reviewResult = result.kind === "review" ? result : undefined;
-    return {
-      approved: false,
-      reason: `Review is not approved (task status: ${task.status}, verdict: ${reviewResult?.verdict ?? "unknown"})`,
-      taskId: task.id,
-      sessionId,
-      headSha: target.headSha,
-      verdict: reviewResult?.verdict,
-    };
+    if (this.client) {
+      try {
+        const { approval } = await this.client.verifyReviewApproval(sessionId, reviewTarget);
+        return approval;
+      } catch (err) {
+        return {
+          approved: false,
+          reason: `Bridge verification request failed: ${err instanceof Error ? err.message : String(err)}`,
+          headSha: target.headSha,
+          sessionId,
+        };
+      }
+    }
+
+    throw new Error("Invalid review gate: neither client nor service configured");
   }
 
   async supersedeReviewTask(taskId: string): Promise<void> {

@@ -396,17 +396,37 @@ export class DecisionBridge {
       return;
     }
 
+    // POST /v1/reviews/verify
+    if (method === "POST" && pathname === "/v1/reviews/verify") {
+      const body = await this.readJsonBody(req);
+      const b = body as Record<string, unknown>;
+      if (typeof b["sessionId"] !== "string") {
+        throw new DecisionValidationError("verify review approval requires sessionId");
+      }
+      if (!b["target"] || typeof b["target"] !== "object") {
+        throw new DecisionValidationError("verify review approval requires target");
+      }
+      const target = parseDecisionReviewTarget(b["target"]);
+      const approval = this.service.verifyReviewApproval(b["sessionId"], target);
+      this.sendJson(res, 200, { approval });
+      return;
+    }
+
     // POST /v1/tasks (create task)
     if (method === "POST" && pathname === "/v1/tasks") {
       const body = await this.readJsonBody(req);
       const b = body as Record<string, unknown>;
-      if (typeof b["sessionId"] !== "string" || typeof b["operationKey"] !== "string") {
-        throw new DecisionValidationError("create task requires sessionId and operationKey");
+      if (typeof b["sessionId"] !== "string") {
+        throw new DecisionValidationError("create task requires sessionId");
       }
+      const operationKey = typeof b["operationKey"] === "string" ? b["operationKey"] : undefined;
       const kind = b["kind"];
       if (kind === "plan") {
+        if (!operationKey) {
+          throw new DecisionValidationError("create plan task requires operationKey");
+        }
         const task = await this.service.createPlanTask(b["sessionId"], {
-          operationKey: b["operationKey"],
+          operationKey,
         });
         this.sendJson(res, 201, { task });
         return;
@@ -417,10 +437,12 @@ export class DecisionBridge {
         }
         const target = parseDecisionReviewTarget(b["target"]);
         const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
+        const supersedeSessionReviews = Boolean(b["supersedeSessionReviews"]);
         const task = await this.service.createReviewTask(b["sessionId"], {
           target,
           context,
-          operationKey: b["operationKey"],
+          ...(operationKey !== undefined ? { operationKey } : {}),
+          supersedeSessionReviews,
         });
         this.sendJson(res, 201, { task });
         return;

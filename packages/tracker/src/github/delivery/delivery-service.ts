@@ -581,11 +581,21 @@ export class GitHubDeliveryService {
     }
 
     // 2.5 Verify Review Gate approval
+    const expectedSessionId = `github:${context.repo}#${context.issueNumber}`;
+    if (options.sessionId && options.sessionId !== expectedSessionId) {
+      throw new DeliveryError(
+        `Session mismatch: options.sessionId (${options.sessionId}) does not match delivery root issue session (${expectedSessionId})`,
+        {
+          code: "session_mismatch",
+          details: { expected: expectedSessionId, actual: options.sessionId },
+        },
+      );
+    }
     const reviewResult = await options.reviewGate.verifyReviewApproval({
       repository: context.repo,
       prNumber: pr.number,
       headSha: targetHeadSha,
-      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+      sessionId: expectedSessionId,
     });
 
     if (!reviewResult.approved) {

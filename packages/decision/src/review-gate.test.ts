@@ -10,6 +10,8 @@ import {
 } from "@symphony/domain";
 import { DurableDecisionStore } from "./store.js";
 import { DecisionService } from "./service.js";
+import { DecisionBridge } from "./bridge.js";
+import { DecisionBridgeClient } from "./client.js";
 import { DecisionReviewGate } from "./review-gate.js";
 
 describe("DecisionReviewGate", () => {
@@ -193,6 +195,140 @@ describe("DecisionReviewGate", () => {
       sessionId,
     });
     expect(checkB.approved).toBe(false);
-    expect(checkB.reason).toContain("No completed review task found for target PR");
+    expect(checkB.reason).toContain("No review task found for target PR");
+  });
+
+  it("fails closed when sessionId is missing in verifyReviewApproval", async () => {
+    await expect(gate.verifyReviewApproval(targetA as unknown as Parameters<typeof gate.verifyReviewApproval>[0])).rejects.toThrow(
+      "verifyReviewApproval requires target.sessionId",
+    );
+  });
+
+  it("supersedes previous PR reviews when replacement PR is created under same session", async () => {
+    const taskPr104 = await gate.ensureReviewTask(sessionId, {
+      ...targetA,
+      prNumber: 104,
+    });
+    expect(taskPr104.status).toBe("pending");
+
+    // Replacement PR #105 under same session
+    clockTime += 1000;
+    const taskPr105 = await gate.ensureReviewTask(sessionId, {
+      ...targetA,
+      prNumber: 105,
+    });
+    expect(taskPr105.status).toBe("pending");
+
+    // Old task for PR #104 must be superseded
+    const oldTask = service.getTask(taskPr104.id);
+    expect(oldTask?.status).toBe("superseded");
+  });
+
+  it("prevents TOCTOU approval race when task is superseded in HTTP bridge mode", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-gate-1-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      const task = await httpGate.ensureReviewTask(sessionId, targetA);
+      clockTime += 1000;
+      const { lease } = await bridgeService.claimTask(task.id, { owner: "test-agent" });
+      await bridgeService.startTask(task.id, lease);
+      await bridgeService.submitResult(task.id, {
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task.id,
+          sessionId,
+          kind: "review",
+          revision: task.revision,
+          createdAtMs: clockTime,
+          target: targetA,
+          verdict: "approve",
+          findings: [],
+        },
+      });
+
+      // Verify approved
+      const approvedResult = await httpGate.verifyReviewApproval({
+        ...targetA,
+        sessionId,
+      });
+      expect(approvedResult.approved).toBe(true);
+
+      // Supersede task in store
+      await bridgeService.supersedeTask(task.id);
+
+      // Verify fail-closed: even though completed result is in store, the task is now superseded
+      const supersededResult = await httpGate.verifyReviewApproval({
+        ...targetA,
+        sessionId,
+      });
+      expect(supersededResult.approved).toBe(false);
+      expect(supersededResult.reason).toContain("not completed (status: superseded)");
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("handles A -> B -> A revision cycle without operationKey collisions or resurrected stale tasks in HTTP mode", async () => {
+    const bridgeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-gate-2-"));
+    const bridgeStore = new DurableDecisionStore({
+      storeDir: bridgeTmpDir,
+      clock: () => clockTime,
+    });
+    const bridgeService = new DecisionService(bridgeStore, { clock: () => clockTime });
+    const bridge = new DecisionBridge(bridgeService, {
+      port: 0,
+      host: "127.0.0.1",
+    });
+    const { port } = await bridge.start();
+    try {
+      const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
+      const httpGate = new DecisionReviewGate(client);
+
+      // Round 1: SHA-A
+      const taskA1 = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(taskA1.revision).toBe(1);
+
+      // Round 2: PR moves to SHA-B
+      const targetB: DecisionReviewTarget = { ...targetA, headSha: "b".repeat(40) };
+      clockTime += 1000;
+      const taskB = await httpGate.ensureReviewTask(sessionId, targetB);
+      expect(taskB.kind).toBe("review");
+      if (taskB.kind === "review") {
+        expect(taskB.target.headSha).toBe("b".repeat(40));
+      }
+
+      const oldA1 = bridgeService.getTask(taskA1.id);
+      expect(oldA1?.status).toBe("superseded");
+
+      // Round 3: PR reverts or moves back to SHA-A
+      clockTime += 1000;
+      const taskA2 = await httpGate.ensureReviewTask(sessionId, targetA);
+      expect(taskA2.id).not.toBe(taskA1.id);
+      expect(taskA2.revision).toBe(3);
+      expect(taskA2.status).toBe("pending");
+      expect(taskA2.kind).toBe("review");
+      if (taskA2.kind === "review") {
+        expect(taskA2.target.headSha).toBe("a".repeat(40));
+      }
+    } finally {
+      await bridge.stop();
+      await fs.rm(bridgeTmpDir, { recursive: true, force: true });
+    }
   });
 });

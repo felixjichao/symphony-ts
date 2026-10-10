@@ -6,6 +6,7 @@ import type {
   DecisionReviewTarget,
   DecisionWorkItemRef,
   DecisionContextBundle,
+  DeliveryReviewApprovalResult,
   UtcTimestampMs,
 } from "@symphony/domain";
 
@@ -189,8 +190,18 @@ export interface CreateTaskRequest {
   readonly sessionId: string;
   readonly kind: "plan" | "review";
   readonly target?: DecisionReviewTarget | undefined;
-  readonly operationKey: string;
+  readonly operationKey?: string | undefined;
   readonly context?: DecisionContextBundle | undefined;
+  readonly supersedeSessionReviews?: boolean | undefined;
+}
+
+export interface VerifyReviewApprovalRequest {
+  readonly sessionId: string;
+  readonly target: DecisionReviewTarget;
+}
+
+export interface VerifyReviewApprovalResponse {
+  readonly approval: DeliveryReviewApprovalResult;
 }
 
 export interface GetSessionTasksResponse {

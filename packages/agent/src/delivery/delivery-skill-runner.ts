@@ -8,6 +8,8 @@ import {
   type CheckConclusion,
   type CheckState,
   type DecisionMaterializedContext,
+  type DecisionReviewFinding,
+  type DecisionReviewResult,
   type DecisionReviewTarget,
   type DecisionTask,
   type DeliveryContext,
@@ -256,6 +258,75 @@ export async function fetchCiFailureDiagnostics(
       failureReason: `Exception during CI failure diagnostics: ${msg}`,
     };
   }
+}
+
+export function parsePrCheckRollup(
+  rawRollup: readonly unknown[],
+  effectiveRequiredChecks: readonly string[] | null,
+): PrCheck[] {
+  return rawRollup.map((raw) => {
+    const rc = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const name = String(rc["name"] || rc["context"] || "unnamed");
+    const typename = String(rc["__typename"] || "");
+    const detailsUrl = (rc["detailsUrl"] || rc["targetUrl"] || null) as string | null;
+
+    let state: CheckState = "PENDING";
+    let conclusion: CheckConclusion | null = null;
+
+    if (typename === "StatusContext" || (!rc["status"] && rc["state"])) {
+      const stateStr = String(rc["state"] || "").toUpperCase();
+      if (stateStr === "SUCCESS") {
+        state = "COMPLETED";
+        conclusion = "SUCCESS";
+      } else if (stateStr === "FAILURE" || stateStr === "ERROR") {
+        state = "COMPLETED";
+        conclusion = "FAILURE";
+      } else if (stateStr === "PENDING") {
+        state = "PENDING";
+        conclusion = null;
+      }
+    } else {
+      const rawStatus = String(rc["status"] || "").toUpperCase();
+      const rawConclusion = String(rc["conclusion"] || "").toUpperCase();
+
+      if (rawStatus === "COMPLETED") {
+        state = "COMPLETED";
+        if (rawConclusion === "SUCCESS") {
+          conclusion = "SUCCESS";
+        } else if (
+          rawConclusion === "FAILURE" ||
+          rawConclusion === "TIMED_OUT" ||
+          rawConclusion === "ACTION_REQUIRED"
+        ) {
+          conclusion = "FAILURE";
+        } else if (rawConclusion === "CANCELLED") {
+          conclusion = "CANCELLED";
+        } else if (rawConclusion === "SKIPPED") {
+          conclusion = "SKIPPED";
+        } else if (rawConclusion === "NEUTRAL") {
+          conclusion = "NEUTRAL";
+        } else {
+          conclusion = "UNKNOWN";
+        }
+      } else {
+        state = "PENDING";
+        conclusion = null;
+      }
+    }
+
+    const isRequired =
+      Boolean(rc["isRequired"]) ||
+      Boolean(effectiveRequiredChecks && effectiveRequiredChecks.includes(name));
+
+    return {
+      name,
+      workflowName: (rc["workflowName"] as string | null | undefined) ?? null,
+      state,
+      conclusion,
+      isRequired,
+      detailsUrl,
+    };
+  });
 }
 
 /**
@@ -880,6 +951,8 @@ export async function runDeliverySkill(
       ? decisionSessionId(githubDecisionRoot(repoParts[0], repoParts[1], context.issueNumber))
       : `github:${context.repo}#${context.issueNumber}`);
   let lastReviewTaskId: string | null = null;
+  const previousReviews: DecisionReviewResult[] = [];
+  let unresolvedFindings: readonly DecisionReviewFinding[] = [];
 
   delivery_loop: while (true) {
     let ciPassedChecks: PrCheck[] = [];
@@ -938,68 +1011,7 @@ export async function runDeliverySkill(
       }
 
       const rawRollup = Array.isArray(prViewData.statusCheckRollup) ? prViewData.statusCheckRollup : [];
-      const parsedChecks: PrCheck[] = rawRollup.map((rc) => {
-        const name = String(rc["name"] || rc["context"] || "unnamed");
-        const typename = String(rc["__typename"] || "");
-        const detailsUrl = (rc["detailsUrl"] || rc["targetUrl"] || null) as string | null;
-
-        let state: CheckState = "PENDING";
-        let conclusion: CheckConclusion | null = null;
-
-        if (typename === "StatusContext" || (!rc["status"] && rc["state"])) {
-          const stateStr = String(rc["state"] || "").toUpperCase();
-          if (stateStr === "SUCCESS") {
-            state = "COMPLETED";
-            conclusion = "SUCCESS";
-          } else if (stateStr === "FAILURE" || stateStr === "ERROR") {
-            state = "COMPLETED";
-            conclusion = "FAILURE";
-          } else if (stateStr === "PENDING") {
-            state = "PENDING";
-            conclusion = null;
-          }
-        } else {
-          const rawStatus = String(rc["status"] || "").toUpperCase();
-          const rawConclusion = String(rc["conclusion"] || "").toUpperCase();
-
-          if (rawStatus === "COMPLETED") {
-            state = "COMPLETED";
-            if (rawConclusion === "SUCCESS") {
-              conclusion = "SUCCESS";
-            } else if (
-              rawConclusion === "FAILURE" ||
-              rawConclusion === "TIMED_OUT" ||
-              rawConclusion === "ACTION_REQUIRED"
-            ) {
-              conclusion = "FAILURE";
-            } else if (rawConclusion === "CANCELLED") {
-              conclusion = "CANCELLED";
-            } else if (rawConclusion === "SKIPPED") {
-              conclusion = "SKIPPED";
-            } else if (rawConclusion === "NEUTRAL") {
-              conclusion = "NEUTRAL";
-            } else {
-              conclusion = "UNKNOWN";
-            }
-          } else {
-            state = "PENDING";
-            conclusion = null;
-          }
-        }
-
-        const isRequired =
-          Boolean(rc["isRequired"]) ||
-          Boolean(effectiveRequiredChecks && effectiveRequiredChecks.includes(name));
-
-        return {
-          name,
-          workflowName: (rc["workflowName"] as string | null | undefined) ?? null,
-          state,
-          conclusion,
-          isRequired,
-          detailsUrl,
-        };
-      });
+      const parsedChecks: PrCheck[] = parsePrCheckRollup(rawRollup, effectiveRequiredChecks);
 
       // 使用 canonical MVP.3 策略（required + observed checks 均须严格全 green）。
       // 已配置但尚未出现在 rollup 的 required check 以 PENDING 合成，确保 fail-closed 等待。
@@ -1198,46 +1210,82 @@ export async function runDeliverySkill(
 
     let issueTitle = "";
     let issueBody = "";
+    const iv = await runner.gh(
+      ["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "title,body"],
+      options.cwd,
+    );
+    if (iv.exitCode !== 0) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to fetch Issue view for #${context.issueNumber}: ${iv.stderr || "exit code " + iv.exitCode}`,
+      );
+    }
     try {
-      const iv = await runner.gh(["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "title,body"], options.cwd);
-      if (iv.exitCode === 0) {
-        const p = JSON.parse(iv.stdout || "{}");
-        issueTitle = p.title ?? "";
-        issueBody = p.body ?? "";
-      }
-    } catch {
-      // ignore
+      const p = JSON.parse(iv.stdout || "{}");
+      issueTitle = p.title ?? "";
+      issueBody = p.body ?? "";
+    } catch (err) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to parse Issue view JSON for #${context.issueNumber}: ${String(err)}`,
+      );
     }
 
     let prTitle = "";
     let prBody = "";
+    const pv = await runner.gh(
+      ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body,headRefOid"],
+      options.cwd,
+    );
+    if (pv.exitCode !== 0) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to fetch PR view for #${prNumber}: ${pv.stderr || "exit code " + pv.exitCode}`,
+      );
+    }
     try {
-      const pv = await runner.gh(["pr", "view", String(prNumber), "--repo", context.repo, "--json", "title,body"], options.cwd);
-      if (pv.exitCode === 0) {
-        const p = JSON.parse(pv.stdout || "{}");
-        prTitle = p.title ?? "";
-        prBody = p.body ?? "";
+      const p = JSON.parse(pv.stdout || "{}");
+      if (p.headRefOid && p.headRefOid !== currentHeadSha) {
+        log(`[delivery-skill] PR HEAD (${p.headRefOid}) moved from expected ${currentHeadSha}. Re-entering CI...`);
+        currentHeadSha = p.headRefOid;
+        continue delivery_loop;
       }
-    } catch {
-      // ignore
+      prTitle = p.title ?? "";
+      prBody = p.body ?? "";
+    } catch (err) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to parse PR view JSON for #${prNumber}: ${String(err)}`,
+      );
     }
 
     let patch = "";
     const patchFiles: string[] = [];
+    const diffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
+    if (diffRes.exitCode !== 0) {
+      return haltDispatch(
+        "manual_intervention_required",
+        `Failed to fetch PR diff for #${prNumber}: ${diffRes.stderr || "exit code " + diffRes.exitCode}`,
+      );
+    }
+
+    patch = diffRes.stdout || "";
+    const m = patch.match(/^diff --git a\/(.+?) b\//gm);
+    if (m) {
+      for (const line of m) {
+        const f = line.replace(/^diff --git a\//, "").replace(/ b\/.*$/, "");
+        if (!patchFiles.includes(f)) patchFiles.push(f);
+      }
+    }
+
+    let repositoryInstructions: string | null = null;
     try {
-      const diffRes = await runner.gh(["pr", "diff", String(prNumber), "--repo", context.repo], options.cwd);
-      if (diffRes.exitCode === 0) {
-        patch = diffRes.stdout || "";
-        const m = patch.match(/^diff --git a\/(.+?) b\//gm);
-        if (m) {
-          for (const line of m) {
-            const f = line.replace(/^diff --git a\//, "").replace(/ b\/.*$/, "");
-            if (!patchFiles.includes(f)) patchFiles.push(f);
-          }
-        }
+      const agentsRes = await runner.git(["show", "HEAD:AGENTS.md"], options.cwd);
+      if (agentsRes.exitCode === 0 && agentsRes.stdout) {
+        repositoryInstructions = agentsRes.stdout;
       }
     } catch {
-      // ignore
+      // no AGENTS.md
     }
 
     const reviewContext: DecisionMaterializedContext = {
@@ -1275,9 +1323,9 @@ export async function runDeliverySkill(
           url: c.detailsUrl ?? null,
         })),
       },
-      repositoryInstructions: null,
-      previousReviews: [],
-      unresolvedFindings: [],
+      repositoryInstructions,
+      previousReviews: [...previousReviews],
+      unresolvedFindings: [...unresolvedFindings],
     };
 
     let reviewTask: DecisionTask;
@@ -1378,6 +1426,8 @@ export async function runDeliverySkill(
 
         // Case B: Changes requested
         if (reviewResult.verdict === "changes_requested") {
+          previousReviews.push(reviewResult);
+          unresolvedFindings = [...(reviewResult.findings ?? [])];
           const findings = reviewResult.findings ?? [];
           const findingSummary = findings
             .map((f) => `[${f.severity.toUpperCase()}] ${f.location ? f.location + ": " : ""}${f.message}`)
@@ -1543,7 +1593,82 @@ export async function runDeliverySkill(
     );
   }
 
-  // Pre-merge verification of review approval
+  // Pre-merge verification: re-read full PR state immediately before merge
+  const preMergePrRes = await runner.gh(
+    ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid,mergeable,state,isDraft,body,statusCheckRollup"],
+    options.cwd,
+  );
+  if (preMergePrRes.exitCode !== 0) {
+    return haltDispatch("unmergeable", `Failed to query PR #${prNumber} state before merge: ${preMergePrRes.stderr}`);
+  }
+  let preMergePr: {
+    headRefOid?: string;
+    mergeable?: string;
+    state?: string;
+    isDraft?: boolean;
+    body?: string;
+    statusCheckRollup?: unknown[];
+  };
+  try {
+    preMergePr = JSON.parse(preMergePrRes.stdout || "{}");
+  } catch (err) {
+    return haltDispatch("unmergeable", `Failed to parse PR #${prNumber} state response: ${String(err)}`);
+  }
+
+  // 1. Verify PR state and draft status
+  if (preMergePr.state !== "OPEN") {
+    return haltDispatch("unmergeable", `PR state changed to '${preMergePr.state}' before merge.`);
+  }
+  if (preMergePr.isDraft) {
+    return haltDispatch("unmergeable", "PR was switched to draft mode before merge.");
+  }
+
+  // 2. Verify PR HEAD unchanged
+  if (preMergePr.headRefOid !== currentHeadSha) {
+    return haltDispatch(
+      "manual_intervention_required",
+      `PR head commit changed before merge: expected ${currentHeadSha}, current is ${preMergePr.headRefOid}.`,
+    );
+  }
+
+  // 3. Verify PR delivery ownership marker intact
+  const ownershipCheck = validatePrOwnership(preMergePr.body ?? "", context);
+  if (!ownershipCheck.valid) {
+    return haltDispatch(
+      "foreign_pr_conflict",
+      `PR ownership validation failed before merge: ${ownershipCheck.reason}`,
+    );
+  }
+
+  // 4. Re-evaluate CI check policy on fresh statusCheckRollup
+  const freshRollup = Array.isArray(preMergePr.statusCheckRollup) ? preMergePr.statusCheckRollup : [];
+  const freshParsedChecks = parsePrCheckRollup(freshRollup, effectiveRequiredChecks);
+  const freshRequiredPrChecks: PrCheck[] = (effectiveRequiredChecks ?? []).map((requiredName) => {
+    const observed = freshParsedChecks.find((c) => c.name === requiredName);
+    return (
+      observed ?? {
+        name: requiredName,
+        state: "PENDING",
+        conclusion: null,
+        isRequired: true,
+        detailsUrl: null,
+      }
+    );
+  });
+  const freshCiEvaluation = evaluateChecksAutoMergePolicy(freshRequiredPrChecks, freshParsedChecks);
+  if (!freshCiEvaluation.canAutoMerge) {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Pre-merge CI check policy re-evaluation failed: ${freshCiEvaluation.reason}`,
+    );
+  }
+
+  // 5. Verify mergeability
+  if (preMergePr.mergeable !== "MERGEABLE") {
+    return haltDispatch("unmergeable", `PR #${prNumber} mergeable state is '${preMergePr.mergeable}', expected 'MERGEABLE'.`);
+  }
+
+  // 6. Pre-merge verification of review approval
   const preMergeApproval = await options.reviewGate.verifyReviewApproval({
     repository: context.repo.toLowerCase(),
     prNumber: prNumber,
@@ -1555,23 +1680,6 @@ export async function runDeliverySkill(
       "manual_intervention_required",
       `Pre-merge review gate verification failed: ${preMergeApproval.reason}`,
     );
-  }
-
-  // 校验 mergeability
-  const checkMergeableRes = await runner.gh(
-    ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "mergeable,state"],
-    options.cwd,
-  );
-  if (checkMergeableRes.exitCode !== 0) {
-    return haltDispatch("unmergeable", `Failed to query PR #${prNumber} mergeability: ${checkMergeableRes.stderr}`);
-  }
-  try {
-    const prStateObj = JSON.parse(checkMergeableRes.stdout || "{}");
-    if (prStateObj.mergeable !== "MERGEABLE") {
-      return haltDispatch("unmergeable", `PR #${prNumber} mergeable state is '${prStateObj.mergeable}', expected 'MERGEABLE'.`);
-    }
-  } catch (err) {
-    return haltDispatch("unmergeable", `Failed to parse PR mergeability response: ${String(err)}`);
   }
 
   // 执行 squash merge

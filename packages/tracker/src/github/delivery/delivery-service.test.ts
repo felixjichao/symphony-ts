@@ -804,6 +804,116 @@ describe("GitHubDeliveryService", () => {
       });
     });
 
+    it("derives review gate session from context.issueNumber when PR number differs", async () => {
+      let merged = false;
+      const runner = createMockRunner(async (args) => {
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 104,
+              title: "PR 104",
+              state: merged ? "MERGED" : "OPEN",
+              mergedAt: merged ? "2026-10-04T09:10:00Z" : null,
+              mergeCommit: merged ? { oid: "squash104" } : null,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "gate",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && args[1] === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/pulls/104/merge")) {
+          merged = true;
+          return { stdout: JSON.stringify({ sha: "squash104", merged: true }), stderr: "", exitCode: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const verifyFn = vi.fn().mockResolvedValue({ approved: true, verdict: "approve" });
+      const mockGate: DeliveryReviewGate = {
+        ensureReviewTask: vi.fn(),
+        getReviewStatus: vi.fn(),
+        verifyReviewApproval: verifyFn,
+      };
+
+      // context.issueNumber is 81, PR is 104
+      await service.landPr(context, { optIn: true, prNumber: 104, reviewGate: mockGate });
+      expect(verifyFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repository: context.repo,
+          prNumber: 104,
+          sessionId: `github:${context.repo}#${context.issueNumber}`,
+        })
+      );
+    });
+
+    it("rejects merge when options.sessionId does not match root issue session", async () => {
+      const runner = createMockRunner(async (args) => {
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 104,
+              title: "PR 104",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "gate",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && args[1] === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(
+        service.landPr(context, {
+          optIn: true,
+          prNumber: 104,
+          sessionId: `github:${context.repo}#104`, // Mismatched session (PR-based instead of Issue-based)
+          reviewGate: approvedMockReviewGate,
+        })
+      ).rejects.toMatchObject({
+        code: "session_mismatch",
+      });
+    });
+
     it("merges with squash and verifies merged state", async () => {
       let mergedState = false;
       const runner = createMockRunner(async (args) => {

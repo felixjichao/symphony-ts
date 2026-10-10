@@ -37,17 +37,38 @@ class MockCliRunner implements DeliveryGitGhRunner {
     if (args[0] === "run") {
       return { stdout: "[]", stderr: "", exitCode: 0 };
     }
-    if (args[0] === "issue" && args[1] === "view" && args.includes("title,body")) {
+    if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
-    if (args[0] === "pr" && args[1] === "view" && args.includes("title,body")) {
-      return { stdout: JSON.stringify({ title: "feat: delivery", body: "pr body" }), stderr: "", exitCode: 0 };
+    if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
+      return { stdout: JSON.stringify({ title: "feat: delivery", body: "pr body", headRefOid: "sha123" }), stderr: "", exitCode: 0 };
     }
     if (args[0] === "pr" && args[1] === "diff") {
       return { stdout: "", stderr: "", exitCode: 0 };
     }
     if (args[0] === "pr" && args[1] === "view" && args.includes("headRefOid") && !args.includes("statusCheckRollup")) {
       return { stdout: JSON.stringify({ headRefOid: "sha123" }), stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("mergeable") && a.includes("statusCheckRollup"))) {
+      if (args.some((a) => a.includes("body"))) {
+        const next = this.ghResponses.shift();
+        const parsed = typeof next === "object" && next !== null ? JSON.parse(next.stdout || "{}") : {};
+        return {
+          stdout: JSON.stringify({
+            headRefOid: parsed.headRefOid ?? "sha123",
+            state: parsed.state ?? "OPEN",
+            isDraft: parsed.isDraft ?? false,
+            mergeable: parsed.mergeable ?? "MERGEABLE",
+            body: parsed.body ?? "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+            statusCheckRollup: parsed.statusCheckRollup ?? [
+              { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+            ],
+            ...parsed,
+          }),
+          stderr: next?.stderr ?? "",
+          exitCode: next?.exitCode ?? 0,
+        };
+      }
     }
     return this.ghResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
@@ -263,9 +284,10 @@ describe("delivery-skill CLI", () => {
     runner.ghResponses.push({ stdout: JSON.stringify({ state: "CLOSED" }), stderr: "", exitCode: 0 });
 
     let stdout = "";
+    let stderr = "";
     const io = {
       stdout: { write: (t: string) => { stdout += t; } },
-      stderr: { write: () => {} },
+      stderr: { write: (t: string) => { stderr += t; } },
     };
 
     const mockReviewGate: DeliveryReviewGate = {
@@ -327,6 +349,7 @@ describe("delivery-skill CLI", () => {
       mockReviewGate,
     );
 
+    expect(stderr).toBe("");
     expect(code).toBe(0);
     expect(stdout).toContain("successfully completed and landed PR #80");
   });

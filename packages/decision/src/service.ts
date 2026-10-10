@@ -18,6 +18,9 @@ import {
   parseDecisionReviewTarget,
   parseDecisionContextBundle,
   validateDecisionContextForTask,
+  isDecisionReviewApproved,
+  type DecisionReviewTask,
+  type DeliveryReviewApprovalResult,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
@@ -409,8 +412,8 @@ export class DecisionService {
     params: {
       target: DecisionReviewTarget;
       context?: DecisionContextBundle | undefined;
-      operationKey?: string;
-      supersedeSessionReviews?: boolean;
+      operationKey?: string | undefined;
+      supersedeSessionReviews?: boolean | undefined;
     }
   ): Promise<DecisionTask> {
     parseDecisionReviewTarget(params.target);
@@ -428,7 +431,9 @@ export class DecisionService {
           );
         }
         const existing = this.store.getTask(op.entityId);
-        if (existing) return existing;
+        if (existing && existing.status !== "superseded" && existing.status !== "failed" && existing.status !== "cancelled") {
+          return existing;
+        }
       }
     }
 
@@ -446,7 +451,9 @@ export class DecisionService {
             );
           }
           const existing = draft.tasks[op.entityId];
-          if (existing) return existing;
+          if (existing && existing.status !== "superseded" && existing.status !== "failed" && existing.status !== "cancelled") {
+            return existing;
+          }
         }
       }
 
@@ -461,12 +468,13 @@ export class DecisionService {
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
 
-      // Supersede previous review tasks (by default for same PR, or for all session reviews if requested)
+      // Supersede previous review tasks (for all session reviews if requested, or same PR by default)
+      const shouldSupersede = Boolean(params.supersedeSessionReviews);
       for (const t of Object.values(draft.tasks)) {
         if (
           t.sessionId === sessionId &&
           t.kind === "review" &&
-          (params.supersedeSessionReviews ||
+          (shouldSupersede ||
             (t.target.repository === params.target.repository && t.target.prNumber === params.target.prNumber)) &&
           t.status !== "superseded"
         ) {
@@ -533,6 +541,80 @@ export class DecisionService {
       .filter((t): t is DecisionTask & { kind: "review" } => t.kind === "review")
       .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
     return tasks[0] ?? null;
+  }
+
+  verifyReviewApproval(
+    sessionId: string,
+    target: DecisionReviewTarget,
+  ): DeliveryReviewApprovalResult {
+    const tasks = this.getTasksForSession(sessionId)
+      .filter(
+        (t): t is DecisionReviewTask =>
+          t.kind === "review" &&
+          t.target.repository === target.repository &&
+          t.target.prNumber === target.prNumber &&
+          t.target.headSha === target.headSha,
+      )
+      .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
+
+    const task = tasks[0];
+    if (!task) {
+      return {
+        approved: false,
+        reason: `No review task found for target PR #${target.prNumber} @ ${target.headSha}`,
+        headSha: target.headSha,
+        sessionId,
+      };
+    }
+
+    if (task.status !== "completed") {
+      return {
+        approved: false,
+        reason: `Review task ${task.id} is not completed (status: ${task.status})`,
+        taskId: task.id,
+        sessionId,
+        headSha: target.headSha,
+      };
+    }
+
+    const result = this.store.getResult(task.id);
+    if (!result) {
+      return {
+        approved: false,
+        reason: `No result found for completed review task ${task.id}`,
+        taskId: task.id,
+        sessionId,
+        headSha: target.headSha,
+      };
+    }
+
+    const approved = isDecisionReviewApproved(task, result, {
+      sessionId,
+      repository: target.repository,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+    });
+
+    if (approved) {
+      return {
+        approved: true,
+        reason: "Review approved",
+        taskId: task.id,
+        sessionId,
+        headSha: target.headSha,
+        verdict: "approve",
+      };
+    }
+
+    const reviewResult = result.kind === "review" ? result : undefined;
+    return {
+      approved: false,
+      reason: `Review is not approved (task status: ${task.status}, verdict: ${reviewResult?.verdict ?? "unknown"})`,
+      taskId: task.id,
+      sessionId,
+      headSha: target.headSha,
+      verdict: reviewResult?.verdict,
+    };
   }
 
   getResult(taskId: string): DecisionResult | null {

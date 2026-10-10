@@ -1,6 +1,7 @@
 import type {
   DecisionSession,
   DecisionTask,
+  DecisionReviewTarget,
   DecisionWorkItemRef,
   DecisionContextBundle,
 } from "@symphony/domain";
@@ -25,6 +26,8 @@ import type {
   SubmitFailureResponse,
   SubmitResultRequest,
   SubmitResultResponse,
+  VerifyReviewApprovalRequest,
+  VerifyReviewApprovalResponse,
 } from "./types";
 
 export interface DecisionBridgeClientOptions {
@@ -211,6 +214,14 @@ export class DecisionBridgeClient {
       "GET",
       `/v1/sessions/${encodeURIComponent(sessionId)}/reviews/latest`
     );
+  }
+
+  async verifyReviewApproval(
+    sessionId: string,
+    target: DecisionReviewTarget,
+  ): Promise<VerifyReviewApprovalResponse> {
+    const payload: VerifyReviewApprovalRequest = { sessionId, target };
+    return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload);
   }
 
   async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {
