@@ -242,4 +242,6 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | SHA-bound review gate before auto-merge (`DeliveryReviewGate`, `DecisionReviewGate`, polling, HEAD invalidation, `landPr` verification) | `packages/domain/src/delivery.test.ts`, `packages/decision/src/review-gate.test.ts`, `packages/tracker/src/github/delivery/delivery-service.test.ts`, `packages/agent/src/delivery/delivery-skill-runner.test.ts`, `apps/cli/src/delivery-skill-cli.test.ts`, `apps/cli/src/delivery-cli.test.ts` |
 | Fixed base-object recovery; delivery consumes completed needs_human / changes_requested after store and HTTP bridge restart, with no merge | `apps/cli/src/delivery-review-recovery.test.ts` (GitHub/git and coding-agent effects are fixtures; real durable store, HTTP bridge and delivery runner) |
 
+Real recovered Review delivery integration: [NEST-103 exact-SHA CI/review/repair/merge/cleanup evidence](evidence/nest103/README.md). Requires the recorded runtime fixes and PR #105 browser fixes; does not claim an uninterrupted run or a green default root gate.
+
 Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/agent`, `npm test -w @symphony/tracker`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
