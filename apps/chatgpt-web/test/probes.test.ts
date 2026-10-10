@@ -117,6 +117,56 @@ describe("DOM Probes and URL utilities", () => {
     ]);
   });
 
+  it("extracts mixed pre and data-markdown-copy surfaces strictly in document tree order", () => {
+    // 1. surface first, pre second
+    const turn1 = new MockElement("div");
+    const surface1 = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header1 = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label1 = new MockElement("div");
+    label1.textContent = "surface-first";
+    header1.appendChild(label1);
+    surface1.appendChild(header1);
+    const code1 = new MockElement("code");
+    code1.textContent = "content-1";
+    surface1.appendChild(code1);
+    turn1.appendChild(surface1);
+
+    const pre1 = new MockElement("pre");
+    const code2 = new MockElement("code", { class: "language-pre-second" });
+    code2.textContent = "content-2";
+    pre1.appendChild(code2);
+    turn1.appendChild(pre1);
+
+    expect(extractCodeBlocksFromTurn(turn1 as unknown as HTMLElement)).toEqual([
+      { language: "surface-first", content: "content-1" },
+      { language: "pre-second", content: "content-2" },
+    ]);
+
+    // 2. pre first, surface second
+    const turn2 = new MockElement("div");
+    const pre2 = new MockElement("pre");
+    const code3 = new MockElement("code", { class: "language-pre-first" });
+    code3.textContent = "content-3";
+    pre2.appendChild(code3);
+    turn2.appendChild(pre2);
+
+    const surface2 = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header2 = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label2 = new MockElement("div");
+    label2.textContent = "surface-second";
+    header2.appendChild(label2);
+    surface2.appendChild(header2);
+    const code4 = new MockElement("code");
+    code4.textContent = "content-4";
+    surface2.appendChild(code4);
+    turn2.appendChild(surface2);
+
+    expect(extractCodeBlocksFromTurn(turn2 as unknown as HTMLElement)).toEqual([
+      { language: "pre-first", content: "content-3" },
+      { language: "surface-second", content: "content-4" },
+    ]);
+  });
+
   it("extracts conversation ID from URLs and constructs resume URLs", () => {
     expect(extractConversationIdFromUrl("https://chatgpt.com/c/67123456-abcd-ef01-2345-6789abcdef01")).toBe(
       "67123456-abcd-ef01-2345-6789abcdef01"
