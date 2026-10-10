@@ -83,14 +83,23 @@ export function findStopButton(doc: Document = document): HTMLButtonElement | nu
   return null;
 }
 
-export function findLatestAssistantTurn(doc: Document = document): HTMLElement | null {
+export function getAllAssistantTurns(doc: Document = document): HTMLElement[] {
   for (const selector of SELECTORS.assistantTurn) {
     const turns = doc.querySelectorAll<HTMLElement>(selector);
     if (turns.length > 0) {
-      return turns[turns.length - 1] ?? null;
+      return Array.from(turns);
     }
   }
-  return null;
+  return [];
+}
+
+export function countAssistantTurns(doc: Document = document): number {
+  return getAllAssistantTurns(doc).length;
+}
+
+export function findLatestAssistantTurn(doc: Document = document): HTMLElement | null {
+  const turns = getAllAssistantTurns(doc);
+  return turns.length > 0 ? (turns[turns.length - 1] ?? null) : null;
 }
 
 export interface ExtractedCodeBlock {
@@ -144,22 +153,29 @@ export function isChatGPTOrigin(originOrUrl: string): boolean {
 
 export interface WaitForCompletionOptions {
   readonly doc?: Document | undefined;
+  readonly baselineCount?: number | undefined;
+  readonly baselineTurn?: HTMLElement | null | undefined;
   readonly checkIntervalMs?: number | undefined;
   readonly stabilizationMs?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
-export async function waitForStreamingCompletion(options: WaitForCompletionOptions = {}): Promise<void> {
+export async function waitForStreamingCompletion(
+  options: WaitForCompletionOptions = {}
+): Promise<HTMLElement> {
   const doc = options.doc ?? document;
   const intervalMs = options.checkIntervalMs ?? 500;
   const stabilizationMs = options.stabilizationMs ?? 1500;
   const timeoutMs = options.timeoutMs ?? 180_000;
   const signal = options.signal;
+  const baselineCount = options.baselineCount ?? 0;
+  const baselineTurn = options.baselineTurn ?? null;
 
   const start = Date.now();
   let lastText = "";
   let lastChangeAt = Date.now();
+  let turnObserved = false;
 
   while (true) {
     if (signal?.aborted) {
@@ -170,21 +186,37 @@ export async function waitForStreamingCompletion(options: WaitForCompletionOptio
       throw new Error(`Timeout waiting for ChatGPT response after ${timeoutMs}ms`);
     }
 
+    const turns = getAllAssistantTurns(doc);
     const stopButton = findStopButton(doc);
 
-    const assistantTurn = findLatestAssistantTurn(doc);
-    const currentText = assistantTurn ? assistantTurn.textContent || "" : "";
-
-    if (currentText !== lastText) {
-      lastText = currentText;
-      lastChangeAt = Date.now();
+    // Identify the target turn corresponding to this attempt
+    let targetTurn: HTMLElement | null = null;
+    if (turns.length > baselineCount) {
+      targetTurn = turns[turns.length - 1] ?? null;
+    } else if (turns.length > 0 && turns[turns.length - 1] !== baselineTurn) {
+      targetTurn = turns[turns.length - 1] ?? null;
     }
 
-    // Condition: Stop button is gone AND text has stabilized AND we have some assistant text
-    if (!stopButton && currentText.trim().length > 0) {
-      const stableDuration = Date.now() - lastChangeAt;
-      if (stableDuration >= stabilizationMs) {
-        return;
+    if (targetTurn) {
+      const currentText = targetTurn.textContent || "";
+      if (!turnObserved) {
+        turnObserved = true;
+        lastText = currentText;
+        lastChangeAt = Date.now();
+      } else if (currentText !== lastText) {
+        lastText = currentText;
+        lastChangeAt = Date.now();
+      }
+
+      // Completion conditions:
+      // 1. Stop button is not active (model has finished generating/streaming)
+      // 2. We have non-empty assistant text
+      // 3. The text has remained stable for at least stabilizationMs
+      if (!stopButton && currentText.trim().length > 0) {
+        const stableDuration = Date.now() - lastChangeAt;
+        if (stableDuration >= stabilizationMs) {
+          return targetTurn;
+        }
       }
     }
 

@@ -113,14 +113,13 @@ describe("DOM Probes and URL utilities", () => {
       assistantTurn.textContent = "Completed text";
     }, 50);
 
-    await expect(
-      waitForStreamingCompletion({
-        doc: doc as unknown as Document,
-        checkIntervalMs: 20,
-        stabilizationMs: 40,
-        timeoutMs: 1000,
-      })
-    ).resolves.toBeUndefined();
+    const result = await waitForStreamingCompletion({
+      doc: doc as unknown as Document,
+      checkIntervalMs: 20,
+      stabilizationMs: 40,
+      timeoutMs: 1000,
+    });
+    expect(result).toBe(assistantTurn);
   });
 
   it("waitForStreamingCompletion rejects on AbortSignal", async () => {

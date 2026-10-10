@@ -196,4 +196,118 @@ describe("DecisionTabDriver", () => {
     driver.stop();
     expect((driver as unknown as { heartbeatTimer: unknown }).heartbeatTimer).toBeNull();
   });
+
+  it("recovers candidateResult from checkpoint without calling startTask again", async () => {
+    const cpStore = new MemoryCheckpointStore({ tabId: "driver-tab" });
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+
+    // Pre-populate checkpoint at result_extracted step
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 0,
+      step: "result_extracted",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      candidateResult: expectedResult,
+    });
+
+    const calls: string[] = [];
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        calls.push(`${method} ${path}`);
+        if (method === "POST" && path.includes("/heartbeat")) {
+          return { expiresAtMs: Date.now() + 60_000 } as unknown as T;
+        }
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "running" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/result")) {
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+            result: expectedResult,
+            superseded: false,
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      ownerId: "driver-1",
+    });
+
+    const resumed = await driver.resumeCheckpointIfAvailable();
+    expect(resumed?.status).toBe("completed");
+    if (resumed?.status === "completed") {
+      expect(resumed.result.verdict).toBe("ready");
+    }
+
+    // Verify /start was NEVER called because we recovered from result_extracted
+    expect(calls.some((c) => c.includes("/start"))).toBe(false);
+    expect(calls.some((c) => c.includes("/result"))).toBe(true);
+    expect(cpStore.get()).toBeNull();
+  });
+
+  it("surfaces polling errors via onError callback", async () => {
+    let capturedError: Error | null = null;
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "bad-token",
+      request: vi.fn().mockRejectedValue(new Error("HTTP 401: Unauthorized")),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      ownerId: "driver-1",
+      pollIntervalMs: 50,
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    const startPromise = driver.start();
+    await new Promise((r) => setTimeout(r, 80));
+    driver.stop();
+    await startPromise;
+
+    expect(capturedError).not.toBeNull();
+    expect(capturedError?.message).toContain("401");
+  });
 });

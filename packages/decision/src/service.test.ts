@@ -549,4 +549,36 @@ describe("DecisionService", () => {
       await cleanup();
     }
   });
+
+  it("strictly rejects binding mutations when lease has expired and been lazily cleared", async () => {
+    const { service, clock, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 95);
+      const session = await service.createSession(root);
+      const task = await service.createPlanTask(session.id, { operationKey: "plan-lease-fence" });
+
+      const claim = await service.claimTask(task.id, { owner: "worker-1", ttlMs: 60_000 });
+
+      // Expire lease and trigger getNextTask to clear task lease back to pending
+      clock.advance(70_000);
+      const reclaimed = await service.getNextTask();
+      expect(reclaimed?.task.id).toBe(task.id);
+      expect(reclaimed?.task.status).toBe("pending");
+      expect(reclaimed?.task.lease).toBeNull();
+
+      // putBinding carrying old credentials must fail closed
+      await expect(
+        service.putBinding(session.id, {
+          adapter: "chatgpt-web",
+          externalSessionRef: "c-stale",
+          resumeUri: null,
+          owner: "worker-1",
+          token: claim.lease.token,
+          generation: claim.lease.generation,
+        })
+      ).rejects.toThrow(DecisionConflictError);
+    } finally {
+      await cleanup();
+    }
+  });
 });

@@ -23,11 +23,13 @@ Your role:
   "taskId": "<taskId>",
   "sessionId": "<sessionId>",
   "revision": <revision>,
+  "createdAtMs": <timestamp>,
   "kind": "plan" | "review",
   ...
 }
 \`\`\`
 
+Strict v1 schema enforcement is active: unknown or misplaced fields will cause fail-closed rejection.
 Acknowledge these instructions and confirm you are ready.`;
 
 export function formatContinuationHeader(
@@ -61,22 +63,28 @@ export function formatPlanPrompt(
     const conn = context as DecisionConnectorContext;
     body += `WorkItem: ${conn.workItem.provider}:${conn.workItem.key}\n`;
     body += `Repository: ${conn.repository}\n\n`;
+    body += `Important connector instructions:\n`;
+    body += `You have received connector references instead of full inlined context. You MUST fetch and inspect the actual repository instructions, issue description, and requirements. If facts cannot be verified or context is insufficient, choose verdict "needs_human" or "needs_clarification".\n\n`;
   }
 
   body += `Please formulate an implementation plan. Address scope, implementation slices, acceptance criteria, and risks.\n\n`;
-  body += `Conclude your response with the following JSON envelope:\n\n`;
+  body += `Verdict choices: "ready" (plan is complete and ready to execute), "needs_clarification" (missing requirements), or "needs_human" (requires manual decision).\n`;
+  body += `Conclude your response strictly with the following JSON envelope (note: all plan fields MUST be nested inside "content", and no extra fields are allowed):\n\n`;
   body += `\`\`\`symphony-result\n`;
   body += `{\n`;
   body += `  "schemaVersion": 1,\n`;
   body += `  "taskId": "${task.id}",\n`;
   body += `  "sessionId": "${task.sessionId}",\n`;
   body += `  "revision": ${task.revision},\n`;
+  body += `  "createdAtMs": ${Date.now()},\n`;
   body += `  "kind": "plan",\n`;
-  body += `  "plan": "<summary of plan>",\n`;
-  body += `  "acceptanceCriteria": ["<criteria 1>", "..."],\n`;
-  body += `  "risks": ["<risk 1>", "..."],\n`;
-  body += `  "clarifications": ["..."],\n`;
-  body += `  "createdAtMs": ${Date.now()}\n`;
+  body += `  "verdict": "ready",\n`;
+  body += `  "content": {\n`;
+  body += `    "plan": "<summary of plan>",\n`;
+  body += `    "acceptanceCriteria": ["<criteria 1>", "..."],\n`;
+  body += `    "risks": ["<risk 1>", "..."],\n`;
+  body += `    "clarifications": ["..."]\n`;
+  body += `  }\n`;
   body += `}\n`;
   body += `\`\`\`\n`;
 
@@ -103,6 +111,12 @@ export function formatReviewPrompt(
 
   if (context.strategy === "materialized") {
     const mat = context as DecisionMaterializedContext;
+    body += `Issue: ${mat.issue.repository} #${mat.issue.number} - ${mat.issue.title}\n`;
+    body += `Issue Description:\n${mat.issue.body}\n\n`;
+
+    if (mat.repositoryInstructions) {
+      body += `Repository Instructions:\n${mat.repositoryInstructions}\n\n`;
+    }
     if (mat.plan) {
       body += `Approved Plan (Task ${mat.plan.taskId}, rev ${mat.plan.revision}):\n${mat.plan.plan}\n\n`;
       body += `Acceptance criteria:\n${mat.plan.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n`;
@@ -120,6 +134,16 @@ export function formatReviewPrompt(
     if (mat.ci) {
       body += `CI State: ${mat.ci.state} (${mat.ci.summary})\n\n`;
     }
+    if (mat.previousReviews && mat.previousReviews.length > 0) {
+      body += `Previous Review History (${mat.previousReviews.length} rounds):\n`;
+      for (const rev of mat.previousReviews) {
+        body += `- Review Task ${rev.taskId} (rev ${rev.revision}, target ${rev.target.headSha}): verdict=${rev.verdict}, findings=${rev.findings.length}\n`;
+        for (const f of rev.findings) {
+          body += `  * [${f.severity}] ${f.location ? `${f.location}: ` : ""}${f.message}\n`;
+        }
+      }
+      body += `\n`;
+    }
     if (mat.unresolvedFindings && mat.unresolvedFindings.length > 0) {
       body += `Outstanding unresolved findings from previous rounds:\n`;
       for (const f of mat.unresolvedFindings) {
@@ -127,34 +151,41 @@ export function formatReviewPrompt(
       }
       body += `\n`;
     }
+  } else {
+    const conn = context as DecisionConnectorContext;
+    body += `WorkItem: ${conn.workItem.provider}:${conn.workItem.key}\n`;
+    body += `Repository: ${conn.repository}\n`;
+    if (conn.prNumber) body += `PR: #${conn.prNumber}\n`;
+    body += `\nImportant connector instructions:\n`;
+    body += `You have received connector references instead of full inlined context. You MUST re-inspect and verify actual repository instructions, current issue description, PR diff, and CI facts. If facts cannot be verified or context is insufficient, you MUST NOT approve (choose "needs_human" or "changes_requested").\n\n`;
   }
 
   body += `Evaluate the changes. Choose verdict: "approve" (ready to land), "changes_requested" (issues must be fixed), or "needs_human" (requires manual attention).\n\n`;
-  body += `Conclude your response with the following JSON envelope:\n\n`;
+  body += `Conclude your response strictly with the following JSON envelope:\n`;
+  body += `- Do NOT include a "comments" field at the root.\n`;
+  body += `- Each finding in "findings" MUST only contain: "severity" ("blocker" or "suggestion"), "message" (string), and "location" (string like "path/to/file.ts:42" or null). Do NOT include "id", "file", or "line".\n`;
+  body += `- Strict v1 schema validation will reject unknown or misspelled fields.\n\n`;
   body += `\`\`\`symphony-result\n`;
   body += `{\n`;
   body += `  "schemaVersion": 1,\n`;
   body += `  "taskId": "${task.id}",\n`;
   body += `  "sessionId": "${task.sessionId}",\n`;
   body += `  "revision": ${task.revision},\n`;
+  body += `  "createdAtMs": ${Date.now()},\n`;
   body += `  "kind": "review",\n`;
   body += `  "target": {\n`;
   body += `    "repository": "${target.repository}",\n`;
   body += `    "prNumber": ${target.prNumber},\n`;
   body += `    "headSha": "${target.headSha}"\n`;
   body += `  },\n`;
-  body += `  "verdict": "approve" | "changes_requested" | "needs_human",\n`;
-  body += `  "comments": "<overall review comments>",\n`;
+  body += `  "verdict": "approve",\n`;
   body += `  "findings": [\n`;
   body += `    {\n`;
-  body += `      "id": "finding-1",\n`;
-  body += `      "severity": "blocker" | "warning" | "note",\n`;
+  body += `      "severity": "blocker",\n`;
   body += `      "message": "<finding description>",\n`;
-  body += `      "file": "path/to/file",\n`;
-  body += `      "line": 42\n`;
+  body += `      "location": "path/to/file.ts:42"\n`;
   body += `    }\n`;
-  body += `  ],\n`;
-  body += `  "createdAtMs": ${Date.now()}\n`;
+  body += `  ]\n`;
   body += `}\n`;
   body += `\`\`\`\n`;
 
@@ -173,6 +204,10 @@ export function formatHandoffPrompt(
   if (context.strategy === "materialized") {
     const mat = context as DecisionMaterializedContext;
     body += `- WorkItem / Issue: ${mat.issue.repository} #${mat.issue.number} - ${mat.issue.title}\n`;
+    body += `- Issue Description:\n${mat.issue.body}\n\n`;
+    if (mat.repositoryInstructions) {
+      body += `- Repository Instructions:\n${mat.repositoryInstructions}\n\n`;
+    }
     if (mat.plan) {
       body += `- Approved Plan:\n${mat.plan.plan}\n`;
     }
@@ -193,6 +228,7 @@ export function formatHandoffPrompt(
     body += `- WorkItem: ${conn.workItem.provider}:${conn.workItem.key}\n`;
     body += `- Repository: ${conn.repository}\n`;
     if (conn.prNumber) body += `- PR: #${conn.prNumber} @ ${conn.headSha ?? "unknown"}\n`;
+    body += `- Important: Connector strategy active. Re-fetch repository instructions, issue description, and verification facts. If facts cannot be verified, do NOT approve.\n`;
   }
 
   body += `\nPlease acknowledge this handoff context and follow with the current task evaluation.\n\n`;

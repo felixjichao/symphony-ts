@@ -19,7 +19,7 @@ import {
   findComposerElement,
   setComposerText,
   findSendButton,
-  findLatestAssistantTurn,
+  countAssistantTurns,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
   buildConversationUrl,
@@ -29,6 +29,7 @@ import {
   formatContinuationHeader,
   formatPlanPrompt,
   formatReviewPrompt,
+  formatHandoffPrompt,
 } from "./prompts";
 import { extractResultFromAssistantTurn } from "./extractor";
 
@@ -44,6 +45,7 @@ export interface ChatGptWebAdapterOptions {
 export interface ChatGptWebHandle {
   readonly conversationId: string;
   readonly bootstrapped: boolean;
+  readonly isRollover?: boolean | undefined;
   previousReviewedSha?: string | null | undefined;
 }
 
@@ -74,6 +76,15 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     session: DecisionSession,
     _options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionBindingInspectionResult> {
+    if (session.status === "broken-binding") {
+      return {
+        status: "unusable",
+        reason: "DecisionSession status is broken-binding",
+        needsRebind: true,
+        observedGeneration: session.bindingGeneration,
+      };
+    }
+
     if (session.binding === null) {
       return { status: "none" };
     }
@@ -85,29 +96,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         needsRebind: true,
         observedGeneration: session.bindingGeneration,
       };
-    }
-
-    if (session.status === "broken-binding") {
-      return {
-        status: "unusable",
-        reason: "DecisionSession status is broken-binding",
-        needsRebind: true,
-        observedGeneration: session.bindingGeneration,
-      };
-    }
-
-    // Check if we are currently on the correct conversation URL if window is available
-    const win = this.winSupplier();
-    if (win && win.location) {
-      const currentConvId = extractConversationIdFromUrl(win.location.href);
-      if (currentConvId && currentConvId !== session.binding.externalSessionRef) {
-        return {
-          status: "unusable",
-          reason: `Browser tab is on conversation "${currentConvId}", but binding expects "${session.binding.externalSessionRef}"`,
-          needsRebind: true,
-          observedGeneration: session.bindingGeneration,
-        };
-      }
     }
 
     return {
@@ -123,13 +111,33 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const doc = this.docSupplier();
     const win = this.winSupplier();
 
-    const composer = findComposerElement(doc);
-    if (!composer) {
-      throw new DecisionAdapterError({
-        code: "execution_failed",
-        message: "ChatGPT prompt composer element not found in DOM",
-        suggestedAction: "retry",
-      });
+    // 1. Ensure we are starting from a clean new conversation, not an existing thread
+    if (win && win.location) {
+      const currentConvId = extractConversationIdFromUrl(win.location.href);
+      if (currentConvId) {
+        // If the browser tab is on an existing conversation, navigate to root / new chat
+        const origin = (win.location as { origin?: string }).origin || this.origin;
+        const newChatUrl = new URL("/", origin).href;
+        win.location.assign(newChatUrl);
+      }
+    }
+
+    // Wait for composer element to be available and ready
+    const startWait = Date.now();
+    let composer = findComposerElement(doc);
+    while (!composer) {
+      if (options.signal?.aborted) {
+        throw new Error("Aborted while waiting for ChatGPT composer");
+      }
+      if (Date.now() - startWait > this.timeoutMs) {
+        throw new DecisionAdapterError({
+          code: "execution_failed",
+          message: "ChatGPT prompt composer element not found in DOM",
+          suggestedAction: "retry",
+        });
+      }
+      await new Promise((r) => setTimeout(r, this.checkIntervalMs));
+      composer = findComposerElement(doc);
     }
 
     setComposerText(composer, BOOTSTRAP_PROMPT);
@@ -143,11 +151,13 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
+    const baselineCount = countAssistantTurns(doc);
     sendBtn.click();
 
     // Wait for bootstrap response
     await waitForStreamingCompletion({
       doc,
+      baselineCount,
       timeoutMs: this.timeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
@@ -158,10 +168,17 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     if (win && win.location) {
       convId = extractConversationIdFromUrl(win.location.href);
     }
+
+    // Must be a real conversation ID from URL. Do NOT synthesize dummy references!
     if (!convId) {
-      convId = `chatgpt-conv-${Date.now()}`;
+      throw new DecisionAdapterError({
+        code: "execution_failed",
+        message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
+        suggestedAction: "retry",
+      });
     }
 
+    const isRollover = session.bindingGeneration > 0 || session.status === "broken-binding";
     const nextGen = session.bindingGeneration === 0 ? 1 : session.bindingGeneration + 1;
     const binding: ExecutorBinding = {
       schemaVersion: 1,
@@ -174,6 +191,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const handle: ChatGptWebHandle = {
       conversationId: convId,
       bootstrapped: true,
+      isRollover,
     };
 
     return {
@@ -185,7 +203,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   async resumeSession(
     session: DecisionSession,
     binding: ExecutorBinding,
-    _options: { signal?: AbortSignal | undefined } = {}
+    options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionSessionResumeResult> {
     if (binding.adapter !== this.name) {
       throw new DecisionAdapterError({
@@ -197,14 +215,30 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     const win = this.winSupplier();
+    const doc = this.docSupplier();
     if (win && win.location && binding.resumeUri) {
       const currentUrl = win.location.href;
       const targetConvId = binding.externalSessionRef;
       const currentConvId = extractConversationIdFromUrl(currentUrl);
 
-      if (currentConvId !== targetConvId && win.location.href !== binding.resumeUri) {
-        // In real browser, location.assign triggers a full page navigation
+      if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
         win.location.assign(binding.resumeUri);
+      }
+    }
+
+    // Wait for composer ready on resumed page
+    if (doc) {
+      const startWait = Date.now();
+      let composer = findComposerElement(doc);
+      while (!composer) {
+        if (options.signal?.aborted) {
+          throw new Error("Aborted while resuming ChatGPT conversation");
+        }
+        if (Date.now() - startWait > Math.min(this.timeoutMs, 500)) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 50)));
+        composer = findComposerElement(doc);
       }
     }
 
@@ -243,7 +277,9 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     let promptText = "";
-    if (isContinuation) {
+    if (handle?.isRollover) {
+      promptText += formatHandoffPrompt(task, context, session.bindingGeneration);
+    } else if (isContinuation) {
       promptText += formatContinuationHeader(task, prevSha);
     }
 
@@ -273,48 +309,29 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
+    const baselineCount = countAssistantTurns(doc);
     sendBtn.click();
 
-    // Wait for streaming response to finish
-    await waitForStreamingCompletion({
+    // Wait for streaming response to finish and get the specific new turn
+    const assistantTurn = await waitForStreamingCompletion({
       doc,
+      baselineCount,
       timeoutMs: this.timeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
     });
 
-    const assistantTurn = findLatestAssistantTurn(doc);
-    if (!assistantTurn) {
-      throw new DecisionAdapterError({
-        code: "malformed_output",
-        message: "No assistant response turn found in DOM",
-        suggestedAction: "fail_closed",
-      });
-    }
-
     // Extract structured result
-    let result;
-    try {
-      result = extractResultFromAssistantTurn(assistantTurn, task);
-    } catch (err: unknown) {
-      if (err instanceof DecisionAdapterError) {
-        throw err;
-      }
-      throw new DecisionAdapterError({
-        code: "malformed_output",
-        message: `Failed to extract valid decision result: ${(err as Error).message}`,
-        suggestedAction: "fail_closed",
-      });
-    }
+    const result = extractResultFromAssistantTurn(assistantTurn, task);
 
-    if (handle && task.kind === "review") {
-      handle.previousReviewedSha = (task as DecisionReviewTask).target.headSha;
+    // If review task, record evaluated headSha for subsequent continuity
+    if (handle && task.kind === "review" && task.target) {
+      handle.previousReviewedSha = task.target.headSha;
     }
 
     return {
       result,
-      rawPayload: assistantTurn.textContent ?? undefined,
     };
   }
 }

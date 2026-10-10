@@ -18,6 +18,7 @@ const gmScope = globalThis as unknown as MockGmScope;
 describe("Driver Checkpoints", () => {
   const sampleCheckpoint: DriverCheckpoint = {
     schemaVersion: 1,
+    tabId: "tab-1",
     taskId: "task-1",
     sessionId: "github:owner/repo#1",
     leaseOwner: "driver-1",
@@ -31,7 +32,7 @@ describe("Driver Checkpoints", () => {
   };
 
   it("MemoryCheckpointStore stores, retrieves, and clears checkpoint", () => {
-    const store = new MemoryCheckpointStore();
+    const store = new MemoryCheckpointStore({ tabId: "tab-1" });
     expect(store.get()).toBeNull();
 
     store.set(sampleCheckpoint);
@@ -39,6 +40,33 @@ describe("Driver Checkpoints", () => {
 
     store.delete();
     expect(store.get()).toBeNull();
+  });
+
+  it("enforces per-tab isolation between independent tab stores", () => {
+    const mockStorage: Record<string, string> = {};
+    gmScope.GM_getValue = (k: string) => mockStorage[k] ?? null;
+    gmScope.GM_setValue = (k: string, v: unknown) => {
+      mockStorage[k] = String(v);
+    };
+    gmScope.GM_deleteValue = (k: string) => {
+      delete mockStorage[k];
+    };
+
+    const tabAStore = new GmCheckpointStore({ tabId: "tab-a" });
+    const tabBStore = new GmCheckpointStore({ tabId: "tab-b" });
+
+    tabAStore.set({ ...sampleCheckpoint, tabId: "tab-a", leaseOwner: "tab-a-driver" });
+
+    // Tab B cannot read Tab A's lease/checkpoint
+    expect(tabBStore.get()).toBeNull();
+
+    // Tab A reads its own checkpoint
+    expect(tabAStore.get()?.leaseOwner).toBe("tab-a-driver");
+
+    // Tab B setting its own checkpoint does not overwrite Tab A
+    tabBStore.set({ ...sampleCheckpoint, tabId: "tab-b", leaseOwner: "tab-b-driver" });
+    expect(tabAStore.get()?.leaseOwner).toBe("tab-a-driver");
+    expect(tabBStore.get()?.leaseOwner).toBe("tab-b-driver");
   });
 
   describe("GmCheckpointStore", () => {
@@ -49,16 +77,16 @@ describe("Driver Checkpoints", () => {
     });
 
     it("uses GM storage when GM APIs are available", () => {
-      let stored: string | null = null;
-      gmScope.GM_getValue = () => stored;
-      gmScope.GM_setValue = (_key: string, val: unknown) => {
-        stored = String(val);
+      const mockStorage: Record<string, string> = {};
+      gmScope.GM_getValue = (k: string) => mockStorage[k] ?? null;
+      gmScope.GM_setValue = (k: string, val: unknown) => {
+        mockStorage[k] = String(val);
       };
-      gmScope.GM_deleteValue = () => {
-        stored = null;
+      gmScope.GM_deleteValue = (k: string) => {
+        delete mockStorage[k];
       };
 
-      const store = new GmCheckpointStore();
+      const store = new GmCheckpointStore({ tabId: "tab-1" });
       expect(store.get()).toBeNull();
 
       store.set(sampleCheckpoint);
@@ -87,7 +115,7 @@ describe("Driver Checkpoints", () => {
         length: 0,
       };
 
-      const store = new GmCheckpointStore();
+      const store = new GmCheckpointStore({ tabId: "tab-1" });
       expect(store.get()).toBeNull();
 
       store.set(sampleCheckpoint);

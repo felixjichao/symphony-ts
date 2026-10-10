@@ -160,6 +160,7 @@ export class MockDocument {
 export class MockWindow {
   location = {
     href: "https://chatgpt.com",
+    origin: "https://chatgpt.com",
     assign(url: string) {
       this.href = url;
     },

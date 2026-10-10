@@ -15,10 +15,10 @@ describe("Prompt formatting and engineering", () => {
     sessionId: "github:owner/repo#1",
     kind: "plan",
     revision: 1,
-    status: "claimed",
+    status: "pending",
     lease: null,
-    claimGeneration: 1,
-    lastClaimToken: "tok-1",
+    claimGeneration: 0,
+    lastClaimToken: null,
     createdAtMs: 1000,
     updatedAtMs: 1000,
   };
@@ -34,10 +34,10 @@ describe("Prompt formatting and engineering", () => {
       prNumber: 42,
       headSha: "1111111111111111111111111111111111111111",
     },
-    status: "claimed",
+    status: "pending",
     lease: null,
-    claimGeneration: 1,
-    lastClaimToken: "tok-1",
+    claimGeneration: 0,
+    lastClaimToken: null,
     createdAtMs: 1000,
     updatedAtMs: 1000,
   };
@@ -182,5 +182,42 @@ describe("Prompt formatting and engineering", () => {
     expect(handoff).toContain("[Symphony Session Rollover — Session: github:owner/repo#1, Generation: 2]");
     expect(handoff).toContain("- Current PR: #42 (1111111111111111111111111111111111111111)");
     expect(handoff).toContain("* [suggestion] src/file.ts: Add comment");
+  });
+
+  it("produces valid JSON result templates that parse with parseDecisionResult", async () => {
+    const { parseDecisionResult } = await import("@symphony/domain/decision");
+    const { extractDecisionResultFromOutput } = await import("@symphony/decision/adapter");
+
+    const context: DecisionContextBundle = {
+      strategy: "materialized",
+      workItem: { provider: "github", key: "owner/repo#1" },
+      repository: "owner/repo",
+      issue: {
+        repository: "owner/repo",
+        number: 1,
+        title: "Issue",
+        body: "Body",
+      },
+      plan: null,
+      pullRequest: null,
+      diff: null,
+      ci: null,
+      repositoryInstructions: null,
+      previousReviews: [],
+      unresolvedFindings: [],
+    };
+
+    const planPrompt = formatPlanPrompt(planTask, context);
+    // Extract the symphony-result block from the prompt itself:
+    const extractedPlan = extractDecisionResultFromOutput(planPrompt, planTask);
+    expect(extractedPlan.kind).toBe("plan");
+    expect(extractedPlan.verdict).toBe("ready");
+    expect(parseDecisionResult(extractedPlan)).toEqual(extractedPlan);
+
+    const reviewPrompt = formatReviewPrompt(reviewTask, context);
+    const extractedReview = extractDecisionResultFromOutput(reviewPrompt, reviewTask);
+    expect(extractedReview.kind).toBe("review");
+    expect(extractedReview.verdict).toBe("approve");
+    expect(parseDecisionResult(extractedReview)).toEqual(extractedReview);
   });
 });

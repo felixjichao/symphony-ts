@@ -120,29 +120,18 @@ export class DecisionService {
           (t) =>
             t.sessionId === sessionId &&
             (t.status === "claimed" || t.status === "running") &&
-            t.lease &&
+            t.lease !== null &&
             now < t.lease.expiresAtMs
         );
-        if (activeLeaseTask && activeLeaseTask.lease) {
-          if (
-            activeLeaseTask.lease.owner !== params.owner ||
-            activeLeaseTask.lease.token !== params.token ||
-            activeLeaseTask.lease.generation !== params.generation
-          ) {
-            throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
-          }
-        } else {
-          for (const t of Object.values(draft.tasks)) {
-            if (t.sessionId === sessionId && t.lease && t.lease.owner === params.owner) {
-              if (
-                t.lease.token !== params.token ||
-                t.lease.generation !== params.generation ||
-                now >= t.lease.expiresAtMs
-              ) {
-                throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
-              }
-            }
-          }
+        if (!activeLeaseTask || !activeLeaseTask.lease) {
+          throw new DecisionConflictError("No active lease found on session matching credentials for binding update");
+        }
+        if (
+          activeLeaseTask.lease.owner !== params.owner ||
+          activeLeaseTask.lease.token !== params.token ||
+          activeLeaseTask.lease.generation !== params.generation
+        ) {
+          throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
         }
       }
 
@@ -245,29 +234,18 @@ export class DecisionService {
           (t) =>
             t.sessionId === sessionId &&
             (t.status === "claimed" || t.status === "running") &&
-            t.lease &&
+            t.lease !== null &&
             now < t.lease.expiresAtMs
         );
-        if (activeLeaseTask && activeLeaseTask.lease) {
-          if (
-            activeLeaseTask.lease.owner !== params.owner ||
-            activeLeaseTask.lease.token !== params.token ||
-            activeLeaseTask.lease.generation !== params.generation
-          ) {
-            throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
-          }
-        } else {
-          for (const t of Object.values(draft.tasks)) {
-            if (t.sessionId === sessionId && t.lease && t.lease.owner === params.owner) {
-              if (
-                t.lease.token !== params.token ||
-                t.lease.generation !== params.generation ||
-                now >= t.lease.expiresAtMs
-              ) {
-                throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
-              }
-            }
-          }
+        if (!activeLeaseTask || !activeLeaseTask.lease) {
+          throw new DecisionConflictError("No active lease found on session matching credentials for binding update");
+        }
+        if (
+          activeLeaseTask.lease.owner !== params.owner ||
+          activeLeaseTask.lease.token !== params.token ||
+          activeLeaseTask.lease.generation !== params.generation
+        ) {
+          throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
         }
       }
 
