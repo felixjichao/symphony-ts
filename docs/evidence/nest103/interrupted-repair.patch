@@ -1,0 +1,40 @@
+diff --git a/src/math.mjs b/src/math.mjs
+index 5d82b94..443ae25 100644
+--- a/src/math.mjs
++++ b/src/math.mjs
+@@ -4,7 +4,7 @@ export function add(a, b) {
+ }
+ 
+ export function sortedCopy_nest103_20261010(values) {
+-  return values.sort((a, b) => a - b);
++  return [...values].sort((a, b) => a - b);
+ }
+ 
+ export function subtract_a8265c25fa(a, b) {
+diff --git a/test/math.test.mjs b/test/math.test.mjs
+index b528b71..4a6b8db 100644
+--- a/test/math.test.mjs
++++ b/test/math.test.mjs
+@@ -9,6 +9,22 @@ test("sortedCopy_nest103_20261010 sorts numbers including negatives and duplicat
+   assert.deepEqual(sortedCopy_nest103_20261010([-2, 0, 4]), [-2, 0, 4]);
+ });
+ 
++for (const [name, values] of [
++  ["unsorted", [10, -3, 2, -3, 0, 2]],
++  ["empty", []],
++  ["already-sorted", [-2, 0, 4]],
++]) {
++  test(`sortedCopy_nest103_20261010 preserves ${name} input and returns a distinct array`, () => {
++    const original = [...values];
++    const result = sortedCopy_nest103_20261010(values);
++
++    assert.deepEqual(values, original);
++    assert.notStrictEqual(result, values);
++    result.push(99);
++    assert.deepEqual(values, original);
++  });
++}
++
+ test("add adds two numbers", () => {
+   assert.equal(add(2, 3), 5);
+ });

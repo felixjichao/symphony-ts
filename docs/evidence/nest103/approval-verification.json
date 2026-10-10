@@ -1,0 +1,41 @@
+[
+  {
+    "request": {
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#18",
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 19,
+        "headSha": "77e149bdcb07ed1ed56639f3472671ad3df54b3b"
+      }
+    },
+    "response": {
+      "approval": {
+        "approved": false,
+        "reason": "Review task github%3Afelixjichao%2Fsymphony-delivery-dogfood%2318:review:1:felixjichao%2Fsymphony-delivery-dogfood:19:77e149bdcb07ed1ed56639f3472671ad3df54b3b is not completed (status: superseded)",
+        "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2318:review:1:felixjichao%2Fsymphony-delivery-dogfood:19:77e149bdcb07ed1ed56639f3472671ad3df54b3b",
+        "sessionId": "github:felixjichao/symphony-delivery-dogfood#18",
+        "headSha": "77e149bdcb07ed1ed56639f3472671ad3df54b3b"
+      }
+    }
+  },
+  {
+    "request": {
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#18",
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 19,
+        "headSha": "ac7a3106405c5389ba4adb864af72b165349e974"
+      }
+    },
+    "response": {
+      "approval": {
+        "approved": true,
+        "reason": "Review approved",
+        "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2318:review:2:felixjichao%2Fsymphony-delivery-dogfood:19:ac7a3106405c5389ba4adb864af72b165349e974",
+        "sessionId": "github:felixjichao/symphony-delivery-dogfood#18",
+        "headSha": "ac7a3106405c5389ba4adb864af72b165349e974",
+        "verdict": "approve"
+      }
+    }
+  }
+]

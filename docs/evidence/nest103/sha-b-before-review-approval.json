@@ -1,0 +1,18 @@
+{
+  "request": {
+    "sessionId": "github:felixjichao/symphony-delivery-dogfood#18",
+    "target": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 19,
+      "headSha": "ac7a3106405c5389ba4adb864af72b165349e974"
+    }
+  },
+  "response": {
+    "approval": {
+      "approved": false,
+      "reason": "No review task found for target PR #19 @ ac7a3106405c5389ba4adb864af72b165349e974",
+      "headSha": "ac7a3106405c5389ba4adb864af72b165349e974",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#18"
+    }
+  }
+}
