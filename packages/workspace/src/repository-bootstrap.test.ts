@@ -97,6 +97,18 @@ async function waitForProcessGone(pid: number, timeoutMs: number): Promise<boole
   }
 }
 
+/** best-effort 终止本轮测试实际创建的进程（断言失败时也执行，避免留下进程污染后续诊断）。 */
+function killPidBestEffort(pid: number | undefined): void {
+  if (pid === undefined) {
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 已退出
+  }
+}
+
 describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
   let tmpBase: string;
   let remoteRepoDir: string;
@@ -1016,12 +1028,17 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       expect(hookEvents.some((e) => e.hook === "before_run" && e.outcome === "timeout")).toBe(true);
 
       // 4. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
-      const pid = await waitForPidFile(pidFile, 5_000);
-      expect(Number.isInteger(pid)).toBe(true);
-      expect(pid).toBeGreaterThan(0);
+      let pid: number | undefined;
+      try {
+        pid = await waitForPidFile(pidFile, 5_000);
+        expect(Number.isInteger(pid)).toBe(true);
+        expect(pid).toBeGreaterThan(0);
 
-      // 5. upload-pack 必须在外层 hook 超时后终止；有界等待真实退出
-      expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+        // 5. upload-pack 必须在外层 hook 超时后终止；有界等待真实退出
+        expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+      } finally {
+        killPidBestEffort(pid);
+      }
     }, 30_000);
 
     it("直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理子孙进程", async () => {
@@ -1063,12 +1080,115 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       expect((thrownError as RepositoryBootstrapError).code).toBe("git_command_timeout");
 
       // 3. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
-      const pid = await waitForPidFile(pidFile, 5_000);
-      expect(Number.isInteger(pid)).toBe(true);
-      expect(pid).toBeGreaterThan(0);
+      let pid: number | undefined;
+      try {
+        pid = await waitForPidFile(pidFile, 5_000);
+        expect(Number.isInteger(pid)).toBe(true);
+        expect(pid).toBeGreaterThan(0);
 
-      // 4. 超时收敛屏障必须已清理子孙进程；有界等待真实退出
-      expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+        // 4. 超时收敛屏障必须已清理子孙进程；有界等待真实退出
+        expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+      } finally {
+        killPidBestEffort(pid);
+      }
+    }, 20_000);
+
+    it("枚举与终止之间新派生的子孙也会被冻结清理，且不产生迟到副作用", async () => {
+      // 复现审查竞争：子孙在「枚举之后、根被终止之前」派生。旧的「单次枚举 → 杀根」会漏掉
+      // 它——根被回收后新子孙重挂父进程无法再通过父子关系发现，且根 close 会提前 settle。
+      // 这里用假 git + 打补丁的 process.kill，在第一次向根发送冻结/终止信号前注入一次真实
+      // fork，构造确定性的窗口（与审查探针同构，但断言修复后的性质）。
+      const fakeBin = path.join(tmpBase, "race-bin");
+      await fs.mkdir(fakeBin, { recursive: true });
+      const rootPidFile = path.join(tmpBase, "race-root.pid");
+      const childPidFile = path.join(tmpBase, "race-child.pid");
+      const markerFile = path.join(tmpBase, "race-late.marker");
+      const childScript = path.join(tmpBase, "race-child.cjs");
+      const gitScript = path.join(fakeBin, "git");
+
+      // 子孙不持有根进程 stdio（stdio:"ignore"），并在延迟后写迟到标记：
+      // 若清理遗漏，窗口内它仍会运行并落下副作用。
+      await fs.writeFile(
+        childScript,
+        `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 400);\n` +
+          `setTimeout(() => {}, 4000);\n`,
+      );
+      await fs.writeFile(
+        gitScript,
+        `#!${process.execPath}\n` +
+          `const fs = require("node:fs");\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `fs.writeFileSync(${JSON.stringify(rootPidFile)}, String(process.pid));\n` +
+          `process.on("SIGUSR1", () => {\n` +
+          `  const child = spawn(process.execPath, [${JSON.stringify(childScript)}], { stdio: "ignore" });\n` +
+          `  fs.writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));\n` +
+          `});\n` +
+          `setInterval(() => {}, 1000);\n`,
+        { mode: 0o755 },
+      );
+
+      const originalKill = process.kill.bind(process);
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+      const notifier = new Int32Array(new SharedArrayBuffer(4));
+      let injected = false;
+      let descendantPid: number | undefined;
+      process.kill = ((pid: number, signal?: string | number) => {
+        if (
+          !injected &&
+          (signal === "SIGSTOP" || signal === "SIGKILL") &&
+          existsSync(rootPidFile) &&
+          pid === Number(readFileSync(rootPidFile, "utf8"))
+        ) {
+          injected = true;
+          originalKill(pid, "SIGUSR1");
+          const deadline = Date.now() + 2_000;
+          while (!existsSync(childPidFile) && Date.now() < deadline) {
+            Atomics.wait(notifier, 0, 0, 10);
+          }
+          if (existsSync(childPidFile)) {
+            descendantPid = Number(readFileSync(childPidFile, "utf8"));
+          }
+        }
+        return originalKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill;
+
+      try {
+        let thrown: unknown;
+        try {
+          await bootstrapRepository({
+            cwd: workspaceDir,
+            repoUrl: "/unused/local/repo",
+            workspaceKey: "GH-79",
+            timeoutMs: 300,
+          });
+        } catch (err: unknown) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+        expect((thrown as RepositoryBootstrapError).code).toBe("git_command_timeout");
+        expect(injected).toBe(true);
+        expect(descendantPid).toBeDefined();
+
+        // 返回后，遗漏的子孙必须已经被冻结清理
+        expect(await waitForProcessGone(descendantPid!, 1_000)).toBe(true);
+        // 等待足够长，确认它没有留下迟到副作用
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        expect(existsSync(markerFile)).toBe(false);
+      } finally {
+        process.kill = originalKill;
+        process.env.PATH = originalPath;
+        for (const file of [childPidFile, rootPidFile]) {
+          if (!existsSync(file)) {
+            continue;
+          }
+          const recorded = Number(readFileSync(file, "utf8"));
+          if (Number.isInteger(recorded) && recorded > 0) {
+            killPidBestEffort(recorded);
+          }
+        }
+      }
     }, 20_000);
   });
 });

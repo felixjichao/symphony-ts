@@ -258,40 +258,119 @@ export function getDescendantPids(parentPid: number): number[] {
 }
 
 /**
- * 递归终止指定进程及其所有子孙进程。
- * 不脱离调用方进程组，但在自身有界超时触发时确保不残留孤儿孙进程。
+ * 进程树清理的收敛参数（均有界）。
+ *
+ * `SUBTREE_POLL_INTERVAL_MS` 是冻结 / 退出确认轮询间隔；`SUBTREE_MAX_FREEZE_ROUNDS`
+ * 限制「枚举 → 冻结」轮次上限，避免异常进程持续派生时无界循环。
  */
-export function killProcessTree(pid: number | undefined): void {
-  if (pid === undefined) {
-    return;
-  }
-  // 先清理子孙进程，避免孤儿孙进程存活
+const SUBTREE_POLL_INTERVAL_MS = 20;
+const SUBTREE_MAX_FREEZE_ROUNDS = 100;
+
+/** 向 PID 发送信号；进程已退出或无权限时忽略（best-effort）。 */
+function signalPid(pid: number, signal: NodeJS.Signals): void {
   try {
-    const descendants = getDescendantPids(pid);
-    for (const dPid of descendants) {
-      try {
-        process.kill(dPid, "SIGKILL");
-      } catch {
-        // 忽略
-      }
-    }
+    process.kill(pid, signal);
   } catch {
-    // 忽略
-  }
-  // 最后终止目标进程本身
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // 忽略已退出
+    // 已退出 / 不可达；忽略
   }
 }
 
+/** 目标 PID 是否仍存活（不含僵尸语义：僵尸的可运行性由调用方按平台判定）。 */
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * `execGit` 超时后等待 Git 子树退出的有界收敛窗口（毫秒）。
+ * 冻结根进程及其子孙（`SIGSTOP`），并返回本次观察到的全部 PID。
  *
- * SIGKILL 投递后进程通常立即退出，此处仅是上界：即便 `close` 迟迟不到（例如 stdio
- * 仍被后台子孙持有），也必须在有限时间内以 typed `git_command_timeout` 收敛，避免
- * 调用方无界等待。见 SPEC §9.4 / §17.2 与外层 hook 进程组清理契约。
+ * 冻结顺序（先冻结、再枚举、后终止）用于消除「枚举与终止之间新派生进程」的竞态：
+ * 被冻结的进程无法继续 `fork`，因此反复「枚举存活集合 + 冻结新发现」会收敛。
+ * 固定信号不改变进程组：本函数按 PID 操作，Git 仍继承外层 hook 进程组（SPEC §9.4 / §17.2）。
+ */
+async function freezeProcessTree(rootPid: number, deadline: number): Promise<Set<number>> {
+  const observed = new Set<number>([rootPid]);
+  signalPid(rootPid, "SIGSTOP");
+  for (let round = 0; round < SUBTREE_MAX_FREEZE_ROUNDS; round++) {
+    let grew = false;
+    for (const pid of [...observed]) {
+      for (const descendant of getDescendantPids(pid)) {
+        if (!observed.has(descendant)) {
+          observed.add(descendant);
+          grew = true;
+        }
+        signalPid(descendant, "SIGSTOP");
+      }
+    }
+    if (!grew || Date.now() >= deadline) {
+      break;
+    }
+    await delay(SUBTREE_POLL_INTERVAL_MS);
+  }
+  return observed;
+}
+
+/**
+ * 终止 `rootPid` 及其全部子孙，并在有界窗口内确认它们已退出。
+ *
+ * 仅「枚举一次 → 杀根」不足以承诺清理：子孙可能在枚举之后、根被终止之前派生新进程；
+ * 根被回收后，新子孙重挂父进程，无法再通过父子关系发现（NEST-119 审查竞态）。因此这里
+ * 采用 **先冻结、再枚举、后终止，并确认退出** 的顺序：
+ * 1. `SIGSTOP` 根进程，使其无法继续派生；
+ * 2. 反复枚举并 `SIGSTOP` 子孙，直到存活集合稳定（冻结的进程不会再 `fork`）；
+ * 3. `SIGKILL` 观察到的全部子孙，最后 `SIGKILL` 根；
+ * 4. 有界等待所有观察到的 PID 退出；超出上界返回 `false`，由调用方在有限时间内决定结果。
+ *
+ * 不使用独立进程组：Git 子树必须继续继承外层 hook 进程组，供 hook 超时整体清理。
+ * 版本信息 / 平台差异（macOS 无 `/proc`）由 {@link getDescendantPids} 的 `pgrep` 回退覆盖。
+ */
+export async function terminateProcessTree(rootPid: number, graceMs: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, graceMs);
+  const observed = await freezeProcessTree(rootPid, deadline);
+
+  for (const pid of observed) {
+    if (pid !== rootPid) {
+      signalPid(pid, "SIGKILL");
+    }
+  }
+  signalPid(rootPid, "SIGKILL");
+
+  while (Date.now() < deadline) {
+    let alive = false;
+    for (const pid of observed) {
+      if (isPidRunning(pid)) {
+        alive = true;
+        signalPid(pid, "SIGKILL"); // 兜底：重挂 / 迟到的观察对象
+      }
+    }
+    if (!alive) {
+      return true;
+    }
+    await delay(SUBTREE_POLL_INTERVAL_MS);
+  }
+
+  for (const pid of observed) {
+    if (isPidRunning(pid)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * `execGit` 超时后等待 Git 子树退出并确认清理的有界窗口（毫秒）。
+ *
+ * SIGKILL 投递后进程通常立即退出，此处仅是上界：即便确认迟迟不成立（例如子孙持续派生），
+ * 也必须在有限时间内以 typed `git_command_timeout` 收敛，避免调用方无界等待。
+ * 见 SPEC §9.4 / §17.2 与外层 hook 进程组清理契约。
  */
 const TIMEOUT_EXIT_GRACE_MS = 2_000;
 
@@ -307,7 +386,6 @@ async function execGit(
     let settled = false;
     let timedOut = false;
     let timer: NodeJS.Timeout | null = null;
-    let convergenceTimer: NodeJS.Timeout | null = null;
 
     // 不使用 detached: true，使 Git 子树继承外层 hook 进程组（SPEC §9.4 / §17.2），
     // 从而在外层 hook 超时或取消时能被整体杀死，不留孤儿子树。
@@ -325,10 +403,6 @@ async function execGit(
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
-      }
-      if (convergenceTimer !== null) {
-        clearTimeout(convergenceTimer);
-        convergenceTimer = null;
       }
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -356,14 +430,15 @@ async function execGit(
 
     timer = setTimeout(() => {
       timedOut = true;
-      // 有界退出收敛：先终止 Git 子树，等待其真正退出后才以 typed
-      // git_command_timeout 失败。SIGKILL 的投递不代表退出完成，且 macOS 无 /proc、
-      // 降级 pgrep 时可能漏掉新出现的子孙（NEST-119）。收敛窗口有界，close 迟到时兜底。
-      killProcessTree(child.pid);
-      convergenceTimer = setTimeout(() => {
-        killProcessTree(child.pid);
+      // 有界退出收敛：先冻结再终止整个子树，确认（或到上界）后才以 typed
+      // git_command_timeout 失败。close 分支只记录终止，不抢先 settle，避免根 close
+      // 过早清掉子树退出确认（NEST-119 审查竞态）。
+      void (async () => {
+        if (child.pid !== undefined) {
+          await terminateProcessTree(child.pid, TIMEOUT_EXIT_GRACE_MS);
+        }
         fail(timeoutError());
-      }, TIMEOUT_EXIT_GRACE_MS);
+      })();
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -388,8 +463,8 @@ async function execGit(
 
     child.on("close", (code, signal) => {
       if (timedOut) {
-        // 超时已判定：迟到 / 正常的 close 都以 timeout 收敛，绝不翻成 success。
-        fail(timeoutError());
+        // 超时已判定：由收敛流程决定何时以 timeout 失败并确认子树清理；此处只记录
+        // 根进程已终止，绝不抢先 fail（否则会在遗漏子孙仍存活时提前返回），也绝不 finish。
         return;
       }
       finish({
