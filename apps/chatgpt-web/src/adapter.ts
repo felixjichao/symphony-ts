@@ -22,6 +22,7 @@ import {
   findSendButton,
   findStopButton,
   getAllAssistantTurns,
+  extractCodeBlocksFromTurn,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
   buildConversationUrl,
@@ -35,6 +36,14 @@ import {
 } from "./prompts";
 import { extractResultFromAssistantTurn } from "./extractor";
 import type { DriverStep } from "./checkpoint";
+
+// Tool-use commentary can temporarily be stable with no stop button after reload.
+// Only result-bearing task turns may finish Plan/Review; extraction remains fail-closed.
+function isResultTurn(turn: HTMLElement): boolean {
+  return extractCodeBlocksFromTurn(turn).some((block) =>
+    block.language.toLowerCase() === "symphony-result"
+  ) || /```symphony-result\s/i.test(turn.textContent || "");
+}
 
 export interface ChatGptWebAdapterOptions {
   readonly origin?: string | undefined;
@@ -66,6 +75,23 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly stabilizationMs: number;
   private readonly checkIntervalMs: number;
   private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null = null;
+
+  private async waitForSendButton(signal?: AbortSignal): Promise<HTMLButtonElement> {
+    const startedAt = Date.now();
+    while (true) {
+      if (signal?.aborted) throw new Error("Task execution aborted");
+      const button = findSendButton(this.docSupplier());
+      if (button && !button.disabled) return button;
+      if (Date.now() - startedAt >= this.timeoutMs) {
+        throw new DecisionAdapterError({
+          code: "execution_failed",
+          message: "Send button not ready or disabled",
+          suggestedAction: "retry",
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.checkIntervalMs));
+    }
+  }
 
   constructor(options: ChatGptWebAdapterOptions = {}) {
     this.origin = options.origin ?? "https://chatgpt.com";
@@ -175,14 +201,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     setComposerText(composer, BOOTSTRAP_PROMPT);
 
     const doc = this.docSupplier();
-    const sendBtn = findSendButton(doc);
-    if (!sendBtn || sendBtn.disabled) {
-      throw new DecisionAdapterError({
-        code: "execution_failed",
-        message: "Send button not ready or disabled",
-        suggestedAction: "retry",
-      });
-    }
+    const sendBtn = await this.waitForSendButton(options.signal);
 
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;
@@ -354,14 +373,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     setComposerText(composer, promptText);
 
-    const sendBtn = findSendButton(doc);
-    if (!sendBtn || sendBtn.disabled) {
-      throw new DecisionAdapterError({
-        code: "execution_failed",
-        message: "Send button not ready or disabled",
-        suggestedAction: "retry",
-      });
-    }
+    const sendBtn = await this.waitForSendButton(options.signal);
 
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;
@@ -384,6 +396,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
+      isCompletionCandidate: isResultTurn,
     });
 
     // Extract structured result
@@ -416,6 +429,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
+      isCompletionCandidate: isResultTurn,
     });
 
     const result = extractResultFromAssistantTurn(assistantTurn, task);

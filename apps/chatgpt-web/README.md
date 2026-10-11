@@ -60,7 +60,7 @@ The bundle includes the complete Tampermonkey metadata block (`// ==UserScript==
 
 ## Manual Task Scheduling & Smoke Testing
 
-To schedule a task on the localhost bridge manually for smoke testing or verification (from an empty store to an executable pending task):
+To schedule a task on the localhost bridge manually for smoke testing or verification (from an empty store to an executable pending task), stop the driver first. Create the session, task and context below before clicking **Start Driver**. A running driver can claim a task before its context is delivered.
 
 ```bash
 # 1. Create a Decision session for a work item
@@ -114,7 +114,7 @@ curl -s -H "Authorization: Bearer secret-bridge-token" \
 ### 3. Checkpoint Lifecycle & Idempotent Recovery
 - Active execution is checkpointed at discrete stages (`claimed`, `started`, `prompt_submitting`, `waiting_response`, `result_extracted`), isolated per tab via `tabId`.
 - **Packet Loss & Receipt Recovery**: Before sending `/result`, the candidate result is persisted in the checkpoint. If network packet loss occurs during submission, `resumeCheckpointIfAvailable()` first checks task completion and queries authoritative `/receipt` on the bridge, replaying the completed result without requiring lease renewal.
-- **In-flight Waiting Recovery**: If the page reloads while in `waiting_response`, the driver recovers and resumes waiting for the existing assistant response instead of re-submitting the prompt.
+- **In-flight Waiting Recovery**: After a full navigation or reload, the HUD initializes in Idle; click **Start Driver** to resume. If the checkpoint is in `waiting_response`, recovery waits for the existing assistant response instead of re-submitting the prompt.
 - **Heartbeat Expiry Sync**: Each successful lease heartbeat returns the extended `expiresAtMs`, which is written back to the checkpoint to prevent false local expiry during lengthy model reasoning.
 
 ### 4. Broken Binding & Rollover
