@@ -235,9 +235,11 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Fake executor adapter, simulated lifecycle, CAS rebind, and error injection | `packages/decision/src/adapter.test.ts`: FakeDecisionExecutorAdapter and Coordinator |
 | Provider-neutral task execution context API (`PUT/GET /v1/tasks/:id/context`) & durable storage | `packages/decision/src/bridge.test.ts`, `packages/decision/src/service.test.ts`, `packages/decision/src/store.test.ts` |
 | Session execution mutual exclusion & lease-fenced binding updates | `packages/decision/src/service.test.ts`: DecisionService claim mutual exclusion and lease fencing |
-| ChatGPT Web adapter & centralized DOM probes (composer, send, stop, streaming wait, conversation URL) | `apps/chatgpt-web/test/probes.test.ts`: DOM Probes; `apps/chatgpt-web/test/adapter.test.ts`: ChatGptWebAdapter |
+| ChatGPT Web adapter & centralized DOM probes (composer, send, stop, streaming wait, conversation URL) | `apps/chatgpt-web/test/probes.test.ts`: DOM Probes; `apps/chatgpt-web/test/adapter.test.ts`: ChatGptWebAdapter, asynchronous send-button readiness; Chinese send/stop labels and current assistant markdown/code surfaces. NEST-105 real smoke verified injection/GM/claim/bootstrap send/response, accepted real dogfood #15 Plan `ready` receipt and conversation binding. Completed-response reload and active streaming reload passed after result-bearing completion fix: real dogfood #15 revision 3 accepted `ready` receipt, user message count unchanged at four (manual Start after navigation/reload) |
 | Prompt templates (bootstrap, plan, review SHA binding, continuation header, handoff summary) | `apps/chatgpt-web/test/prompts.test.ts`: Prompt Templates and Contracts |
 | Decision tab driver, loopback transport (GM/Fetch), and navigation checkpoint recovery | `apps/chatgpt-web/test/transport.test.ts`, `apps/chatgpt-web/test/checkpoint.test.ts`, `apps/chatgpt-web/test/driver.test.ts` |
 | Multi-turn fixture (Plan → Review SHA-A → Review SHA-B) & broken-binding rollover (N → N+1) | `apps/chatgpt-web/test/fixture-e2e.test.ts`: Decision Multi-Turn Fixture and Rollover (E2E) |
+
+Real browser smoke: [NEST-105 process and sanitized receipts](evidence/nest105/README.md). This is adapter evidence, not the delivery review gate end-to-end acceptance.
 
 Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.

@@ -56,6 +56,15 @@ describe("DOM Probes and URL utilities", () => {
     expect(findStopButton(doc as unknown as Document)).not.toBeNull();
   });
 
+  it("locates Chinese send buttons without test IDs", () => {
+    for (const label of ["发送", "提交"]) {
+      const doc = new MockDocument();
+      const button = new MockElement("button", { "aria-label": label });
+      doc.body.appendChild(button);
+      expect(findSendButton(doc as unknown as Document)).toBe(button);
+    }
+  });
+
   it("locates latest assistant turn and extracts code blocks", () => {
     const doc = new MockDocument();
     const turn1 = new MockElement("article", { "data-testid": "conversation-turn-1" });
@@ -83,6 +92,79 @@ describe("DOM Probes and URL utilities", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.language).toBe("symphony-result");
     expect(blocks[0]?.content).toBe('{"verdict":"approve"}');
+  });
+
+  it("reads current ChatGPT assistant markdown and labeled code surfaces", () => {
+    const doc = new MockDocument();
+    const turn = new MockElement("div", { "data-markdown-text-style": "assistant-message" });
+    const surface = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label = new MockElement("div");
+    label.textContent = "symphony-result";
+    header.appendChild(label);
+    surface.appendChild(header);
+    const code = new MockElement("code");
+    code.textContent = '{"schemaVersion":1}';
+    surface.appendChild(code);
+    turn.appendChild(surface);
+    doc.body.appendChild(turn);
+    const stop = new MockElement("button", { "aria-label": "停止" });
+    doc.body.appendChild(stop);
+    expect(findLatestAssistantTurn(doc as unknown as Document)).toBe(turn);
+    expect(findStopButton(doc as unknown as Document)).toBe(stop);
+    expect(extractCodeBlocksFromTurn(turn as unknown as HTMLElement)).toEqual([
+      { language: "symphony-result", content: '{"schemaVersion":1}' },
+    ]);
+  });
+
+  it("extracts mixed pre and data-markdown-copy surfaces strictly in document tree order", () => {
+    // 1. surface first, pre second
+    const turn1 = new MockElement("div");
+    const surface1 = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header1 = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label1 = new MockElement("div");
+    label1.textContent = "surface-first";
+    header1.appendChild(label1);
+    surface1.appendChild(header1);
+    const code1 = new MockElement("code");
+    code1.textContent = "content-1";
+    surface1.appendChild(code1);
+    turn1.appendChild(surface1);
+
+    const pre1 = new MockElement("pre");
+    const code2 = new MockElement("code", { class: "language-pre-second" });
+    code2.textContent = "content-2";
+    pre1.appendChild(code2);
+    turn1.appendChild(pre1);
+
+    expect(extractCodeBlocksFromTurn(turn1 as unknown as HTMLElement)).toEqual([
+      { language: "surface-first", content: "content-1" },
+      { language: "pre-second", content: "content-2" },
+    ]);
+
+    // 2. pre first, surface second
+    const turn2 = new MockElement("div");
+    const pre2 = new MockElement("pre");
+    const code3 = new MockElement("code", { class: "language-pre-first" });
+    code3.textContent = "content-3";
+    pre2.appendChild(code3);
+    turn2.appendChild(pre2);
+
+    const surface2 = new MockElement("div", { "data-markdown-copy": "code-block" });
+    const header2 = new MockElement("div", { "data-markdown-copy": "exclude" });
+    const label2 = new MockElement("div");
+    label2.textContent = "surface-second";
+    header2.appendChild(label2);
+    surface2.appendChild(header2);
+    const code4 = new MockElement("code");
+    code4.textContent = "content-4";
+    surface2.appendChild(code4);
+    turn2.appendChild(surface2);
+
+    expect(extractCodeBlocksFromTurn(turn2 as unknown as HTMLElement)).toEqual([
+      { language: "pre-first", content: "content-3" },
+      { language: "surface-second", content: "content-4" },
+    ]);
   });
 
   it("extracts conversation ID from URLs and constructs resume URLs", () => {

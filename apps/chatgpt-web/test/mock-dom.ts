@@ -104,10 +104,20 @@ export class MockElement {
     // Check comma-separated selectors
     if (selector.includes(",")) {
       const parts = selector.split(",").map((s) => s.trim());
-      for (const part of parts) {
-        matched.push(...this.querySelectorAll(part));
+      const matchingSets = parts.map((part) => new Set(this.querySelectorAll(part)));
+      const ordered: MockElement[] = [];
+      const traverse = (el: MockElement) => {
+        if (matchingSets.some((set) => set.has(el))) {
+          ordered.push(el);
+        }
+        for (const c of el.children) {
+          traverse(c);
+        }
+      };
+      for (const c of this.children) {
+        traverse(c);
       }
-      return matched;
+      return ordered;
     }
 
     // Check space-separated descendant selectors
