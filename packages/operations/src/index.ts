@@ -43,6 +43,8 @@ export type {
   RuntimeRetryFacts,
   RuntimeWorkFacts,
   DecisionSessionFacts,
+  DecisionPlanTaskFacts,
+  DecisionReviewTaskFacts,
   DecisionTaskFacts,
   DecisionPlanVerdictFacts,
   DecisionReviewVerdictFacts,

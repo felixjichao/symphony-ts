@@ -21,9 +21,11 @@ import {
   isExactHeadSha,
   parseReviewTarget,
   parseWorkKey,
+  type DecisionTaskFacts,
   type DecisionWorkFacts,
   type ExecutorFacts,
   type FactProvenance,
+  type GitHubWorkFacts,
   type OperationalSnapshot,
   type ReviewProjection,
   type RuntimeWorkFacts,
@@ -110,11 +112,32 @@ describe("Normalized facts provenance and absence", () => {
   });
 
   it("expresses confirmed absence as null, distinct from a failed read", () => {
-    const noPullRequest = { workKey: key, provenance };
+    const noPullRequest: GitHubWorkFacts = {
+      workKey: key,
+      issue: { state: "open", url: "https://github.com/owner/repo/issues/109" },
+      pullRequest: null,
+      ci: null,
+      provenance,
+    };
+    const noSession: DecisionWorkFacts = {
+      workKey: key,
+      session: null,
+      tasks: [],
+      results: [],
+      provenance: { source: "decision", instance: "decision:local", observedAt: 6 },
+    };
     const unavailable: SourceFreshness = { status: "unavailable", observedAt: null, lastAttemptAt: 1, reason: "github_unreachable" };
     // null nested object = read succeeded, nothing there; unavailable = the read failed.
-    expect(noPullRequest).toHaveProperty("workKey");
+    expect(noPullRequest.pullRequest).toBeNull();
+    expect(noPullRequest.ci).toBeNull();
+    expect(noSession.session).toBeNull();
     expect(unavailable.status).toBe("unavailable");
+  });
+
+  it("rejects impossible fact shapes at the type level", () => {
+    // @ts-expect-error GitHubWorkFacts requires an issue object.
+    const missingIssue: GitHubWorkFacts = { workKey: key, pullRequest: null, ci: null, provenance };
+    void missingIssue;
   });
 
   it("keeps runtime facts unlinked (null workKey) instead of inventing an identity", () => {
@@ -130,15 +153,27 @@ describe("Normalized facts provenance and absence", () => {
   });
 
   it("keeps decision tasks/results without leaking store-only fields", () => {
+    const reviewTask: DecisionTaskFacts = { taskId: "t1", kind: "review", revision: 1, status: "running", target: { repository: "owner/repo", prNumber: 120, headSha: HEAD_A }, createdAtMs: 1, updatedAtMs: 2 };
+    const planTask: DecisionTaskFacts = { taskId: "t2", kind: "plan", revision: 1, status: "completed", createdAtMs: 1, updatedAtMs: 2 };
     const decision: DecisionWorkFacts = {
       workKey: key,
       session: { sessionId: "github:owner/repo#109", status: "active", bindingGeneration: 2, adapter: "chatgpt-web", updatedAtMs: 5 },
-      tasks: [{ taskId: "t1", kind: "review", revision: 1, status: "running", target: { repository: "owner/repo", prNumber: 120, headSha: HEAD_A }, createdAtMs: 1, updatedAtMs: 2 }],
+      tasks: [reviewTask, planTask],
       results: [{ taskId: "t0", revision: 1, createdAtMs: 1, outcome: { kind: "review", verdict: "approve", target: { repository: "owner/repo", prNumber: 120, headSha: HEAD_A } } }],
       provenance: { source: "decision", instance: "decision:local", observedAt: 6 },
     };
-    expect(decision.tasks[0]?.target?.headSha).toBe(HEAD_A);
+    const first = decision.tasks[0]!;
+    expect(first.kind === "review" ? first.target.headSha : null).toBe(HEAD_A);
+    expect(decision.tasks[1]?.kind).toBe("plan");
     expect(decision.results[0]?.outcome.kind).toBe("review");
+  });
+
+  it("makes a review task without an exact target and a plan task with one unrepresentable", () => {
+    // @ts-expect-error a review task must carry its exact repository / PR / HEAD target.
+    const reviewWithoutTarget: DecisionTaskFacts = { taskId: "t1", kind: "review", revision: 1, status: "running", createdAtMs: 1, updatedAtMs: 2 };
+    // @ts-expect-error a plan task must not carry a review target.
+    const planWithTarget: DecisionTaskFacts = { taskId: "t2", kind: "plan", revision: 1, status: "pending", target: { repository: "owner/repo", prNumber: 120, headSha: HEAD_A }, createdAtMs: 1, updatedAtMs: 2 };
+    void reviewWithoutTarget; void planWithTarget;
   });
 
   it("models executor host as observation metadata only", () => {

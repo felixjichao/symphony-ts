@@ -39,7 +39,10 @@ stay distinguishable. `WorkPhase` / `WaitingReason` / `AttentionState` / `System
 are documented derived-only display concepts with no setter or transition, kept orthogonal
 (phase and attention), and review projections retain `currentHeadSha`, task target and
 result target separately so an approval against a stale SHA is never presented as approval
-of the current HEAD. This slice defines contracts and identity/shape helpers only; it adds
+of the current HEAD. Normalized Decision task facts are a kind-discriminated union: a
+`review` task always carries its exact target and a `plan` task never does, so a normalized
+review fact cannot silently lose its repository / PR / HEAD. This slice defines contracts
+and identity/shape helpers only; it adds
 no HTTP, Dashboard, history store, query service or mutation command.
 
 ## Alternatives considered

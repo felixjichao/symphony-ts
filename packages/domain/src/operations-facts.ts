@@ -196,16 +196,32 @@ export interface DecisionSessionFacts {
   readonly updatedAtMs: UtcTimestampMs;
 }
 
-export interface DecisionTaskFacts {
+interface DecisionTaskFactsBase {
   readonly taskId: string;
-  readonly kind: "plan" | "review";
   readonly revision: number;
   readonly status: DecisionTaskStatus;
-  /** Present only for review tasks: exact repository / PR / HEAD target. */
-  readonly target: DecisionReviewTarget | null;
   readonly createdAtMs: UtcTimestampMs;
   readonly updatedAtMs: UtcTimestampMs;
 }
+
+/** A plan task carries no review target. */
+export interface DecisionPlanTaskFacts extends DecisionTaskFactsBase {
+  readonly kind: "plan";
+}
+
+/**
+ * A review task always carries its exact repository / PR / HEAD target. Modeling this
+ * as a discriminated union (rather than `kind` plus a nullable target) makes
+ * `kind: "review", target: null` unrepresentable, so a normalized review fact can never
+ * lose the target a projector must preserve. The target MAY differ from the current HEAD;
+ * cross-source mismatch is a fact to retain, not a shape to reject.
+ */
+export interface DecisionReviewTaskFacts extends DecisionTaskFactsBase {
+  readonly kind: "review";
+  readonly target: DecisionReviewTarget;
+}
+
+export type DecisionTaskFacts = DecisionPlanTaskFacts | DecisionReviewTaskFacts;
 
 export interface DecisionPlanVerdictFacts {
   readonly kind: "plan";
