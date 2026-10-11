@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Operational Read Model contracts](accepted/architecture/2026-10-11-operational-read-model-contracts.md) — provider-neutral 只读 facts / 投影契约与 `@symphony/operations` 包边界（NEST-113 / #109）：契约归 `@symphony/domain`（WorkKey 别名复用 `DecisionWorkItemRef`、四类 facts、fresh/stale/unavailable/unknown 判别联合、`WorkProjection` / `OperationalSnapshot`、derived-only phase/waiting/attention/health），facade 包只依赖 domain，源包不得反向 import；本分片不含 reader / projector / anomaly / query / transport。
+
 - [Delivery review gate](accepted/architecture/2026-10-10-delivery-review-gate.md) — SHA-bound independent review gate before auto-merge, review task materialization, polling, and findings repair (NEST-103 / #98).
 - [Decision store and bridge](accepted/architecture/2026-10-09-decision-store-bridge.md) — durable task/session snapshot store, cross-process lock, and localhost Web Agent Bridge (NEST-100 / #95).
 - [Decision contracts](accepted/architecture/2026-10-08-decision-contracts.md) — provider-neutral v1 session/task/result/binding, pure validation and exact SHA approval (NEST-99 / #94).

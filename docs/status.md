@@ -26,6 +26,11 @@
 - NEST-105 real-account smoke (2026-10-10, Edge/Tampermonkey): authenticated GM loopback transport, claim, automatic bootstrap/Plan submission and conversation binding verified. Real `felixjichao/symphony-delivery-dogfood#15` Plan revisions 2 and 3 completed with accepted `ready` result receipts. Revision 3 was reloaded while the stop button was visible and recovered after manual **Start Driver**; user message count stayed at four before/after reload and completion, proving no duplicate submission. Full navigating checkpoint recovery also passed with manual Start after page replacement. Local fixes wait for send-button readiness, support current Chinese labels/markdown/code surfaces, and ignore intermediate prose completion candidates (60 Web tests pass). Context must be delivered before starting the driver; implementation/review delivery remains pending.
 - Plan dispatch remains separate work; delivery auto-merge is now guarded by the SHA-bound review gate.
 
+## Operational Read Model extension
+
+- NEST-113 / GitHub #109: provider-neutral readonly facts and projection contracts for the Operational Read Model in `@symphony/domain` (`operations*.ts`) — WorkKey identity, GitHub/runtime/Decision/executor facts with provenance, fresh/stale/unavailable/unknown freshness, `WorkProjection`, `OperationalSnapshot`, derived-only phase/waiting/attention/health, and exact-HEAD review projection — surfaced through the new `@symphony/operations` facade package (domain-only dependency).
+- Contracts only: source readers, phase/waiting derivation, anomaly detection, in-process query service, CLI/Dashboard/HTTP and any mutation path remain unimplemented. [Boundary note](../notes/accepted/architecture/2026-10-11-operational-read-model-contracts.md); evidence in [conformance](conformance.md#operational-read-model-contracts-nest-113--109).
+
 ## 已完成能力
 
 ### M0–M6 Core
