@@ -1384,7 +1384,7 @@ export async function runDeliverySkill(
         title: issueTitle,
         body: issueBody,
       },
-      plan: null,
+      plan: options.plan ?? null,
       pullRequest: {
         repository: context.repo.toLowerCase(),
         prNumber: prNumber!,

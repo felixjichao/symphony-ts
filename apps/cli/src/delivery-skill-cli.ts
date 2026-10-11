@@ -9,10 +9,13 @@ import {
 } from "@symphony/agent";
 import {
   DecisionBridgeClient,
+  DecisionPlanningGate,
   DecisionReviewGate,
 } from "@symphony/decision";
 import {
+  decisionSessionId,
   formatDeliveryHandoffMarkdown,
+  type DecisionMaterializedPlan,
   type DeliveryHandoff,
   type DeliveryReviewGate,
   type PersistedDeliveryState,
@@ -342,11 +345,28 @@ export async function runDeliverySkillCli(
   const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
 
   let reviewGate = customReviewGate;
+  let plan: DecisionMaterializedPlan | null | undefined = undefined;
   const bridgeUrl = parsed.bridgeUrl ?? process.env.DECISION_BRIDGE_URL;
-  if (!reviewGate && bridgeUrl) {
+  if (bridgeUrl) {
     const token = parsed.bridgeToken ?? process.env.DECISION_BRIDGE_TOKEN;
     const client = new DecisionBridgeClient(bridgeUrl, ...(token ? [{ authToken: token }] : []));
-    reviewGate = new DecisionReviewGate(client);
+    if (!reviewGate) {
+      reviewGate = new DecisionReviewGate(client);
+    }
+    const sId = parsed.sessionId ?? (parsed.repo && parsed.issueNumber
+      ? decisionSessionId({ provider: "github", key: `${parsed.repo.toLowerCase()}#${parsed.issueNumber}` })
+      : undefined);
+    if (sId) {
+      try {
+        const planningGate = new DecisionPlanningGate(client);
+        const eligibility = await planningGate.verifyPlanEligibility(sId);
+        if (eligibility.eligible && eligibility.plan) {
+          plan = eligibility.plan;
+        }
+      } catch {
+        // plan check is best-effort for delivery skill
+      }
+    }
   }
 
   const options: RunDeliverySkillOptions = {
@@ -366,6 +386,7 @@ export async function runDeliverySkillCli(
     requiredChecks: parsed.requiredChecks,
     reviewGate,
     sessionId: parsed.sessionId,
+    plan,
     runner,
     stateStorage,
     log: (msg) => io.stdout.write(`${msg}\n`),

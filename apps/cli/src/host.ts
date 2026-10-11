@@ -5,7 +5,7 @@ import {
   type WorkflowWatchHandle,
   type WorkflowWatchScheduler,
 } from "@symphony/config";
-import type { OrchestratorRuntimeState } from "@symphony/domain";
+import type { DecisionMaterializedPlan, Issue, OrchestratorRuntimeState } from "@symphony/domain";
 import {
   createStructuredLogger,
   projectObservabilitySnapshot,
@@ -68,6 +68,8 @@ export interface CreateHostOptions {
   readonly monotonicNow?: (() => number) | undefined;
   readonly watcherScheduler?: WorkflowWatchScheduler | undefined;
   readonly watcherIntervalMs?: number | undefined;
+  readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
+  readonly getPlanForIssue?: ((issue: Issue) => DecisionMaterializedPlan | null | undefined) | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -171,7 +173,10 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       policy: controller.current.scheduling.policy,
       tracker: trackerProxy,
       runner: runAgentAttempt,
-      createAttemptOptions: (context) => workspaceCoordinator.createAttemptOptions(context),
+      createAttemptOptions: (context) =>
+        workspaceCoordinator.createAttemptOptions(context, {
+          plan: options.getPlanForIssue?.(context.issue),
+        }),
       resolveWorkspacePath: (issue) => workspaceCoordinator.resolveForDispatch(issue),
       onEvent: observers.onEvent,
       onOutcome: observers.onOutcome,
@@ -186,6 +191,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       },
       now,
       monotonicNow,
+      canDispatch: options.canDispatch,
     });
 
     controller.setAuthority(authority);

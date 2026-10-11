@@ -28,6 +28,11 @@ import type {
   SubmitResultResponse,
   VerifyReviewApprovalRequest,
   VerifyReviewApprovalResponse,
+  VerifyPlanEligibilityRequest,
+  VerifyPlanEligibilityResponse,
+  MarkPlanPublishedRequest,
+  MarkPlanPublishedResponse,
+  GetLatestPlanResponse,
 } from "./types";
 
 export interface DecisionBridgeClientOptions {
@@ -222,6 +227,36 @@ export class DecisionBridgeClient {
   ): Promise<VerifyReviewApprovalResponse> {
     const payload: VerifyReviewApprovalRequest = { sessionId, target };
     return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload);
+  }
+
+  async verifyPlanEligibility(
+    sessionId: string,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
+  ): Promise<VerifyPlanEligibilityResponse> {
+    const payload: VerifyPlanEligibilityRequest = { sessionId, requirements };
+    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
+  }
+
+  async markPlanPublished(
+    taskId: string,
+    params: MarkPlanPublishedRequest = {},
+  ): Promise<MarkPlanPublishedResponse> {
+    return await this.request<MarkPlanPublishedResponse>(
+      "POST",
+      `/v1/plans/${encodeURIComponent(taskId)}/publish`,
+      params,
+    );
+  }
+
+  async getLatestPlan(sessionId: string): Promise<GetLatestPlanResponse> {
+    return await this.request<GetLatestPlanResponse>(
+      "GET",
+      `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
+    );
   }
 
   async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {

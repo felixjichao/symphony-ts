@@ -111,6 +111,7 @@ function makeHarness(
     runner: AgentAttemptRunner;
     createAttemptOptions: AttemptOptionsFactory;
     cancelRetry: (issueId: string) => void;
+    canDispatch: (issue: Issue, context: { readonly isRetry: boolean }) => boolean;
   }> = {},
 ): Harness {
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 30_000, maxConcurrentAgents: 10 });
@@ -136,6 +137,7 @@ function makeHarness(
     now: () => clock++,
     monotonicNow: () => monotonic,
     cancelRetry: overrides.cancelRetry ?? ((issueId) => cancelledRetries.push(issueId)),
+    canDispatch: overrides.canDispatch,
     onOutcome: (outcome) => {
       outcomes.push(outcome);
       overrides.onOutcome?.(outcome);
@@ -421,5 +423,24 @@ describe("attempt token 隔离 — 验收 06 前置", () => {
       summary: "A late",
     });
     expect(state.running.get(issue.id)?.session?.threadId).toBe("thread-B");
+  });
+
+  it("canDispatch 外部准入钩子拦截时返回 not_eligible，允许时正常派发", () => {
+    let allowDispatch = false;
+    const { authority, state } = makeHarness({
+      canDispatch: () => allowDispatch,
+    });
+    const issue = makeIssue();
+
+    // 1. allowDispatch = false -> not_eligible
+    const rejected = authority.dispatchIssue(issue);
+    expect(rejected.kind).toBe("not_eligible");
+    expect(state.running.has(issue.id)).toBe(false);
+
+    // 2. allowDispatch = true -> dispatched
+    allowDispatch = true;
+    const accepted = authority.dispatchIssue(issue);
+    expect(accepted.kind).toBe("dispatched");
+    expect(state.running.has(issue.id)).toBe(true);
   });
 });

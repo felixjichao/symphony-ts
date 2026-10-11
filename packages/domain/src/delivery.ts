@@ -2,7 +2,7 @@
  * @symphony/domain — GitHub delivery and auto-merge policy types and pure functions (SPEC §11.5 / MVP.3).
  */
 import type { DecisionReviewTarget, DecisionTask, DecisionResult } from "./decision";
-import type { DecisionContextBundle } from "./decision-context";
+import type { DecisionContextBundle, DecisionMaterializedPlan } from "./decision-context";
 
 export interface DeliveryContext {
   readonly repo: string;
@@ -531,6 +531,7 @@ export interface DeliverySkillConfig {
   readonly reviewGate?: DeliveryReviewGate | undefined;
   readonly sessionId?: string | undefined;
   readonly reviewPollIntervalSeconds?: number | undefined;
+  readonly plan?: DecisionMaterializedPlan | null | undefined;
 }
 
 export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";
