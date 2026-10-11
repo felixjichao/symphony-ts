@@ -1375,5 +1375,197 @@ describe("DecisionTabDriver", () => {
       globalThis.document = prevDoc;
     }
   });
+
+  it("resolves supersede race during execution into terminal superseded outcome without failing the driver (V1)", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const supersededTask: DecisionTask = { ...sampleTask, status: "superseded", lease: null };
+    const failureSubmission = vi.fn().mockRejectedValue(
+      new BridgeHttpError("Cannot fail superseded task", "conflict", 409)
+    );
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/binding")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/start")) {
+          return {} as unknown as T;
+        }
+        if (method === "POST" && path.includes("/fail")) {
+          return await failureSubmission();
+        }
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: supersededTask } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const mockAdapter: DecisionExecutorAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"],
+      supportedContextStrategies: ["connector", "materialized"],
+      inspectBinding: vi.fn().mockResolvedValue({ status: "none" }),
+      createSession: vi.fn().mockResolvedValue({
+        binding: {
+          schemaVersion: 1,
+          adapter: "chatgpt-web",
+          externalSessionRef: "conv-1",
+          resumeUri: "https://chatgpt.com/c/conv-1",
+          generation: 1,
+        },
+      }),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn().mockRejectedValue(new Error("model exploded mid-review")),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter,
+      ownerId: "driver-1",
+    });
+
+    const outcome = await driver.executeClaimedTask(
+      sampleTask,
+      sampleSession,
+      sampleLease,
+      sampleContext
+    );
+
+    expect(outcome.status).toBe("superseded");
+    if (outcome.status === "superseded") {
+      expect(outcome.error).toBeInstanceOf(BridgeHttpError);
+    }
+    // Stale checkpoint (and any candidate state) must be dropped, driver keeps polling
+    expect(cpStore.get()).toBeNull();
+    expect(failureSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows 409 conflict when the task is not superseded during execution", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const runningTask: DecisionTask = { ...sampleTask, status: "running" };
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/binding")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/start")) {
+          return {} as unknown as T;
+        }
+        if (method === "POST" && path.includes("/fail")) {
+          throw new BridgeHttpError("Claim lease has already expired", "conflict", 409);
+        }
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: runningTask } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const mockAdapter: DecisionExecutorAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"],
+      supportedContextStrategies: ["connector", "materialized"],
+      inspectBinding: vi.fn().mockResolvedValue({ status: "none" }),
+      createSession: vi.fn().mockResolvedValue({
+        binding: {
+          schemaVersion: 1,
+          adapter: "chatgpt-web",
+          externalSessionRef: "conv-1",
+          resumeUri: "https://chatgpt.com/c/conv-1",
+          generation: 1,
+        },
+      }),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn().mockRejectedValue(new Error("model exploded mid-review")),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter,
+      ownerId: "driver-1",
+    });
+
+    await expect(
+      driver.executeClaimedTask(sampleTask, sampleSession, sampleLease, sampleContext)
+    ).rejects.toThrow("Claim lease has already expired");
+  });
+
+  it("resolves supersede race on checkpoint resume candidate result submission (V1)", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const candidateResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: cpStore.tabId,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: sampleLease.owner,
+      leaseToken: sampleLease.token,
+      leaseGeneration: sampleLease.generation,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 1,
+      step: "result_extracted",
+      attemptId: "attempt-1",
+      savedAtMs: Date.now(),
+      candidateResult,
+    });
+
+    // Task looks active on the first status check, but is superseded by the time the
+    // candidate result submission lands (bridge rejects with 409)
+    let currentStatus: DecisionTask["status"] = "running";
+    const supersededTask = (): DecisionTask => ({
+      ...sampleTask,
+      status: currentStatus,
+      lease: currentStatus === "superseded" ? null : sampleTask.lease,
+    });
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: supersededTask() } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/v1/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/result")) {
+          currentStatus = "superseded";
+          throw new BridgeHttpError("Cannot submit result for superseded task", "conflict", 409);
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      ownerId: "driver-1",
+    });
+
+    const outcome = await driver.runOnce();
+
+    expect(outcome?.status).toBe("superseded");
+    // Stale candidate result must not survive; driver continues with newer tasks
+    expect(cpStore.get()).toBeNull();
+  });
 });
 

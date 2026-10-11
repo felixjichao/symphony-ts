@@ -2,7 +2,7 @@
  * Tampermonkey userscript entrypoint.
  * Injects a floating control HUD into ChatGPT Web and orchestrates DecisionTabDriver.
  */
-import { GmBridgeTransport, FetchBridgeTransport, type BridgeTransport } from "./transport";
+import { GmBridgeTransport, FetchBridgeTransport, BridgeHttpError, type BridgeTransport } from "./transport";
 import { GmCheckpointStore } from "./checkpoint";
 import { ChatGptWebAdapter } from "./adapter";
 import { DecisionTabDriver } from "./driver";
@@ -243,11 +243,23 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         checkpointStore,
         adapter,
         onError: (err: Error) => {
-          if (currentDriver) {
-            currentDriver.stop();
-            currentDriver = null;
+          // Auth failures are fatal: polling would loop on 401/403 until credentials
+          // are fixed by the operator, so stop and surface the error.
+          const isAuthError =
+            err instanceof BridgeHttpError && (err.status === 401 || err.status === 403);
+          if (isAuthError) {
+            if (currentDriver) {
+              currentDriver.stop();
+              currentDriver = null;
+            }
+            updateUI(false, `Error: ${err.message}`, true);
+            return;
           }
-          updateUI(false, `Error: ${err.message}`, true);
+          // Recoverable operational error (transient network failure, supersede race,
+          // lease expiry): keep polling. Checkpoint recovery and the bridge's lease /
+          // supersede semantics own reconciliation; stopping here would require a
+          // manual Start for every transient conflict.
+          updateUI(true, `Recovered from error: ${err.message}`);
         },
       });
 
