@@ -793,20 +793,32 @@ export class DecisionService {
           headSha: target.headSha,
         };
       }
-      if (requirements) {
-        const curFp = computeRequirementFingerprint(
-          requirements.title,
-          requirements.body,
-          requirements.clarifications ?? []
-        );
-        if (curFp !== latestPlan.requirements.fingerprint) {
-          return {
-            approved: false,
-            reason: `Requirements changed since plan was created`,
-            sessionId,
-            headSha: target.headSha,
-          };
-        }
+      // A session plan exists, so approval is bound to those requirements. Refuse
+      // to fall open when the caller omits the current requirements: an
+      // unreadable/stale Issue must block the merge rather than silently reuse an
+      // old approval.
+      if (!requirements) {
+        return {
+          approved: false,
+          reason: "Current requirements not provided; cannot verify approval against the session plan",
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+      const curFp = computeRequirementFingerprint(
+        requirements.title,
+        requirements.body,
+        // Clarifications are durable operator input from the plan; fall back to
+        // the saved set when the caller only supplies GitHub Issue facts.
+        requirements.clarifications ?? latestPlan.requirements.clarifications
+      );
+      if (curFp !== latestPlan.requirements.fingerprint) {
+        return {
+          approved: false,
+          reason: `Requirements changed since plan was created`,
+          sessionId,
+          headSha: target.headSha,
+        };
       }
     }
 
@@ -1437,10 +1449,16 @@ export class DecisionService {
     }
 
     if (requirements) {
+      // The durable plan persists the authoritative answered clarifications (they
+      // are operator input, not GitHub facts). Callers supply the current Issue
+      // title/body; when they do not carry clarifications, fall back to the saved
+      // set so the clarification loop does not produce a permanent fingerprint
+      // mismatch. Explicit clarifications still take precedence.
+      const clarifications = requirements.clarifications ?? planRecord.requirements.clarifications;
       const currentFingerprint = computeRequirementFingerprint(
         requirements.title,
         requirements.body,
-        requirements.clarifications ?? []
+        clarifications
       );
       if (currentFingerprint !== planRecord.requirements.fingerprint) {
         return {

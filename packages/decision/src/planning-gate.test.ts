@@ -346,4 +346,78 @@ describe("DecisionPlanningGate", () => {
       await bridge.stop();
     }
   });
+
+  it("sync bridge lookups observe planning state changes (no stale cache)", async () => {
+    await service.createSession({ provider: "github", key: "felixjichao/symphony-ts#99" });
+    // The default sync transport shells out to curl (bridge runs out-of-process).
+    // Inject a transport backed by the live service so the no-cache behavior can
+    // be asserted without blocking an in-process HTTP server.
+    const client = new DecisionBridgeClient("http://127.0.0.1:0", {
+      syncTransport: (_method, path, body) => {
+        if (path === "/v1/plans/verify") {
+          const payload = body as {
+            sessionId: string;
+            requirements?: { title: string; body: string; clarifications?: readonly string[] };
+          };
+          return { eligibility: service.verifyPlanEligibility(payload.sessionId, payload.requirements) };
+        }
+        const latest = /^\/v1\/plans\/(.+)\/latest$/.exec(path);
+        if (latest) {
+          return { plan: service.getLatestPlanForSession(decodeURIComponent(latest[1]!)) };
+        }
+        throw new Error(`unexpected sync path: ${path}`);
+      },
+    });
+
+    const requirements = { title: "Sync Issue", body: "Sync Body" };
+
+    // No plan yet: fail closed. This negative result must not be cached.
+    expect(client.verifyPlanEligibilitySync(sessionId, requirements).eligible).toBe(false);
+    expect(client.getLatestPlanSync(sessionId)).toBeNull();
+
+    // Complete and publish revision 1.
+    const task1 = await service.createPlanTask(sessionId, { requirements });
+    const c1 = await service.claimTask(task1.id, { owner: "p", ttlMs: 60_000 });
+    await service.startTask(task1.id, {
+      owner: "p",
+      token: c1.lease.token,
+      generation: c1.lease.generation,
+    });
+    await service.submitResult(task1.id, {
+      owner: "p",
+      token: c1.lease.token,
+      generation: c1.lease.generation,
+      result: {
+        schemaVersion: 1,
+        taskId: task1.id,
+        sessionId,
+        revision: task1.revision,
+        createdAtMs: clockTime,
+        kind: "plan",
+        verdict: "ready",
+        content: { plan: "v1", acceptanceCriteria: [], risks: [], clarifications: [] },
+      },
+    });
+    await service.markPlanPublished(task1.id, { commentId: 1 });
+
+    // Positive result is observed immediately.
+    expect(client.verifyPlanEligibilitySync(sessionId, requirements).eligible).toBe(true);
+    expect(client.getLatestPlanSync(sessionId)?.revision).toBe(1);
+
+    // A pending replan must invalidate the earlier positive authorization.
+    const task2 = await service.createPlanTask(sessionId, {
+      triggerKind: "requirements_changed",
+      previousTaskId: task1.id,
+      requirements: { title: "Sync Issue", body: "Sync Body v2" },
+    });
+
+    const afterReplan = client.verifyPlanEligibilitySync(sessionId, {
+      title: "Sync Issue",
+      body: "Sync Body v2",
+    });
+    expect(afterReplan.eligible).toBe(false);
+    const latest2 = client.getLatestPlanSync(sessionId);
+    expect(latest2?.revision).toBe(2);
+    expect(latest2?.taskId).toBe(task2.id);
+  });
 });

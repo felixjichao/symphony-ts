@@ -807,4 +807,78 @@ describe("DecisionService", () => {
       await cleanup();
     }
   });
+
+  it("applies durable clarifications to eligibility and review approval, and fails closed when requirements are omitted", async () => {
+    const { service, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 99);
+      const session = await service.createSession(root);
+      // A clarification round persists the answered clarifications with the plan.
+      const task = await service.createPlanTask(session.id, {
+        triggerKind: "clarification",
+        requirements: { title: "Clarified", body: "Body", clarifications: ["Use TypeScript"] },
+      });
+      const claim = await service.claimTask(task.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+      });
+      await service.submitResult(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task.id,
+          sessionId: session.id,
+          revision: task.revision,
+          createdAtMs: 1000,
+          kind: "plan",
+          verdict: "ready",
+          content: { plan: "Clarified plan", acceptanceCriteria: [], risks: [], clarifications: [] },
+        },
+      });
+      await service.markPlanPublished(task.id, { commentId: 55 });
+
+      // Dispatch/delivery callers only surface GitHub title/body; the durable
+      // clarifications must be applied so the fingerprint still matches.
+      const eligibility = service.verifyPlanEligibility(session.id, {
+        title: "Clarified",
+        body: "Body",
+      });
+      expect(eligibility.eligible).toBe(true);
+
+      // A genuine Issue requirement change still blocks.
+      const drifted = service.verifyPlanEligibility(session.id, {
+        title: "Clarified",
+        body: "Body changed",
+      });
+      expect(drifted.eligible).toBe(false);
+      expect(drifted.reason).toBe("requirements_changed");
+
+      const target: DecisionReviewTarget = {
+        repository: "felixjichao/symphony-ts",
+        prNumber: 7,
+        headSha: "abc123",
+      };
+
+      // A session plan exists: omitting requirements must fail closed instead of
+      // silently reusing an old approval.
+      const omitted = service.verifyReviewApproval(session.id, target);
+      expect(omitted.approved).toBe(false);
+      expect(omitted.reason).toContain("requirements");
+
+      // With GitHub facts only, durable clarifications are applied; the remaining
+      // failure is the absent review task, not a fingerprint mismatch.
+      const withFacts = service.verifyReviewApproval(session.id, target, {
+        title: "Clarified",
+        body: "Body",
+      });
+      expect(withFacts.approved).toBe(false);
+      expect(withFacts.reason).not.toContain("Requirements changed");
+    } finally {
+      await cleanup();
+    }
+  });
 });

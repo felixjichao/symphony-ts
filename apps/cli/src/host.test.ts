@@ -585,6 +585,84 @@ describe("createHost in-process composition", () => {
     }
   });
 
+  it("dispatches a clarified plan even though Issue facts carry no clarifications", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-clarify-test-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const storeDir = path.join(temp, ".symphony", "decision");
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+
+      const store = new DurableDecisionStore({ storeDir });
+      await store.open();
+      const service = new DecisionService(store);
+      const root = githubDecisionRoot("owner", "repo", 77);
+      await service.createSession(root);
+      const sessionId = decisionSessionId(root);
+
+      // Mirrors the durable result of `symphony plan clarify`: answered
+      // clarifications are persisted with the plan and folded into its fingerprint.
+      const task = await service.createPlanTask(sessionId, {
+        triggerKind: "clarification",
+        requirements: {
+          title: "Clarified issue",
+          body: "Original body",
+          clarifications: ["Use approach A"],
+        },
+      });
+      const claim = await service.claimTask(task.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+      });
+      await service.submitResult(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task.id,
+          sessionId,
+          revision: task.revision,
+          kind: "plan",
+          verdict: "ready",
+          content: { plan: "Use approach A", acceptanceCriteria: ["AC"], risks: [], clarifications: [] },
+          createdAtMs: Date.now(),
+        },
+      });
+      await service.markPlanPublished(task.id, { commentId: 202 });
+
+      const host = await createHost({
+        workflowPath,
+        planningGate: new DecisionPlanningGate(service),
+        enablePlanning: true,
+        env: { GITHUB_TOKEN: "dummy" },
+      });
+
+      const issue = makeIssue("GH-77", "open", {
+        title: "Clarified issue",
+        description: "Original body",
+        url: "https://github.com/owner/repo/issues/77",
+        nativeRef: { repo: "owner/repo", number: 77 },
+      });
+
+      // The dispatch entry only knows GitHub title/body; the service must apply
+      // the durable clarifications instead of reporting requirements_changed.
+      const res = host.authority.dispatchIssue(issue);
+      expect(res.kind).toBe("dispatched");
+
+      await host.authority.shutdown();
+      await host.stop();
+      await store.close();
+    } finally {
+      await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
   it("createHost auto-creates DecisionPlanningGate from storeDir and cleanly closes owned store on stop", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-planning-auto-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");

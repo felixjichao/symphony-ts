@@ -38,19 +38,50 @@ import type {
   DecisionPlanRecord,
 } from "./types";
 
+/**
+ * Transport for synchronous bridge lookups. The default implementation shells
+ * out to curl (a bridge runs in a separate process). It is injectable so the
+ * no-cache behavior can be exercised without blocking an in-process server.
+ */
+export type DecisionBridgeSyncTransport = (
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+) => unknown;
+
 export interface DecisionBridgeClientOptions {
   readonly authToken?: string | undefined;
+  readonly syncTransport?: DecisionBridgeSyncTransport | undefined;
 }
 
 export class DecisionBridgeClient {
   readonly baseUrl: string;
   readonly authToken: string | undefined;
-  private readonly eligibilityCache = new Map<string, { fingerprint: string; result: PlanningEligibilityResult }>();
-  private readonly latestPlanCache = new Map<string, DecisionPlanRecord | null>();
+  private readonly syncTransport: DecisionBridgeSyncTransport | undefined;
 
   constructor(baseUrl: string, options: DecisionBridgeClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.authToken = options.authToken;
+    this.syncTransport = options.syncTransport;
+  }
+
+  private syncRequest(method: "GET" | "POST", path: string, body: unknown): unknown {
+    if (this.syncTransport) {
+      return this.syncTransport(method, path, body);
+    }
+    const url = `${this.baseUrl}${path}`;
+    const args = ["-s", "-X", method, url];
+    if (body !== undefined) {
+      args.push("-H", "Content-Type: application/json");
+    }
+    if (this.authToken) {
+      args.push("-H", `Authorization: Bearer ${this.authToken}`);
+    }
+    if (body !== undefined) {
+      args.push("-d", JSON.stringify(body));
+    }
+    const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
+    return JSON.parse(out) as unknown;
   }
 
   private async request<T>(
@@ -252,12 +283,15 @@ export class DecisionBridgeClient {
     },
   ): Promise<VerifyPlanEligibilityResponse> {
     const payload: VerifyPlanEligibilityRequest = { sessionId, requirements };
-    const res = await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
-    const fp = requirements ? `${requirements.title}::${requirements.body}::${(requirements.clarifications ?? []).join(";")}` : "";
-    this.eligibilityCache.set(sessionId, { fingerprint: fp, result: res.eligibility });
-    return res;
+    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
   }
 
+  // Synchronous lookups are used by the orchestrator's dispatch gate, which must
+  // observe the current authoritative planning state. They intentionally do not
+  // cache: the plan revision, publish status, and verdict can change between two
+  // dispatches for otherwise identical requirements, so any cached result would
+  // grant stale authorization (or permanently reject a finished plan). A bridge
+  // failure fails closed.
   verifyPlanEligibilitySync(
     sessionId: string,
     requirements?: {
@@ -266,26 +300,16 @@ export class DecisionBridgeClient {
       readonly clarifications?: readonly string[] | undefined;
     },
   ): PlanningEligibilityResult {
-    const fp = requirements ? `${requirements.title}::${requirements.body}::${(requirements.clarifications ?? []).join(";")}` : "";
-    const cached = this.eligibilityCache.get(sessionId);
-    if (cached && cached.fingerprint === fp) {
-      return cached.result;
-    }
     try {
-      const url = `${this.baseUrl}/v1/plans/verify`;
-      const args = ["-s", "-X", "POST", url, "-H", "Content-Type: application/json"];
-      if (this.authToken) {
-        args.push("-H", `Authorization: Bearer ${this.authToken}`);
-      }
-      args.push("-d", JSON.stringify({ sessionId, requirements }));
-      const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
-      const parsed = JSON.parse(out) as VerifyPlanEligibilityResponse;
+      const parsed = this.syncRequest("POST", "/v1/plans/verify", {
+        sessionId,
+        requirements,
+      }) as VerifyPlanEligibilityResponse;
       if (parsed && parsed.eligibility) {
-        this.eligibilityCache.set(sessionId, { fingerprint: fp, result: parsed.eligibility });
         return parsed.eligibility;
       }
     } catch {
-      // Fallback
+      // Fail closed on bridge failure.
     }
     return {
       eligible: false,
@@ -306,33 +330,24 @@ export class DecisionBridgeClient {
   }
 
   async getLatestPlan(sessionId: string): Promise<GetLatestPlanResponse> {
-    const res = await this.request<GetLatestPlanResponse>(
+    return await this.request<GetLatestPlanResponse>(
       "GET",
       `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
     );
-    this.latestPlanCache.set(sessionId, res.plan);
-    return res;
   }
 
   getLatestPlanSync(sessionId: string): DecisionPlanRecord | null {
-    const cached = this.latestPlanCache.get(sessionId);
-    if (cached !== undefined) {
-      return cached;
-    }
     try {
-      const url = `${this.baseUrl}/v1/plans/${encodeURIComponent(sessionId)}/latest`;
-      const args = ["-s", "-X", "GET", url];
-      if (this.authToken) {
-        args.push("-H", `Authorization: Bearer ${this.authToken}`);
-      }
-      const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
-      const parsed = JSON.parse(out) as GetLatestPlanResponse;
+      const parsed = this.syncRequest(
+        "GET",
+        `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
+        undefined,
+      ) as GetLatestPlanResponse;
       if (parsed) {
-        this.latestPlanCache.set(sessionId, parsed.plan);
         return parsed.plan;
       }
     } catch {
-      // Fallback
+      // Fail closed on bridge failure.
     }
     return null;
   }

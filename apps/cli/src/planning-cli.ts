@@ -65,6 +65,65 @@ function buildPlanningContext(params: {
   };
 }
 
+/**
+ * Full validation of a published plan comment against the durable plan record.
+ *
+ * Reading a comment that merely contains a marker is not proof that the current
+ * structured result is durably visible: the marker could carry a different
+ * revision, fingerprint, verdict, or a body that does not render the durable
+ * result. Fail closed unless every marker field and the readable body agree with
+ * the durable record.
+ */
+export function validatePlanCommentAgainstRecord(params: {
+  readonly body: string;
+  readonly repo: string | undefined;
+  readonly issueNumber: number | undefined;
+  readonly sessionId: string;
+  readonly plan: DecisionPlanRecord;
+}): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
+  const { body, repo, issueNumber, sessionId, plan } = params;
+  const marker = parsePlanCommentMarker(body);
+  if (!marker) {
+    return { ok: false, reason: "does not contain a valid Symphony plan marker" };
+  }
+  if (!repo || marker.repo.toLowerCase() !== repo.toLowerCase()) {
+    return { ok: false, reason: `marker repository mismatch (marker: "${marker.repo}", expected: "${repo ?? ""}")` };
+  }
+  if (issueNumber === undefined || marker.issueNumber !== issueNumber) {
+    return { ok: false, reason: `marker issue mismatch (marker: #${marker.issueNumber}, expected: #${issueNumber ?? "?"})` };
+  }
+  if (marker.sessionId !== sessionId) {
+    return { ok: false, reason: `marker session mismatch (marker: "${marker.sessionId}", expected: "${sessionId}")` };
+  }
+  if (marker.taskId !== plan.taskId) {
+    return { ok: false, reason: `comment marker task mismatch (marker task: "${marker.taskId}", expected: "${plan.taskId}")` };
+  }
+  if (marker.revision !== plan.revision) {
+    return { ok: false, reason: `marker revision mismatch (marker: ${marker.revision}, expected: ${plan.revision})` };
+  }
+  if (marker.triggerKind !== plan.triggerKind) {
+    return { ok: false, reason: `marker trigger mismatch (marker: "${marker.triggerKind}", expected: "${plan.triggerKind}")` };
+  }
+  if (marker.fingerprint !== plan.requirements.fingerprint) {
+    return { ok: false, reason: "marker fingerprint does not match the durable plan requirements" };
+  }
+  if (!plan.result || plan.result.kind !== "plan") {
+    return { ok: false, reason: "durable plan record has no structured plan result" };
+  }
+  if (marker.verdict !== plan.result.verdict) {
+    return { ok: false, reason: `marker verdict mismatch (marker: "${marker.verdict}", expected: "${plan.result.verdict}")` };
+  }
+  const expectedBody = formatPlanCommentMarkdown({ marker, planResult: plan.result });
+  if (normalizeCommentBody(body) !== normalizeCommentBody(expectedBody)) {
+    return { ok: false, reason: "comment body does not match the durable structured plan result" };
+  }
+  return { ok: true };
+}
+
+function normalizeCommentBody(body: string): string {
+  return body.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trimEnd();
+}
+
 export interface PlanningCliIo {
   readonly stdout: { write(text: string): unknown };
   readonly stderr: { write(text: string): unknown };
@@ -443,14 +502,15 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
           }
 
           const body = String(commentJson["body"] ?? "");
-          const marker = parsePlanCommentMarker(body);
-          if (!marker) {
-            io.stderr.write(`symphony plan: error: comment ${args.commentId} does not contain a valid Symphony plan marker\n`);
-            return 1;
-          }
-
-          if (marker.sessionId !== sessionId || marker.taskId !== latestPlan.taskId) {
-            io.stderr.write(`symphony plan: error: comment marker task mismatch (marker task: "${marker.taskId}", expected: "${latestPlan.taskId}")\n`);
+          const validation = validatePlanCommentAgainstRecord({
+            body,
+            repo,
+            issueNumber,
+            sessionId,
+            plan: latestPlan,
+          });
+          if (!validation.ok) {
+            io.stderr.write(`symphony plan: error: comment ${args.commentId} is not a valid published record of the current plan: ${validation.reason}\n`);
             return 1;
           }
 
@@ -481,8 +541,12 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
             return 1;
           }
 
-          // Check for existing matching comment first (crash recovery idempotency)
+          // Check for existing matching comment first (crash recovery idempotency).
+          // A comment that carries our session/task marker must fully match the
+          // durable record; an inconsistent marker is rejected rather than accepted
+          // or silently duplicated.
           let existingCommentId: number | null = null;
+          let inconsistentReason: string | null = null;
           try {
             const commentsOut = runGh([
               "api",
@@ -492,17 +556,31 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
             const comments = JSON.parse(commentsOut);
             if (Array.isArray(comments)) {
               for (const c of comments) {
-                if (typeof c["body"] === "string") {
-                  const m = parsePlanCommentMarker(c["body"]);
-                  if (m && m.sessionId === sessionId && m.taskId === latestPlan.taskId && m.revision === latestPlan.revision) {
-                    existingCommentId = Number(c["id"]);
-                    break;
-                  }
+                if (typeof c["body"] !== "string") continue;
+                const m = parsePlanCommentMarker(c["body"]);
+                if (!m || m.sessionId !== sessionId || m.taskId !== latestPlan.taskId) continue;
+                const validation = validatePlanCommentAgainstRecord({
+                  body: c["body"],
+                  repo,
+                  issueNumber,
+                  sessionId,
+                  plan: latestPlan,
+                });
+                if (validation.ok) {
+                  existingCommentId = Number(c["id"]);
+                  break;
                 }
+                inconsistentReason = validation.reason;
+                break;
               }
             }
           } catch {
-            // best-effort
+            // best-effort; absence of a readable comment set means we must publish
+          }
+
+          if (inconsistentReason !== null) {
+            io.stderr.write(`symphony plan: error: existing comment for plan "${latestPlan.taskId}" is inconsistent with the durable record: ${inconsistentReason}\n`);
+            return 1;
           }
 
           if (existingCommentId !== null) {
@@ -561,8 +639,15 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
                   for (let idx = comments.length - 1; idx >= 0; idx--) {
                     const c = comments[idx];
                     if (typeof c["body"] === "string") {
-                      const m = parsePlanCommentMarker(c["body"]);
-                      if (m && m.sessionId === sessionId && m.taskId === latestPlan.taskId && m.revision === latestPlan.revision) {
+                      if (
+                        validatePlanCommentAgainstRecord({
+                          body: c["body"],
+                          repo,
+                          issueNumber,
+                          sessionId,
+                          plan: latestPlan,
+                        }).ok
+                      ) {
                         publishedCommentId = Number(c["id"]);
                         break;
                       }

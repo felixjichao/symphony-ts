@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 
 import {
   runDeliverySkill,
@@ -358,19 +357,28 @@ export async function runDeliverySkillCli(
       ? decisionSessionId({ provider: "github", key: `${parsed.repo.toLowerCase()}#${parsed.issueNumber}` })
       : undefined);
     if (sId) {
-      let requirements: { readonly title: string; readonly body: string } | undefined;
+      // The planning gate verifies the current Issue requirements against the
+      // durable plan. If GitHub facts cannot be read, fail closed instead of
+      // silently skipping the requirement-drift check.
+      let requirements: { readonly title: string; readonly body: string };
       try {
-        const ghArgs = ["issue", "view", String(parsed.issueNumber), "--json", "title,body"];
-        if (parsed.repo) {
-          ghArgs.push("--repo", parsed.repo);
+        const viewRes = await runner.gh(
+          ["issue", "view", String(parsed.issueNumber), "--json", "title,body", "--repo", parsed.repo],
+          cwd,
+        );
+        if (viewRes.exitCode !== 0) {
+          throw new Error(viewRes.stderr || `gh issue view exited ${viewRes.exitCode}`);
         }
-        const out = execFileSync("gh", ghArgs, { encoding: "utf8" });
-        const data = JSON.parse(out);
-        if (data && typeof data.title === "string") {
-          requirements = { title: data.title, body: data.body ?? "" };
+        const data = JSON.parse(viewRes.stdout || "{}");
+        if (!data || typeof data.title !== "string") {
+          throw new Error("Issue view response is missing a string title");
         }
-      } catch {
-        // gh issue view unavailable or failed
+        requirements = { title: data.title, body: typeof data.body === "string" ? data.body : "" };
+      } catch (err) {
+        io.stderr.write(
+          `symphony delivery-skill: error: failed to read current Issue #${parsed.issueNumber} requirements for planning gate verification: ${String(err)}\n`,
+        );
+        return 1;
       }
 
       const planningGate = new DecisionPlanningGate(client);

@@ -67,8 +67,23 @@ describe("GitHubDeliveryService", () => {
     ...overrides,
   });
 
-  const createMockRunner = (handler: (args: readonly string[], options?: GhExecOptions) => Promise<GhExecResult>): GhRunner => ({
-    exec: vi.fn(handler),
+  const createMockRunner = (
+    handler: (args: readonly string[], options?: GhExecOptions) => Promise<GhExecResult>,
+    issueView?: GhExecResult | (() => GhExecResult | Promise<GhExecResult>),
+  ): GhRunner => ({
+    exec: vi.fn(async (args: readonly string[], options?: GhExecOptions) => {
+      if (args[0] === "issue" && args[1] === "view") {
+        if (issueView !== undefined) {
+          return typeof issueView === "function" ? await issueView() : issueView;
+        }
+        return {
+          stdout: JSON.stringify({ title: "Default Issue Title", body: "Default issue body" }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return handler(args, options);
+    }),
   });
 
   describe("ensurePr", () => {
@@ -981,6 +996,108 @@ describe("GitHubDeliveryService", () => {
       expect(result.prNumber).toBe(81);
       expect(result.mergeCommitSha).toBe("squashcommit81");
       expect(result.mergedAt).toBe("2026-10-04T09:10:00Z");
+    });
+
+    it("forwards the current Issue requirements to the review gate before merge", async () => {
+      let mergedState = false;
+      const runner = createMockRunner(
+        async (args) => {
+          const cmd = args[0];
+          const sub = args[1];
+          if (cmd === "pr" && sub === "view") {
+            return {
+              stdout: JSON.stringify(defaultMockPr({
+                number: 81,
+                title: "PR 81",
+                state: mergedState ? "MERGED" : "OPEN",
+                mergedAt: mergedState ? "2026-10-04T09:10:00Z" : null,
+                mergeCommit: mergedState ? { oid: "squash81" } : null,
+                statusCheckRollup: [
+                  { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+                ],
+              })),
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (cmd === "api" && sub === "graphql") {
+            return {
+              stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } } }),
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+            return { stdout: "[]", stderr: "", exitCode: 0 };
+          }
+          if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/pulls/81/merge")) {
+            mergedState = true;
+            return { stdout: JSON.stringify({ sha: "squash81", merged: true }), stderr: "", exitCode: 0 };
+          }
+          throw new Error(`Unexpected command: ${args.join(" ")}`);
+        },
+        { stdout: JSON.stringify({ title: "Live Issue Title", body: "Live Issue Body" }), stderr: "", exitCode: 0 },
+      );
+
+      const service = new GitHubDeliveryService(runner);
+      const verifyFn = vi.fn().mockResolvedValue({ approved: true, reason: "ok", verdict: "approve" });
+      const gate: DeliveryReviewGate = {
+        ensureReviewTask: vi.fn(),
+        getReviewStatus: vi.fn(),
+        verifyReviewApproval: verifyFn,
+      };
+
+      await service.landPr(context, { optIn: true, prNumber: 81, reviewGate: gate });
+      expect(verifyFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requirements: { title: "Live Issue Title", body: "Live Issue Body" },
+        }),
+      );
+    });
+
+    it("blocks merge when the current Issue requirements cannot be read", async () => {
+      let mergeCalled = false;
+      const runner = createMockRunner(
+        async (args) => {
+          const cmd = args[0];
+          const sub = args[1];
+          if (cmd === "pr" && sub === "view") {
+            return {
+              stdout: JSON.stringify(defaultMockPr({
+                number: 81,
+                title: "PR 81",
+                statusCheckRollup: [
+                  { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+                ],
+              })),
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (cmd === "api" && sub === "graphql") {
+            return {
+              stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } } }),
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+            return { stdout: "[]", stderr: "", exitCode: 0 };
+          }
+          if (cmd === "api" && typeof args[1] === "string" && args[1].includes("/merge")) {
+            mergeCalled = true;
+            return { stdout: "{}", stderr: "", exitCode: 0 };
+          }
+          throw new Error(`Unexpected command: ${args.join(" ")}`);
+        },
+        { stdout: "", stderr: "Issue not found", exitCode: 1 },
+      );
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(
+        service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate }),
+      ).rejects.toMatchObject({ code: "requirements_unavailable" });
+      expect(mergeCalled).toBe(false);
     });
   });
 

@@ -12,6 +12,9 @@ describe("planning-cli", () => {
   let stderrBuffer: string[];
   let io: PlanningCliIo;
 
+  const sessionId = "github:felixjichao/symphony-ts#99";
+  const repo = "felixjichao/symphony-ts";
+
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "planning-cli-test-"));
     stdoutBuffer = [];
@@ -60,7 +63,7 @@ describe("planning-cli", () => {
     expect(parsed.json).toBe(true);
   });
 
-  it("executes plan start, status, clarify, replan, and sync against a store", async () => {
+  it("executes plan start, status, clarify, and replan against a store", async () => {
     // 1. Start planning task
     const code1 = await runPlanningCli(
       [
@@ -127,7 +130,7 @@ describe("planning-cli", () => {
     const store = new DurableDecisionStore({ storeDir: tmpDir });
     await store.open();
     const service = new DecisionService(store);
-    const session = service.getSession("github:felixjichao/symphony-ts#99");
+    const session = service.getSession(sessionId);
     expect(session).not.toBeNull();
     const latestPlan = service.getLatestPlanForSession(session!.id);
     expect(latestPlan).not.toBeNull();
@@ -139,72 +142,6 @@ describe("planning-cli", () => {
       expect(context.issue.body).toContain("Clarification item 1");
     }
     await store.close();
-
-    // 5. Sync comment-id verifies against GitHub
-    // Case 5a: Non-existent comment fails
-    const failingIo: PlanningCliIo = {
-      ...io,
-      execGh: () => {
-        throw new Error("HTTP 404: Not Found");
-      },
-    };
-    stdoutBuffer.length = 0;
-    stderrBuffer.length = 0;
-    const failCode = await runPlanningCli(
-      [
-        "sync",
-        "--repo", "felixjichao/symphony-ts",
-        "--issue", "99",
-        "--comment-id", "does-not-exist",
-        "--store", tmpDir,
-      ],
-      failingIo,
-    );
-    expect(failCode).toBe(1);
-    expect(stderrBuffer.join("")).toContain("failed to verify GitHub comment");
-
-    // Case 5b: Valid GitHub comment with marker succeeds
-    const markerJson: PlanCommentMarker = {
-      schemaVersion: 1,
-      repo: "felixjichao/symphony-ts",
-      issueNumber: 99,
-      sessionId: "github:felixjichao/symphony-ts#99",
-      taskId: latestPlan!.taskId,
-      revision: latestPlan!.revision,
-      triggerKind: latestPlan!.triggerKind,
-      fingerprint: latestPlan!.requirements.fingerprint,
-      verdict: "ready",
-    };
-    const markerComment = serializePlanCommentMarker(markerJson);
-    const mockedIo: PlanningCliIo = {
-      ...io,
-      execGh: (args) => {
-        if (args[0] === "api" && args[1]?.includes("issues/comments/12345")) {
-          return JSON.stringify({
-            id: 12345,
-            issue_url: "https://api.github.com/repos/felixjichao/symphony-ts/issues/99",
-            body: `Plan details\n\n${markerComment}`,
-            created_at: "2026-10-11T04:00:00Z",
-          });
-        }
-        throw new Error(`Unexpected command: ${args.join(" ")}`);
-      },
-    };
-
-    stdoutBuffer.length = 0;
-    stderrBuffer.length = 0;
-    const code5 = await runPlanningCli(
-      [
-        "sync",
-        "--repo", "felixjichao/symphony-ts",
-        "--issue", "99",
-        "--comment-id", "12345",
-        "--store", tmpDir,
-      ],
-      mockedIo,
-    );
-    expect(code5).toBe(0);
-    expect(stdoutBuffer.join("")).toContain("Marked plan");
   });
 
   it("publishes non-ready verdicts (needs_clarification, needs_human) to GitHub via sync --publish", async () => {
@@ -225,7 +162,7 @@ describe("planning-cli", () => {
     const store = new DurableDecisionStore({ storeDir: tmpDir });
     await store.open();
     const service = new DecisionService(store);
-    const session = service.getSession("github:felixjichao/symphony-ts#99")!;
+    const session = service.getSession(sessionId)!;
     const latestPlan = service.getLatestPlanForSession(session.id)!;
     const claim = await service.claimTask(latestPlan.taskId, { owner: "planner", ttlMs: 60_000 });
     await service.startTask(latestPlan.taskId, {
@@ -288,6 +225,150 @@ describe("planning-cli", () => {
     expect(pubCode).toBe(0);
     expect(stdoutBuffer.join("")).toContain("Plan published to GitHub issue #99 (comment #98765, verdict: needs_clarification)");
     expect(postedBody).toContain("What is the target format?");
+  });
+
+  it("verifies the full marker and readable body against the durable record before accepting a published plan", async () => {
+    // 1. Start and complete a ready plan.
+    await runPlanningCli(
+      [
+        "start",
+        "--repo", repo,
+        "--issue", "99",
+        "--title", "Ready Plan",
+        "--body", "Do the thing",
+        "--store", tmpDir,
+      ],
+      io,
+    );
+
+    const { DurableDecisionStore, DecisionService } = await import("@symphony/decision");
+    const store = new DurableDecisionStore({ storeDir: tmpDir });
+    await store.open();
+    const service = new DecisionService(store);
+    const session = service.getSession(sessionId)!;
+    const plan = service.getLatestPlanForSession(session.id)!;
+    const claim = await service.claimTask(plan.taskId, { owner: "planner", ttlMs: 60_000 });
+    await service.startTask(plan.taskId, {
+      owner: "planner",
+      token: claim.lease.token,
+      generation: claim.lease.generation,
+    });
+    await service.submitResult(plan.taskId, {
+      owner: "planner",
+      token: claim.lease.token,
+      generation: claim.lease.generation,
+      result: {
+        schemaVersion: 1,
+        taskId: plan.taskId,
+        sessionId: session.id,
+        revision: plan.revision,
+        kind: "plan",
+        verdict: "ready",
+        content: {
+          plan: "Implement the feature",
+          acceptanceCriteria: ["Tests pass"],
+          risks: ["Concurrency"],
+          clarifications: [],
+        },
+        createdAtMs: Date.now(),
+      },
+    });
+    const ready = service.getLatestPlanForSession(session.id)!;
+    await store.close();
+
+    // 2. Publish to GitHub and capture the exact rendered comment body.
+    let postedBody = "";
+    const publishIo: PlanningCliIo = {
+      ...io,
+      execGh: (args) => {
+        if (args[0] === "api" && args[1]?.includes("/comments")) return "[]";
+        if (args[0] === "issue" && args[1] === "comment") {
+          const bodyIdx = args.indexOf("--body");
+          postedBody = bodyIdx >= 0 ? (args[bodyIdx + 1] ?? "") : "";
+          return "https://github.com/felixjichao/symphony-ts/issues/99#issuecomment-77777\n";
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      },
+    };
+    const pubCode = await runPlanningCli(
+      ["sync", "--repo", repo, "--issue", "99", "--publish", "--store", tmpDir],
+      publishIo,
+    );
+    expect(pubCode).toBe(0);
+    expect(postedBody).toContain("Implement the feature");
+    expect(postedBody).toContain("<!-- symphony-plan-marker:");
+
+    const commentIo = (body: string): PlanningCliIo => ({
+      ...io,
+      execGh: (args) => {
+        if (args[0] === "api" && args[1]?.includes("issues/comments/77777")) {
+          return JSON.stringify({
+            id: 77777,
+            issue_url: `https://api.github.com/repos/${repo}/issues/99`,
+            body,
+            created_at: "2026-10-11T04:00:00Z",
+          });
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      },
+    });
+
+    // 2a. The genuine published comment is accepted.
+    stdoutBuffer.length = 0;
+    stderrBuffer.length = 0;
+    const okCode = await runPlanningCli(
+      ["sync", "--repo", repo, "--issue", "99", "--comment-id", "77777", "--store", tmpDir],
+      commentIo(postedBody),
+    );
+    expect(okCode).toBe(0);
+    expect(stdoutBuffer.join("")).toContain("Marked plan");
+
+    // 2b. An unreadable GitHub comment blocks.
+    const failingIo: PlanningCliIo = {
+      ...io,
+      execGh: () => {
+        throw new Error("HTTP 404: Not Found");
+      },
+    };
+    stderrBuffer.length = 0;
+    const failCode = await runPlanningCli(
+      ["sync", "--repo", repo, "--issue", "99", "--comment-id", "does-not-exist", "--store", tmpDir],
+      failingIo,
+    );
+    expect(failCode).toBe(1);
+    expect(stderrBuffer.join("")).toContain("failed to verify GitHub comment");
+
+    // 3. Inconsistent comments must be rejected: revision, fingerprint, verdict, and body.
+    const markerBase: PlanCommentMarker = {
+      schemaVersion: 1,
+      repo,
+      issueNumber: 99,
+      sessionId: ready.sessionId,
+      taskId: ready.taskId,
+      revision: ready.revision,
+      triggerKind: ready.triggerKind,
+      fingerprint: ready.requirements.fingerprint,
+      verdict: "ready",
+    };
+    const build = (overrides: Partial<PlanCommentMarker>, readable = "Just a status note without a plan."): string =>
+      `${readable}\n\n${serializePlanCommentMarker({ ...markerBase, ...overrides })}`;
+
+    const negatives: ReadonlyArray<readonly [string, string]> = [
+      ["revision mismatch", build({ revision: ready.revision + 999 })],
+      ["fingerprint mismatch", build({ fingerprint: "0000deadbeef" })],
+      ["verdict mismatch", build({ verdict: "needs_human" })],
+      ["body does not render the durable plan", build({}, "Just a status note without a plan.")],
+    ];
+
+    for (const [label, body] of negatives) {
+      stderrBuffer.length = 0;
+      const code = await runPlanningCli(
+        ["sync", "--repo", repo, "--issue", "99", "--comment-id", "77777", "--store", tmpDir],
+        commentIo(body),
+      );
+      expect(code, label).toBe(1);
+      expect(stderrBuffer.join(""), label).toContain("not a valid published record of the current plan");
+    }
   });
 
   it("outputs help text when requested", async () => {
