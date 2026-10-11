@@ -11,7 +11,7 @@ export interface DeliveryGitGhRunner {
 }
 
 const TOKEN_PATTERNS = [
-  /https?:\/\/[^@\s]+@/g,
+  /https?:\/\/[^@\s"'<>\\]+@/g,
   /ghp_[a-zA-Z0-9]{36,}/g,
   /github_pat_[a-zA-Z0-9_]{50,}/g,
   /Bearer\s+[a-zA-Z0-9_.-]+/gi,

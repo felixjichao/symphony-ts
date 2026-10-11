@@ -1,0 +1,66 @@
+
+> @symphony/agent@0.1.0 test
+> vitest run src/delivery/git-gh-runner.test.ts
+
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+
+ ❯ src/delivery/git-gh-runner.test.ts (6 tests | 2 failed) 6ms
+   × structured GitHub output > preserves compact JSON and SHA fields when HTTPS and SSH URLs coexist 4ms
+     → expected '{"url":"https://***:***@github.com:ow…' to be '{"url":"https://api.github.com/repos/…' // Object.is equality
+   × structured GitHub output > redacts actual credentials without crossing JSON string boundaries 1ms
+     → expected { …(2) } to deeply equal { …(3) }
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/delivery/git-gh-runner.test.ts > structured GitHub output > preserves compact JSON and SHA fields when HTTPS and SSH URLs coexist
+AssertionError: expected '{"url":"https://***:***@github.com:ow…' to be '{"url":"https://api.github.com/repos/…' // Object.is equality
+
+Expected: "{"url":"https://api.github.com/repos/owner/repo/pulls/19","head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"html_url":"https://github.com/owner/repo","ssh_url":"git@github.com:owner/repo.git"}},"base":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"body":"Reviewer @owner must check this commit"}"
+Received: "{"url":"https://***:***@github.com:owner/repo.git"}},"base":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"body":"Reviewer @owner must check this commit"}"
+
+ ❯ src/delivery/git-gh-runner.test.ts:46:20
+     44|     const input = JSON.stringify(response);
+     45|     const output = sanitizeCredentials(input);
+     46|     expect(output).toBe(input);
+       |                    ^
+     47|     expect(JSON.parse(output)).toEqual(response);
+     48|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/delivery/git-gh-runner.test.ts > structured GitHub output > redacts actual credentials without crossing JSON string boundaries
+AssertionError: expected { …(2) } to deeply equal { …(3) }
+
+- Expected
++ Received
+
+  Object {
+-   "next": "https://github.com/owner/repo",
+-   "ssh": "git@github.com:owner/repo.git",
++   "next": "https://***:***@github.com:owner/repo.git",
+    "url": "https://***:***@github.com/owner/repo.git",
+  }
+
+ ❯ src/delivery/git-gh-runner.test.ts:54:32
+     52|     const output = sanitizeCredentials(input);
+     53|     expect(output).not.toContain("user:secret");
+     54|     expect(JSON.parse(output)).toEqual({ url: "https://***:***@github.…
+       |                                ^
+     55|   });
+     56| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 4 passed (6)
+   Start at  23:30:17
+   Duration  397ms (transform 77ms, setup 0ms, collect 58ms, tests 6ms, environment 0ms, prepare 86ms)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+npm error workspace @symphony/agent@0.1.0
+npm error location /Users/jichao/.codex/worktrees/nest103-e2e/symphony-ts/packages/agent
+npm error command failed
+npm error command sh -c vitest run src/delivery/git-gh-runner.test.ts

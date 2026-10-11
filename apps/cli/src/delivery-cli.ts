@@ -8,8 +8,13 @@
  *   symphony pr verify ...
  */
 import {
+  DecisionBridgeClient,
+  DecisionReviewGate,
+} from "@symphony/decision";
+import {
   DeliveryError,
   type DeliveryContext,
+  type DeliveryReviewGate,
 } from "@symphony/domain";
 import {
   GitHubDeliveryService,
@@ -44,9 +49,10 @@ export interface RunDeliveryCliOptions {
   readonly stdout?: DeliveryCliOutput | undefined;
   readonly stderr?: DeliveryCliOutput | undefined;
   readonly service?: GitHubDeliveryService | undefined;
+  readonly reviewGate?: DeliveryReviewGate | undefined;
 }
 
-interface ParsedDeliveryArgs {
+export interface ParsedDeliveryArgs {
   readonly action?: string | undefined;
   readonly repo?: string | undefined;
   readonly issueNumber?: number | undefined;
@@ -60,6 +66,9 @@ interface ParsedDeliveryArgs {
   readonly draft?: boolean | undefined;
   readonly optIn?: boolean | undefined;
   readonly deleteBranch?: boolean | undefined;
+  readonly bridgeUrl?: string | undefined;
+  readonly bridgeToken?: string | undefined;
+  readonly sessionId?: string | undefined;
   readonly json?: boolean | undefined;
   readonly help?: boolean | undefined;
 }
@@ -78,6 +87,9 @@ export function parseDeliveryArgs(argv: readonly string[]): ParsedDeliveryArgs {
   let draft = false;
   let optIn = false;
   let deleteBranch = false;
+  let bridgeUrl: string | undefined;
+  let bridgeToken: string | undefined;
+  let sessionId: string | undefined;
   let json = false;
   let help = false;
 
@@ -99,6 +111,12 @@ export function parseDeliveryArgs(argv: readonly string[]): ParsedDeliveryArgs {
       optIn = true;
     } else if (arg === "--delete-branch") {
       deleteBranch = true;
+    } else if (arg === "--bridge-url" && i + 1 < argv.length) {
+      bridgeUrl = argv[++i];
+    } else if (arg === "--bridge-token" && i + 1 < argv.length) {
+      bridgeToken = argv[++i];
+    } else if (arg === "--session-id" && i + 1 < argv.length) {
+      sessionId = argv[++i];
     } else if (arg === "--repo" && i + 1 < argv.length) {
       repo = argv[++i];
     } else if (arg === "--issue" && i + 1 < argv.length) {
@@ -136,6 +154,9 @@ export function parseDeliveryArgs(argv: readonly string[]): ParsedDeliveryArgs {
     draft,
     optIn,
     deleteBranch,
+    bridgeUrl,
+    bridgeToken,
+    sessionId,
     json,
     help,
   };
@@ -296,11 +317,21 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
           }
           return 1;
         }
+        let reviewGate = options.reviewGate;
+        const bridgeUrl = args.bridgeUrl ?? process.env.DECISION_BRIDGE_URL;
+        if (!reviewGate && bridgeUrl) {
+          const token = args.bridgeToken ?? process.env.DECISION_BRIDGE_TOKEN;
+          const client = new DecisionBridgeClient(bridgeUrl, ...(token ? [{ authToken: token }] : []));
+          reviewGate = new DecisionReviewGate(client);
+        }
+
         const result = await service.landPr(context, {
           optIn: true,
           prNumber: args.prNumber,
           expectedHeadSha: args.expectedHeadSha,
           deleteBranch: args.deleteBranch,
+          reviewGate,
+          sessionId: args.sessionId,
         });
         if (args.json) {
           stdout.write(`${JSON.stringify(sanitizeData(result), null, 2)}\n`);

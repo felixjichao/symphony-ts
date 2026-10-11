@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   formatPrBody,
   type DeliveryContext,
+  type DeliveryReviewGate,
   type PrOwnershipMarker,
   DeliveryError,
 } from "@symphony/domain";
@@ -20,6 +21,17 @@ describe("GitHubDeliveryService", () => {
     workspaceKey: "nest-92-c67d34d77de5",
     headBranch: "symphony/nest-92-c67d34d77de5",
     baseBranch: "main",
+  };
+
+  const approvedMockReviewGate: DeliveryReviewGate = {
+    ensureReviewTask: vi.fn(),
+    getReviewStatus: vi.fn(),
+    verifyReviewApproval: vi.fn().mockResolvedValue({
+      approved: true,
+      reason: "Review approved",
+      headSha: "sha81",
+      verdict: "approve",
+    }),
   };
 
   const sampleMarker: PrOwnershipMarker = {
@@ -725,11 +737,181 @@ describe("GitHubDeliveryService", () => {
 
       const service = new GitHubDeliveryService(runner);
       try {
-        await service.landPr(context, { optIn: true });
+        await service.landPr(context, { optIn: true, reviewGate: approvedMockReviewGate });
         expect.fail("Should have thrown");
       } catch (err) {
         expect((err as DeliveryError).code).toBe("merge_rejected");
       }
+    });
+
+    it("rejects merge when reviewGate is missing", async () => {
+      const runner = createMockRunner(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+      const service = new GitHubDeliveryService(runner);
+
+      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+        code: "review_gate_required",
+      });
+    });
+
+    it("rejects merge when reviewGate verification fails", async () => {
+      const runner = createMockRunner(async (args) => {
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 81,
+              title: "PR 81",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "gate",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && args[1] === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const rejectedGate: DeliveryReviewGate = {
+        ensureReviewTask: vi.fn(),
+        getReviewStatus: vi.fn(),
+        verifyReviewApproval: vi.fn().mockResolvedValue({
+          approved: false,
+          reason: "Changes requested by reviewer",
+        }),
+      };
+      await expect(
+        service.landPr(context, { optIn: true, prNumber: 81, reviewGate: rejectedGate })
+      ).rejects.toMatchObject({
+        code: "review_not_approved",
+      });
+    });
+
+    it("derives review gate session from context.issueNumber when PR number differs", async () => {
+      let merged = false;
+      const runner = createMockRunner(async (args) => {
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 104,
+              title: "PR 104",
+              state: merged ? "MERGED" : "OPEN",
+              mergedAt: merged ? "2026-10-04T09:10:00Z" : null,
+              mergeCommit: merged ? { oid: "squash104" } : null,
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "gate",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && args[1] === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/pulls/104/merge")) {
+          merged = true;
+          return { stdout: JSON.stringify({ sha: "squash104", merged: true }), stderr: "", exitCode: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      const verifyFn = vi.fn().mockResolvedValue({ approved: true, verdict: "approve" });
+      const mockGate: DeliveryReviewGate = {
+        ensureReviewTask: vi.fn(),
+        getReviewStatus: vi.fn(),
+        verifyReviewApproval: verifyFn,
+      };
+
+      // context.issueNumber is 81, PR is 104
+      await service.landPr(context, { optIn: true, prNumber: 104, reviewGate: mockGate });
+      expect(verifyFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repository: context.repo,
+          prNumber: 104,
+          sessionId: `github:${context.repo}#${context.issueNumber}`,
+        })
+      );
+    });
+
+    it("rejects merge when options.sessionId does not match root issue session", async () => {
+      const runner = createMockRunner(async (args) => {
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            stdout: JSON.stringify(defaultMockPr({
+              number: 104,
+              title: "PR 104",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  name: "gate",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            })),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && args[1] === "graphql") {
+          return {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { baseRef: { branchProtectionRule: null } } } },
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("/rules/branches/")) {
+          return { stdout: "[]", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(" ")}`);
+      });
+
+      const service = new GitHubDeliveryService(runner);
+      await expect(
+        service.landPr(context, {
+          optIn: true,
+          prNumber: 104,
+          sessionId: `github:${context.repo}#104`, // Mismatched session (PR-based instead of Issue-based)
+          reviewGate: approvedMockReviewGate,
+        })
+      ).rejects.toMatchObject({
+        code: "session_mismatch",
+      });
     });
 
     it("merges with squash and verifies merged state", async () => {
@@ -793,7 +975,7 @@ describe("GitHubDeliveryService", () => {
       });
 
       const service = new GitHubDeliveryService(runner);
-      const result = await service.landPr(context, { optIn: true, prNumber: 81 });
+      const result = await service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate });
 
       expect(result.merged).toBe(true);
       expect(result.prNumber).toBe(81);
@@ -837,7 +1019,7 @@ describe("GitHubDeliveryService", () => {
       }));
 
       const service = new GitHubDeliveryService(runner);
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "verification_unknown",
       });
       await expect(service.verifyMerged(context, { prNumber: 81 })).rejects.toMatchObject({
@@ -1323,7 +1505,7 @@ describe("GitHubDeliveryService", () => {
       expect(report.requiredChecks[0]!.isRequired).toBe(true);
 
       // landPr should proceed and call merge API
-      const landResult = await service.landPr(context, { optIn: true, prNumber: 81 });
+      const landResult = await service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate });
       expect(landResult.merged).toBe(true);
       expect(getMergedCalled()).toBe(true);
     });
@@ -1344,7 +1526,7 @@ describe("GitHubDeliveryService", () => {
       expect(report.reason).toContain("Required check(s) pending: lint");
 
       // landPr must throw checks_waiting and MUST NOT invoke merge API
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_waiting",
       });
       expect(getMergedCalled()).toBe(false);
@@ -1363,7 +1545,7 @@ describe("GitHubDeliveryService", () => {
       expect(report.canAutoMerge).toBe(false);
       expect(report.status).toBe("pending");
 
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_waiting",
       });
       expect(getMergedCalled()).toBe(false);
@@ -1518,7 +1700,7 @@ describe("GitHubDeliveryService", () => {
       expect(report.status).toBe("passed");
       expect(report.requiredChecks[0]!.appId).toBe(app?.databaseId ?? null);
 
-      const landResult = await service.landPr(context, { optIn: true, prNumber: 81 });
+      const landResult = await service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate });
       expect(landResult.merged).toBe(true);
       expect(mergedCalled).toBe(true);
     });
@@ -1597,7 +1779,7 @@ describe("GitHubDeliveryService", () => {
         code: "checks_unknown",
       });
 
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_unknown",
       });
       expect(mergedCalled).toBe(false);
@@ -1688,7 +1870,7 @@ describe("GitHubDeliveryService", () => {
         code: "checks_unknown",
       });
 
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_unknown",
       });
       expect(mergedCalled).toBe(false);
@@ -1768,7 +1950,7 @@ describe("GitHubDeliveryService", () => {
         code: "checks_unknown",
       });
 
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_unknown",
       });
       expect(mergedCalled).toBe(false);
@@ -1855,7 +2037,7 @@ describe("GitHubDeliveryService", () => {
       expect(report.requiredChecks[0]!.appId).toBe(123);
       expect(report.requiredChecks[0]!.state).toBe("PENDING");
 
-      await expect(service.landPr(context, { optIn: true, prNumber: 81 })).rejects.toMatchObject({
+      await expect(service.landPr(context, { optIn: true, prNumber: 81, reviewGate: approvedMockReviewGate })).rejects.toMatchObject({
         code: "checks_waiting",
       });
       expect(mergedCalled).toBe(false);

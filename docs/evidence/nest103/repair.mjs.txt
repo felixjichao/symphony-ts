@@ -1,0 +1,8 @@
+import { spawnSync } from 'node:child_process';
+const review = process.env.SYMPHONY_REVIEW_FINDINGS ?? '';
+const ci = process.env.SYMPHONY_CI_FAILURE_DIAGNOSTICS ?? '';
+if (!review.trim() && !ci.trim()) { console.error('No review findings or CI diagnostics'); process.exit(1); }
+const prompt = `Repair the actual repository code according to these independent review findings or CI diagnostics. Preserve all existing tests; add meaningful regression tests. Do not modify CI workflows, delivery-state metadata, commit, push or merge; the delivery skill owns those operations. Run npm run gate and npm run lint. This is the repair phase: fix any seeded initial scenario defect fully.\n\nReview findings:\n${review}\n\nCI diagnostics:\n${ci}`;
+const result = spawnSync('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', ['exec','--skip-git-repo-check','--sandbox','workspace-write',prompt], {stdio:'inherit',env:process.env});
+if(result.error) console.error(result.error.message);
+process.exit(result.status ?? 1);

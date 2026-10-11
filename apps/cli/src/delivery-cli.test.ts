@@ -223,6 +223,56 @@ describe("delivery-cli", () => {
       expect(service.landPr).toHaveBeenCalled();
     });
 
+    it("executes land command with --opt-in and --bridge-url, passing instantiated review gate to landPr", async () => {
+      let stdout = "";
+      const service = createServiceMock();
+      const code = await runDeliveryCli(
+        [
+          "land",
+          "--repo", "org/repo",
+          "--issue", "81",
+          "--workspace-key", "ws-81",
+          "--opt-in",
+          "--bridge-url", "http://127.0.0.1:4040",
+          "--session-id", "github:org/repo#81",
+        ],
+        {
+          stdout: { write: (t) => { stdout += t; } },
+          service,
+        },
+      );
+      expect(code).toBe(0);
+      expect(stdout).toContain("successfully merged");
+      expect(service.landPr).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          reviewGate: expect.anything(),
+          sessionId: "github:org/repo#81",
+        }),
+      );
+    });
+
+    it("fails closed when landPr fails with review_gate_required", async () => {
+      let stderr = "";
+      const service = createServiceMock({
+        landPr: vi.fn(async () => {
+          throw new DeliveryError(
+            "Auto-merge requires review gate verification, but no review gate is configured",
+            { code: "review_gate_required" },
+          );
+        }),
+      });
+      const code = await runDeliveryCli(
+        ["land", "--repo", "org/repo", "--issue", "81", "--workspace-key", "ws-81", "--opt-in"],
+        {
+          stderr: { write: (t) => { stderr += t; } },
+          service,
+        },
+      );
+      expect(code).toBe(1);
+      expect(stderr).toContain("review_gate_required");
+    });
+
     it("executes verify command: returns 0 when merged, 2 when not merged", async () => {
       const mergedService = createServiceMock({
         verifyMerged: vi.fn(async () => ({

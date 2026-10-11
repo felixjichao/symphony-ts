@@ -8,8 +8,13 @@ import {
   type RunDeliverySkillOptions,
 } from "@symphony/agent";
 import {
+  DecisionBridgeClient,
+  DecisionReviewGate,
+} from "@symphony/decision";
+import {
   formatDeliveryHandoffMarkdown,
   type DeliveryHandoff,
+  type DeliveryReviewGate,
   type PersistedDeliveryState,
 } from "@symphony/domain";
 
@@ -93,6 +98,9 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   resume?: boolean | undefined;
   requiredChecks?: readonly string[] | undefined;
   cwd?: string | undefined;
+  bridgeUrl?: string | undefined;
+  bridgeToken?: string | undefined;
+  sessionId?: string | undefined;
   reason?: string | undefined;
   details?: string | undefined;
 } {
@@ -111,6 +119,9 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   let resume = false;
   let requiredChecks: string[] | undefined;
   let cwd: string | undefined;
+  let bridgeUrl: string | undefined;
+  let bridgeToken: string | undefined;
+  let sessionId: string | undefined;
   let reason: string | undefined;
   let details: string | undefined;
 
@@ -153,6 +164,12 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
       requiredChecks = raw.split(",").map((s) => s.trim()).filter(Boolean);
     } else if (arg === "--cwd" && i + 1 < argv.length) {
       cwd = argv[++i];
+    } else if (arg === "--bridge-url" && i + 1 < argv.length) {
+      bridgeUrl = argv[++i];
+    } else if (arg === "--bridge-token" && i + 1 < argv.length) {
+      bridgeToken = argv[++i];
+    } else if (arg === "--session-id" && i + 1 < argv.length) {
+      sessionId = argv[++i];
     } else if (arg === "--reason" && i + 1 < argv.length) {
       reason = argv[++i];
     } else if (arg === "--details" && i + 1 < argv.length) {
@@ -176,6 +193,9 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
     resume,
     requiredChecks,
     cwd,
+    bridgeUrl,
+    bridgeToken,
+    sessionId,
     reason,
     details,
   };
@@ -185,6 +205,7 @@ export async function runDeliverySkillCli(
   argv: readonly string[],
   io: DeliveryCliIo,
   customRunner?: DeliveryGitGhRunner,
+  customReviewGate?: DeliveryReviewGate,
 ): Promise<number> {
   let parsed: ReturnType<typeof parseDeliverySkillArgs>;
   try {
@@ -320,6 +341,14 @@ export async function runDeliverySkillCli(
 
   const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
 
+  let reviewGate = customReviewGate;
+  const bridgeUrl = parsed.bridgeUrl ?? process.env.DECISION_BRIDGE_URL;
+  if (!reviewGate && bridgeUrl) {
+    const token = parsed.bridgeToken ?? process.env.DECISION_BRIDGE_TOKEN;
+    const client = new DecisionBridgeClient(bridgeUrl, ...(token ? [{ authToken: token }] : []));
+    reviewGate = new DecisionReviewGate(client);
+  }
+
   const options: RunDeliverySkillOptions = {
     cwd,
     repo: parsed.repo,
@@ -335,6 +364,8 @@ export async function runDeliverySkillCli(
     optInLand: parsed.optInLand,
     resume: parsed.resume,
     requiredChecks: parsed.requiredChecks,
+    reviewGate,
+    sessionId: parsed.sessionId,
     runner,
     stateStorage,
     log: (msg) => io.stdout.write(`${msg}\n`),

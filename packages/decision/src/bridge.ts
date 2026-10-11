@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import {
   parseDecisionReviewTarget,
+  parseDecisionContextBundle,
   type DecisionContextBundle,
   type DecisionResult,
   type DecisionWorkItemRef,
@@ -395,17 +396,37 @@ export class DecisionBridge {
       return;
     }
 
+    // POST /v1/reviews/verify
+    if (method === "POST" && pathname === "/v1/reviews/verify") {
+      const body = await this.readJsonBody(req);
+      const b = body as Record<string, unknown>;
+      if (typeof b["sessionId"] !== "string") {
+        throw new DecisionValidationError("verify review approval requires sessionId");
+      }
+      if (!b["target"] || typeof b["target"] !== "object") {
+        throw new DecisionValidationError("verify review approval requires target");
+      }
+      const target = parseDecisionReviewTarget(b["target"]);
+      const approval = this.service.verifyReviewApproval(b["sessionId"], target);
+      this.sendJson(res, 200, { approval });
+      return;
+    }
+
     // POST /v1/tasks (create task)
     if (method === "POST" && pathname === "/v1/tasks") {
       const body = await this.readJsonBody(req);
       const b = body as Record<string, unknown>;
-      if (typeof b["sessionId"] !== "string" || typeof b["operationKey"] !== "string") {
-        throw new DecisionValidationError("create task requires sessionId and operationKey");
+      if (typeof b["sessionId"] !== "string") {
+        throw new DecisionValidationError("create task requires sessionId");
       }
+      const operationKey = typeof b["operationKey"] === "string" ? b["operationKey"] : undefined;
       const kind = b["kind"];
       if (kind === "plan") {
+        if (!operationKey) {
+          throw new DecisionValidationError("create plan task requires operationKey");
+        }
         const task = await this.service.createPlanTask(b["sessionId"], {
-          operationKey: b["operationKey"],
+          operationKey,
         });
         this.sendJson(res, 201, { task });
         return;
@@ -415,14 +436,42 @@ export class DecisionBridge {
           throw new DecisionValidationError("review task requires target");
         }
         const target = parseDecisionReviewTarget(b["target"]);
+        const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
+        const supersedeSessionReviews = Boolean(b["supersedeSessionReviews"]);
+        const forceNewRevision = Boolean(b["forceNewRevision"]);
         const task = await this.service.createReviewTask(b["sessionId"], {
           target,
-          operationKey: b["operationKey"],
+          context,
+          ...(operationKey !== undefined ? { operationKey } : {}),
+          supersedeSessionReviews,
+          ...(forceNewRevision ? { forceNewRevision: true } : {}),
         });
         this.sendJson(res, 201, { task });
         return;
       }
       throw new DecisionValidationError("kind must be plan or review");
+    }
+
+    // GET /v1/sessions/:id/tasks
+    const sessionTasksMatch = /^\/v1\/sessions\/([^/]+)\/tasks$/.exec(pathname);
+    if (method === "GET" && sessionTasksMatch) {
+      const id = decodeURIComponent(sessionTasksMatch[1]!);
+      const session = this.service.getSession(id);
+      if (!session) throw new DecisionNotFoundError(`Session "${id}" not found`);
+      const tasks = this.service.getTasksForSession(id);
+      this.sendJson(res, 200, { tasks });
+      return;
+    }
+
+    // GET /v1/sessions/:id/reviews/latest
+    const sessionLatestReviewMatch = /^\/v1\/sessions\/([^/]+)\/reviews\/latest$/.exec(pathname);
+    if (method === "GET" && sessionLatestReviewMatch) {
+      const id = decodeURIComponent(sessionLatestReviewMatch[1]!);
+      const session = this.service.getSession(id);
+      if (!session) throw new DecisionNotFoundError(`Session "${id}" not found`);
+      const task = this.service.getLatestReviewTask(id);
+      this.sendJson(res, 200, { task });
+      return;
     }
 
     // GET /v1/sessions/:id

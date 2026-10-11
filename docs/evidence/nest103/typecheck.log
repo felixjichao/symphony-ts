@@ -1,0 +1,58 @@
+
+> symphony-ts@0.1.0 typecheck
+> npm run build --workspaces --if-present
+
+
+> @symphony/agent@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/config@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/decision@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/domain@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/observability@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/orchestrator@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/tracker@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/workspace@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @symphony/chatgpt-web@0.1.0 build
+> tsc -p tsconfig.json && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 17 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/symphony-decision-driver.user.js  63.67 kB │ gzip: 17.88 kB
+✓ built in 99ms
+
+> @symphony/cli@0.1.0 build
+> tsc -p tsconfig.json && vite build && npm rebuild @symphony/cli
+
+vite v5.4.21 building SSR bundle for production...
+transforming...
+✓ 89 modules transformed.
+rendering chunks...
+dist/bin/symphony.js  591.01 kB
+✓ built in 283ms
+rebuilt dependencies successfully

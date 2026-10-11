@@ -55,6 +55,7 @@ export {
 export { DecisionService } from "./service.js";
 export { DecisionBridge } from "./bridge.js";
 export { DecisionBridgeClient, type DecisionBridgeClientOptions } from "./client.js";
+export { DecisionReviewGate } from "./review-gate.js";
 
 // Executor adapter abstraction and context strategies (NEST-101 / #96)
 export {
