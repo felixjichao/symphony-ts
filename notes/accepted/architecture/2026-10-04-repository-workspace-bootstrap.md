@@ -27,7 +27,7 @@ We implement repository bootstrap and issue branch synchronization in `@symphony
      - In-progress git operations (`MERGE_HEAD`, `REBASE_HEAD`, etc.): safe failure with `git_operation_in_progress`.
    - Credential sanitization: `sanitizeRepoUrl` replaces embedded user/token credentials with `***`.
    - Local git identity: Configures `user.name` and `user.email` locally if not set globally.
-   - Subprocess safety: All git commands run with `GIT_TERMINAL_PROMPT=0`, bounded execution timeouts, and process-group `SIGKILL` on timeout.
+   - Subprocess safety: All git commands run with `GIT_TERMINAL_PROMPT=0` and bounded execution timeouts. On timeout `execGit` terminates the git subtree by enumerating descendant PIDs (Linux `/proc`, `pgrep -P` fallback on macOS/BSD) and sending `SIGKILL`, then waits for a **bounded exit-convergence window** before surfacing the typed `git_command_timeout` failure; a late `close` can never flip the timeout into success. The root git child is **not** detached, so it inherits the outer hook process group and is additionally killed when the enclosing workspace hook times out (see the workspace hook execution contract).
 
 2. **CLI Subcommand (`@symphony/cli`)**:
    - Subcommands `repo-bootstrap`, `bootstrap-repo`, and `workspace bootstrap` run `runRepositoryBootstrapCli` directly without booting the orchestrator host daemon.
@@ -53,4 +53,5 @@ We implement repository bootstrap and issue branch synchronization in `@symphony
 - Workspaces can be bootstrapped into ready-to-run git checkouts with deterministic issue branches.
 - Full re-entrancy safety: existing work and commits are protected against overwriting, while clean workspaces synchronize with default branch updates seamlessly.
 - Zero credential leakage in logs, messages, and terminal outputs.
+- Timeout cleanup is observable and testable: after a bounded convergence window the git subtree is gone and `kill(pid, 0)` no longer reports it as running, so callers can rely on the subtree being reaped before the `git_command_timeout` error is surfaced (NEST-119).
 - Conformance matrix SPEC §9 and §17.2 conditional entries for workspace population and synchronization are satisfied.

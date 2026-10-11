@@ -1,8 +1,9 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bootstrapRepository,
   createWorkspaceManager,
@@ -11,7 +12,90 @@ import {
   RepositoryBootstrapError,
   runRepositoryBootstrapCli,
   sanitizeRepoUrl,
+  WorkspaceError,
+  type WorkspaceHookEvent,
 } from "./index";
+
+// 进程生命周期用例通过真实 CLI 子进程触发 Git 子树，必须使用「由当前源码构建」的
+// 可运行入口。此前 `dist 存在就用、否则裸 node import("@symphony/workspace")` 的回退在
+// 干净 checkout 上必然 ERR_MODULE_NOT_FOUND（源码包无法被裸 node 执行），而 catch-all
+// 又把该错误误判成 hook 超时，掩盖真实故障，最终只表现为 PID undefined（NEST-119）。
+const repoRoot = path.resolve(__dirname, "../../..");
+const cliRoot = path.join(repoRoot, "apps/cli");
+const cliBin = path.join(cliRoot, "dist/bin/symphony.js");
+
+beforeAll(() => {
+  // 用当前源码重新构建 CLI bundle，拒绝复用来源不明的旧 dist。
+  execFileSync(path.join(repoRoot, "node_modules", ".bin", "vite"), ["build"], {
+    cwd: cliRoot,
+    stdio: "pipe",
+  });
+  if (!existsSync(cliBin)) {
+    throw new Error(`CLI bundle was not produced by the build: ${cliBin}`);
+  }
+}, 120_000);
+
+/** 读取 PID 文件；文件尚不存在或内容非法（非有限正整数）时返回 null。 */
+async function readPidFile(file: string): Promise<number | null> {
+  try {
+    const pid = Number.parseInt((await fs.readFile(file, "utf8")).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 有界等待 PID 文件写入；超时给出明确诊断，而不是静默继续到 undefined 断言。 */
+async function waitForPidFile(file: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const pid = await readPidFile(file);
+    if (pid !== null) {
+      return pid;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`upload-pack PID file was not written within ${timeoutMs}ms: ${file}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/**
+ * 进程是否仍在运行。Linux 上僵尸（state Z / X）视为已退出——`kill(pid, 0)` 对僵尸仍
+ * 成功，不能据此判定为可运行的子孙泄漏。
+ */
+function isProcessRunning(pid: number): boolean {
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const lastParen = stat.lastIndexOf(")");
+      const state = lastParen >= 0 ? stat.slice(lastParen + 2).trimStart().charAt(0) : "";
+      return state !== "Z" && state !== "X";
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 有界等待目标进程退出；超出上界返回 false，由调用方断言失败。 */
+async function waitForProcessGone(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!isProcessRunning(pid)) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
   let tmpBase: string;
@@ -894,7 +978,11 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         cwd: workspaceDir,
       });
 
-      // 3. 通过 WorkspaceManager.runBeforeRunHook 执行 bootstrap，设置 hook timeout 为 1000ms
+      // 3. 通过 WorkspaceManager.runBeforeRunHook 执行真实 CLI（当前源码构建）。
+      //    hook timeout 必须大过「CLI 启动 + 到达 upload-pack」的启动裕量，否则 hook 会在
+      //    Git 子树建立前就被终止，测试将拿不到可验证的清理对象（macOS gate 的实际竞争）。
+      const hookTimeoutMs = 5_000;
+      const cliCmd = `node "${cliBin}" repo-bootstrap --repo "${remoteRepoDir}" --target "${workspaceDir}"`;
       const manager = createWorkspaceManager({
         workspace: { root: tmpBase },
       });
@@ -904,12 +992,8 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         createdNow: false,
       };
 
-      const cliDist = path.resolve(__dirname, "../../../apps/cli/dist/bin/symphony.js");
-      const cliCmd = (await fs.stat(cliDist).catch(() => null))
-        ? `node "${cliDist}" repo-bootstrap --repo "${remoteRepoDir}" --target "${workspaceDir}"`
-        : `node -e 'import("@symphony/workspace").then(m => m.runRepositoryBootstrapCli(["--repo", process.argv[1], "--target", process.argv[2]]))' "${remoteRepoDir}" "${workspaceDir}"`;
-
-      let hookTimedOut = false;
+      const hookEvents: WorkspaceHookEvent[] = [];
+      let thrownError: unknown;
       try {
         await manager.runBeforeRunHook(ws, {
           hooks: {
@@ -917,40 +1001,28 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
             beforeRun: cliCmd,
             afterRun: null,
             beforeRemove: null,
-            timeoutMs: 1000,
+            timeoutMs: hookTimeoutMs,
           },
           identifier: "GH-79",
+          onHookEvent: (evt) => hookEvents.push(evt),
         });
-      } catch {
-        hookTimedOut = true;
+      } catch (err) {
+        thrownError = err;
       }
 
-      expect(hookTimedOut).toBe(true);
+      // 必须是 typed hook_timeout，而不是被 catch-all 掩盖的任意错误
+      expect(thrownError).toBeInstanceOf(WorkspaceError);
+      expect((thrownError as WorkspaceError).code).toBe("hook_timeout");
+      expect(hookEvents.some((e) => e.hook === "before_run" && e.outcome === "timeout")).toBe(true);
 
-      // 4. 读取 upload-pack PID 并验证其已被终止
-      let pid: number | undefined;
-      for (let i = 0; i < 20; i++) {
-        try {
-          const content = (await fs.readFile(pidFile, "utf8")).trim();
-          pid = parseInt(content, 10);
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 50));
-        }
-      }
+      // 4. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
+      const pid = await waitForPidFile(pidFile, 5_000);
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(pid).toBeGreaterThan(0);
 
-      expect(pid).toBeDefined();
-      await new Promise((r) => setTimeout(r, 100));
-
-      let isAlive = false;
-      try {
-        process.kill(pid!, 0);
-        isAlive = true;
-      } catch {
-        isAlive = false;
-      }
-      expect(isAlive).toBe(false);
-    });
+      // 5. upload-pack 必须在外层 hook 超时后终止；有界等待真实退出
+      expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+    }, 30_000);
 
     it("直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理子孙进程", async () => {
       // 1. 初始化 workspace 为已 bootstrap 的本地仓库
@@ -973,45 +1045,30 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         cwd: workspaceDir,
       });
 
-      let timeoutThrown = false;
+      // 每条 Git 命令共享该预算；给启动裕量留有余地，但 upload-pack 的 sleep 20 必然超时
+      const gitCommandTimeoutMs = 3_000;
+      let thrownError: unknown;
       try {
         await bootstrapRepository({
           cwd: workspaceDir,
           repoUrl: remoteRepoDir,
           workspaceKey: "GH-79",
-          timeoutMs: 800,
+          timeoutMs: gitCommandTimeoutMs,
         });
       } catch (err: unknown) {
-        if (err instanceof RepositoryBootstrapError && err.code === "git_command_timeout") {
-          timeoutThrown = true;
-        }
+        thrownError = err;
       }
 
-      expect(timeoutThrown).toBe(true);
+      expect(thrownError).toBeInstanceOf(RepositoryBootstrapError);
+      expect((thrownError as RepositoryBootstrapError).code).toBe("git_command_timeout");
 
-      // 3. 读取 upload-pack PID 并验证其已被 killProcessTree 终止
-      let pid: number | undefined;
-      for (let i = 0; i < 20; i++) {
-        try {
-          const content = (await fs.readFile(pidFile, "utf8")).trim();
-          pid = parseInt(content, 10);
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 50));
-        }
-      }
+      // 3. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
+      const pid = await waitForPidFile(pidFile, 5_000);
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(pid).toBeGreaterThan(0);
 
-      expect(pid).toBeDefined();
-      await new Promise((r) => setTimeout(r, 100));
-
-      let isAlive = false;
-      try {
-        process.kill(pid!, 0);
-        isAlive = true;
-      } catch {
-        isAlive = false;
-      }
-      expect(isAlive).toBe(false);
-    });
+      // 4. 超时收敛屏障必须已清理子孙进程；有界等待真实退出
+      expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+    }, 20_000);
   });
 });

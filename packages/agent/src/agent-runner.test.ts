@@ -378,6 +378,40 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
       const pid = Number.parseInt(pidStr, 10);
       expect(await waitFor(() => !isProcessAlive(pid), 3_000)).toBe(true);
     });
+
+    it("正常 attempt 成功但 after_run hook 自身超时时，结果仍正常返回且超时被记录", async () => {
+      const hookEvents: WorkspaceHookEvent[] = [];
+      const startupPidFile = path.join(tempDir, "child-afterrun-timeout.pid");
+      const { getConfig } = createConfig(
+        ["--record-startup", startupPidFile],
+        {
+          afterRun: "sleep 10", // after_run 自身超时
+          timeoutMs: 200,
+        },
+      );
+
+      const issue = createIssue();
+      const workflow: WorkflowDefinition = {
+        config: {},
+        promptTemplate: "Do {{ issue.identifier }}",
+      };
+
+      const result = await runAgentAttempt({
+        issue,
+        attempt: 1,
+        workflow,
+        workflowPath: path.join(tempDir, "WORKFLOW.md"),
+        getConfig,
+        onHookEvent: (evt) => hookEvents.push(evt),
+      });
+
+      // attempt 结果未被覆盖，正常返回
+      expect(result.stopReason).toBe("decider_stop");
+      expect(result.turnCount).toBe(1);
+
+      // after_run 自身超时被记录为 timeout 事件，且不覆盖原结果
+      expect(hookEvents.some((e) => e.hook === "after_run" && e.outcome === "timeout")).toBe(true);
+    });
   });
 
   describe("验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果", () => {
@@ -515,14 +549,30 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
     it("before_run timeout 阻止子进程启动，抛出 hook_timeout，且 after_run 执行", async () => {
       const startupMarker = path.join(tempDir, "child-never-started.marker");
       const afterRunMarker = path.join(tempDir, "after-run-on-before-run-timeout.marker");
-      const { getConfig } = createConfig(
+      const hookEvents: WorkspaceHookEvent[] = [];
+      const baseGetConfig = createConfig(
         ["--record-startup", startupMarker],
         {
           beforeRun: "sleep 10",
           afterRun: `echo "after_run_executed" > "${afterRunMarker}"`,
           timeoutMs: 150,
         },
-      );
+      ).getConfig;
+
+      // before_run 用刻意很短的预算触发 hook_timeout，但 after_run 是在超时之后才执行的，
+      // 必须仍能在合理预算内完整跑完。runner 每次调用都重新读取 effective hooks
+      // （§5.3.4 / workspace-hook-execution-contract Note），因此在观察到 before_run
+      // 超时事件后放宽 hooks.timeoutMs：否则 after_run 的 `sh` 启动会和被压到 150ms 的
+      // before_run 预算竞争同一预算，在 macOS 上被自身 timeout 掐断导致 marker 缺失
+      // （NEST-119 观测到的失败；属 fixture/时序问题，不是 runner 漏调 after_run）。
+      let beforeRunTimedOut = false;
+      const getConfig = (): ServiceConfig => {
+        const config = baseGetConfig();
+        if (!beforeRunTimedOut) {
+          return config;
+        }
+        return { ...config, hooks: { ...config.hooks, timeoutMs: 5_000 } };
+      };
 
       const issue = createIssue();
       const workflow: WorkflowDefinition = {
@@ -538,6 +588,12 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
           workflow,
           workflowPath: path.join(tempDir, "WORKFLOW.md"),
           getConfig,
+          onHookEvent: (evt) => {
+            hookEvents.push(evt);
+            if (evt.hook === "before_run" && evt.outcome === "timeout") {
+              beforeRunTimedOut = true;
+            }
+          },
         });
       } catch (err) {
         thrownError = err;
@@ -545,6 +601,8 @@ describe("Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive"
 
       expect(thrownError).toBeDefined();
       expect((thrownError as { code?: string }).code).toBe("hook_timeout");
+      // before_run 超时事件必须对 operator 可见
+      expect(hookEvents.some((e) => e.hook === "before_run" && e.outcome === "timeout")).toBe(true);
 
       let childStarted = false;
       try {

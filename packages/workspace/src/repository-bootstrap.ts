@@ -286,6 +286,15 @@ export function killProcessTree(pid: number | undefined): void {
   }
 }
 
+/**
+ * `execGit` 超时后等待 Git 子树退出的有界收敛窗口（毫秒）。
+ *
+ * SIGKILL 投递后进程通常立即退出，此处仅是上界：即便 `close` 迟迟不到（例如 stdio
+ * 仍被后台子孙持有），也必须在有限时间内以 typed `git_command_timeout` 收敛，避免
+ * 调用方无界等待。见 SPEC §9.4 / §17.2 与外层 hook 进程组清理契约。
+ */
+const TIMEOUT_EXIT_GRACE_MS = 2_000;
+
 async function execGit(
   args: readonly string[],
   cwd: string,
@@ -296,7 +305,9 @@ async function execGit(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
     let timer: NodeJS.Timeout | null = null;
+    let convergenceTimer: NodeJS.Timeout | null = null;
 
     // 不使用 detached: true，使 Git 子树继承外层 hook 进程组（SPEC §9.4 / §17.2），
     // 从而在外层 hook 超时或取消时能被整体杀死，不留孤儿子树。
@@ -314,6 +325,10 @@ async function execGit(
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
+      }
+      if (convergenceTimer !== null) {
+        clearTimeout(convergenceTimer);
+        convergenceTimer = null;
       }
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -333,14 +348,22 @@ async function execGit(
       reject(err);
     };
 
-    timer = setTimeout(() => {
-      killProcessTree(child.pid);
-      fail(
-        new RepositoryBootstrapError(
-          "git_command_timeout",
-          `Git command "git ${args[0] ?? ""}" timed out after ${timeoutMs}ms`,
-        ),
+    const timeoutError = (): RepositoryBootstrapError =>
+      new RepositoryBootstrapError(
+        "git_command_timeout",
+        `Git command "git ${args[0] ?? ""}" timed out after ${timeoutMs}ms`,
       );
+
+    timer = setTimeout(() => {
+      timedOut = true;
+      // 有界退出收敛：先终止 Git 子树，等待其真正退出后才以 typed
+      // git_command_timeout 失败。SIGKILL 的投递不代表退出完成，且 macOS 无 /proc、
+      // 降级 pgrep 时可能漏掉新出现的子孙（NEST-119）。收敛窗口有界，close 迟到时兜底。
+      killProcessTree(child.pid);
+      convergenceTimer = setTimeout(() => {
+        killProcessTree(child.pid);
+        fail(timeoutError());
+      }, TIMEOUT_EXIT_GRACE_MS);
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -364,6 +387,11 @@ async function execGit(
     });
 
     child.on("close", (code, signal) => {
+      if (timedOut) {
+        // 超时已判定：迟到 / 正常的 close 都以 timeout 收敛，绝不翻成 success。
+        fail(timeoutError());
+        return;
+      }
       finish({
         exitCode: code ?? (signal ? 128 : 0),
         stdout: stdout.trim(),
