@@ -148,6 +148,30 @@ describe("renderPrompt — successful rendering (SPEC §5.4 / §12.2)", () => {
     });
     expect(prompt).toBe("HELLO");
   });
+
+  it("renders plan fields when plan is provided", () => {
+    const plan = {
+      taskId: "task-1",
+      revision: 1,
+      plan: "Detailed steps",
+      acceptanceCriteria: ["Tests pass"],
+      risks: ["None"],
+      clarifications: [],
+    };
+    const prompt = renderPrompt(
+      "{% if plan %}Plan: {{ plan.plan }} (rev {{ plan.revision }}){% else %}No plan{% endif %}",
+      { issue: makeIssue(), attempt: null, plan },
+    );
+    expect(prompt).toBe("Plan: Detailed steps (rev 1)");
+  });
+
+  it("renders falsy branch when plan is null or omitted", () => {
+    const prompt = renderPrompt(
+      "{% if plan %}Has plan{% else %}No plan{% endif %}",
+      { issue: makeIssue(), attempt: null },
+    );
+    expect(prompt).toBe("No plan");
+  });
 });
 
 describe("renderPrompt — strict failures (SPEC §5.4 / §5.5)", () => {

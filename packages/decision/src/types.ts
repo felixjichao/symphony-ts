@@ -2,15 +2,38 @@ import type {
   DecisionSession,
   DecisionTask,
   DecisionResult,
+  DecisionPlanResult,
   DecisionLease,
   DecisionReviewTarget,
   DecisionWorkItemRef,
   DecisionContextBundle,
   DeliveryReviewApprovalResult,
+  PlanningEligibilityResult,
   UtcTimestampMs,
 } from "@symphony/domain";
 
 export const DECISION_STORE_SCHEMA_VERSION = 1 as const;
+
+export interface DecisionPlanRecord {
+  readonly schemaVersion: 1;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly revision: number;
+  readonly triggerKind: "initial" | "requirements_changed" | "clarification" | "retry";
+  readonly requirements: {
+    readonly title: string;
+    readonly body: string;
+    readonly clarifications: readonly string[];
+    readonly fingerprint: string;
+  };
+  readonly previousTaskId: string | null;
+  readonly status: "pending" | "running" | "completed" | "failed" | "superseded";
+  readonly result: DecisionPlanResult | null;
+  readonly publishedCommentId: number | string | null;
+  readonly publishedAtMs: number | null;
+  readonly createdAtMs: UtcTimestampMs;
+  readonly updatedAtMs: UtcTimestampMs;
+}
 
 export interface DecisionTaskFailure {
   readonly schemaVersion: 1;
@@ -38,9 +61,12 @@ export interface SubmissionReceipt {
 export interface OperationReceipt {
   readonly schemaVersion: 1;
   readonly operationKey: string;
-  readonly kind: "create-plan-task" | "create-review-task" | "rebind-session";
+  readonly kind: "create-plan-task" | "create-review-task" | "rebind-session" | "publish-plan";
   readonly sessionId: string;
   readonly target?: DecisionReviewTarget | null | undefined;
+  readonly triggerKind?: string | undefined;
+  readonly fingerprint?: string | undefined;
+  readonly previousTaskId?: string | null | undefined;
   readonly bindingGeneration?: number | undefined;
   readonly adapter?: string | undefined;
   readonly externalSessionRef?: string | undefined;
@@ -62,6 +88,7 @@ export interface DecisionStoreRecord {
   readonly revisions: Record<string, number>;
   readonly operationReceipts: Record<string, OperationReceipt>;
   readonly contexts: Record<string, DecisionContextBundle>;
+  readonly plans: Record<string, DecisionPlanRecord>;
 }
 
 export interface DecisionStoreConfig {
@@ -194,15 +221,53 @@ export interface CreateTaskRequest {
   readonly context?: DecisionContextBundle | undefined;
   readonly supersedeSessionReviews?: boolean | undefined;
   readonly forceNewRevision?: boolean | undefined;
+  readonly triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
+  readonly requirements?: {
+    readonly title: string;
+    readonly body: string;
+    readonly clarifications?: readonly string[] | undefined;
+  } | undefined;
+  readonly previousTaskId?: string | null | undefined;
 }
 
 export interface VerifyReviewApprovalRequest {
   readonly sessionId: string;
   readonly target: DecisionReviewTarget;
+  readonly requirements?: {
+    readonly title: string;
+    readonly body: string;
+    readonly clarifications?: readonly string[] | undefined;
+  } | undefined;
 }
 
 export interface VerifyReviewApprovalResponse {
   readonly approval: DeliveryReviewApprovalResult;
+}
+
+export interface VerifyPlanEligibilityRequest {
+  readonly sessionId: string;
+  readonly requirements?: {
+    readonly title: string;
+    readonly body: string;
+    readonly clarifications?: readonly string[] | undefined;
+  } | undefined;
+}
+
+export interface VerifyPlanEligibilityResponse {
+  readonly eligibility: PlanningEligibilityResult;
+}
+
+export interface MarkPlanPublishedRequest {
+  readonly commentId?: string | number | undefined;
+  readonly publishedAtMs?: number | undefined;
+}
+
+export interface MarkPlanPublishedResponse {
+  readonly plan: DecisionPlanRecord;
+}
+
+export interface GetLatestPlanResponse {
+  readonly plan: DecisionPlanRecord | null;
 }
 
 export interface GetSessionTasksResponse {

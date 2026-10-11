@@ -31,7 +31,7 @@ import { dirname, sep } from "node:path";
 
 import { Liquid, LiquidError, type FS, type Template } from "liquidjs";
 
-import type { Issue } from "@symphony/domain";
+import type { Issue, DecisionMaterializedPlan } from "@symphony/domain";
 
 import { SymphonyConfigError, type ConfigErrorCode } from "./errors";
 
@@ -110,6 +110,8 @@ export interface RenderPromptOptions {
    * {@link INLINE_PROMPT_PATH}。
    */
   readonly workflowPath?: string;
+  /** 当前工单的规划结果（如有）；在模板中通过 `plan` 变量消费。 */
+  readonly plan?: DecisionMaterializedPlan | null | undefined;
 }
 
 /**
@@ -134,6 +136,7 @@ export function renderPrompt(template: string, options: RenderPromptOptions): st
   const context: Record<string, unknown> = {
     issue: toTemplateIssue(options.issue),
     attempt: options.attempt ?? null,
+    plan: options.plan ? toTemplatePlan(options.plan) : null,
   };
 
   let parsed: Template[];
@@ -147,6 +150,19 @@ export function renderPrompt(template: string, options: RenderPromptOptions): st
   } catch (error) {
     throw toPromptError(error, "render", workflowPath);
   }
+}
+
+function toTemplatePlan(plan: DecisionMaterializedPlan): Record<string, unknown> {
+  return {
+    task_id: plan.taskId,
+    taskId: plan.taskId,
+    revision: plan.revision,
+    plan: plan.plan,
+    acceptance_criteria: plan.acceptanceCriteria,
+    acceptanceCriteria: plan.acceptanceCriteria,
+    risks: plan.risks,
+    clarifications: plan.clarifications,
+  };
 }
 
 /**

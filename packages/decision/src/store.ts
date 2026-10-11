@@ -25,6 +25,7 @@ import {
   DECISION_STORE_SCHEMA_VERSION,
   type DecisionStoreConfig,
   type DecisionStoreRecord,
+  type DecisionPlanRecord,
   type DecisionTaskFailure,
   type SubmissionReceipt,
   type OperationReceipt,
@@ -91,6 +92,76 @@ export function validateSubmissionReceipt(value: unknown): SubmissionReceipt {
     validateDecisionTaskFailure(r["payload"]);
   }
   return value as SubmissionReceipt;
+}
+
+export function validateDecisionPlanRecord(value: unknown): DecisionPlanRecord {
+  if (typeof value !== "object" || value === null) {
+    throw new DecisionValidationError("Expected plan record object");
+  }
+  const p = value as Record<string, unknown>;
+  if (p["schemaVersion"] !== 1) {
+    throw new DecisionValidationError("Invalid plan record schemaVersion");
+  }
+  if (typeof p["sessionId"] !== "string" || p["sessionId"].trim() === "") {
+    throw new DecisionValidationError("Invalid plan record sessionId");
+  }
+  if (typeof p["taskId"] !== "string" || p["taskId"].trim() === "") {
+    throw new DecisionValidationError("Invalid plan record taskId");
+  }
+  if (typeof p["revision"] !== "number" || !Number.isSafeInteger(p["revision"]) || p["revision"] < 1) {
+    throw new DecisionValidationError("Invalid plan record revision");
+  }
+  if (!["initial", "requirements_changed", "clarification", "retry"].includes(p["triggerKind"] as string)) {
+    throw new DecisionValidationError("Invalid plan record triggerKind");
+  }
+  if (typeof p["requirements"] !== "object" || p["requirements"] === null) {
+    throw new DecisionValidationError("Invalid plan record requirements");
+  }
+  const req = p["requirements"] as Record<string, unknown>;
+  if (typeof req["title"] !== "string") {
+    throw new DecisionValidationError("Invalid plan record requirements title");
+  }
+  if (typeof req["body"] !== "string") {
+    throw new DecisionValidationError("Invalid plan record requirements body");
+  }
+  if (!Array.isArray(req["clarifications"])) {
+    throw new DecisionValidationError("Invalid plan record requirements clarifications");
+  }
+  if (typeof req["fingerprint"] !== "string" || req["fingerprint"].trim() === "") {
+    throw new DecisionValidationError("Invalid plan record requirements fingerprint");
+  }
+  if (p["previousTaskId"] !== null && typeof p["previousTaskId"] !== "string") {
+    throw new DecisionValidationError("Invalid plan record previousTaskId");
+  }
+  if (!["pending", "running", "completed", "failed", "superseded"].includes(p["status"] as string)) {
+    throw new DecisionValidationError("Invalid plan record status");
+  }
+  if (p["result"] !== null) {
+    const res = parseDecisionResult(p["result"]);
+    if (res.kind !== "plan") {
+      throw new DecisionValidationError("Plan record result must be a plan result");
+    }
+  }
+  if (
+    p["publishedCommentId"] !== null &&
+    typeof p["publishedCommentId"] !== "string" &&
+    typeof p["publishedCommentId"] !== "number"
+  ) {
+    throw new DecisionValidationError("Invalid plan record publishedCommentId");
+  }
+  if (
+    p["publishedAtMs"] !== null &&
+    (!Number.isSafeInteger(p["publishedAtMs"]) || (p["publishedAtMs"] as number) < 0)
+  ) {
+    throw new DecisionValidationError("Invalid plan record publishedAtMs");
+  }
+  if (!Number.isSafeInteger(p["createdAtMs"]) || (p["createdAtMs"] as number) < 0) {
+    throw new DecisionValidationError("Invalid plan record createdAtMs");
+  }
+  if (!Number.isSafeInteger(p["updatedAtMs"]) || (p["updatedAtMs"] as number) < 0) {
+    throw new DecisionValidationError("Invalid plan record updatedAtMs");
+  }
+  return value as DecisionPlanRecord;
 }
 
 export function validateStoreRecord(record: DecisionStoreRecord): void {
@@ -407,6 +478,25 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
       validateDecisionContextForTask(parsedCtx, task, session);
     }
   }
+
+  // Validate plans
+  if (record.plans !== undefined) {
+    if (typeof record.plans !== "object" || record.plans === null) {
+      throw new CorruptedStoreError("plans table must be an object if present");
+    }
+    for (const [key, plan] of Object.entries(record.plans)) {
+      if (key !== plan.taskId) {
+        throw new CorruptedStoreError(`Plan key "${key}" does not match plan taskId "${plan.taskId}"`);
+      }
+      validateDecisionPlanRecord(plan);
+      if (!record.sessions[plan.sessionId]) {
+        throw new CorruptedStoreError(`Plan ${key} references non-existent session ${plan.sessionId}`);
+      }
+      if (!record.tasks[plan.taskId]) {
+        throw new CorruptedStoreError(`Plan ${key} references non-existent task ${plan.taskId}`);
+      }
+    }
+  }
 }
 
 export function createEmptyStoreRecord(): DecisionStoreRecord {
@@ -421,6 +511,7 @@ export function createEmptyStoreRecord(): DecisionStoreRecord {
     revisions: {},
     operationReceipts: {},
     contexts: {},
+    plans: {},
   };
 }
 
@@ -482,7 +573,11 @@ export class DurableDecisionStore {
       throw new CorruptedStoreError(`Store file validation failed: ${(valErr as Error).message}`);
     }
 
-    this.state = candidate.contexts === undefined ? { ...candidate, contexts: {} } : candidate;
+    this.state = {
+      ...candidate,
+      contexts: candidate.contexts ?? {},
+      plans: candidate.plans ?? {},
+    };
   }
 
   async close(): Promise<void> {
@@ -556,6 +651,24 @@ export class DurableDecisionStore {
       }
     }
     return res;
+  }
+
+  getPlan(taskId: string): DecisionPlanRecord | null {
+    const p = this.state.plans?.[taskId];
+    return p ? structuredClone(p) : null;
+  }
+
+  getAllPlans(): DecisionPlanRecord[] {
+    if (!this.state.plans) return [];
+    return Object.values(this.state.plans).map((p) => structuredClone(p));
+  }
+
+  getLatestPlanForSession(sessionId: string): DecisionPlanRecord | null {
+    if (!this.state.plans) return null;
+    const sessionPlans = Object.values(this.state.plans).filter((p) => p.sessionId === sessionId);
+    if (sessionPlans.length === 0) return null;
+    sessionPlans.sort((a, b) => b.revision - a.revision);
+    return structuredClone(sessionPlans[0]!);
   }
 
   async transaction<T>(mutator: (draft: DecisionStoreRecord) => T | Promise<T>): Promise<T> {

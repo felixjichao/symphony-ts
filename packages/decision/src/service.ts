@@ -21,6 +21,7 @@ import {
   isDecisionReviewApproved,
   type DecisionReviewTask,
   type DeliveryReviewApprovalResult,
+  type PlanningEligibilityResult,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
@@ -28,9 +29,11 @@ import {
   type DecisionReviewTarget,
   type DecisionWorkItemRef,
   type DecisionContextBundle,
+  type DecisionMaterializedContext,
+  type DecisionMaterializedPlan,
   type UtcTimestampMs,
 } from "@symphony/domain";
-import { canonicalJsonEqual } from "./canonical-json";
+import { canonicalJsonEqual, computeRequirementFingerprint } from "./canonical-json";
 import {
   DecisionConflictError,
   DecisionNotFoundError,
@@ -39,6 +42,7 @@ import {
 import type { DurableDecisionStore } from "./store";
 import type {
   DecisionStoreConfig,
+  DecisionPlanRecord,
   DecisionTaskFailure,
   SubmissionReceipt,
   OperationReceipt,
@@ -328,8 +332,26 @@ export class DecisionService {
 
   async createPlanTask(
     sessionId: string,
-    params: { operationKey?: string } = {}
+    params: {
+      operationKey?: string | undefined;
+      context?: DecisionContextBundle | undefined;
+      triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
+      requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+      previousTaskId?: string | null | undefined;
+    } = {}
   ): Promise<DecisionTask> {
+    const title =
+      params.requirements?.title?.trim() ||
+      (params.context?.strategy === "materialized" ? params.context.issue.title : "") ||
+      "Issue Requirements";
+    const body =
+      params.requirements?.body ??
+      (params.context?.strategy === "materialized" ? params.context.issue.body : "");
+    const clarifications = params.requirements?.clarifications ?? [];
+    const fingerprint = computeRequirementFingerprint(title, body, clarifications);
+    const triggerKind = params.triggerKind ?? "initial";
+    const previousTaskId = params.previousTaskId ?? null;
+
     if (params.operationKey) {
       const op = this.store.getOperationReceipt(params.operationKey);
       if (op) {
@@ -338,8 +360,19 @@ export class DecisionService {
             `Operation key "${params.operationKey}" was already used for a different operation`
           );
         }
+        if (
+          (op.fingerprint !== undefined && op.fingerprint !== fingerprint) ||
+          (op.triggerKind !== undefined && op.triggerKind !== triggerKind) ||
+          (op.previousTaskId !== undefined && op.previousTaskId !== previousTaskId)
+        ) {
+          throw new DecisionConflictError(
+            `Operation key "${params.operationKey}" was already used with different parameters`
+          );
+        }
         const existing = this.store.getTask(op.entityId);
-        if (existing) return existing;
+        if (existing) {
+          return existing;
+        }
       }
     }
 
@@ -352,8 +385,19 @@ export class DecisionService {
               `Operation key "${params.operationKey}" was already used for a different operation`
             );
           }
+          if (
+            (op.fingerprint !== undefined && op.fingerprint !== fingerprint) ||
+            (op.triggerKind !== undefined && op.triggerKind !== triggerKind) ||
+            (op.previousTaskId !== undefined && op.previousTaskId !== previousTaskId)
+          ) {
+            throw new DecisionConflictError(
+              `Operation key "${params.operationKey}" was already used with different parameters`
+            );
+          }
           const existing = draft.tasks[op.entityId];
-          if (existing) return existing;
+          if (existing) {
+            return existing;
+          }
         }
       }
 
@@ -368,10 +412,19 @@ export class DecisionService {
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
 
-      // Supersede previous plan tasks for this session
+      // Supersede previous plan tasks and active plan records for this session
       for (const t of Object.values(draft.tasks)) {
         if (t.sessionId === sessionId && t.kind === "plan" && t.status !== "superseded") {
           draft.tasks[t.id] = supersedeDecisionTask(t, now);
+        }
+      }
+      for (const p of Object.values(draft.plans)) {
+        if (p.sessionId === sessionId && (p.status === "pending" || p.status === "running")) {
+          draft.plans[p.taskId] = {
+            ...p,
+            status: "superseded",
+            updatedAtMs: now,
+          };
         }
       }
 
@@ -392,12 +445,107 @@ export class DecisionService {
 
       draft.tasks[id] = task;
 
+      if (params.context) {
+        const parsed = parseDecisionContextBundle(params.context);
+        validateDecisionContextForTask(parsed, task, session);
+        draft.contexts[id] = parsed;
+      } else {
+        const root = session.root;
+        const match = /^(.*)#([1-9][0-9]*)$/.exec(root.key);
+        let repo = match ? match[1]! : (root.key.includes("/") ? root.key.split("#")[0]! : "symphony/repo");
+        if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\/[a-z0-9_.-]+$/.test(repo)) {
+          repo = "symphony/repo";
+        }
+        const issueNumber = match ? Number(match[2]) : 1;
+
+        let priorMaterializedPlan: DecisionMaterializedPlan | null = null;
+        if (previousTaskId) {
+          const prevPlan = draft.plans[previousTaskId];
+          if (prevPlan && prevPlan.result?.kind === "plan") {
+            priorMaterializedPlan = {
+              taskId: prevPlan.taskId,
+              revision: prevPlan.revision,
+              plan: prevPlan.result.content.plan,
+              acceptanceCriteria: prevPlan.result.content.acceptanceCriteria,
+              risks: prevPlan.result.content.risks,
+              clarifications: prevPlan.result.content.clarifications,
+            };
+          }
+        } else {
+          const prevPlans = Object.values(draft.plans)
+            .filter((p) => p.sessionId === sessionId && p.status === "completed" && p.result !== null)
+            .sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
+          const prev = prevPlans[0];
+          if (prev && prev.result?.kind === "plan") {
+            priorMaterializedPlan = {
+              taskId: prev.taskId,
+              revision: prev.revision,
+              plan: prev.result.content.plan,
+              acceptanceCriteria: prev.result.content.acceptanceCriteria,
+              risks: prev.result.content.risks,
+              clarifications: prev.result.content.clarifications,
+            };
+          }
+        }
+
+        let enrichedBody = body;
+        if (clarifications.length > 0) {
+          enrichedBody += `\n\n### Clarifications\n` + clarifications.map((c) => `- ${c}`).join("\n");
+        }
+
+        const autoContext: DecisionMaterializedContext = {
+          strategy: "materialized",
+          workItem: root,
+          repository: repo,
+          issue: {
+            repository: repo,
+            number: issueNumber,
+            title,
+            body: enrichedBody,
+          },
+          plan: priorMaterializedPlan,
+          pullRequest: null,
+          diff: null,
+          ci: null,
+          repositoryInstructions: null,
+          previousReviews: [],
+          unresolvedFindings: [],
+        };
+        draft.contexts[id] = autoContext;
+      }
+
+      const planRecord: DecisionPlanRecord = {
+        schemaVersion: 1,
+        sessionId,
+        taskId: id,
+        revision: rev,
+        triggerKind: params.triggerKind ?? (rev === 1 ? "initial" : "clarification"),
+        requirements: {
+          title,
+          body,
+          clarifications,
+          fingerprint,
+        },
+        previousTaskId,
+        status: "pending",
+        result: null,
+        publishedCommentId: null,
+        publishedAtMs: null,
+        createdAtMs: now,
+        updatedAtMs: now,
+      };
+
+      draft.plans[id] = planRecord;
+
       if (params.operationKey) {
         draft.operationReceipts[params.operationKey] = {
           schemaVersion: 1,
           operationKey: params.operationKey,
           kind: "create-plan-task",
           sessionId,
+          triggerKind,
+          fingerprint,
+          previousTaskId,
           entityId: id,
           createdAtMs: now,
         };
@@ -486,10 +634,34 @@ export class DecisionService {
             return false;
           }
           if (t.status === "pending" || t.status === "claimed" || t.status === "running") {
+            const existingCtx = draft.contexts[t.id];
+            if (params.context?.strategy === "materialized" && params.context.plan) {
+              if (
+                !existingCtx ||
+                existingCtx.strategy !== "materialized" ||
+                !existingCtx.plan ||
+                existingCtx.plan.taskId !== params.context.plan.taskId ||
+                existingCtx.plan.revision !== params.context.plan.revision
+              ) {
+                return false;
+              }
+            }
             return true;
           }
           if (t.status === "completed") {
             if (isExplicitNewRound) return false;
+            const existingCtx = draft.contexts[t.id];
+            if (params.context?.strategy === "materialized" && params.context.plan) {
+              if (
+                !existingCtx ||
+                existingCtx.strategy !== "materialized" ||
+                !existingCtx.plan ||
+                existingCtx.plan.taskId !== params.context.plan.taskId ||
+                existingCtx.plan.revision !== params.context.plan.revision
+              ) {
+                return false;
+              }
+            }
             const res = draft.results[t.id];
             return Boolean(res && res.kind === "review");
           }
@@ -593,7 +765,63 @@ export class DecisionService {
   verifyReviewApproval(
     sessionId: string,
     target: DecisionReviewTarget,
+    requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined,
   ): DeliveryReviewApprovalResult {
+    const latestPlan = this.store.getLatestPlanForSession(sessionId);
+    if (latestPlan !== null) {
+      if (latestPlan.status !== "completed") {
+        return {
+          approved: false,
+          reason: `Session plan is not completed (status: ${latestPlan.status}, task: ${latestPlan.taskId})`,
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+      if (latestPlan.result?.verdict !== "ready") {
+        return {
+          approved: false,
+          reason: `Session plan verdict is not ready (verdict: ${latestPlan.result?.verdict ?? "unknown"})`,
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+      if (latestPlan.publishedCommentId === null) {
+        return {
+          approved: false,
+          reason: `Session plan is not published to GitHub`,
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+      // A session plan exists, so approval is bound to those requirements. Refuse
+      // to fall open when the caller omits the current requirements: an
+      // unreadable/stale Issue must block the merge rather than silently reuse an
+      // old approval.
+      if (!requirements) {
+        return {
+          approved: false,
+          reason: "Current requirements not provided; cannot verify approval against the session plan",
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+      const curFp = computeRequirementFingerprint(
+        requirements.title,
+        requirements.body,
+        // Clarifications are durable operator input from the plan; fall back to
+        // the saved set when the caller only supplies GitHub Issue facts.
+        requirements.clarifications ?? latestPlan.requirements.clarifications
+      );
+      if (curFp !== latestPlan.requirements.fingerprint) {
+        return {
+          approved: false,
+          reason: `Requirements changed since plan was created`,
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
+    }
+
     const tasks = this.getTasksForSession(sessionId)
       .filter(
         (t): t is DecisionReviewTask =>
@@ -612,6 +840,25 @@ export class DecisionService {
         headSha: target.headSha,
         sessionId,
       };
+    }
+
+    if (latestPlan !== null) {
+      const reviewCtx = this.store.getContext(task.id);
+      if (
+        !reviewCtx ||
+        reviewCtx.strategy !== "materialized" ||
+        !reviewCtx.plan ||
+        reviewCtx.plan.taskId !== latestPlan.taskId ||
+        reviewCtx.plan.revision !== latestPlan.revision
+      ) {
+        return {
+          approved: false,
+          reason: `Review was evaluated against plan revision ${reviewCtx && reviewCtx.strategy === "materialized" ? (reviewCtx.plan?.revision ?? "none") : "none"}, but latest plan is revision ${latestPlan.revision} (${latestPlan.taskId})`,
+          taskId: task.id,
+          sessionId,
+          headSha: target.headSha,
+        };
+      }
     }
 
     if (task.status !== "completed") {
@@ -921,6 +1168,18 @@ export class DecisionService {
       draft.tasks[taskId] = completed;
       draft.results[taskId] = params.result;
 
+      if (task.kind === "plan" && params.result.kind === "plan") {
+        const planRecord = draft.plans[taskId];
+        if (planRecord) {
+          draft.plans[taskId] = {
+            ...planRecord,
+            status: "completed",
+            result: params.result,
+            updatedAtMs: now,
+          };
+        }
+      }
+
       const newReceipt: SubmissionReceipt = {
         schemaVersion: 1,
         taskId,
@@ -1016,6 +1275,17 @@ export class DecisionService {
       };
       draft.failures[taskId] = failure;
 
+      if (task.kind === "plan") {
+        const planRecord = draft.plans[taskId];
+        if (planRecord) {
+          draft.plans[taskId] = {
+            ...planRecord,
+            status: "failed",
+            updatedAtMs: now,
+          };
+        }
+      }
+
       const newReceipt: SubmissionReceipt = {
         schemaVersion: 1,
         taskId,
@@ -1043,6 +1313,18 @@ export class DecisionService {
       const now = this.clock();
       const updated = cancelDecisionTask(task, now);
       draft.tasks[taskId] = updated;
+
+      if (task.kind === "plan") {
+        const planRecord = draft.plans[taskId];
+        if (planRecord) {
+          draft.plans[taskId] = {
+            ...planRecord,
+            status: "superseded",
+            updatedAtMs: now,
+          };
+        }
+      }
+
       return updated;
     });
   }
@@ -1054,7 +1336,164 @@ export class DecisionService {
       const now = this.clock();
       const updated = supersedeDecisionTask(task, now);
       draft.tasks[taskId] = updated;
+
+      if (task.kind === "plan") {
+        const planRecord = draft.plans[taskId];
+        if (planRecord) {
+          draft.plans[taskId] = {
+            ...planRecord,
+            status: "superseded",
+            updatedAtMs: now,
+          };
+        }
+      }
+
       return updated;
     });
+  }
+
+  getPlan(taskId: string): DecisionPlanRecord | null {
+    return this.store.getPlan(taskId);
+  }
+
+  getLatestPlan(sessionId: string): DecisionPlanRecord | null {
+    return this.store.getLatestPlanForSession(sessionId);
+  }
+
+  getLatestPlanForSession(sessionId: string): DecisionPlanRecord | null {
+    return this.store.getLatestPlanForSession(sessionId);
+  }
+
+  getAllPlans(): DecisionPlanRecord[] {
+    return this.store.getAllPlans();
+  }
+
+  async markPlanPublished(
+    taskId: string,
+    published: { commentId?: number | string | undefined; publishedAtMs?: number | undefined } = {}
+  ): Promise<DecisionPlanRecord> {
+    if (
+      published.commentId === undefined ||
+      published.commentId === null ||
+      (typeof published.commentId !== "number" && typeof published.commentId !== "string") ||
+      (typeof published.commentId === "string" && published.commentId.trim() === "") ||
+      (typeof published.commentId === "number" && (!Number.isFinite(published.commentId) || published.commentId <= 0))
+    ) {
+      throw new DecisionValidationError("markPlanPublished requires valid non-empty commentId");
+    }
+
+    return await this.store.transaction((draft) => {
+      const planRecord = draft.plans[taskId];
+      if (!planRecord) {
+        throw new DecisionNotFoundError(`Plan record for task "${taskId}" not found`);
+      }
+      const now = this.clock();
+      const updated: DecisionPlanRecord = {
+        ...planRecord,
+        publishedCommentId: published.commentId ?? null,
+        publishedAtMs: published.publishedAtMs !== undefined ? published.publishedAtMs : now,
+        updatedAtMs: now,
+      };
+      draft.plans[taskId] = updated;
+      return updated;
+    });
+  }
+
+  verifyPlanEligibility(
+    sessionId: string,
+    requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined
+  ): PlanningEligibilityResult {
+    const planRecord = this.store.getLatestPlanForSession(sessionId);
+    if (!planRecord) {
+      return {
+        eligible: false,
+        sessionId,
+        reason: "no_plan",
+      };
+    }
+
+    if (planRecord.status !== "completed") {
+      return {
+        eligible: false,
+        sessionId,
+        reason: `plan_status_${planRecord.status}`,
+      };
+    }
+
+    const result = planRecord.result;
+    if (!result || result.kind !== "plan") {
+      return {
+        eligible: false,
+        sessionId,
+        reason: "no_plan_result",
+      };
+    }
+
+    if (result.verdict !== "ready") {
+      return {
+        eligible: false,
+        sessionId,
+        reason: `verdict_${result.verdict}`,
+        verdict: result.verdict,
+      };
+    }
+
+    // Fail closed if verdict is ready but clarifications contains items
+    if (result.content.clarifications && result.content.clarifications.length > 0) {
+      return {
+        eligible: false,
+        sessionId,
+        reason: "unresolved_clarifications",
+        verdict: "ready",
+      };
+    }
+
+    if (requirements) {
+      // The durable plan persists the authoritative answered clarifications (they
+      // are operator input, not GitHub facts). Callers supply the current Issue
+      // title/body; when they do not carry clarifications, fall back to the saved
+      // set so the clarification loop does not produce a permanent fingerprint
+      // mismatch. Explicit clarifications still take precedence.
+      const clarifications = requirements.clarifications ?? planRecord.requirements.clarifications;
+      const currentFingerprint = computeRequirementFingerprint(
+        requirements.title,
+        requirements.body,
+        clarifications
+      );
+      if (currentFingerprint !== planRecord.requirements.fingerprint) {
+        return {
+          eligible: false,
+          sessionId,
+          reason: "requirements_changed",
+          verdict: "ready",
+          fingerprint: planRecord.requirements.fingerprint,
+        };
+      }
+    }
+
+    if (planRecord.publishedCommentId === null) {
+      return {
+        eligible: false,
+        sessionId,
+        reason: "plan_not_published_to_github",
+        verdict: "ready",
+      };
+    }
+
+    return {
+      eligible: true,
+      sessionId,
+      verdict: "ready",
+      fingerprint: planRecord.requirements.fingerprint,
+      publishedCommentId: planRecord.publishedCommentId,
+      plan: {
+        taskId: planRecord.taskId,
+        revision: planRecord.revision,
+        plan: result.content.plan,
+        acceptanceCriteria: result.content.acceptanceCriteria,
+        risks: result.content.risks,
+        clarifications: result.content.clarifications,
+      },
+    };
   }
 }

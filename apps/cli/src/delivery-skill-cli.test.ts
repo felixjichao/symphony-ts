@@ -21,6 +21,9 @@ class MockCliRunner implements DeliveryGitGhRunner {
   ghResponses: DeliverySubprocessResult[] = [];
   execResponses: DeliverySubprocessResult[] = [];
 
+  // Simulates an unreadable Issue for the planning gate's requirement read.
+  issueViewFailure = false;
+
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
     if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
@@ -45,6 +48,9 @@ class MockCliRunner implements DeliveryGitGhRunner {
       return { stdout: "[]", stderr: "", exitCode: 0 };
     }
     if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
+      if (this.issueViewFailure) {
+        return { stdout: "", stderr: "simulated issue view failure", exitCode: 1 };
+      }
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
     if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("pulls/")) {
@@ -262,6 +268,33 @@ describe("delivery-skill CLI", () => {
     expect(code).toBe(1);
     expect(stderr).toContain("halt failed: could not remove label");
     expect(stdout).toContain("移除 `symphony-ready` 标签失败");
+  });
+
+  it("fails closed when current Issue requirements cannot be read for the planning gate", async () => {
+    const tempDir = createTempDir();
+    const runner = new MockCliRunner();
+    runner.issueViewFailure = true;
+
+    let stderr = "";
+    const io = {
+      stdout: { write: () => {} },
+      stderr: { write: (t: string) => { stderr += t; } },
+    };
+
+    const code = await runDeliverySkillCli(
+      [
+        "run",
+        "--repo", "owner/repo",
+        "--issue", "80",
+        "--bridge-url", "http://127.0.0.1:9",
+        "--cwd", tempDir,
+      ],
+      io,
+      runner,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("failed to read current Issue #80 requirements");
   });
 
   it("executes run action successfully when checks are green and --opt-in is passed", async () => {

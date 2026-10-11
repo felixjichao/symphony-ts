@@ -2,7 +2,13 @@ import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Issue, TimerHandle } from "@symphony/domain";
+import {
+  decisionSessionId,
+  githubDecisionRoot,
+  type Issue,
+  type TimerHandle,
+} from "@symphony/domain";
+import { DurableDecisionStore, DecisionService, DecisionPlanningGate } from "@symphony/decision";
 import type { RetryScheduler } from "@symphony/orchestrator";
 import { SymphonyConfigError } from "@symphony/config";
 import { createStructuredLogger } from "@symphony/observability";
@@ -445,6 +451,255 @@ describe("createHost in-process composition", () => {
       await expect(host.start()).rejects.toThrow();
 
       await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("enables planning gate in createHost: blocks unapproved issues and passes plan when eligible", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-planning-test-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const storeDir = path.join(temp, ".symphony", "decision");
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+
+      const store = new DurableDecisionStore({ storeDir });
+      await store.open();
+      const service = new DecisionService(store);
+      const root = githubDecisionRoot("owner", "repo", 42);
+      await service.createSession(root);
+      const sessionId = decisionSessionId(root);
+
+      const host = await createHost({
+        workflowPath,
+        planningGate: new DecisionPlanningGate(service),
+        enablePlanning: true,
+        env: { GITHUB_TOKEN: "dummy" },
+      });
+
+      const issue = makeIssue("GH-42", "open", {
+        title: "Test Issue",
+        description: "Test description",
+        url: "https://github.com/owner/repo/issues/42",
+        nativeRef: { repo: "owner/repo", number: 42 },
+      });
+
+      // 1. Initial: no plan -> dispatchIssue returns not_eligible
+      const res1 = host.authority.dispatchIssue(issue);
+      expect(res1.kind).toBe("not_eligible");
+
+      const task = await service.createPlanTask(sessionId, {
+        requirements: { title: "Test Issue", body: "Test description" },
+      });
+      const claim = await service.claimTask(task.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+      });
+      await service.submitResult(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task.id,
+          sessionId,
+          revision: task.revision,
+          kind: "plan",
+          verdict: "ready",
+          content: {
+            plan: "Step 1",
+            acceptanceCriteria: ["AC 1"],
+            risks: [],
+            clarifications: [],
+          },
+          createdAtMs: Date.now(),
+        },
+      });
+
+      // Still not published -> not_eligible
+      const res2 = host.authority.dispatchIssue(issue);
+      expect(res2.kind).toBe("not_eligible");
+
+      // 3. Mark published
+      await service.markPlanPublished(task.id, { commentId: 101 });
+
+      // Now eligible -> dispatched!
+      const res3 = host.authority.dispatchIssue(issue);
+      expect(res3.kind).toBe("dispatched");
+
+      // 4. Requirements changed on another issue GH-43
+      const root2 = githubDecisionRoot("owner", "repo", 43);
+      await service.createSession(root2);
+      const sessionId2 = decisionSessionId(root2);
+      const task2 = await service.createPlanTask(sessionId2, {
+        requirements: { title: "Issue 43", body: "Initial body" },
+      });
+      const claim2 = await service.claimTask(task2.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(task2.id, {
+        owner: "planner",
+        token: claim2.lease.token,
+        generation: claim2.lease.generation,
+      });
+      await service.submitResult(task2.id, {
+        owner: "planner",
+        token: claim2.lease.token,
+        generation: claim2.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task2.id,
+          sessionId: sessionId2,
+          revision: task2.revision,
+          kind: "plan",
+          verdict: "ready",
+          content: {
+            plan: "Step 1",
+            acceptanceCriteria: ["AC 1"],
+            risks: [],
+            clarifications: [],
+          },
+          createdAtMs: Date.now(),
+        },
+      });
+      await service.markPlanPublished(task2.id, { commentId: 102 });
+
+      const driftedIssue = makeIssue("GH-43", "open", {
+        title: "Issue 43",
+        description: "Modified body since planning",
+        url: "https://github.com/owner/repo/issues/43",
+        nativeRef: { repo: "owner/repo", number: 43 },
+      });
+      const res4 = host.authority.dispatchIssue(driftedIssue);
+      expect(res4.kind).toBe("not_eligible");
+
+      await host.authority.shutdown();
+      await host.stop();
+      await store.close();
+    } finally {
+      await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
+  it("dispatches a clarified plan even though Issue facts carry no clarifications", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-clarify-test-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const storeDir = path.join(temp, ".symphony", "decision");
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+
+      const store = new DurableDecisionStore({ storeDir });
+      await store.open();
+      const service = new DecisionService(store);
+      const root = githubDecisionRoot("owner", "repo", 77);
+      await service.createSession(root);
+      const sessionId = decisionSessionId(root);
+
+      // Mirrors the durable result of `symphony plan clarify`: answered
+      // clarifications are persisted with the plan and folded into its fingerprint.
+      const task = await service.createPlanTask(sessionId, {
+        triggerKind: "clarification",
+        requirements: {
+          title: "Clarified issue",
+          body: "Original body",
+          clarifications: ["Use approach A"],
+        },
+      });
+      const claim = await service.claimTask(task.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+      });
+      await service.submitResult(task.id, {
+        owner: "planner",
+        token: claim.lease.token,
+        generation: claim.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: task.id,
+          sessionId,
+          revision: task.revision,
+          kind: "plan",
+          verdict: "ready",
+          content: { plan: "Use approach A", acceptanceCriteria: ["AC"], risks: [], clarifications: [] },
+          createdAtMs: Date.now(),
+        },
+      });
+      await service.markPlanPublished(task.id, { commentId: 202 });
+
+      const host = await createHost({
+        workflowPath,
+        planningGate: new DecisionPlanningGate(service),
+        enablePlanning: true,
+        env: { GITHUB_TOKEN: "dummy" },
+      });
+
+      const issue = makeIssue("GH-77", "open", {
+        title: "Clarified issue",
+        description: "Original body",
+        url: "https://github.com/owner/repo/issues/77",
+        nativeRef: { repo: "owner/repo", number: 77 },
+      });
+
+      // The dispatch entry only knows GitHub title/body; the service must apply
+      // the durable clarifications instead of reporting requirements_changed.
+      const res = host.authority.dispatchIssue(issue);
+      expect(res.kind).toBe("dispatched");
+
+      await host.authority.shutdown();
+      await host.stop();
+      await store.close();
+    } finally {
+      await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
+  it("createHost auto-creates DecisionPlanningGate from storeDir and cleanly closes owned store on stop", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-planning-auto-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const storeDir = path.join(temp, ".symphony", "decision");
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: owner/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+
+      const host = await createHost({
+        workflowPath,
+        decisionStoreDir: storeDir,
+        enablePlanning: true,
+        env: { GITHUB_TOKEN: "dummy" },
+      });
+
+      const issue = makeIssue("GH-42", "open", {
+        title: "Test Issue",
+        description: "Test description",
+        url: "https://github.com/owner/repo/issues/42",
+        nativeRef: { repo: "owner/repo", number: 42 },
+      });
+
+      // No plan in auto-created store -> dispatch rejected
+      const res = host.authority.dispatchIssue(issue);
+      expect(res.kind).toBe("not_eligible");
+
+      // Stopping host must release the store lock cleanly
+      await host.stop();
+
+      // We should now be able to open the store without lock conflict
+      const store = new DurableDecisionStore({ storeDir });
+      await store.open();
+      expect(store.getAllTasks()).toEqual([]);
+      await store.close();
     } finally {
       await rm(temp, { recursive: true, force: true });
     }

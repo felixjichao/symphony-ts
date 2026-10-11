@@ -28,6 +28,9 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
   lastRevParseSha: string | null = null;
   currentPrHead: string | null = null;
   headRefOidResponses: Array<DeliverySubprocessResult | ((args: readonly string[]) => DeliverySubprocessResult)> = [];
+  // Number of `issue view --json title,body` calls that succeed before the mock
+  // starts failing (used to simulate a pre-merge Issue read failure).
+  issueViewCallsBeforeFailure = Number.POSITIVE_INFINITY;
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
@@ -78,6 +81,10 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
         : { stdout: "test: assertion failed", stderr: "", exitCode: 0 };
     }
     if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body"))) {
+      if (this.issueViewCallsBeforeFailure <= 0) {
+        return { stdout: "", stderr: "simulated issue view failure", exitCode: 1 };
+      }
+      this.issueViewCallsBeforeFailure--;
       return { stdout: JSON.stringify({ title: "issue 80", body: "body 80" }), stderr: "", exitCode: 0 };
     }
     if (args[0] === "api" && typeof args[1] === "string" && args[1].includes("pulls/")) {
@@ -402,6 +409,57 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const gitPushCall = runner.gitCalls.find((c) => c.args[0] === "push");
     expect(gitPushCall).toBeDefined();
     expect(gitPushCall?.args).toContain("symphony/GH-80");
+  });
+
+  it("fails closed before merge when the current Issue requirements cannot be read", async () => {
+    const cwd = createTempCwd();
+    const runner = new MockDeliveryRunner();
+    // The startup Issue read (used to build review context) succeeds; the
+    // pre-merge re-read fails, so approval must not be reused.
+    runner.issueViewCallsBeforeFailure = 1;
+
+    setupPreMutationSuccess(runner);
+    runner.ghResponses.push({
+      stdout: JSON.stringify([
+        {
+          number: 85,
+          url: "https://github.com/felixjichao/symphony-ts/pull/85",
+          title: "feat: delivery",
+          state: "OPEN",
+          headRefOid: "1234567890abcdef1234567890abcdef12345678",
+          body: "Fixes #80\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"workspaceKey\":\"GH-80\",\"issueNumber\":80,\"repo\":\"felixjichao/symphony-ts\",\"headBranch\":\"symphony/GH-80\",\"baseBranch\":\"main\"} -->",
+        },
+      ]),
+      stderr: "",
+      exitCode: 0,
+    });
+    runner.execResponses.push({ stdout: "tests passed", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: " M src/index.ts\n", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "[symphony/GH-80 1234567] feat commit", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.gitResponses.push({ stdout: "1234567890abcdef1234567890abcdef12345678\n", stderr: "", exitCode: 0 });
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "1234567890abcdef1234567890abcdef12345678",
+        mergeable: "MERGEABLE",
+        state: "OPEN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+    runner.ghResponses.push({ stdout: JSON.stringify({ mergeable: "MERGEABLE", state: "OPEN" }), stderr: "", exitCode: 0 });
+
+    const result = await runDeliverySkill({ ...getBaseOptions(cwd), runner });
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("manual_intervention_required");
+    expect(result.handoffMarkdown).toContain("before merge");
+
+    const mergeCalled = runner.ghCalls.some((c) => c.args[0] === "pr" && c.args[1] === "merge");
+    expect(mergeCalled).toBe(false);
   });
 
   it("验收 2: 无 PR 时自动创建，已有 PR 时自动复用", async () => {

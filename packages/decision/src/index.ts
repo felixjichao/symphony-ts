@@ -5,6 +5,7 @@
 export {
   DECISION_STORE_SCHEMA_VERSION,
   type DecisionStoreRecord,
+  type DecisionPlanRecord,
   type DecisionStoreConfig,
   type DecisionBridgeConfig,
   type DecisionTaskFailure,
@@ -56,6 +57,11 @@ export { DecisionService } from "./service.js";
 export { DecisionBridge } from "./bridge.js";
 export { DecisionBridgeClient, type DecisionBridgeClientOptions } from "./client.js";
 export { DecisionReviewGate } from "./review-gate.js";
+export {
+  DecisionPlanningGate,
+  type DecisionPlanningGateOptions,
+  type EnsurePlanTaskOptions,
+} from "./planning-gate.js";
 
 // Executor adapter abstraction and context strategies (NEST-101 / #96)
 export {

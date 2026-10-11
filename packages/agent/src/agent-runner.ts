@@ -16,6 +16,7 @@
  */
 import { renderPrompt } from "@symphony/config";
 import type {
+  DecisionMaterializedPlan,
   Issue,
   RunAttemptStatus,
   ServiceConfig,
@@ -82,6 +83,8 @@ export interface AgentAttemptOptions {
   readonly onHookEvent?: WorkspaceHookEventSink | undefined;
   /** 子进程 stderr 诊断行回调。 */
   readonly onStderr?: ((line: string) => void) | undefined;
+  /** 可选的已确认实施计划（Decision Plane M6.1）。 */
+  readonly plan?: DecisionMaterializedPlan | null | undefined;
 }
 
 /**
@@ -180,6 +183,7 @@ export async function runAgentAttempt(options: AgentAttemptOptions): Promise<Age
       issue: options.issue,
       attempt: options.attempt,
       workflowPath: options.workflowPath,
+      plan: options.plan,
     });
     throwIfCancelled();
 

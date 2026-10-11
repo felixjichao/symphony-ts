@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 /**
  * Deterministic JSON serialization and deep equality comparison where key order does not matter.
  */
@@ -25,4 +27,25 @@ export function canonicalJsonStringify(value: unknown): string {
 
 export function canonicalJsonEqual(a: unknown, b: unknown): boolean {
   return canonicalJsonStringify(a) === canonicalJsonStringify(b);
+}
+
+export function computeRequirementFingerprint(
+  title: string,
+  body: string,
+  clarifications: readonly string[] = []
+): string {
+  const normalizedTitle = title.trim();
+  const normalizedBody = body.trim();
+  const normalizedClarifications = clarifications
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  const payload = {
+    title: normalizedTitle,
+    body: normalizedBody,
+    clarifications: normalizedClarifications,
+  };
+  // SHA-256 hex digest
+  const hash = crypto.createHash("sha256");
+  hash.update(canonicalJsonStringify(payload), "utf8");
+  return hash.digest("hex");
 }

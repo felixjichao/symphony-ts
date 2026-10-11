@@ -9,10 +9,13 @@ import {
 } from "@symphony/agent";
 import {
   DecisionBridgeClient,
+  DecisionPlanningGate,
   DecisionReviewGate,
 } from "@symphony/decision";
 import {
+  decisionSessionId,
   formatDeliveryHandoffMarkdown,
+  type DecisionMaterializedPlan,
   type DeliveryHandoff,
   type DeliveryReviewGate,
   type PersistedDeliveryState,
@@ -342,11 +345,52 @@ export async function runDeliverySkillCli(
   const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
 
   let reviewGate = customReviewGate;
+  let plan: DecisionMaterializedPlan | null | undefined = undefined;
   const bridgeUrl = parsed.bridgeUrl ?? process.env.DECISION_BRIDGE_URL;
-  if (!reviewGate && bridgeUrl) {
+  if (bridgeUrl) {
     const token = parsed.bridgeToken ?? process.env.DECISION_BRIDGE_TOKEN;
     const client = new DecisionBridgeClient(bridgeUrl, ...(token ? [{ authToken: token }] : []));
-    reviewGate = new DecisionReviewGate(client);
+    if (!reviewGate) {
+      reviewGate = new DecisionReviewGate(client);
+    }
+    const sId = parsed.sessionId ?? (parsed.repo && parsed.issueNumber
+      ? decisionSessionId({ provider: "github", key: `${parsed.repo.toLowerCase()}#${parsed.issueNumber}` })
+      : undefined);
+    if (sId) {
+      // The planning gate verifies the current Issue requirements against the
+      // durable plan. If GitHub facts cannot be read, fail closed instead of
+      // silently skipping the requirement-drift check.
+      let requirements: { readonly title: string; readonly body: string };
+      try {
+        const viewRes = await runner.gh(
+          ["issue", "view", String(parsed.issueNumber), "--json", "title,body", "--repo", parsed.repo],
+          cwd,
+        );
+        if (viewRes.exitCode !== 0) {
+          throw new Error(viewRes.stderr || `gh issue view exited ${viewRes.exitCode}`);
+        }
+        const data = JSON.parse(viewRes.stdout || "{}");
+        if (!data || typeof data.title !== "string") {
+          throw new Error("Issue view response is missing a string title");
+        }
+        requirements = { title: data.title, body: typeof data.body === "string" ? data.body : "" };
+      } catch (err) {
+        io.stderr.write(
+          `symphony delivery-skill: error: failed to read current Issue #${parsed.issueNumber} requirements for planning gate verification: ${String(err)}\n`,
+        );
+        return 1;
+      }
+
+      const planningGate = new DecisionPlanningGate(client);
+      const eligibility = await planningGate.verifyPlanEligibility(sId, requirements);
+      if (!eligibility.eligible) {
+        io.stderr.write(`symphony delivery-skill: error: planning gate verification failed: ${eligibility.reason}\n`);
+        return 1;
+      }
+      if (eligibility.plan) {
+        plan = eligibility.plan;
+      }
+    }
   }
 
   const options: RunDeliverySkillOptions = {
@@ -366,6 +410,7 @@ export async function runDeliverySkillCli(
     requiredChecks: parsed.requiredChecks,
     reviewGate,
     sessionId: parsed.sessionId,
+    plan,
     runner,
     stateStorage,
     log: (msg) => io.stdout.write(`${msg}\n`),

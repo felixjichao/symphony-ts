@@ -8,6 +8,8 @@ import {
   completeDecisionTask, failDecisionTask, cancelDecisionTask, supersedeDecisionTask, releaseExpiredDecisionTask,
   validateDecisionResultForTask, isDecisionReviewApproved, rebindDecisionSession,
   breakDecisionBinding, completeDecisionSession, reopenDecisionSession,
+  serializePlanCommentMarker, parsePlanCommentMarker, formatPlanCommentMarkdown,
+  type PlanCommentMarker,
 } from "./index";
 
 const root = githubDecisionRoot("Owner", "Repo", 94);
@@ -315,3 +317,62 @@ describe("Strict JSON result arrays", () => {
     });
   }
 });
+
+describe("PlanCommentMarker and GitHub comment formatting", () => {
+  const marker: PlanCommentMarker = {
+    schemaVersion: 1,
+    repo: "owner/repo",
+    issueNumber: 99,
+    sessionId: "github:owner/repo#99",
+    taskId: "github%3Aowner%2Frepo%2399:plan:1",
+    revision: 1,
+    triggerKind: "initial",
+    fingerprint: "abc123def456",
+    verdict: "ready",
+  };
+
+  it("round-trips marker through serialization and parsing", () => {
+    const serialized = serializePlanCommentMarker(marker);
+    expect(serialized).toContain("<!-- symphony-plan-marker:");
+    const parsed = parsePlanCommentMarker(serialized);
+    expect(parsed).toEqual(marker);
+  });
+
+  it("parses marker embedded in complex markdown body", () => {
+    const serialized = serializePlanCommentMarker(marker);
+    const body = `# Some Issue Header\n\nDiscussion content\n\n${serialized}\n\nFooter`;
+    expect(parsePlanCommentMarker(body)).toEqual(marker);
+  });
+
+  it("fails closed on corrupted or invalid marker JSON", () => {
+    expect(parsePlanCommentMarker("no marker here")).toBeNull();
+    expect(parsePlanCommentMarker("<!-- symphony-plan-marker: not-json -->")).toBeNull();
+    expect(parsePlanCommentMarker("<!-- symphony-plan-marker: {} -->")).toBeNull();
+    expect(parsePlanCommentMarker('<!-- symphony-plan-marker: {"schemaVersion":2} -->')).toBeNull();
+    const invalidTrigger = serializePlanCommentMarker(marker).replace('"triggerKind":"initial"', '"triggerKind":"unknown"');
+    expect(parsePlanCommentMarker(invalidTrigger)).toBeNull();
+    const invalidVerdict = serializePlanCommentMarker(marker).replace('"verdict":"ready"', '"verdict":"other"');
+    expect(parsePlanCommentMarker(invalidVerdict)).toBeNull();
+  });
+
+  it("formats developer-visible markdown with embedded marker and structured details", () => {
+    const planTask = task("plan");
+    const planResult = result(planTask);
+    if (planResult.kind !== "plan") throw new Error("Expected plan result");
+
+    const md = formatPlanCommentMarkdown({
+      marker,
+      planResult,
+    });
+
+    expect(md).toContain("## Symphony Implementation Plan (rev 1)");
+    expect(md).toContain("**Verdict:** `ready`");
+    expect(md).toContain("**Requirement Fingerprint:** `abc123def456`");
+    expect(md).toContain("### Plan Summary");
+    expect(md).toContain("Implement contracts");
+    expect(md).toContain("<details>");
+    expect(md).toContain("Structured Decision Payload");
+    expect(parsePlanCommentMarker(md)).toEqual(marker);
+  });
+});
+

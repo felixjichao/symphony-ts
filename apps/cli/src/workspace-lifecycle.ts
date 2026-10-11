@@ -1,5 +1,5 @@
 import type { AgentAttemptOptions } from "@symphony/agent";
-import type { Issue } from "@symphony/domain";
+import type { DecisionMaterializedPlan, Issue } from "@symphony/domain";
 import type { AttemptContext, WorkspaceCleanupIssueContext } from "@symphony/orchestrator";
 import type { WorkspaceManager } from "@symphony/workspace";
 import type { EffectiveRuntime, EffectiveRuntimeController } from "./effective-runtime";
@@ -51,7 +51,10 @@ export class WorkspaceLifecycleCoordinator {
     return path;
   }
 
-  public createAttemptOptions(context: AttemptContext): AgentAttemptOptions {
+  public createAttemptOptions(
+    context: AttemptContext,
+    extraOptions?: { readonly plan?: DecisionMaterializedPlan | null | undefined } | undefined,
+  ): AgentAttemptOptions {
     const binding = (context.issue.id ? this.issueBindings.get(context.issue.id) : undefined)
       ?? this.identifierBindings.get(context.issue.identifier);
     const runtime = binding ? binding.runtime : this.controller.current;
@@ -65,6 +68,7 @@ export class WorkspaceLifecycleCoordinator {
         hooks: this.controller.current.serviceConfig.hooks,
       }),
       excludeEnvNames: runtime.excludeEnvNames,
+      ...(extraOptions?.plan !== undefined ? { plan: extraOptions.plan } : {}),
     });
   }
 

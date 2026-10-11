@@ -407,8 +407,69 @@ export class DecisionBridge {
         throw new DecisionValidationError("verify review approval requires target");
       }
       const target = parseDecisionReviewTarget(b["target"]);
-      const approval = this.service.verifyReviewApproval(b["sessionId"], target);
+      let requirements: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+      if (b["requirements"] && typeof b["requirements"] === "object") {
+        const reqObj = b["requirements"] as Record<string, unknown>;
+        if (typeof reqObj["title"] === "string" && typeof reqObj["body"] === "string") {
+          const clarifications = Array.isArray(reqObj["clarifications"])
+            ? reqObj["clarifications"].filter((x): x is string => typeof x === "string")
+            : undefined;
+          requirements = {
+            title: reqObj["title"],
+            body: reqObj["body"],
+            ...(clarifications !== undefined ? { clarifications } : {}),
+          };
+        }
+      }
+      const approval = this.service.verifyReviewApproval(b["sessionId"], target, requirements);
       this.sendJson(res, 200, { approval });
+      return;
+    }
+
+    // POST /v1/plans/verify
+    if (method === "POST" && pathname === "/v1/plans/verify") {
+      const body = await this.readJsonBody(req);
+      const b = body as Record<string, unknown>;
+      if (typeof b["sessionId"] !== "string") {
+        throw new DecisionValidationError("verify plan eligibility requires sessionId");
+      }
+      let requirements: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+      if (b["requirements"] && typeof b["requirements"] === "object") {
+        const reqObj = b["requirements"] as Record<string, unknown>;
+        if (typeof reqObj["title"] === "string" && typeof reqObj["body"] === "string") {
+          const clarifications = Array.isArray(reqObj["clarifications"])
+            ? reqObj["clarifications"].filter((x): x is string => typeof x === "string")
+            : undefined;
+          requirements = {
+            title: reqObj["title"],
+            body: reqObj["body"],
+            ...(clarifications !== undefined ? { clarifications } : {}),
+          };
+        }
+      }
+      const eligibility = this.service.verifyPlanEligibility(b["sessionId"], requirements);
+      this.sendJson(res, 200, { eligibility });
+      return;
+    }
+
+    // POST /v1/plans/:id/publish
+    const publishPlanMatch = /^\/v1\/plans\/([^/]+)\/publish$/.exec(pathname);
+    if (method === "POST" && publishPlanMatch) {
+      const taskId = decodeURIComponent(publishPlanMatch[1]!);
+      const body = (await this.readJsonBody(req)) as Record<string, unknown> | null;
+      const commentId = body?.["commentId"] !== undefined ? (body["commentId"] as string | number) : undefined;
+      const publishedAtMs = typeof body?.["publishedAtMs"] === "number" ? body["publishedAtMs"] : undefined;
+      const plan = await this.service.markPlanPublished(taskId, { commentId, publishedAtMs });
+      this.sendJson(res, 200, { plan });
+      return;
+    }
+
+    // GET /v1/plans/:sessionId/latest
+    const latestPlanMatch = /^\/v1\/plans\/([^/]+)\/latest$/.exec(pathname);
+    if (method === "GET" && latestPlanMatch) {
+      const sessionId = decodeURIComponent(latestPlanMatch[1]!);
+      const plan = this.service.getLatestPlanForSession(sessionId);
+      this.sendJson(res, 200, { plan });
       return;
     }
 
@@ -422,11 +483,31 @@ export class DecisionBridge {
       const operationKey = typeof b["operationKey"] === "string" ? b["operationKey"] : undefined;
       const kind = b["kind"];
       if (kind === "plan") {
-        if (!operationKey) {
-          throw new DecisionValidationError("create plan task requires operationKey");
+        const triggerKind = typeof b["triggerKind"] === "string"
+          ? (b["triggerKind"] as "initial" | "requirements_changed" | "clarification" | "retry")
+          : undefined;
+        let requirements: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+        if (b["requirements"] && typeof b["requirements"] === "object") {
+          const reqObj = b["requirements"] as Record<string, unknown>;
+          if (typeof reqObj["title"] === "string" && typeof reqObj["body"] === "string") {
+            const clarifications = Array.isArray(reqObj["clarifications"])
+              ? reqObj["clarifications"].filter((x): x is string => typeof x === "string")
+              : undefined;
+            requirements = {
+              title: reqObj["title"],
+              body: reqObj["body"],
+              ...(clarifications !== undefined ? { clarifications } : {}),
+            };
+          }
         }
+        const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
+        const previousTaskId = typeof b["previousTaskId"] === "string" ? b["previousTaskId"] : undefined;
         const task = await this.service.createPlanTask(b["sessionId"], {
-          operationKey,
+          ...(operationKey !== undefined ? { operationKey } : {}),
+          ...(context !== undefined ? { context } : {}),
+          ...(triggerKind !== undefined ? { triggerKind } : {}),
+          ...(requirements !== undefined ? { requirements } : {}),
+          ...(previousTaskId !== undefined ? { previousTaskId } : {}),
         });
         this.sendJson(res, 201, { task });
         return;
