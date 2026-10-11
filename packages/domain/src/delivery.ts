@@ -400,7 +400,14 @@ export interface DeliveryReviewGate {
    * Validates that task is completed, verdict is approve, and target PR & HEAD SHA match.
    */
   verifyReviewApproval(
-    target: DecisionReviewTarget & { readonly sessionId?: string },
+    target: DecisionReviewTarget & {
+      readonly sessionId?: string;
+      readonly requirements?: {
+        readonly title: string;
+        readonly body: string;
+        readonly clarifications?: readonly string[] | undefined;
+      } | undefined;
+    },
   ): Promise<DeliveryReviewApprovalResult>;
 
   /**

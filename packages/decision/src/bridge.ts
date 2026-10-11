@@ -407,7 +407,21 @@ export class DecisionBridge {
         throw new DecisionValidationError("verify review approval requires target");
       }
       const target = parseDecisionReviewTarget(b["target"]);
-      const approval = this.service.verifyReviewApproval(b["sessionId"], target);
+      let requirements: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+      if (b["requirements"] && typeof b["requirements"] === "object") {
+        const reqObj = b["requirements"] as Record<string, unknown>;
+        if (typeof reqObj["title"] === "string" && typeof reqObj["body"] === "string") {
+          const clarifications = Array.isArray(reqObj["clarifications"])
+            ? reqObj["clarifications"].filter((x): x is string => typeof x === "string")
+            : undefined;
+          requirements = {
+            title: reqObj["title"],
+            body: reqObj["body"],
+            ...(clarifications !== undefined ? { clarifications } : {}),
+          };
+        }
+      }
+      const approval = this.service.verifyReviewApproval(b["sessionId"], target, requirements);
       this.sendJson(res, 200, { approval });
       return;
     }

@@ -1498,6 +1498,10 @@ export async function runDeliverySkill(
           const approvalVerify = await options.reviewGate.verifyReviewApproval({
             ...reviewTarget,
             sessionId: resolvedSessionId,
+            requirements: {
+              title: issueTitle,
+              body: issueBody,
+            },
           });
           if (!approvalVerify.approved) {
             return haltDispatch(
@@ -1755,11 +1759,28 @@ export async function runDeliverySkill(
   }
 
   // 6. Pre-merge verification of review approval
+  let latestTitle = "";
+  let latestBody = "";
+  const preMergeIv = await runner.gh(
+    ["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "title,body"],
+    options.cwd,
+  );
+  if (preMergeIv.exitCode === 0) {
+    try {
+      const p = JSON.parse(preMergeIv.stdout || "{}");
+      latestTitle = p.title ?? "";
+      latestBody = p.body ?? "";
+    } catch {
+      // ignore JSON parse error
+    }
+  }
+
   const preMergeApproval = await options.reviewGate.verifyReviewApproval({
     repository: context.repo.toLowerCase(),
     prNumber: prNumber,
     headSha: currentHeadSha ?? "",
     sessionId: resolvedSessionId,
+    ...(latestTitle ? { requirements: { title: latestTitle, body: latestBody } } : {}),
   });
   if (!preMergeApproval.approved) {
     return haltDispatch(

@@ -106,7 +106,14 @@ export class DecisionReviewGate implements DeliveryReviewGate {
   }
 
   async verifyReviewApproval(
-    target: DecisionReviewTarget & { readonly sessionId?: string },
+    target: DecisionReviewTarget & {
+      readonly sessionId?: string;
+      readonly requirements?: {
+        readonly title: string;
+        readonly body: string;
+        readonly clarifications?: readonly string[] | undefined;
+      } | undefined;
+    },
   ): Promise<DeliveryReviewApprovalResult> {
     if (!target.sessionId) {
       throw new Error(
@@ -121,12 +128,12 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     };
 
     if (this.service) {
-      return this.service.verifyReviewApproval(sessionId, reviewTarget);
+      return this.service.verifyReviewApproval(sessionId, reviewTarget, target.requirements);
     }
 
     if (this.client) {
       try {
-        const { approval } = await this.client.verifyReviewApproval(sessionId, reviewTarget);
+        const { approval } = await this.client.verifyReviewApproval(sessionId, reviewTarget, target.requirements);
         return approval;
       } catch (err) {
         return {

@@ -64,6 +64,9 @@ export interface OperationReceipt {
   readonly kind: "create-plan-task" | "create-review-task" | "rebind-session" | "publish-plan";
   readonly sessionId: string;
   readonly target?: DecisionReviewTarget | null | undefined;
+  readonly triggerKind?: string | undefined;
+  readonly fingerprint?: string | undefined;
+  readonly previousTaskId?: string | null | undefined;
   readonly bindingGeneration?: number | undefined;
   readonly adapter?: string | undefined;
   readonly externalSessionRef?: string | undefined;
@@ -230,6 +233,11 @@ export interface CreateTaskRequest {
 export interface VerifyReviewApprovalRequest {
   readonly sessionId: string;
   readonly target: DecisionReviewTarget;
+  readonly requirements?: {
+    readonly title: string;
+    readonly body: string;
+    readonly clarifications?: readonly string[] | undefined;
+  } | undefined;
 }
 
 export interface VerifyReviewApprovalResponse {

@@ -100,6 +100,25 @@ export class DecisionPlanningGate {
     throw new Error("Invalid planning gate: neither client nor service configured");
   }
 
+  verifyPlanEligibilitySync(
+    sessionId: string,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
+  ): PlanningEligibilityResult {
+    if (this.service) {
+      return this.service.verifyPlanEligibility(sessionId, requirements);
+    }
+
+    if (this.client) {
+      return this.client.verifyPlanEligibilitySync(sessionId, requirements);
+    }
+
+    throw new Error("Invalid planning gate: neither client nor service configured");
+  }
+
   async markPlanPublished(
     taskId: string,
     params: { readonly commentId?: string | number | undefined; readonly publishedAtMs?: number | undefined } = {},
@@ -124,6 +143,18 @@ export class DecisionPlanningGate {
     if (this.client) {
       const res = await this.client.getLatestPlan(sessionId);
       return res.plan;
+    }
+
+    throw new Error("Invalid planning gate: neither client nor service configured");
+  }
+
+  getLatestPlanSync(sessionId: string): DecisionPlanRecord | null {
+    if (this.service) {
+      return this.service.getLatestPlanForSession(sessionId);
+    }
+
+    if (this.client) {
+      return this.client.getLatestPlanSync(sessionId);
     }
 
     throw new Error("Invalid planning gate: neither client nor service configured");

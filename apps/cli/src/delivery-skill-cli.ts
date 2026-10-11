@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import {
   runDeliverySkill,
@@ -357,14 +358,29 @@ export async function runDeliverySkillCli(
       ? decisionSessionId({ provider: "github", key: `${parsed.repo.toLowerCase()}#${parsed.issueNumber}` })
       : undefined);
     if (sId) {
+      let requirements: { readonly title: string; readonly body: string } | undefined;
       try {
-        const planningGate = new DecisionPlanningGate(client);
-        const eligibility = await planningGate.verifyPlanEligibility(sId);
-        if (eligibility.eligible && eligibility.plan) {
-          plan = eligibility.plan;
+        const ghArgs = ["issue", "view", String(parsed.issueNumber), "--json", "title,body"];
+        if (parsed.repo) {
+          ghArgs.push("--repo", parsed.repo);
+        }
+        const out = execFileSync("gh", ghArgs, { encoding: "utf8" });
+        const data = JSON.parse(out);
+        if (data && typeof data.title === "string") {
+          requirements = { title: data.title, body: data.body ?? "" };
         }
       } catch {
-        // plan check is best-effort for delivery skill
+        // gh issue view unavailable or failed
+      }
+
+      const planningGate = new DecisionPlanningGate(client);
+      const eligibility = await planningGate.verifyPlanEligibility(sId, requirements);
+      if (!eligibility.eligible) {
+        io.stderr.write(`symphony delivery-skill: error: planning gate verification failed: ${eligibility.reason}\n`);
+        return 1;
+      }
+      if (eligibility.plan) {
+        plan = eligibility.plan;
       }
     }
   }

@@ -26,17 +26,54 @@ new orchestrator state or second state machine.
 
 | Step | Owner | Notes |
 |---|---|---|
-| Discover dispatchable issues | Symphony (tracker polling) | `open` + `required_labels` (`symphony-ready`) |
+| Pre-execution Planning | Decision Plane (`symphony plan`) | `ready` verdict + published plan required for dispatch |
+| Discover dispatchable issues | Symphony (tracker polling + planning gate) | `open` + `required_labels` (`symphony-ready`) + planning gate eligible |
 | Provision per-issue workspace | Symphony (`@symphony/workspace` hook) | `after_create` runs `symphony repo-bootstrap` |
-| Implement + run project validation | Codex | Local gate such as `npm run gate` |
+| Implement + run project validation | Codex | Local gate such as `npm run gate`; prompt receives accepted plan |
 | Commit / push / create-or-reuse PR / read CI / repair / land | Codex (delivery skill) | `symphony delivery-skill run ... --repair-cmd ... --opt-in` |
-| Auto squash-merge decision | Delivery skill, using `@symphony/domain` policy | Opt-in only; ownership-checked |
+| Auto squash-merge decision | Delivery skill, using `@symphony/domain` policy | Opt-in only; ownership-checked; SHA + plan verified |
 | Issue closed | GitHub | PR body `Fixes #N` closes the issue on merge |
 | Observe terminal issue + cleanup | Symphony (tracker refresh + reconciliation) | Existing path; no new state machine |
 
 Facts that always come from GitHub: whether the issue is `open`/`closed`; whether
 a pull request already exists, is open, mergeable, and whether its checks are
 green; whether the issue was closed by a merge.
+
+## `symphony-ready` semantics
+
+> **`symphony-ready`**: The Issue has sufficient requirements and an accepted/current implementation plan to enter autonomous execution.
+
+When Decision Plane planning is active, simply tagging `symphony-ready` on an issue is **not sufficient** for autonomous dispatch. The production host's Planning Gate verifies:
+1. A PlanTask has been completed with verdict `ready`.
+2. All clarifications are resolved.
+3. The accepted plan is published to GitHub (with verified comment marker).
+4. Current issue title and description match the requirement fingerprint.
+
+An issue carrying `symphony-ready` that has not been planned, is pending planning, needs clarification, or whose requirements were modified will be rejected fail-closed during normal and retry dispatch.
+
+## Pre-execution planning commands
+
+Operators or autonomous planners use `symphony plan`:
+
+```sh
+# 1. Start planning session for an issue
+symphony plan start --repo owner/repo --issue 123 --title "Feature title" --body "Feature requirements"
+
+# 2. Check planning status and dispatch eligibility
+symphony plan status --repo owner/repo --issue 123
+
+# 3. If planner returned needs_clarification, submit clarifications:
+symphony plan clarify --repo owner/repo --issue 123 --clarifications "Answer to Q1; Answer to Q2"
+
+# 4. If requirements changed on GitHub:
+symphony plan replan --repo owner/repo --issue 123 --body "Updated requirements"
+
+# 5. Publish plan to GitHub issue comment (supports ready, needs_clarification, needs_human):
+symphony plan sync --repo owner/repo --issue 123 --publish
+
+# 6. Or sync using an existing GitHub comment ID (verifies comment content & marker):
+symphony plan sync --repo owner/repo --issue 123 --comment-id 123456
+```
 
 ## Start
 

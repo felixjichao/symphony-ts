@@ -4,6 +4,10 @@ export interface ParsedCliArgs {
   readonly subcommand?: "repo-bootstrap" | "delivery" | "delivery-skill" | "dogfood" | "decision-bridge" | "plan" | undefined;
   readonly subcommandArgs?: readonly string[] | undefined;
   readonly workflowPath?: string | undefined;
+  readonly enablePlanning?: boolean | undefined;
+  readonly decisionStoreDir?: string | undefined;
+  readonly decisionBridgeUrl?: string | undefined;
+  readonly decisionBridgeToken?: string | undefined;
   readonly help?: boolean | undefined;
   readonly version?: boolean | undefined;
 }
@@ -69,6 +73,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
 
 
   let workflowPath: string | undefined;
+  let enablePlanning: boolean | undefined;
+  let decisionStoreDir: string | undefined;
+  let decisionBridgeUrl: string | undefined;
+  let decisionBridgeToken: string | undefined;
   let help = false;
   let version = false;
 
@@ -78,6 +86,16 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       help = true;
     } else if (arg === "--version" || arg === "-v") {
       version = true;
+    } else if (arg === "--enable-planning" || arg === "--planning") {
+      enablePlanning = true;
+    } else if (arg === "--no-planning") {
+      enablePlanning = false;
+    } else if (arg === "--decision-store" && i + 1 < argv.length) {
+      decisionStoreDir = argv[++i];
+    } else if (arg === "--decision-bridge-url" && i + 1 < argv.length) {
+      decisionBridgeUrl = argv[++i];
+    } else if (arg === "--decision-bridge-token" && i + 1 < argv.length) {
+      decisionBridgeToken = argv[++i];
     } else if (!arg.startsWith("-")) {
       if (workflowPath === undefined) {
         workflowPath = arg;
@@ -87,6 +105,10 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
 
   return {
     ...(workflowPath !== undefined ? { workflowPath } : {}),
+    ...(enablePlanning !== undefined ? { enablePlanning } : {}),
+    ...(decisionStoreDir !== undefined ? { decisionStoreDir } : {}),
+    ...(decisionBridgeUrl !== undefined ? { decisionBridgeUrl } : {}),
+    ...(decisionBridgeToken !== undefined ? { decisionBridgeToken } : {}),
     ...(help ? { help: true } : {}),
     ...(version ? { version: true } : {}),
   };

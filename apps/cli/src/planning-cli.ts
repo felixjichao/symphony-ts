@@ -4,18 +4,71 @@ import { execFileSync } from "node:child_process";
 import {
   decisionSessionId,
   formatPlanCommentMarkdown,
+  parsePlanCommentMarker,
+  parseDecisionSessionRootFromId,
   type PlanCommentMarker,
+  type DecisionMaterializedContext,
+  type DecisionMaterializedPlan,
 } from "@symphony/domain";
 import {
   DecisionBridgeClient,
   DecisionPlanningGate,
   DecisionService,
   DurableDecisionStore,
+  type DecisionPlanRecord,
 } from "@symphony/decision";
+
+function buildPlanningContext(params: {
+  sessionId: string;
+  repo: string;
+  issueNumber: number;
+  title: string;
+  body: string;
+  clarifications?: readonly string[] | undefined;
+  previousPlan?: DecisionPlanRecord | null | undefined;
+}): DecisionMaterializedContext {
+  const root = parseDecisionSessionRootFromId(params.sessionId);
+  let enrichedBody = params.body;
+  if (params.clarifications && params.clarifications.length > 0) {
+    enrichedBody += "\n\n### Clarifications\n" + params.clarifications.map((c) => `- ${c}`).join("\n");
+  }
+
+  let priorMaterializedPlan: DecisionMaterializedPlan | null = null;
+  if (params.previousPlan?.result && params.previousPlan.result.verdict === "ready") {
+    priorMaterializedPlan = {
+      taskId: params.previousPlan.taskId,
+      revision: params.previousPlan.revision,
+      plan: params.previousPlan.result.content.plan,
+      acceptanceCriteria: params.previousPlan.result.content.acceptanceCriteria,
+      risks: params.previousPlan.result.content.risks,
+      clarifications: params.previousPlan.requirements.clarifications ?? [],
+    };
+  }
+
+  return {
+    strategy: "materialized",
+    workItem: root,
+    repository: params.repo,
+    issue: {
+      repository: params.repo,
+      number: params.issueNumber,
+      title: params.title,
+      body: enrichedBody,
+    },
+    plan: priorMaterializedPlan,
+    pullRequest: null,
+    diff: null,
+    ci: null,
+    repositoryInstructions: null,
+    previousReviews: [],
+    unresolvedFindings: [],
+  };
+}
 
 export interface PlanningCliIo {
   readonly stdout: { write(text: string): unknown };
   readonly stderr: { write(text: string): unknown };
+  readonly execGh?: ((args: readonly string[]) => string) | undefined;
 }
 
 export interface ParsedPlanningArgs {
@@ -179,13 +232,29 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
     gate = new DecisionPlanningGate(service);
   }
 
+  const root = parseDecisionSessionRootFromId(sessionId);
+  const match = /^(.*)#([1-9][0-9]*)$/.exec(root.key);
+  const repo = args.repo ?? (match ? match[1]! : (root.key.includes("/") ? root.key.split("#")[0]! : "symphony/repo"));
+  const issueNumber = args.issueNumber ?? (match ? Number(match[2]) : 1);
+  const runGh = (cmdArgs: readonly string[]): string =>
+    io.execGh ? io.execGh(cmdArgs) : execFileSync("gh", cmdArgs as string[], { encoding: "utf8" });
+
   try {
     switch (args.action) {
       case "start": {
         const title = args.title ?? "Issue Requirements";
         const body = args.body ?? "";
+        const context = buildPlanningContext({
+          sessionId,
+          repo,
+          issueNumber,
+          title,
+          body,
+          clarifications: args.clarifications,
+        });
         const task = await gate.ensurePlanTask(sessionId, {
           triggerKind: "initial",
+          context,
           requirements: {
             title,
             body,
@@ -211,9 +280,20 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
           ...(args.clarifications ?? []),
         ];
 
+        const context = buildPlanningContext({
+          sessionId,
+          repo,
+          issueNumber,
+          title,
+          body,
+          clarifications: mergedClarifications,
+          previousPlan: latestPlan,
+        });
+
         const task = await gate.ensurePlanTask(sessionId, {
           triggerKind: "clarification",
           previousTaskId,
+          context,
           requirements: {
             title,
             body,
@@ -233,14 +313,26 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
         const title = args.title ?? latestPlan?.requirements.title ?? "Issue Requirements";
         const body = args.body ?? latestPlan?.requirements.body ?? "";
         const previousTaskId = latestPlan?.taskId ?? null;
+        const clarifications = args.clarifications ?? latestPlan?.requirements.clarifications;
+
+        const context = buildPlanningContext({
+          sessionId,
+          repo,
+          issueNumber,
+          title,
+          body,
+          clarifications,
+          previousPlan: latestPlan,
+        });
 
         const task = await gate.ensurePlanTask(sessionId, {
           triggerKind: "requirements_changed",
           previousTaskId,
+          context,
           requirements: {
             title,
             body,
-            clarifications: args.clarifications ?? latestPlan?.requirements.clarifications,
+            clarifications,
           },
         });
         if (args.json) {
@@ -257,13 +349,28 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
           io.stderr.write(`symphony plan: error: no existing plan found to retry for session "${sessionId}"\n`);
           return 1;
         }
+        const title = latestPlan.requirements.title;
+        const body = latestPlan.requirements.body;
+        const clarifications = latestPlan.requirements.clarifications;
+
+        const context = buildPlanningContext({
+          sessionId,
+          repo,
+          issueNumber,
+          title,
+          body,
+          clarifications,
+          previousPlan: latestPlan,
+        });
+
         const task = await gate.ensurePlanTask(sessionId, {
           triggerKind: "retry",
           previousTaskId: latestPlan.taskId,
+          context,
           requirements: {
-            title: latestPlan.requirements.title,
-            body: latestPlan.requirements.body,
-            clarifications: latestPlan.requirements.clarifications,
+            title,
+            body,
+            clarifications,
           },
         });
         if (args.json) {
@@ -312,31 +419,108 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
         }
 
         if (args.commentId !== undefined) {
+          if (!repo || !issueNumber) {
+            io.stderr.write("symphony plan: error: repository and issue number required to verify comment on GitHub\n");
+            return 1;
+          }
+
+          let commentJson: Record<string, unknown>;
+          try {
+            const ghOut = runGh([
+              "api",
+              `repos/${repo}/issues/comments/${args.commentId}`,
+            ]);
+            commentJson = JSON.parse(ghOut);
+          } catch (err) {
+            io.stderr.write(`symphony plan: error: failed to verify GitHub comment ${args.commentId} on ${repo}: ${String(err)}\n`);
+            return 1;
+          }
+
+          const issueUrl = String(commentJson["issue_url"] ?? "");
+          if (!issueUrl.endsWith(`/issues/${issueNumber}`)) {
+            io.stderr.write(`symphony plan: error: comment ${args.commentId} does not belong to issue #${issueNumber} (${issueUrl})\n`);
+            return 1;
+          }
+
+          const body = String(commentJson["body"] ?? "");
+          const marker = parsePlanCommentMarker(body);
+          if (!marker) {
+            io.stderr.write(`symphony plan: error: comment ${args.commentId} does not contain a valid Symphony plan marker\n`);
+            return 1;
+          }
+
+          if (marker.sessionId !== sessionId || marker.taskId !== latestPlan.taskId) {
+            io.stderr.write(`symphony plan: error: comment marker task mismatch (marker task: "${marker.taskId}", expected: "${latestPlan.taskId}")\n`);
+            return 1;
+          }
+
+          const verifiedCommentId = Number(commentJson["id"]) || args.commentId;
+          const publishedAtMs = commentJson["created_at"] ? new Date(String(commentJson["created_at"])).getTime() : undefined;
+
           const updated = await gate.markPlanPublished(latestPlan.taskId, {
-            commentId: args.commentId,
+            commentId: verifiedCommentId,
+            ...(publishedAtMs ? { publishedAtMs } : {}),
           });
+
           if (args.json) {
             io.stdout.write(JSON.stringify({ status: "synced", plan: updated }, null, 2) + "\n");
           } else {
-            io.stdout.write(`Marked plan "${latestPlan.taskId}" published with comment ID ${args.commentId}\n`);
+            io.stdout.write(`Marked plan "${latestPlan.taskId}" published with verified comment ID ${verifiedCommentId}\n`);
           }
           return 0;
         }
 
         if (args.publish) {
-          if (!latestPlan.result || latestPlan.result.verdict !== "ready") {
-            io.stderr.write(`symphony plan: error: plan is not ready (verdict: ${latestPlan.result?.verdict ?? "unknown"})\n`);
+          if (!latestPlan.result) {
+            io.stderr.write(`symphony plan: error: plan task "${latestPlan.taskId}" has no completed result\n`);
             return 1;
           }
-          if (!args.repo || !args.issueNumber) {
+
+          if (!repo || !issueNumber) {
             io.stderr.write("symphony plan: error: --repo and --issue required to publish comment via gh\n");
             return 1;
           }
 
+          // Check for existing matching comment first (crash recovery idempotency)
+          let existingCommentId: number | null = null;
+          try {
+            const commentsOut = runGh([
+              "api",
+              `repos/${repo}/issues/${issueNumber}/comments`,
+              "--paginate",
+            ]);
+            const comments = JSON.parse(commentsOut);
+            if (Array.isArray(comments)) {
+              for (const c of comments) {
+                if (typeof c["body"] === "string") {
+                  const m = parsePlanCommentMarker(c["body"]);
+                  if (m && m.sessionId === sessionId && m.taskId === latestPlan.taskId && m.revision === latestPlan.revision) {
+                    existingCommentId = Number(c["id"]);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch {
+            // best-effort
+          }
+
+          if (existingCommentId !== null) {
+            const updated = await gate.markPlanPublished(latestPlan.taskId, {
+              commentId: existingCommentId,
+            });
+            if (args.json) {
+              io.stdout.write(JSON.stringify({ status: "recovered", commentId: existingCommentId, plan: updated }, null, 2) + "\n");
+            } else {
+              io.stdout.write(`Plan comment already exists on GitHub issue #${issueNumber} (comment #${existingCommentId}), synced successfully\n`);
+            }
+            return 0;
+          }
+
           const marker: PlanCommentMarker = {
             schemaVersion: 1,
-            repo: args.repo,
-            issueNumber: args.issueNumber,
+            repo,
+            issueNumber,
             sessionId,
             taskId: latestPlan.taskId,
             revision: latestPlan.revision,
@@ -350,21 +534,50 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
             planResult: latestPlan.result,
           });
 
-          // Post comment using gh CLI
           try {
-            const out = execFileSync("gh", [
+            const out = runGh([
               "issue",
               "comment",
-              String(args.issueNumber),
+              String(issueNumber),
               "--repo",
-              args.repo,
+              repo,
               "--body",
               markdown,
-            ], { encoding: "utf8" });
+            ]);
 
-            // gh output contains comment url: https://github.com/owner/repo/issues/99#issuecomment-123456
             const commentMatch = /#issuecomment-(\d+)/.exec(out);
-            const publishedCommentId = commentMatch ? Number(commentMatch[1]) : Date.now();
+            let publishedCommentId = commentMatch ? Number(commentMatch[1]) : null;
+
+            if (!publishedCommentId) {
+              // Locate the newly posted comment by marker
+              try {
+                const commentsOut = runGh([
+                  "api",
+                  `repos/${repo}/issues/${issueNumber}/comments`,
+                  "--paginate",
+                ]);
+                const comments = JSON.parse(commentsOut);
+                if (Array.isArray(comments)) {
+                  for (let idx = comments.length - 1; idx >= 0; idx--) {
+                    const c = comments[idx];
+                    if (typeof c["body"] === "string") {
+                      const m = parsePlanCommentMarker(c["body"]);
+                      if (m && m.sessionId === sessionId && m.taskId === latestPlan.taskId && m.revision === latestPlan.revision) {
+                        publishedCommentId = Number(c["id"]);
+                        break;
+                      }
+                    }
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+
+            if (!publishedCommentId) {
+              io.stderr.write("symphony plan: error: failed to determine published GitHub comment ID\n");
+              return 1;
+            }
 
             const updated = await gate.markPlanPublished(latestPlan.taskId, {
               commentId: publishedCommentId,
@@ -373,7 +586,7 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
             if (args.json) {
               io.stdout.write(JSON.stringify({ status: "published", commentId: publishedCommentId, plan: updated }, null, 2) + "\n");
             } else {
-              io.stdout.write(`Plan published to GitHub issue #${args.issueNumber} (comment #${publishedCommentId})\n`);
+              io.stdout.write(`Plan published to GitHub issue #${issueNumber} (comment #${publishedCommentId}, verdict: ${latestPlan.result.verdict})\n`);
             }
             return 0;
           } catch (err) {

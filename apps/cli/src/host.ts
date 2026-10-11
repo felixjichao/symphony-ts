@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { runAgentAttempt } from "@symphony/agent";
 import {
   watchWorkflow,
@@ -5,7 +7,45 @@ import {
   type WorkflowWatchHandle,
   type WorkflowWatchScheduler,
 } from "@symphony/config";
-import type { DecisionMaterializedPlan, Issue, OrchestratorRuntimeState } from "@symphony/domain";
+import {
+  decisionSessionId,
+  githubDecisionRoot,
+  type DecisionMaterializedPlan,
+  type Issue,
+  type OrchestratorRuntimeState,
+} from "@symphony/domain";
+import {
+  DecisionBridgeClient,
+  DecisionPlanningGate,
+  DecisionService,
+  DurableDecisionStore,
+} from "@symphony/decision";
+
+function resolveIssueSessionId(issue: Issue, fallbackRepo?: string | null): string | null {
+  if (issue.nativeRef && typeof issue.nativeRef["repo"] === "string" && typeof issue.nativeRef["number"] === "number") {
+    const parts = (issue.nativeRef["repo"] as string).split("/");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      return decisionSessionId(githubDecisionRoot(parts[0], parts[1], issue.nativeRef["number"] as number));
+    }
+  }
+  if (issue.url) {
+    const match = issue.url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/i);
+    if (match && match[1] && match[2] && match[3]) {
+      return decisionSessionId(githubDecisionRoot(match[1], match[2], Number(match[3])));
+    }
+  }
+  const repoToUse = fallbackRepo ?? (issue.nativeRef && typeof issue.nativeRef["repo"] === "string" ? (issue.nativeRef["repo"] as string) : null);
+  if (repoToUse) {
+    const parts = repoToUse.split("/");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      const num = Number(issue.id.replace(/^GH-/, "")) || Number(issue.identifier.replace(/^GH-/, ""));
+      if (!Number.isNaN(num) && num > 0) {
+        return decisionSessionId(githubDecisionRoot(parts[0], parts[1], num));
+      }
+    }
+  }
+  return null;
+}
 import {
   createStructuredLogger,
   projectObservabilitySnapshot,
@@ -70,6 +110,11 @@ export interface CreateHostOptions {
   readonly watcherIntervalMs?: number | undefined;
   readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
   readonly getPlanForIssue?: ((issue: Issue) => DecisionMaterializedPlan | null | undefined) | undefined;
+  readonly enablePlanning?: boolean | undefined;
+  readonly decisionStoreDir?: string | undefined;
+  readonly decisionBridgeUrl?: string | undefined;
+  readonly decisionBridgeToken?: string | undefined;
+  readonly planningGate?: DecisionPlanningGate | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -110,6 +155,43 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     observers.onConfigFailure(error);
     try { logger.close(); } catch { /* Preserve initial validation failure. */ }
     throw error;
+  }
+
+  const cwd = options.cwd ?? process.cwd();
+  const defaultStoreDir = path.join(cwd, ".symphony", "decision");
+  const bridgeUrl = options.decisionBridgeUrl ?? options.env?.DECISION_BRIDGE_URL ?? process.env.DECISION_BRIDGE_URL;
+  const explicitStoreDir = options.decisionStoreDir ?? options.env?.DECISION_STORE_DIR ?? process.env.DECISION_STORE_DIR;
+  const isExplicitlyDisabled =
+    options.enablePlanning === false ||
+    options.env?.SYMPHONY_PLANNING_ENABLED === "0" ||
+    options.env?.SYMPHONY_PLANNING_ENABLED === "false" ||
+    process.env.SYMPHONY_PLANNING_ENABLED === "0" ||
+    process.env.SYMPHONY_PLANNING_ENABLED === "false";
+  const isExplicitlyEnabled =
+    options.enablePlanning === true ||
+    options.env?.SYMPHONY_PLANNING_ENABLED === "1" ||
+    options.env?.SYMPHONY_PLANNING_ENABLED === "true" ||
+    process.env.SYMPHONY_PLANNING_ENABLED === "1" ||
+    process.env.SYMPHONY_PLANNING_ENABLED === "true";
+
+  let planningGate: DecisionPlanningGate | null = options.planningGate ?? null;
+  let ownedStore: DurableDecisionStore | null = null;
+
+  if (!planningGate && !isExplicitlyDisabled) {
+    if (bridgeUrl) {
+      const token = options.decisionBridgeToken ?? options.env?.DECISION_BRIDGE_TOKEN ?? process.env.DECISION_BRIDGE_TOKEN;
+      const client = new DecisionBridgeClient(bridgeUrl, { ...(token ? { authToken: token } : {}) });
+      planningGate = new DecisionPlanningGate(client);
+    } else if (explicitStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
+      const storeDir = explicitStoreDir ?? defaultStoreDir;
+      if (!fs.existsSync(storeDir)) {
+        fs.mkdirSync(storeDir, { recursive: true });
+      }
+      ownedStore = new DurableDecisionStore({ storeDir });
+      await ownedStore.open();
+      const service = new DecisionService(ownedStore);
+      planningGate = new DecisionPlanningGate(service);
+    }
   }
 
   try {
@@ -168,6 +250,58 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       monotonicNow: () => monotonicNow(),
     };
 
+    const getEffectiveRepo = (): string | null => {
+      const provider = controller.current.serviceConfig.tracker?.provider as Record<string, unknown> | undefined;
+      return typeof provider?.["repo"] === "string" ? (provider["repo"] as string) : null;
+    };
+
+    const getPlanForIssue = (issue: Issue): DecisionMaterializedPlan | null => {
+      if (options.getPlanForIssue) {
+        const customPlan = options.getPlanForIssue(issue);
+        if (customPlan !== undefined) {
+          return customPlan;
+        }
+      }
+      if (!planningGate) {
+        return null;
+      }
+      const sessionId = resolveIssueSessionId(issue, getEffectiveRepo());
+      if (!sessionId) {
+        return null;
+      }
+      const record = planningGate.getLatestPlanSync(sessionId);
+      if (record?.result && record.result.verdict === "ready") {
+        return {
+          taskId: record.taskId,
+          revision: record.revision,
+          plan: record.result.content.plan,
+          acceptanceCriteria: record.result.content.acceptanceCriteria,
+          risks: record.result.content.risks,
+          clarifications: record.requirements.clarifications ?? [],
+        };
+      }
+      return null;
+    };
+
+    const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
+      if (options.canDispatch && !options.canDispatch(issue, context)) {
+        return false;
+      }
+      if (!planningGate) {
+        return true;
+      }
+      const sessionId = resolveIssueSessionId(issue, getEffectiveRepo());
+      if (!sessionId) {
+        return false;
+      }
+      const requirements = {
+        title: issue.title,
+        body: issue.description ?? "",
+      };
+      const eligibility = planningGate.verifyPlanEligibilitySync(sessionId, requirements);
+      return eligibility.eligible;
+    };
+
     const authority = new OrchestratorAuthority({
       state,
       policy: controller.current.scheduling.policy,
@@ -175,7 +309,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       runner: runAgentAttempt,
       createAttemptOptions: (context) =>
         workspaceCoordinator.createAttemptOptions(context, {
-          plan: options.getPlanForIssue?.(context.issue),
+          plan: getPlanForIssue(context.issue),
         }),
       resolveWorkspacePath: (issue) => workspaceCoordinator.resolveForDispatch(issue),
       onEvent: observers.onEvent,
@@ -191,7 +325,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       },
       now,
       monotonicNow,
-      canDispatch: options.canDispatch,
+      canDispatch,
     });
 
     controller.setAuthority(authority);
@@ -222,6 +356,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       try { shutdown = loop.stop(); } catch (error) { shutdown = Promise.reject(error); }
       void (async () => {
         try { await shutdown; } catch (error) { errors.push(error); }
+        if (ownedStore) {
+          try { await ownedStore.close(); } catch (error) { errors.push(error); }
+        }
         observers.lifecycle({ event: "shutdown", outcome: errors.length ? "failed" : "completed" });
         try { logger.close(); } catch (error) { errors.push(error); }
         if (errors.length) throw new AggregateError(errors, "Host shutdown failed");
@@ -266,6 +403,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       stop,
     };
   } catch (error) {
+    if (ownedStore) {
+      try { await ownedStore.close(); } catch { /* Continue construction rollback. */ }
+    }
     controller.close();
     try { watcher.close(); } catch { /* Continue construction rollback. */ }
     try { logger.close(); } catch { /* Preserve the original construction failure. */ }

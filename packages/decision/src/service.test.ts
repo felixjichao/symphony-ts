@@ -581,4 +581,230 @@ describe("DecisionService", () => {
       await cleanup();
     }
   });
+
+  it("binds full inputs to operationKey, idempotent on identical inputs and rejects conflicting inputs", async () => {
+    const { service, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 101);
+      const session = await service.createSession(root);
+
+      const task1 = await service.createPlanTask(session.id, {
+        operationKey: "op:plan:test:1",
+        triggerKind: "initial",
+        requirements: {
+          title: "Initial Title",
+          body: "Initial Body",
+        },
+      });
+
+      // Identical request returns same task idempotently
+      const replay = await service.createPlanTask(session.id, {
+        operationKey: "op:plan:test:1",
+        triggerKind: "initial",
+        requirements: {
+          title: "Initial Title",
+          body: "Initial Body",
+        },
+      });
+      expect(replay.id).toBe(task1.id);
+
+      // Conflicting title rejects with DecisionConflictError
+      await expect(
+        service.createPlanTask(session.id, {
+          operationKey: "op:plan:test:1",
+          triggerKind: "initial",
+          requirements: {
+            title: "Changed Title",
+            body: "Initial Body",
+          },
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Conflicting triggerKind rejects
+      await expect(
+        service.createPlanTask(session.id, {
+          operationKey: "op:plan:test:1",
+          triggerKind: "clarification",
+          requirements: {
+            title: "Initial Title",
+            body: "Initial Body",
+          },
+        })
+      ).rejects.toThrow(DecisionConflictError);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("persists valid task context on plan task creation and retrieves it via getTaskContext", async () => {
+    const { service, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 102);
+      const session = await service.createSession(root);
+
+      const task = await service.createPlanTask(session.id, {
+        requirements: {
+          title: "Feature Title",
+          body: "Feature Body",
+          clarifications: ["clarification 1", "clarification 2"],
+        },
+      });
+
+      const context = service.getTaskContext(task.id);
+      expect(context).not.toBeNull();
+      expect(context?.strategy).toBe("materialized");
+      if (context?.strategy === "materialized") {
+        expect(context.repository).toBe("felixjichao/symphony-ts");
+        expect(context.issue.title).toBe("Feature Title");
+        expect(context.issue.body).toContain("Feature Body");
+        expect(context.issue.body).toContain("clarification 1");
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("invalidates review approval when new plan is created, pending, unpublished, or requirements change", async () => {
+    const { service, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 103);
+      const session = await service.createSession(root);
+
+      const planTask1 = await service.createPlanTask(session.id, {
+        requirements: { title: "Plan 1 Title", body: "Plan 1 Body" },
+      });
+      const claim1 = await service.claimTask(planTask1.id, { owner: "planner", ttlMs: 60_000 });
+      await service.startTask(planTask1.id, {
+        owner: "planner",
+        token: claim1.lease.token,
+        generation: claim1.lease.generation,
+      });
+      await service.submitResult(planTask1.id, {
+        owner: "planner",
+        token: claim1.lease.token,
+        generation: claim1.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: planTask1.id,
+          sessionId: session.id,
+          revision: 1,
+          kind: "plan",
+          verdict: "ready",
+          content: {
+            plan: "Step 1",
+            acceptanceCriteria: ["AC1"],
+            risks: ["R1"],
+            clarifications: [],
+          },
+          createdAtMs: 1000,
+        },
+      });
+
+      // Unpublished plan cannot be approved
+      const target: DecisionReviewTarget = {
+        repository: "felixjichao/symphony-ts",
+        prNumber: 99,
+        headSha: "1111222233334444555566667777888899990000",
+      };
+      const unpubCheck = service.verifyReviewApproval(session.id, target, {
+        title: "Plan 1 Title",
+        body: "Plan 1 Body",
+      });
+      expect(unpubCheck.approved).toBe(false);
+      expect(unpubCheck.reason).toContain("not published to GitHub");
+
+      // Mark published
+      await service.markPlanPublished(planTask1.id, { commentId: 12345 });
+
+      // Create and approve review task evaluated against plan revision 1
+      const reviewTask1 = await service.createReviewTask(session.id, {
+        target,
+        context: {
+          strategy: "materialized",
+          workItem: root,
+          repository: target.repository,
+          issue: {
+            repository: target.repository,
+            number: 103,
+            title: "Plan 1 Title",
+            body: "Plan 1 Body",
+          },
+          plan: {
+            taskId: planTask1.id,
+            revision: 1,
+            plan: "Step 1",
+            acceptanceCriteria: ["AC1"],
+            risks: ["R1"],
+            clarifications: [],
+          },
+          pullRequest: {
+            repository: target.repository,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            baseRef: "main",
+            headRef: "feat/103",
+            title: "PR Title",
+            body: "PR Body",
+          },
+          diff: null,
+          ci: null,
+          repositoryInstructions: null,
+          previousReviews: [],
+          unresolvedFindings: [],
+        },
+      });
+      const revClaim = await service.claimTask(reviewTask1.id, { owner: "reviewer", ttlMs: 60_000 });
+      await service.startTask(reviewTask1.id, {
+        owner: "reviewer",
+        token: revClaim.lease.token,
+        generation: revClaim.lease.generation,
+      });
+      await service.submitResult(reviewTask1.id, {
+        owner: "reviewer",
+        token: revClaim.lease.token,
+        generation: revClaim.lease.generation,
+        result: {
+          schemaVersion: 1,
+          taskId: reviewTask1.id,
+          sessionId: session.id,
+          revision: 1,
+          kind: "review",
+          target,
+          verdict: "approve",
+          findings: [],
+          createdAtMs: 1000,
+        },
+      });
+
+      // Review approval is now valid
+      const validCheck = service.verifyReviewApproval(session.id, target, {
+        title: "Plan 1 Title",
+        body: "Plan 1 Body",
+      });
+      expect(validCheck.approved).toBe(true);
+
+      // Requirements change invalidates approval
+      const changedReqCheck = service.verifyReviewApproval(session.id, target, {
+        title: "Plan 1 Title Changed",
+        body: "Plan 1 Body",
+      });
+      expect(changedReqCheck.approved).toBe(false);
+      expect(changedReqCheck.reason).toContain("Requirements changed");
+
+      // Creating a new plan task (revision 2) invalidates existing approval
+      await service.createPlanTask(session.id, {
+        triggerKind: "requirements_changed",
+        requirements: { title: "Plan 2 Title", body: "Plan 2 Body" },
+      });
+
+      const pendingCheck = service.verifyReviewApproval(session.id, target, {
+        title: "Plan 2 Title",
+        body: "Plan 2 Body",
+      });
+      expect(pendingCheck.approved).toBe(false);
+      expect(pendingCheck.reason).toContain("Session plan is not completed");
+    } finally {
+      await cleanup();
+    }
+  });
 });

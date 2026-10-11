@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import type {
   DecisionSession,
   DecisionTask,
   DecisionReviewTarget,
   DecisionWorkItemRef,
   DecisionContextBundle,
+  PlanningEligibilityResult,
 } from "@symphony/domain";
 import { DecisionStoreError } from "./errors";
 import type {
@@ -33,6 +35,7 @@ import type {
   MarkPlanPublishedRequest,
   MarkPlanPublishedResponse,
   GetLatestPlanResponse,
+  DecisionPlanRecord,
 } from "./types";
 
 export interface DecisionBridgeClientOptions {
@@ -42,6 +45,8 @@ export interface DecisionBridgeClientOptions {
 export class DecisionBridgeClient {
   readonly baseUrl: string;
   readonly authToken: string | undefined;
+  private readonly eligibilityCache = new Map<string, { fingerprint: string; result: PlanningEligibilityResult }>();
+  private readonly latestPlanCache = new Map<string, DecisionPlanRecord | null>();
 
   constructor(baseUrl: string, options: DecisionBridgeClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -224,8 +229,17 @@ export class DecisionBridgeClient {
   async verifyReviewApproval(
     sessionId: string,
     target: DecisionReviewTarget,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
   ): Promise<VerifyReviewApprovalResponse> {
-    const payload: VerifyReviewApprovalRequest = { sessionId, target };
+    const payload: VerifyReviewApprovalRequest = {
+      sessionId,
+      target,
+      ...(requirements !== undefined ? { requirements } : {}),
+    };
     return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload);
   }
 
@@ -238,7 +252,46 @@ export class DecisionBridgeClient {
     },
   ): Promise<VerifyPlanEligibilityResponse> {
     const payload: VerifyPlanEligibilityRequest = { sessionId, requirements };
-    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
+    const res = await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
+    const fp = requirements ? `${requirements.title}::${requirements.body}::${(requirements.clarifications ?? []).join(";")}` : "";
+    this.eligibilityCache.set(sessionId, { fingerprint: fp, result: res.eligibility });
+    return res;
+  }
+
+  verifyPlanEligibilitySync(
+    sessionId: string,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
+  ): PlanningEligibilityResult {
+    const fp = requirements ? `${requirements.title}::${requirements.body}::${(requirements.clarifications ?? []).join(";")}` : "";
+    const cached = this.eligibilityCache.get(sessionId);
+    if (cached && cached.fingerprint === fp) {
+      return cached.result;
+    }
+    try {
+      const url = `${this.baseUrl}/v1/plans/verify`;
+      const args = ["-s", "-X", "POST", url, "-H", "Content-Type: application/json"];
+      if (this.authToken) {
+        args.push("-H", `Authorization: Bearer ${this.authToken}`);
+      }
+      args.push("-d", JSON.stringify({ sessionId, requirements }));
+      const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
+      const parsed = JSON.parse(out) as VerifyPlanEligibilityResponse;
+      if (parsed && parsed.eligibility) {
+        this.eligibilityCache.set(sessionId, { fingerprint: fp, result: parsed.eligibility });
+        return parsed.eligibility;
+      }
+    } catch {
+      // Fallback
+    }
+    return {
+      eligible: false,
+      sessionId,
+      reason: "Planning eligibility check pending or unavailable synchronously",
+    };
   }
 
   async markPlanPublished(
@@ -253,10 +306,35 @@ export class DecisionBridgeClient {
   }
 
   async getLatestPlan(sessionId: string): Promise<GetLatestPlanResponse> {
-    return await this.request<GetLatestPlanResponse>(
+    const res = await this.request<GetLatestPlanResponse>(
       "GET",
       `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
     );
+    this.latestPlanCache.set(sessionId, res.plan);
+    return res;
+  }
+
+  getLatestPlanSync(sessionId: string): DecisionPlanRecord | null {
+    const cached = this.latestPlanCache.get(sessionId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    try {
+      const url = `${this.baseUrl}/v1/plans/${encodeURIComponent(sessionId)}/latest`;
+      const args = ["-s", "-X", "GET", url];
+      if (this.authToken) {
+        args.push("-H", `Authorization: Bearer ${this.authToken}`);
+      }
+      const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
+      const parsed = JSON.parse(out) as GetLatestPlanResponse;
+      if (parsed) {
+        this.latestPlanCache.set(sessionId, parsed.plan);
+        return parsed.plan;
+      }
+    } catch {
+      // Fallback
+    }
+    return null;
   }
 
   async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {

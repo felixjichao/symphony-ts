@@ -92,6 +92,11 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n" +
         "  plan                 Pre-execution planning gate (start, clarify, replan, retry, status, sync)\n\n" +
         "Options:\n" +
+        "  --enable-planning       Enable Decision Plane planning gate for dispatch\n" +
+        "  --no-planning           Explicitly disable Decision Plane planning gate\n" +
+        "  --decision-store <dir>  Path to durable decision store directory\n" +
+        "  --decision-bridge-url <url> Decision bridge URL for remote gate checks\n" +
+        "  --decision-bridge-token <token> Decision bridge authentication token\n" +
         "  -h, --help           Show this help message\n" +
         "  -v, --version        Show version information\n"
       );
@@ -103,7 +108,14 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
       return 0;
     }
     const workflowPath = resolveWorkflowPath(args.workflowPath, options.hostOptions?.cwd);
-    host = await (options.createHost ?? createHost)({ ...options.hostOptions, workflowPath });
+    host = await (options.createHost ?? createHost)({
+      ...options.hostOptions,
+      workflowPath,
+      ...(args.enablePlanning !== undefined ? { enablePlanning: args.enablePlanning } : {}),
+      ...(args.decisionStoreDir !== undefined ? { decisionStoreDir: args.decisionStoreDir } : {}),
+      ...(args.decisionBridgeUrl !== undefined ? { decisionBridgeUrl: args.decisionBridgeUrl } : {}),
+      ...(args.decisionBridgeToken !== undefined ? { decisionBridgeToken: args.decisionBridgeToken } : {}),
+    });
   } catch {
     fail("startup");
     return exitCode;
