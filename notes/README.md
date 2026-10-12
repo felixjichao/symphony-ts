@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Supersede race recovery](accepted/architecture/2026-10-11-supersede-race-recovery.md) — supersede/cancel 与 driver 执行竞态的恢复契约：终端 superseded outcome、status 复核而非消息匹配、userscript 仅对 401/403 停机（NEST-118 / #116）。
 - [Delivery review gate](accepted/architecture/2026-10-10-delivery-review-gate.md) — SHA-bound independent review gate before auto-merge, review task materialization, polling, and findings repair (NEST-103 / #98).
 - [Decision store and bridge](accepted/architecture/2026-10-09-decision-store-bridge.md) — durable task/session snapshot store, cross-process lock, and localhost Web Agent Bridge (NEST-100 / #95).
 - [Decision contracts](accepted/architecture/2026-10-08-decision-contracts.md) — provider-neutral v1 session/task/result/binding, pure validation and exact SHA approval (NEST-99 / #94).

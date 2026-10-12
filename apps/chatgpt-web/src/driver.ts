@@ -14,6 +14,7 @@ import {
   executeTaskWithAdapter,
   type DecisionTaskController,
   type TaskExecutionOutcome,
+  type TaskExecutionSupersededOutcome,
   type SubmissionReceipt,
   type DecisionTaskFailure,
 } from "@symphony/decision/adapter";
@@ -535,6 +536,16 @@ export class DecisionTabDriver implements DecisionTaskController {
         };
       } catch (submitErr: unknown) {
         if (submitErr instanceof BridgeHttpError && submitErr.status === 409) {
+          // Task may have been superseded/cancelled between the status check above and
+          // submission; resolve the expected terminal race instead of surfacing a fatal error
+          const supersededOutcome = await this.resolveSupersededOutcome(
+            cp.taskId,
+            sessionRes?.session ?? ({} as DecisionSession),
+            submitErr
+          );
+          if (supersededOutcome) {
+            return supersededOutcome;
+          }
           throw submitErr;
         }
         // Re-submission failed. Check whether bridge recorded it or if it failed/superseded
@@ -932,6 +943,15 @@ export class DecisionTabDriver implements DecisionTaskController {
       this.checkpointStore.delete();
       return outcome;
     } catch (err: unknown) {
+      // Expected supersede/cancel race: the bridge rejected the result or failure
+      // submission because the task became non-actionable while executing (e.g. a
+      // newer PR HEAD superseded this review task). The stale outcome is correctly
+      // not accepted; recover by dropping local state and letting newer tasks take
+      // over, instead of surfacing the conflict as a fatal driver error.
+      const supersededOutcome = await this.resolveSupersededOutcome(task.id, session, err);
+      if (supersededOutcome) {
+        return supersededOutcome;
+      }
       // If error is an abort (e.g. from page navigation or timeout), preserve checkpoint for reload recovery
       if (signal.aborted) {
         throw err;
@@ -955,6 +975,38 @@ export class DecisionTabDriver implements DecisionTaskController {
       this.activeSession = null;
       this.activeLease = null;
     }
+  }
+
+  /**
+   * After a 409 conflict from result/failure submission, verify the authoritative task
+   * status on the bridge. If the task is superseded or cancelled, the conflict is the
+   * expected terminal race and resolves to a superseded outcome; otherwise returns null
+   * so the original error propagates.
+   */
+  private async resolveSupersededOutcome(
+    taskId: string,
+    session: DecisionSession,
+    err: unknown
+  ): Promise<TaskExecutionSupersededOutcome | null> {
+    if (!(err instanceof BridgeHttpError) || err.status !== 409) {
+      return null;
+    }
+    let fresh: DecisionTask | null = null;
+    try {
+      const res = await this.transport.request<{ task: DecisionTask }>(
+        "GET",
+        `/v1/tasks/${encodeURIComponent(taskId)}`
+      );
+      fresh = res?.task ?? null;
+    } catch {
+      // Authoritative status unverifiable; treat the conflict as unexpected
+      return null;
+    }
+    if (fresh?.status !== "superseded" && fresh?.status !== "cancelled") {
+      return null;
+    }
+    this.checkpointStore.delete();
+    return { status: "superseded", session, error: err };
   }
 
   async runOnce(): Promise<TaskExecutionOutcome | null> {
