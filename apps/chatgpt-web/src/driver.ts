@@ -315,6 +315,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         readonly newExternalSessionRef: string;
         readonly newResumeUri: string | null;
         readonly expectedGeneration: number;
+        readonly operationKey?: string | undefined;
       };
     }
   ): void {
@@ -335,7 +336,16 @@ export class DecisionTabDriver implements DecisionTaskController {
       ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
       ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
       ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
-      ...(meta?.rebindState !== undefined ? { rebindState: meta.rebindState } : {}),
+      ...(meta?.rebindState !== undefined
+        ? {
+            rebindState: meta.rebindState.operationKey
+              ? meta.rebindState
+              : {
+                  ...meta.rebindState,
+                  operationKey: `driver:${this.ownerId}:${session.id}:rebind:${meta.rebindState.expectedGeneration + 1}`,
+                },
+          }
+        : {}),
     };
     this.checkpointStore.set(cp);
   }
@@ -357,9 +367,10 @@ export class DecisionTabDriver implements DecisionTaskController {
   ): void {
     let rebindState = meta?.rebindState;
     if (rebindState && !rebindState.operationKey) {
+      const sid = this.activeSession?.id ?? this.checkpointStore.get()?.sessionId ?? "";
       rebindState = {
         ...rebindState,
-        operationKey: `driver:${this.ownerId}:rebind:${rebindState.expectedGeneration + 1}`,
+        operationKey: `driver:${this.ownerId}:${sid}:rebind:${rebindState.expectedGeneration + 1}`,
       };
     }
     const existing = this.checkpointStore.get();
@@ -521,13 +532,41 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     if (cp.step === "rebind_submitting") {
       if (cp.rebindState && sessionRes?.session) {
-        if (sessionRes.session.bindingGeneration > cp.rebindState.expectedGeneration) {
+        if (
+          cp.rebindState.expectedGeneration > 0 &&
+          sessionRes.session.bindingGeneration > cp.rebindState.expectedGeneration
+        ) {
+          this.checkpointStore.delete();
+          return null;
+        }
+        if (
+          cp.rebindState.expectedGeneration === 0 &&
+          sessionRes.session.bindingGeneration > 1
+        ) {
+          this.checkpointStore.delete();
+          return null;
+        }
+        if (
+          cp.rebindState.expectedGeneration === 0 &&
+          sessionRes.session.bindingGeneration === 1
+        ) {
+          if (taskRes?.task && (taskRes.task.status === "claimed" || taskRes.task.status === "running")) {
+            const lease: DecisionLease = {
+              owner: cp.leaseOwner,
+              token: cp.leaseToken,
+              generation: cp.leaseGeneration,
+              expiresAtMs: cp.leaseExpiresAtMs,
+            };
+            this.saveCheckpoint("claimed", taskRes.task, sessionRes.session, lease);
+            const context = await this.fetchContext(taskRes.task.id);
+            return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
+          }
           this.checkpointStore.delete();
           return null;
         }
         try {
           if (cp.rebindState.expectedGeneration === 0) {
-            await this.putBinding(cp.sessionId, {
+            const updatedSession = await this.putBinding(cp.sessionId, {
               adapter: this.adapter?.name ?? "chatgpt-web",
               externalSessionRef: cp.rebindState.newExternalSessionRef,
               resumeUri: cp.rebindState.newResumeUri,
@@ -535,6 +574,17 @@ export class DecisionTabDriver implements DecisionTaskController {
               token: cp.leaseToken,
               generation: cp.leaseGeneration,
             });
+            if (taskRes?.task && (taskRes.task.status === "claimed" || taskRes.task.status === "running")) {
+              const lease: DecisionLease = {
+                owner: cp.leaseOwner,
+                token: cp.leaseToken,
+                generation: cp.leaseGeneration,
+                expiresAtMs: cp.leaseExpiresAtMs,
+              };
+              this.saveCheckpoint("claimed", taskRes.task, updatedSession, lease);
+              const context = await this.fetchContext(taskRes.task.id);
+              return await this.executeClaimedTask(taskRes.task, updatedSession, lease, context);
+            }
           } else {
             await this.rebindSession(cp.sessionId, {
               adapter: this.adapter?.name ?? "chatgpt-web",
@@ -792,55 +842,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       const win =
         (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
         (globalThis as unknown as { window?: Window }).window;
-      const currentConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
-      const oldRef = sessionRes.session.binding?.externalSessionRef;
-      // If we are already on a newly created conversation (different from the old binding),
-      // do not blindly navigate back to root "/"! Recover by completing rebind directly.
-      if (currentConvId && currentConvId !== oldRef) {
-        const origin =
-          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getOrigin() : null) ?? "https://chatgpt.com";
-        const resumeUri = buildConversationUrl(currentConvId, origin);
-        const expectedGen = sessionRes.session.bindingGeneration;
-        const opKey = `driver:${this.ownerId}:rebind:${expectedGen + 1}`;
-        this.updateCheckpointStep("rebind_submitting", {
-          rebindState: {
-            newExternalSessionRef: currentConvId,
-            newResumeUri: resumeUri,
-            expectedGeneration: expectedGen,
-            operationKey: opKey,
-          },
-        });
-        let updatedSession: DecisionSession;
-        if (expectedGen === 0) {
-          updatedSession = await this.putBinding(sessionRes.session.id, {
-            adapter: this.adapter?.name ?? "chatgpt-web",
-            externalSessionRef: currentConvId,
-            resumeUri,
-            owner: lease.owner,
-            token: lease.token,
-            generation: lease.generation,
-          });
-        } else {
-          updatedSession = await this.rebindSession(sessionRes.session.id, {
-            adapter: this.adapter?.name ?? "chatgpt-web",
-            externalSessionRef: currentConvId,
-            resumeUri,
-            expectedGeneration: expectedGen,
-            operationKey: opKey,
-            owner: lease.owner,
-            token: lease.token,
-            generation: lease.generation,
-          });
-        }
-        this.checkpointStore.delete();
-        return {
-          status: "superseded",
-          session: updatedSession,
-          error: new Error(
-            `Task "${cp.taskId}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
-          ),
-        };
-      }
       if (win && cp.targetUri && win.location && win.location.href !== cp.targetUri) {
         win.location.assign(cp.targetUri);
       }
@@ -1140,7 +1141,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getOrigin() : null) ?? "https://chatgpt.com";
     const resumeUri = buildConversationUrl(convId, origin);
     const expectedGen = session.bindingGeneration;
-    const opKey = `driver:${this.ownerId}:rebind:${expectedGen + 1}`;
+    const opKey = `driver:${this.ownerId}:${session.id}:rebind:${expectedGen + 1}`;
 
     this.updateCheckpointStep("rebind_submitting", {
       rebindState: {
@@ -1151,9 +1152,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       },
     });
 
-    let updatedSession: DecisionSession;
     if (expectedGen === 0) {
-      updatedSession = await this.putBinding(session.id, {
+      const updatedSession = await this.putBinding(session.id, {
         adapter: this.adapter.name,
         externalSessionRef: convId,
         resumeUri,
@@ -1161,8 +1161,11 @@ export class DecisionTabDriver implements DecisionTaskController {
         token: lease.token,
         generation: lease.generation,
       });
+      this.saveCheckpoint("claimed", task, updatedSession, lease);
+      const context = await this.fetchContext(task.id);
+      return await this.executeClaimedTask(task, updatedSession, lease, context);
     } else {
-      updatedSession = await this.rebindSession(session.id, {
+      const updatedSession = await this.rebindSession(session.id, {
         adapter: this.adapter.name,
         externalSessionRef: convId,
         resumeUri,
@@ -1172,16 +1175,16 @@ export class DecisionTabDriver implements DecisionTaskController {
         token: lease.token,
         generation: lease.generation,
       });
-    }
 
-    this.checkpointStore.delete();
-    return {
-      status: "superseded",
-      session: updatedSession,
-      error: new Error(
-        `Task "${task.id}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
-      ),
-    };
+      this.checkpointStore.delete();
+      return {
+        status: "superseded",
+        session: updatedSession,
+        error: new Error(
+          `Task "${task.id}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
+        ),
+      };
+    }
   }
 
   private async resumeWaitingResponse(

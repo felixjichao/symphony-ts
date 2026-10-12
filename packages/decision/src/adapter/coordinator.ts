@@ -440,7 +440,7 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
       if (controller.rebindSession) {
         const expectedGen = inspection.observedGeneration ?? currentSession.bindingGeneration;
         const opKey = options.operationKeyPrefix
-          ? `${options.operationKeyPrefix}:rebind:${expectedGen + 1}`
+          ? `${options.operationKeyPrefix}:${currentSession.id}:rebind:${expectedGen + 1}`
           : undefined;
         // Controller authority call: CAS conflict or store error rethrows directly
         const reboundRes = await controller.rebindSession(currentSession.id, {
@@ -511,7 +511,7 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
             ? err.observedGeneration
             : currentSession.bindingGeneration;
         const opKey = options.operationKeyPrefix
-          ? `${options.operationKeyPrefix}:rebind:${expectedGen + 1}`
+          ? `${options.operationKeyPrefix}:${currentSession.id}:rebind:${expectedGen + 1}`
           : undefined;
         const reboundRes = await controller.rebindSession(currentSession.id, {
           adapter: created.binding.adapter,
