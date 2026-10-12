@@ -9,6 +9,14 @@ import type {
   DecisionConnectorContext,
 } from "@symphony/domain/decision";
 
+/**
+ * Distinguishing closing sentence of the bootstrap prompt. The bootstrap send is
+ * the only place this text is ever put into ChatGPT, so its presence in a
+ * conversation is positive evidence that this conversation is the one created by
+ * the current bootstrap attempt (used to verify recovery association).
+ */
+export const BOOTSTRAP_ACKNOWLEDGEMENT = "Acknowledge these instructions and confirm you are ready.";
+
 export const BOOTSTRAP_PROMPT = `You are acting as an Independent Decision Reviewer and Planner for the Symphony orchestration platform.
 
 Your role:
@@ -30,7 +38,7 @@ Your role:
 \`\`\`
 
 Strict v1 schema enforcement is active: unknown or misplaced fields will cause fail-closed rejection.
-Acknowledge these instructions and confirm you are ready.`;
+${BOOTSTRAP_ACKNOWLEDGEMENT}`;
 
 export function formatContinuationHeader(
   task: DecisionTask,

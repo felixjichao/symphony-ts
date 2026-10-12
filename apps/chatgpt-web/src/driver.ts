@@ -36,6 +36,7 @@ import {
   waitForStreamingCompletion,
   detectConversationNotFound,
   detectAuthRequired,
+  isConversationAssociatedWithBootstrap,
 } from "./probes";
 import { canonicalJsonEqual } from "./canonical-json";
 
@@ -930,7 +931,8 @@ export class DecisionTabDriver implements DecisionTaskController {
             sessionRes.session,
             lease,
             cp.baselineCount ?? 0,
-            signal
+            signal,
+            cp
           );
         } else {
           // Cannot confirm bootstrap prompt was sent! Fail safely and hand off to human to prevent duplicate execution
@@ -981,7 +983,8 @@ export class DecisionTabDriver implements DecisionTaskController {
           sessionRes.session,
           lease,
           cp.baselineCount ?? 0,
-          signal
+          signal,
+          cp
         );
       } finally {
         this.stopHeartbeat();
@@ -1105,7 +1108,8 @@ export class DecisionTabDriver implements DecisionTaskController {
     session: DecisionSession,
     lease: DecisionLease,
     baselineCount: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    cp: DriverCheckpoint
   ): Promise<TaskExecutionOutcome> {
     const adapterWithBootstrap = this.adapter as unknown as {
       waitForBootstrapResponse?: (opts: {
@@ -1115,35 +1119,63 @@ export class DecisionTabDriver implements DecisionTaskController {
     };
 
     let convId: string;
+    const win =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
+      (globalThis as unknown as { window?: Window }).window;
+    const doc =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+      (globalThis as unknown as { document?: Document }).document;
     try {
+      // Page health takes precedence: an explicitly deleted conversation or an auth
+      // interstitial must keep its existing recovery classification.
+      if (doc && detectConversationNotFound(doc)) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: "Conversation not found during bootstrap waiting recovery",
+          suggestedAction: "rebind",
+        });
+      }
+      if (doc && detectAuthRequired(doc)) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: "Authentication required during bootstrap waiting recovery",
+          suggestedAction: "human_intervention",
+        });
+      }
+
+      // Never read a reply, or bind, a conversation that cannot be tied back to this
+      // bootstrap attempt: the loaded conversation must be the one this send created,
+      // proven by the sent bootstrap prompt (or a matching recorded conversation).
+      const isAssociated = await this.confirmBootstrapConversationAssociation(cp, signal);
+      if (!isAssociated) {
+        const failRes = await this.submitFailure(task.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          error: "human_required",
+          details: {
+            message:
+              "Cannot confirm the loaded ChatGPT conversation was created by this bootstrap attempt during recovery; manual intervention required to avoid reading or binding an unrelated conversation",
+          },
+          retryable: false,
+        });
+        this.checkpointStore.delete();
+        return {
+          status: "failed",
+          failure: failRes.failure,
+          receipt: failRes.receipt,
+          superseded: failRes.superseded,
+          session,
+          error: new Error("Unconfirmed bootstrap conversation association during recovery"),
+        };
+      }
+
       if (typeof adapterWithBootstrap.waitForBootstrapResponse === "function") {
         convId = await adapterWithBootstrap.waitForBootstrapResponse({
           baselineCount,
           signal,
         });
       } else {
-        const win =
-          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
-          (globalThis as unknown as { window?: Window }).window;
-        const doc =
-          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
-          (globalThis as unknown as { document?: Document }).document;
-
-        if (doc && detectConversationNotFound(doc)) {
-          throw new DecisionAdapterError({
-            code: "binding_broken",
-            message: "Conversation not found during bootstrap waiting recovery",
-            suggestedAction: "rebind",
-          });
-        }
-        if (doc && detectAuthRequired(doc)) {
-          throw new DecisionAdapterError({
-            code: "human_required",
-            message: "Authentication required during bootstrap waiting recovery",
-            suggestedAction: "human_intervention",
-          });
-        }
-
         await waitForStreamingCompletion({
           doc,
           baselineCount,
@@ -1204,9 +1236,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       throw bootstrapErr;
     }
 
-    const doc =
-      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
-      (globalThis as unknown as { document?: Document }).document;
     if (doc) {
       if (detectConversationNotFound(doc)) {
         throw new DecisionAdapterError({
@@ -1272,6 +1301,41 @@ export class DecisionTabDriver implements DecisionTaskController {
         ),
       };
     }
+  }
+
+  /**
+   * Confirms the conversation currently loaded in the tab was created by this bootstrap
+   * attempt. Recovery must never read a reply from, or bind, a conversation whose relation
+   * to the bootstrap send cannot be positively established (fail closed instead).
+   */
+  private async confirmBootstrapConversationAssociation(
+    cp: DriverCheckpoint,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    const recordedConvId = cp.rebindState?.newExternalSessionRef ?? cp.targetConvId ?? null;
+    const adapterWithAssociation = this.adapter as unknown as {
+      confirmBootstrapConversationAssociated?: (
+        recordedConvId: string | null,
+        options: { signal?: AbortSignal | undefined }
+      ) => Promise<boolean>;
+    };
+    if (typeof adapterWithAssociation.confirmBootstrapConversationAssociated === "function") {
+      return await adapterWithAssociation.confirmBootstrapConversationAssociated(recordedConvId, {
+        signal,
+      });
+    }
+    const win =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
+      (globalThis as unknown as { window?: Window }).window;
+    const doc =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+      (globalThis as unknown as { document?: Document }).document;
+    if (!doc) return false;
+    return isConversationAssociatedWithBootstrap(
+      doc,
+      win?.location?.href ?? null,
+      recordedConvId
+    );
   }
 
   private async resumeWaitingResponse(

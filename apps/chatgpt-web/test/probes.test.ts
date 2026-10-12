@@ -13,7 +13,10 @@ import {
   detectAuthRequired,
   detectConversationNotFound,
   hasMessageContainers,
+  hasBootstrapPromptTurn,
+  isConversationAssociatedWithBootstrap,
 } from "../src/probes";
+import { BOOTSTRAP_PROMPT } from "../src/prompts";
 
 describe("DOM Probes and URL utilities", () => {
   it("locates prompt composer across selector fallbacks", () => {
@@ -343,5 +346,30 @@ describe("DOM Probes and URL utilities", () => {
     const realError = new MockElement("div", { "data-testid": "conversation-not-found" });
     doc.body.appendChild(realError);
     expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+  });
+
+  it("associates a loaded conversation with this bootstrap attempt only via the sent bootstrap prompt", () => {
+    const doc = new MockDocument();
+    const url = "https://chatgpt.com/c/recovery-conv";
+
+    // A conversation with an unrelated assistant reply carries no association evidence
+    const unrelated = new MockElement("div", { "data-message-author-role": "assistant" });
+    unrelated.textContent = "Ready for Symphony tasks";
+    doc.body.appendChild(unrelated);
+    expect(hasBootstrapPromptTurn(doc as unknown as Document)).toBe(false);
+    expect(isConversationAssociatedWithBootstrap(doc as unknown as Document, url, null)).toBe(false);
+
+    // The conversation created by our send renders the bootstrap prompt as a user turn,
+    // including whitespace-reflowed renderings
+    const userTurn = new MockElement("div", { "data-message-author-role": "user" });
+    userTurn.textContent = BOOTSTRAP_PROMPT.replace(/\n/g, " \n ");
+    doc.body.appendChild(userTurn);
+    expect(hasBootstrapPromptTurn(doc as unknown as Document)).toBe(true);
+    expect(isConversationAssociatedWithBootstrap(doc as unknown as Document, url, null)).toBe(true);
+
+    // Not on a conversation route, or a conversation that contradicts a recorded reference, is not associated
+    expect(isConversationAssociatedWithBootstrap(doc as unknown as Document, "https://chatgpt.com/", null)).toBe(false);
+    expect(isConversationAssociatedWithBootstrap(doc as unknown as Document, url, "other-conv")).toBe(false);
+    expect(isConversationAssociatedWithBootstrap(doc as unknown as Document, url, "recovery-conv")).toBe(true);
   });
 });

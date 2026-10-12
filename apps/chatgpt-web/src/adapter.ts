@@ -29,6 +29,7 @@ import {
   buildConversationUrl,
   detectAuthRequired,
   detectConversationNotFound,
+  isConversationAssociatedWithBootstrap,
 } from "./probes";
 import {
   BOOTSTRAP_PROMPT,
@@ -194,6 +195,37 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     return convId;
+  }
+
+  /**
+   * Positive association evidence that the conversation currently loaded in the tab is the
+   * one created by this bootstrap attempt. Recovery must not read the reply of, or bind to,
+   * a conversation that cannot be tied back to the bootstrap prompt we sent.
+   */
+  isBootstrapConversationAssociated(recordedConvId: string | null): boolean {
+    return isConversationAssociatedWithBootstrap(
+      this.docSupplier(),
+      this.winSupplier()?.location?.href ?? null,
+      recordedConvId
+    );
+  }
+
+  async confirmBootstrapConversationAssociated(
+    recordedConvId: string | null,
+    options: { timeoutMs?: number | undefined; signal?: AbortSignal | undefined } = {}
+  ): Promise<boolean> {
+    // Same budget as the bootstrap response wait: a freshly loaded conversation may need
+    // a moment before its turns (including the bootstrap prompt) are rendered.
+    const timeout = options.timeoutMs ?? this.timeoutMs;
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (options.signal?.aborted) return false;
+      if (this.isBootstrapConversationAssociated(recordedConvId)) {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 200)));
+    }
+    return this.isBootstrapConversationAssociated(recordedConvId);
   }
 
   async inspectBinding(

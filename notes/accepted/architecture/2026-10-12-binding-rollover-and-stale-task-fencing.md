@@ -22,15 +22,22 @@ In real-world Decision Plane runs (e.g. dogfooding with ChatGPT Web and localhos
    - In `apps/chatgpt-web`, starting the driver persists `symphony_driver_enabled` in `sessionStorage`.
    - On page reload or navigation, if `sessionStorage.getItem("symphony_driver_enabled") === "true"`, the driver automatically starts without operator intervention.
    - Explicit operator stop or fatal authentication rejections (HTTP 401/403) clear `symphony_driver_enabled` from `sessionStorage`. Unstarted tabs remain Idle.
+4. **Bootstrap recovery requires positive conversation association**:
+   - Conversation creation is checkpointed in phases (`bootstrap_submitting`, `bootstrap_waiting`, `rebind_submitting`).
+   - Recovering a `bootstrap_waiting` checkpoint only proceeds when the loaded page is on a conversation route that matches any recorded conversation reference and renders the bootstrap prompt this attempt sent as a user turn (`hasBootstrapPromptTurn`). The bootstrap prompt is only ever sent once per conversation creation, so its presence is positive evidence that the conversation belongs to this attempt.
+   - An arbitrary conversation URL, a historical assistant reply, or an unloaded/ambiguous page is never accepted as creation evidence. unconfirmable pages fail closed with a non-retryable `human_required` failure for operator handoff (no reply is read, no binding is written, no prompt is re-sent).
 
 ## Alternatives considered
 
 - **Clear all tasks on rebind instead of releasing to pending**: Rejected because review tasks and plan tasks belong to the issue session's historical continuity. Setting them back to `pending` allows the newly bound generation to pick up the execution with handoff context without losing task identity or findings history.
 - **Rely solely on task lease timeout (TTL) for fencing**: Rejected because lease TTL defaults to minutes, during which an old generation worker could write back stale results or race with the new generation worker. Explicit generation fencing rejects stale calls immediately (fail-closed).
 - **Auto-restart driver unconditionally without `sessionStorage`**: Rejected because tabs not intended to act as Symphony drivers (or tabs where an operator intentionally clicked "Stop") must not execute tasks unexpectedly.
+- **Association by URL shape alone during bootstrap recovery**: Rejected because a restored or unrelated page also sits on a `/c/<id>` route (or is a healthy conversation whose replies could be mistaken for the bootstrap response). Only positive evidence of this attempt's own bootstrap prompt (or a matching recorded conversation reference) proves the conversation belongs to the recovery.
+- **Binding the loaded conversation and re-sending when association is unclear**: Rejected because binding an unrelated historical conversation silently abandons the real one and routes later tasks to the wrong context, while re-sending can duplicate external side effects; failing closed with an operator handoff is the safe alternative.
 
 ## Consequences
 
 - Broken conversation sessions seamlessly roll over to a fresh conversation with durable handoff context without human restart.
+- Bootstrap-phase recovery only continues from the conversation this attempt created; unconfirmable pages fail closed into an explicit operator handoff instead of binding unrelated history.
 - Stale workers from older binding generations are fenced immediately with HTTP 409 and cannot overwrite or corrupt state in newer generations.
 - ChatGPT Web tab navigation or reload resumes autonomous execution smoothly.

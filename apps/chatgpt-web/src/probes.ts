@@ -4,6 +4,7 @@
  */
 
 import { DecisionAdapterError } from "@symphony/domain/decision";
+import { BOOTSTRAP_ACKNOWLEDGEMENT } from "./prompts";
 
 export const SELECTORS = {
   composer: [
@@ -32,6 +33,11 @@ export const SELECTORS = {
     "[data-message-author-role='assistant']",
     "article.agent-turn",
     "[data-markdown-text-style='assistant-message']",
+  ],
+  userTurn: [
+    "article[data-testid^='conversation-turn-'] [data-message-author-role='user']",
+    "[data-message-author-role='user']",
+    "[data-markdown-text-style='user-message']",
   ],
   codeBlock: [
     "pre code.language-symphony-result",
@@ -101,6 +107,52 @@ export function getAllAssistantTurns(doc: Document = document): HTMLElement[] {
 
 export function countAssistantTurns(doc: Document = document): number {
   return getAllAssistantTurns(doc).length;
+}
+
+export function getAllUserTurns(doc: Document = document): HTMLElement[] {
+  for (const selector of SELECTORS.userTurn) {
+    const turns = doc.querySelectorAll<HTMLElement>(selector);
+    if (turns.length > 0) {
+      return Array.from(turns);
+    }
+  }
+  return [];
+}
+
+function normalizeTurnText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Returns true when the loaded conversation renders the bootstrap prompt sent by the
+ * current attempt as a user turn. The bootstrap prompt is only ever sent once per
+ * conversation creation, so this is the positive association evidence required before
+ * reading a bootstrap reply or binding the conversation during recovery.
+ */
+export function hasBootstrapPromptTurn(doc: Document = document): boolean {
+  const marker = normalizeTurnText(BOOTSTRAP_ACKNOWLEDGEMENT);
+  for (const turn of getAllUserTurns(doc)) {
+    if (normalizeTurnText(turn.textContent || "").includes(marker)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Verifies that the conversation currently loaded in the tab is the one created by the
+ * current bootstrap attempt: the page must be on a conversation route, must match any
+ * recorded conversation reference, and must render the bootstrap prompt we sent.
+ */
+export function isConversationAssociatedWithBootstrap(
+  doc: Document,
+  currentUrl: string | null,
+  recordedConvId: string | null
+): boolean {
+  const convId = currentUrl ? extractConversationIdFromUrl(currentUrl) : null;
+  if (!convId) return false;
+  if (recordedConvId && convId !== recordedConvId) return false;
+  return hasBootstrapPromptTurn(doc);
 }
 
 export function findLatestAssistantTurn(doc: Document = document): HTMLElement | null {
