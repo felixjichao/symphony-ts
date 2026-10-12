@@ -406,7 +406,7 @@ The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Age
 - `POST /v1/sessions` — Create or retrieve an issue session with `{ root }`.
 - `PUT /v1/sessions/:id/binding` — Bind or update executor binding with `{ adapter, externalSessionRef, resumeUri? }`.
 - `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check: `{ adapter, externalSessionRef, resumeUri?, expectedGeneration, operationKey? }`.
-- `POST /v1/sessions/:id/break-binding` — Break executor binding with optional `{ adapter?, externalSessionRef?, expectedGeneration? }` payload when conversation is broken or human intervention is required.
+- `POST /v1/sessions/:id/break-binding` — Break executor binding with optional `{ owner?, token?, generation?, expectedGeneration? }` lease credentials and compare-and-swap expectedGeneration check when conversation is broken or human intervention is required.
 
 Security boundaries:
 - Loopback-only binding (`127.0.0.1` by default).

@@ -114,7 +114,7 @@ curl -s -H "Authorization: Bearer secret-bridge-token" \
 ### 3. Checkpoint Lifecycle & Idempotent Recovery
 - Active execution is checkpointed at discrete stages (`claimed`, `started`, `prompt_submitting`, `waiting_response`, `result_extracted`), isolated per tab via `tabId`.
 - **Packet Loss & Receipt Recovery**: Before sending `/result`, the candidate result is persisted in the checkpoint. If network packet loss occurs during submission, `resumeCheckpointIfAvailable()` first checks task completion and queries authoritative `/receipt` on the bridge, replaying the completed result without requiring lease renewal.
-- **In-flight Waiting Recovery**: After a full navigation or reload, the HUD initializes in Idle; click **Start Driver** to resume. If the checkpoint is in `waiting_response`, recovery waits for the existing assistant response instead of re-submitting the prompt.
+- **In-flight Waiting & Navigation Auto-Recovery**: Starting the driver records active run state in `sessionStorage` (`symphony_driver_enabled`). Across full page navigation or reloads within the same tab, the userscript automatically resumes polling and checkpoint recovery without requiring manual operator clicks. Explicit operator Stop or fatal authentication errors (HTTP 401/403) clear this flag and keep the HUD in Idle. If the checkpoint is in `waiting_response`, recovery waits for the existing assistant response instead of re-submitting the prompt.
 - **Heartbeat Expiry Sync**: Each successful lease heartbeat returns the extended `expiresAtMs`, which is written back to the checkpoint to prevent false local expiry during lengthy model reasoning.
 
 ### 4. Broken Binding & Rollover

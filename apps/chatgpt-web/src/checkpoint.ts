@@ -34,6 +34,7 @@ export interface DriverCheckpoint {
     readonly newExternalSessionRef: string;
     readonly newResumeUri: string | null;
     readonly expectedGeneration: number;
+    readonly operationKey?: string | undefined;
   } | undefined;
 }
 

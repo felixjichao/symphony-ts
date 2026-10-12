@@ -242,6 +242,10 @@ export async function waitForStreamingCompletion(
 
 export function detectAuthRequired(doc: Document = document): boolean {
   if (!doc) return false;
+  // If composer element is present, user is authenticated in an active session
+  if (findComposerElement(doc)) {
+    return false;
+  }
   const authSelectors = [
     "[data-testid='login-button']",
     "[data-testid='auth-button']",
@@ -252,6 +256,14 @@ export function detectAuthRequired(doc: Document = document): boolean {
   for (const selector of authSelectors) {
     if (doc.querySelector(selector)) return true;
   }
+  // Exclude chat message content / articles from general text matching
+  const hasMessages =
+    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
+    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
+  if (hasMessages) {
+    return false;
+  }
+
   const text = doc.body?.textContent || "";
   if (
     (text.includes("Log in") || text.includes("Sign up")) &&
@@ -264,13 +276,42 @@ export function detectAuthRequired(doc: Document = document): boolean {
 
 export function detectConversationNotFound(doc: Document = document): boolean {
   if (!doc) return false;
+  // If composer element is present, this is a healthy interactive conversation, not a 404 page!
+  if (findComposerElement(doc)) {
+    return false;
+  }
   const notFoundSelectors = [
     "[data-testid='conversation-not-found']",
     "[data-testid='error-page']",
+    "[data-testid='error-container']",
   ];
   for (const selector of notFoundSelectors) {
     if (doc.querySelector(selector)) return true;
   }
+  // Exclude chat message content / articles from general text matching:
+  // Text inside message articles or turn containers is user/assistant prose, not a page error!
+  const hasMessages =
+    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
+    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
+  if (hasMessages) {
+    return false;
+  }
+
+  // Error page headings / alerts
+  const alert = doc.querySelector?.("div[role='alert'], h1, h2, h3");
+  if (alert && alert.textContent) {
+    const alertText = alert.textContent;
+    if (
+      alertText.includes("Conversation not found") ||
+      alertText.includes("Unable to load conversation") ||
+      alertText.includes("This conversation may have been deleted") ||
+      alertText.includes("404: Not Found") ||
+      alertText.includes("404 - Not Found")
+    ) {
+      return true;
+    }
+  }
+
   const text = doc.body?.textContent || "";
   if (
     text.includes("Conversation not found") ||

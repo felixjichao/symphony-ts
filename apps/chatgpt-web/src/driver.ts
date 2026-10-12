@@ -229,6 +229,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       `/v1/sessions/${encodeURIComponent(sessionId)}/binding`,
       params
     );
+    if (this.activeSession && this.activeSession.id === sessionId) {
+      this.activeSession = res.session;
+    }
     return res.session;
   }
 
@@ -267,6 +270,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         newExternalSessionRef: params.externalSessionRef,
         newResumeUri: params.resumeUri,
         expectedGeneration: params.expectedGeneration,
+        ...(params.operationKey ? { operationKey: params.operationKey } : {}),
       },
     });
     const res = await this.transport.request<{ session: DecisionSession }>(
@@ -274,6 +278,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       `/v1/sessions/${encodeURIComponent(sessionId)}/rebind`,
       params
     );
+    if (this.activeSession && this.activeSession.id === sessionId) {
+      this.activeSession = res.session;
+    }
     return res.session;
   }
 
@@ -483,9 +490,15 @@ export class DecisionTabDriver implements DecisionTaskController {
       throw err;
     }
 
-    if (sessionRes?.session && sessionRes.session.bindingGeneration > cp.bindingGeneration) {
-      this.checkpointStore.delete();
-      return null;
+    if (sessionRes?.session) {
+      const isStaleRollover =
+        cp.bindingGeneration > 0
+          ? sessionRes.session.bindingGeneration > cp.bindingGeneration
+          : sessionRes.session.bindingGeneration > 1;
+      if (isStaleRollover) {
+        this.checkpointStore.delete();
+        return null;
+      }
     }
 
     if (cp.step === "rebind_submitting") {
@@ -496,16 +509,27 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
         try {
           await this.rebindSession(cp.sessionId, {
-            adapter: this.adapter.name,
+            adapter: this.adapter?.name ?? "chatgpt-web",
             externalSessionRef: cp.rebindState.newExternalSessionRef,
             resumeUri: cp.rebindState.newResumeUri,
             expectedGeneration: cp.rebindState.expectedGeneration,
+            ...(cp.rebindState.operationKey ? { operationKey: cp.rebindState.operationKey } : {}),
             owner: cp.leaseOwner,
             token: cp.leaseToken,
             generation: cp.leaseGeneration,
           });
-        } catch {
-          // Ignore error
+          this.checkpointStore.delete();
+          return null;
+        } catch (err: unknown) {
+          if (
+            err instanceof BridgeHttpError &&
+            (err.status === 404 || err.status === 409 || err.status === 410)
+          ) {
+            this.checkpointStore.delete();
+            return null;
+          }
+          // Transient network or server outage (e.g. HTTP 503): preserve checkpoint with full rebindState
+          return null;
         }
       }
       this.checkpointStore.delete();
@@ -1021,12 +1045,13 @@ export class DecisionTabDriver implements DecisionTaskController {
       if (signal.aborted) {
         throw err;
       }
-      // If candidate result exists or currently navigating, DO NOT delete checkpoint so it can be recovered
+      // If candidate result exists, currently navigating, or submitting rebind, DO NOT delete checkpoint so it can be recovered
       const currentCp = this.checkpointStore.get();
       if (
         currentCp?.candidateResult ||
         currentCp?.step === "result_extracted" ||
-        currentCp?.step === "navigating"
+        currentCp?.step === "navigating" ||
+        currentCp?.step === "rebind_submitting"
       ) {
         throw err;
       }

@@ -272,23 +272,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
-    if (detectAuthRequired(this.docSupplier())) {
-      throw new DecisionAdapterError({
-        code: "human_required",
-        message: "ChatGPT Web authentication / login required",
-        suggestedAction: "human_intervention",
-      });
-    }
-
-    if (detectConversationNotFound(this.docSupplier())) {
-      throw new DecisionAdapterError({
-        code: "binding_broken",
-        message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
-        suggestedAction: "rebind",
-        observedGeneration: binding.generation,
-      });
-    }
-
     const win = this.winSupplier();
     if (win && win.location && binding.resumeUri) {
       const currentUrl = win.location.href;
