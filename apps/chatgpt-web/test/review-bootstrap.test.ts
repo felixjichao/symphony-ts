@@ -311,7 +311,9 @@ describe("approved bootstrap navigation recovery", () => {
       send.addEventListener("click", () => {
         sends++;
         win.location.href = "https://chatgpt.com/c/created-by-this-attempt";
-        controller.abort();
+        // The page is lost shortly after the conversation route appears, i.e. only after the
+        // attempt has already recorded the conversation it created.
+        setTimeout(() => controller.abort(), 10);
       });
       const adapter = new ChatGptWebAdapter({ doc: doc as unknown as Document, win: win as unknown as Window, stabilizationMs: 1, checkIntervalMs: 1, timeoutMs: 500 });
       // Install the real driver's checkpoint listener for the creation phase.

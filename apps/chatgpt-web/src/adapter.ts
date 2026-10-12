@@ -326,6 +326,12 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         ? extractConversationIdFromUrl(currentWin.location.href)
         : null;
       if (recordedConvId === null) {
+        // A cancelled attempt never takes its creation reference from a route observed after
+        // the interruption: that route may be an unrelated conversation (user navigation,
+        // redirect). Without a recorded reference the recovery fails closed instead.
+        if (options.signal?.aborted) {
+          return;
+        }
         if (convId) {
           recordedConvId = convId;
           this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
