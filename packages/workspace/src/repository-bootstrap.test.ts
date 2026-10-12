@@ -1,8 +1,9 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bootstrapRepository,
   createWorkspaceManager,
@@ -11,7 +12,102 @@ import {
   RepositoryBootstrapError,
   runRepositoryBootstrapCli,
   sanitizeRepoUrl,
+  WorkspaceError,
+  type WorkspaceHookEvent,
 } from "./index";
+
+// 进程生命周期用例通过真实 CLI 子进程触发 Git 子树，必须使用「由当前源码构建」的
+// 可运行入口。此前 `dist 存在就用、否则裸 node import("@symphony/workspace")` 的回退在
+// 干净 checkout 上必然 ERR_MODULE_NOT_FOUND（源码包无法被裸 node 执行），而 catch-all
+// 又把该错误误判成 hook 超时，掩盖真实故障，最终只表现为 PID undefined（NEST-119）。
+const repoRoot = path.resolve(__dirname, "../../..");
+const cliRoot = path.join(repoRoot, "apps/cli");
+const cliBin = path.join(cliRoot, "dist/bin/symphony.js");
+
+beforeAll(() => {
+  // 用当前源码重新构建 CLI bundle，拒绝复用来源不明的旧 dist。
+  execFileSync(path.join(repoRoot, "node_modules", ".bin", "vite"), ["build"], {
+    cwd: cliRoot,
+    stdio: "pipe",
+  });
+  if (!existsSync(cliBin)) {
+    throw new Error(`CLI bundle was not produced by the build: ${cliBin}`);
+  }
+}, 120_000);
+
+/** 读取 PID 文件；文件尚不存在或内容非法（非有限正整数）时返回 null。 */
+async function readPidFile(file: string): Promise<number | null> {
+  try {
+    const pid = Number.parseInt((await fs.readFile(file, "utf8")).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 有界等待 PID 文件写入；超时给出明确诊断，而不是静默继续到 undefined 断言。 */
+async function waitForPidFile(file: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const pid = await readPidFile(file);
+    if (pid !== null) {
+      return pid;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`upload-pack PID file was not written within ${timeoutMs}ms: ${file}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/**
+ * 进程是否仍在运行。Linux 上僵尸（state Z / X）视为已退出——`kill(pid, 0)` 对僵尸仍
+ * 成功，不能据此判定为可运行的子孙泄漏。
+ */
+function isProcessRunning(pid: number): boolean {
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const lastParen = stat.lastIndexOf(")");
+      const state = lastParen >= 0 ? stat.slice(lastParen + 2).trimStart().charAt(0) : "";
+      return state !== "Z" && state !== "X";
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 有界等待目标进程退出；超出上界返回 false，由调用方断言失败。 */
+async function waitForProcessGone(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!isProcessRunning(pid)) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/** best-effort 终止本轮测试实际创建的进程（断言失败时也执行，避免留下进程污染后续诊断）。 */
+function killPidBestEffort(pid: number | undefined): void {
+  if (pid === undefined) {
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 已退出
+  }
+}
 
 describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
   let tmpBase: string;
@@ -873,7 +969,7 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
   });
 
   describe("进程生命周期与超时清理 (Blocker 回归)", () => {
-    it("外层 hook 超时终止时清理 Git 子树，不残留孤儿子进程", async () => {
+    it("外层 hook 超时终止时清理受管 Git 进程组（独立组 + 监督者 ownership），不残留孤儿子进程", async () => {
       // 1. 初始化 workspace 为已 bootstrap 的本地仓库
       await bootstrapRepository({
         cwd: workspaceDir,
@@ -894,7 +990,13 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         cwd: workspaceDir,
       });
 
-      // 3. 通过 WorkspaceManager.runBeforeRunHook 执行 bootstrap，设置 hook timeout 为 1000ms
+      // 3. 通过 WorkspaceManager.runBeforeRunHook 执行真实 CLI（当前源码构建）。
+      //    hook timeout 必须大过「CLI 启动 + 到达 upload-pack」的启动裕量，否则 hook 会在
+      //    Git 子树建立前就被终止，测试将拿不到可验证的清理对象（macOS gate 的实际竞争）。
+      //    NEST-119 A 修订方案后：Git 在独立进程组中由 hook 宿主的监督者持有，
+      //    本用例证明外层 hook 超时仍能清理它（不依赖 Git 继承 hook 进程组）。
+      const hookTimeoutMs = 5_000;
+      const cliCmd = `node "${cliBin}" repo-bootstrap --repo "${remoteRepoDir}" --target "${workspaceDir}"`;
       const manager = createWorkspaceManager({
         workspace: { root: tmpBase },
       });
@@ -904,55 +1006,154 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         createdNow: false,
       };
 
-      const cliDist = path.resolve(__dirname, "../../../apps/cli/dist/bin/symphony.js");
-      const cliCmd = (await fs.stat(cliDist).catch(() => null))
-        ? `node "${cliDist}" repo-bootstrap --repo "${remoteRepoDir}" --target "${workspaceDir}"`
-        : `node -e 'import("@symphony/workspace").then(m => m.runRepositoryBootstrapCli(["--repo", process.argv[1], "--target", process.argv[2]]))' "${remoteRepoDir}" "${workspaceDir}"`;
-
-      let hookTimedOut = false;
-      try {
-        await manager.runBeforeRunHook(ws, {
-          hooks: {
-            afterCreate: null,
-            beforeRun: cliCmd,
-            afterRun: null,
-            beforeRemove: null,
-            timeoutMs: 1000,
-          },
-          identifier: "GH-79",
-        });
-      } catch {
-        hookTimedOut = true;
-      }
-
-      expect(hookTimedOut).toBe(true);
-
-      // 4. 读取 upload-pack PID 并验证其已被终止
+      const hookEvents: WorkspaceHookEvent[] = [];
+      let thrownError: unknown;
       let pid: number | undefined;
-      for (let i = 0; i < 20; i++) {
-        try {
-          const content = (await fs.readFile(pidFile, "utf8")).trim();
-          pid = parseInt(content, 10);
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 50));
-        }
-      }
-
-      expect(pid).toBeDefined();
-      await new Promise((r) => setTimeout(r, 100));
-
-      let isAlive = false;
+      // 执行、全部断言与 PID 清理在同一 try/finally：断言失败也清理本轮进程。
       try {
-        process.kill(pid!, 0);
-        isAlive = true;
-      } catch {
-        isAlive = false;
-      }
-      expect(isAlive).toBe(false);
-    });
+        try {
+          await manager.runBeforeRunHook(ws, {
+            hooks: {
+              afterCreate: null,
+              beforeRun: cliCmd,
+              afterRun: null,
+              beforeRemove: null,
+              timeoutMs: hookTimeoutMs,
+            },
+            identifier: "GH-79",
+            onHookEvent: (evt) => hookEvents.push(evt),
+          });
+        } catch (err) {
+          thrownError = err;
+        }
 
-    it("直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理子孙进程", async () => {
+        // 必须是 typed hook_timeout，而不是被 catch-all 掩盖的任意错误
+        expect(thrownError).toBeInstanceOf(WorkspaceError);
+        expect((thrownError as WorkspaceError).code).toBe("hook_timeout");
+        expect(hookEvents.some((e) => e.hook === "before_run" && e.outcome === "timeout")).toBe(true);
+
+        // 4. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
+        pid = (await waitForPidFile(pidFile, 5_000)) ?? undefined;
+        expect(Number.isInteger(pid)).toBe(true);
+        expect(pid).toBeGreaterThan(0);
+
+        // 5. upload-pack 必须在外层 hook 超时后终止；有界等待真实退出
+        expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+      } finally {
+        if (pid === undefined) {
+          pid = (await readPidFile(pidFile)) ?? undefined;
+        }
+        killPidBestEffort(pid);
+      }
+    }, 30_000);
+
+    it("hook 内 CLI bootstrap 经监督通路正常完成（成功路径不降级、不被误杀）", async () => {
+      // A 修订方案后 hook 内的 Git 由宿主监督者创建与登记；本用例锁定成功路径：
+      // spawn 请求 → 启动许可 → 输出转发 → exit 报告全链路可用。
+      const target = path.join(tmpBase, "supervised-success");
+      await fs.mkdir(target, { recursive: true });
+      const manager = createWorkspaceManager({
+        workspace: { root: tmpBase },
+      });
+      const ws = {
+        path: path.join(tmpBase, "hook-cwd-success"),
+        workspaceKey: "hook-cwd-success",
+        createdNow: false,
+      };
+      await fs.mkdir(ws.path, { recursive: true });
+
+      await manager.runBeforeRunHook(ws, {
+        hooks: {
+          afterCreate: null,
+          beforeRun: `node "${cliBin}" repo-bootstrap --repo "${remoteRepoDir}" --target "${target}"`,
+          afterRun: null,
+          beforeRemove: null,
+          timeoutMs: 30_000,
+        },
+        identifier: "SUPERVISED-1",
+      });
+
+      const readme = await fs.readFile(path.join(target, "README.md"), "utf8");
+      expect(readme).toBe("# Initial Commit\n");
+      // CLI 经 hook 环境拿到 SYMPHONY_WORKSPACE_KEY（hook 宿主注入），分支据此派生。
+      const branch = execSync("git symbolic-ref --short HEAD", { cwd: target }).toString().trim();
+      expect(branch).toBe("symphony/hook-cwd-success");
+    }, 30_000);
+
+    it("外层 hook 超时清理同一 hook 内多个并发受管 Git 进程组", async () => {
+      const targetA = path.join(tmpBase, "concurrent-a");
+      const targetB = path.join(tmpBase, "concurrent-b");
+      const pidFileA = path.join(tmpBase, "concurrent-a.pid");
+      const pidFileB = path.join(tmpBase, "concurrent-b.pid");
+
+      // 两个目标均先完成首次 bootstrap，再各自配置慢 upload-pack，使重入 fetch 走 Git 子树
+      for (const target of [targetA, targetB]) {
+        await fs.mkdir(target, { recursive: true });
+        await bootstrapRepository({
+          cwd: target,
+          repoUrl: remoteRepoDir,
+          workspaceKey: path.basename(target),
+        });
+      }
+      const scriptA = path.join(tmpBase, "concurrent-a.sh");
+      const scriptB = path.join(tmpBase, "concurrent-b.sh");
+      await fs.writeFile(scriptA, `#!/bin/sh\necho $$ > "${pidFileA}"\nexec sleep 20\n`, { mode: 0o755 });
+      await fs.writeFile(scriptB, `#!/bin/sh\necho $$ > "${pidFileB}"\nexec sleep 20\n`, { mode: 0o755 });
+      execSync(`git config remote.origin.uploadpack "${scriptA}"`, { cwd: targetA });
+      execSync(`git config remote.origin.uploadpack "${scriptB}"`, { cwd: targetB });
+
+      const manager = createWorkspaceManager({
+        workspace: { root: tmpBase },
+      });
+      const ws = {
+        path: path.join(tmpBase, "hook-cwd-concurrent"),
+        workspaceKey: "hook-cwd-concurrent",
+        createdNow: false,
+      };
+      await fs.mkdir(ws.path, { recursive: true });
+      const cliCmd =
+        `node "${cliBin}" repo-bootstrap --repo "${remoteRepoDir}" --target "${targetA}" &\n` +
+        `node "${cliBin}" repo-bootstrap --repo "${remoteRepoDir}" --target "${targetB}" &\n` +
+        `wait\n`;
+
+      let thrownError: unknown;
+      let pidA: number | undefined;
+      let pidB: number | undefined;
+      try {
+        try {
+          await manager.runBeforeRunHook(ws, {
+            hooks: {
+              afterCreate: null,
+              beforeRun: cliCmd,
+              afterRun: null,
+              beforeRemove: null,
+              timeoutMs: 5_000,
+            },
+            identifier: "CONCURRENT-1",
+          });
+        } catch (err) {
+          thrownError = err;
+        }
+        expect(thrownError).toBeInstanceOf(WorkspaceError);
+        expect((thrownError as WorkspaceError).code).toBe("hook_timeout");
+
+        pidA = await waitForPidFile(pidFileA, 5_000);
+        pidB = await waitForPidFile(pidFileB, 5_000);
+        expect(await waitForProcessGone(pidA, 3_000)).toBe(true);
+        expect(await waitForProcessGone(pidB, 3_000)).toBe(true);
+      } finally {
+        if (pidA === undefined) {
+          pidA = (await readPidFile(pidFileA)) ?? undefined;
+        }
+        if (pidB === undefined) {
+          pidB = (await readPidFile(pidFileB)) ?? undefined;
+        }
+        killPidBestEffort(pidA);
+        killPidBestEffort(pidB);
+      }
+    }, 30_000);
+
+    it("直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理进程组", async () => {
       // 1. 初始化 workspace 为已 bootstrap 的本地仓库
       await bootstrapRepository({
         cwd: workspaceDir,
@@ -973,45 +1174,193 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         cwd: workspaceDir,
       });
 
-      let timeoutThrown = false;
-      try {
-        await bootstrapRepository({
-          cwd: workspaceDir,
-          repoUrl: remoteRepoDir,
-          workspaceKey: "GH-79",
-          timeoutMs: 800,
-        });
-      } catch (err: unknown) {
-        if (err instanceof RepositoryBootstrapError && err.code === "git_command_timeout") {
-          timeoutThrown = true;
-        }
-      }
-
-      expect(timeoutThrown).toBe(true);
-
-      // 3. 读取 upload-pack PID 并验证其已被 killProcessTree 终止
+      // 每条 Git 命令共享该预算；给启动裕量留有余地，但 upload-pack 的 sleep 20 必然超时
+      const gitCommandTimeoutMs = 3_000;
+      let thrownError: unknown;
       let pid: number | undefined;
-      for (let i = 0; i < 20; i++) {
-        try {
-          const content = (await fs.readFile(pidFile, "utf8")).trim();
-          pid = parseInt(content, 10);
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 50));
-        }
-      }
-
-      expect(pid).toBeDefined();
-      await new Promise((r) => setTimeout(r, 100));
-
-      let isAlive = false;
+      // 执行、全部断言与 PID 清理在同一 try/finally：断言失败也清理本轮进程。
       try {
-        process.kill(pid!, 0);
-        isAlive = true;
-      } catch {
-        isAlive = false;
+        try {
+          await bootstrapRepository({
+            cwd: workspaceDir,
+            repoUrl: remoteRepoDir,
+            workspaceKey: "GH-79",
+            timeoutMs: gitCommandTimeoutMs,
+          });
+        } catch (err: unknown) {
+          thrownError = err;
+        }
+
+        expect(thrownError).toBeInstanceOf(RepositoryBootstrapError);
+        const bootstrapError = thrownError as RepositoryBootstrapError;
+        expect(bootstrapError.code).toBe("git_command_timeout");
+        // 清理确认诊断：组终止 + 组扫描确认无可运行成员
+        expect((bootstrapError.details as { cleanupConfirmed?: boolean }).cleanupConfirmed).toBe(true);
+
+        // 3. 读取 upload-pack PID：必须确实到达 Git 子树，且是有限正整数
+        pid = (await waitForPidFile(pidFile, 5_000)) ?? undefined;
+        expect(Number.isInteger(pid)).toBe(true);
+        expect(pid).toBeGreaterThan(0);
+
+        // 4. 超时收敛屏障必须已清理 Git 进程组；有界等待真实退出
+        expect(await waitForProcessGone(pid, 3_000)).toBe(true);
+      } finally {
+        if (pid === undefined) {
+          pid = (await readPidFile(pidFile)) ?? undefined;
+        }
+        killPidBestEffort(pid);
       }
-      expect(isAlive).toBe(false);
-    });
+    }, 20_000);
+
+    it("组终止覆盖 fork + exit 后重挂父的孙进程（原冻结算法的逃逸窗口），且不产生迟到副作用", async () => {
+      // NEST-119 第二轮审查证明：「枚举快照 → 冻结/终止」之间存在确定性逃逸——
+      // 中间进程 fork 新叶后立即退出，新叶重挂父进程，不再是根的后代，快照算法
+      // 永远看不到它。A 修订方案改用独立进程组：kill(-pgid) 原子覆盖组内全部成员
+      // （含已重挂父的正常子孙），与「何时 fork」无关。
+      // 调度（真实进程，非 SIGSTOP 注入）：root git 启动 → 立即派生 middle →
+      // middle 派生 leaf（不持有 stdio）并退出 → leaf 重挂父后延迟写迟到 marker。
+      const fakeBin = path.join(tmpBase, "escape-bin");
+      await fs.mkdir(fakeBin, { recursive: true });
+      const rootPidFile = path.join(tmpBase, "escape-root.pid");
+      const leafPidFile = path.join(tmpBase, "escape-leaf.pid");
+      const markerFile = path.join(tmpBase, "escape-late.marker");
+      const leafScript = path.join(tmpBase, "escape-leaf.cjs");
+      const middleScript = path.join(tmpBase, "escape-middle.cjs");
+      const gitScript = path.join(fakeBin, "git");
+
+      // leaf：800ms 后写迟到标记并继续存活——若清理遗漏，marker 必然出现。
+      await fs.writeFile(
+        leafScript,
+        `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 800);\n` +
+          `setInterval(() => {}, 5000);\n`,
+      );
+      // middle：派生 leaf（stdio ignore）→ 记录 leaf PID → 立即退出，触发重挂父。
+      await fs.writeFile(
+        middleScript,
+        `const { spawn } = require("node:child_process");\n` +
+          `const fs = require("node:fs");\n` +
+          `const leaf = spawn(process.execPath, [${JSON.stringify(leafScript)}], { stdio: "ignore", detached: false });\n` +
+          `fs.writeFileSync(${JSON.stringify(leafPidFile)}, String(leaf.pid));\n` +
+          `process.exit(0);\n`,
+      );
+      // 假 git root：记录 PID → 派生 middle → 保持存活。
+      await fs.writeFile(
+        gitScript,
+        `#!${process.execPath}\n` +
+          `const fs = require("node:fs");\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `fs.writeFileSync(${JSON.stringify(rootPidFile)}, String(process.pid));\n` +
+          `spawn(process.execPath, [${JSON.stringify(middleScript)}], { stdio: "ignore" });\n` +
+          `setInterval(() => {}, 5000);\n`,
+        { mode: 0o755 },
+      );
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+      let rootPid: number | undefined;
+      let leafPid: number | undefined;
+      try {
+        let thrown: unknown;
+        try {
+          await bootstrapRepository({
+            cwd: workspaceDir,
+            repoUrl: "/unused/local/repo",
+            workspaceKey: "GH-79",
+            timeoutMs: 300,
+          });
+        } catch (err: unknown) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+        expect((thrown as RepositoryBootstrapError).code).toBe("git_command_timeout");
+
+        // 注入确认：middle 确实 fork 了 leaf（fork + exit + 重挂父链真实发生），
+        // 不能把「未触发调度」算作回归通过。
+        leafPid = await waitForPidFile(leafPidFile, 5_000);
+        expect(Number.isInteger(leafPid)).toBe(true);
+        expect(leafPid).toBeGreaterThan(0);
+
+        // 重挂父的 leaf（不持有 stdio、不在父子快照里）必须被组终止清掉。
+        expect(await waitForProcessGone(leafPid, 3_000)).toBe(true);
+
+        // 等过 leaf 原本的迟到写入时刻，确认无迟到副作用。
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        expect(existsSync(markerFile)).toBe(false);
+      } finally {
+        process.env.PATH = originalPath;
+        if (leafPid === undefined) {
+          leafPid = (await readPidFile(leafPidFile)) ?? undefined;
+        }
+        if (rootPid === undefined) {
+          rootPid = (await readPidFile(rootPidFile)) ?? undefined;
+        }
+        killPidBestEffort(leafPid);
+        killPidBestEffort(rootPid);
+      }
+    }, 20_000);
+    it("直接调用路径：根正常退出但组内 leaf 仍存活时，返回前完成防误杀收尾且无迟到副作用", async () => {
+      // 复审 blocker 的直接路径核对：execGit 成功路径曾以根 close 立即返回，
+      // 释放 ownership——残留 leaf（同组、重挂父）无人清理。现在 close 后先做
+      // 有界防误杀收尾（清残留 + 确认），确认不成立才以 typed 失败收敛。
+      const fakeBin = path.join(tmpBase, "direct-exit-bin");
+      await fs.mkdir(fakeBin, { recursive: true });
+      const leafPidFile = path.join(tmpBase, "direct-exit-leaf.pid");
+      const markerFile = path.join(tmpBase, "direct-exit-late.marker");
+      const leafScript = path.join(tmpBase, "direct-exit-leaf.cjs");
+      const gitScript = path.join(fakeBin, "git");
+
+      await fs.writeFile(
+        leafScript,
+        `const fs = require("node:fs");\n` +
+          `setTimeout(() => fs.writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 1_500);\n` +
+          `setInterval(() => {}, 5000);\n`,
+      );
+      // 假 git：spawn 同组 leaf（stdio ignore）后立即退出 0（每次调用都如此）。
+      await fs.writeFile(
+        gitScript,
+        `#!${process.execPath}\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `const leaf = spawn(process.execPath, [${JSON.stringify(leafScript)}], { stdio: "ignore" });\n` +
+          `require("node:fs").writeFileSync(${JSON.stringify(leafPidFile)}, String(leaf.pid));\n` +
+          `process.exit(0);\n`,
+        { mode: 0o755 },
+      );
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+      let leafPid: number | undefined;
+      try {
+        let thrown: unknown;
+        try {
+          await bootstrapRepository({
+            cwd: workspaceDir,
+            repoUrl: "/unused/local/repo",
+            workspaceKey: "GH-79",
+            timeoutMs: 10_000,
+          });
+        } catch (err: unknown) {
+          thrown = err;
+        }
+
+        // 假 git 每条命令都退出 0 且 close 后 leaf 已被收尾确认——流程推进到
+        // 默认分支探测失败（missing_remote_default_branch），而非 git_command_failed
+        // （后者意味着收尾确认失败，即所有权被提前释放或清理不可信）。
+        expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+        expect((thrown as RepositoryBootstrapError).code).toBe("missing_remote_default_branch");
+
+        // 最后一次注入的 leaf 必须已被清理，且迟到 marker 永不出现。
+        leafPid = await waitForPidFile(leafPidFile, 3_000);
+        expect(await waitForProcessGone(leafPid, 3_000)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 1_700));
+        expect(existsSync(markerFile)).toBe(false);
+      } finally {
+        process.env.PATH = originalPath;
+        if (leafPid === undefined) {
+          leafPid = (await readPidFile(leafPidFile)) ?? undefined;
+        }
+        killPidBestEffort(leafPid);
+      }
+    }, 20_000);
   });
 });

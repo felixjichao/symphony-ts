@@ -70,7 +70,7 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
     - 目标目录为非空非 git 目录：抛 `unrecognized_non_empty_directory` 拒绝；
     - 已有仓储 `origin` URL 与传入仓库不一致：抛 `repository_url_mismatch` 拒绝；
     - 存在进行中 git 操作（`MERGE_HEAD` / `rebase-merge` 等）：抛 `git_operation_in_progress` 拒绝；
-  - 安全与防护：所有 URL 敏感凭据脱敏（`sanitizeRepoUrl`）、子进程 `GIT_TERMINAL_PROMPT=0` 防交互挂起、超时 SIGKILL 进程组；
+  - 安全与防护：所有 URL 敏感凭据脱敏（`sanitizeRepoUrl`）、子进程 `GIT_TERMINAL_PROMPT=0` 防交互挂起、超时对 Git **独立进程组**发 SIGKILL（受管执行器，见下文 timeout 终止与 Known limitations）；
 - `runRepositoryBootstrapCli(argv: string[], io?: BootstrapCliIo): Promise<number>`：
   - 供 `@symphony/cli` 直接调用的轻量独立 CLI 执行器（0 成功、非 0 失败，脱敏诊断输出）。
 
@@ -153,6 +153,12 @@ M5（orchestrator）。「谁在什么时候调用」见下方接缝表。
   `DEFAULT_HOOK_TIMEOUT_MS`（60000，与 §5.3.4 默认一致）。
 - **timeout 终止**：超时后 SIGKILL 整个 hook **进程组**（detached spawn + 负 pid），
   确保脚本派生的孙进程不留孤儿，且清理 timer / stdio、不残留 handle（§15.4 "timeouts REQUIRED"）。
+  hook 内的 Git 操作另由**受管 Git 进程组监督者**持有（NEST-119 A 修订方案）：每次 hook
+  执行时宿主建立 Unix socket 监督者并注入 `SYMPHONY_GIT_SUPERVISOR_SOCKET`，hook 内
+  CLI / 库经本地 IPC 请求创建 Git 操作——创建与登记由监督者串行完成后才授予启动许可，
+  每条 Git 操作运行在**独立进程组**；外层 hook 超时先停止接纳新受管操作，再对已持有的
+  Git 组与 hook 组发终止信号，并在 `HOOK_GIT_TEARDOWN_GRACE_MS` 统一上界内有界确认。
+  即使 hook 内 CLI / 中间进程先退出，登记仍保留在监督者内存中（不依赖 PPID 可追溯）。
 - **输出捕获有界**：stdout / stderr 各捕获至 `HOOK_OUTPUT_CAPTURE_LIMIT`（1 MiB）后停止累积并置
   `truncated`；operator 事件 / 错误 message 只携带 `HOOK_OUTPUT_EXCERPT_LIMIT`（8 KiB）摘录
   （§15.4 "output SHOULD be truncated"），避免无界内存。
@@ -205,6 +211,17 @@ SPEC §17.2 允许当目标 workspace 路径已存在非目录对象时，“rep
 - validate 与后续动作（launch / delete）之间的 TOCTOU 窗口只能收窄不能根除（O_NOFOLLOW / openat 级原子手段不在范围）；消费方必须在破坏性动作前重新调用 `assertWorkspacePathSafe`——`removeWorkspace` 已内建「hook 前 + delete 前」双重校验，`after_create` 失败清理同样在 delete 前重验；
 - hook shell 为 POSIX `sh -lc` 语义：Linux / macOS 原生可用；Windows 无 `sh`（未经 Git Bash / WSL 提供）时属**文档化限制**（CI / gate 在 Linux），进程组终止（detached + 负 pid SIGKILL）亦为 POSIX 语义；
 - **hook 完成判定用 `close`（stdio 关闭）而非 `exit`（进程退出）**：脚本本身秒退（退出码 0）但留下持有继承 stdout/stderr 的后台进程（如未重定向的 `daemon &`）时，`close` 被后台进程拖住，直到 `timeout_ms` 到期 SIGKILL 进程组，结果为 `hook_timeout` 而非 success（对 `after_create` 还会触发半成品清理）。此语义确定、有界（≤ timeout_ms）且与「孙进程不留孤儿」一致；确需 daemonize 的 hook 应自行重定向 stdio（如 `daemon >/dev/null 2>&1 &`）以免拖住 `close`。M4 / M5 operator 诊断「秒退脚本为何报 timeout」时先看这里；
+- **受管 Git 进程组的保证边界（NEST-119 A 修订方案）**：每条 Git 命令运行在独立进程组，
+  超时以 `kill(-pgid)` 原子覆盖**仍在该组内**的正常 fork / 重挂父子孙（不再依赖父子快照
+  枚举——审查已证明快照 + 冻结存在 `fork + exit` 重挂父逃逸窗口）。hook 内的 Git 由宿主
+  监督者持有 ownership，通信失效时拒绝启动、绝不静默降级为未登记的独立组。边界：这不是
+  对任意脚本 `setsid` / `daemonize` 主动脱组的 OS 沙箱；直接调用路径（无 hook）中宿主进程
+  自身即监督者，宿主被 SIGKILL 时无清理方（与任何子进程的宿主死亡一致）。到达收尾上界
+  仍不能确认清理时，错误 / 事件携带明确「cleanup unconfirmed」诊断，不宣称全部退出。根进程自然 close
+  同样不释放仍有可运行成员的组：监督者对自然退出做有界组确认（空 → 释放；非空 / 查询不可信 → 保留
+  登记并如实上报 `cleanupConfirmed=false`），残留由请求方断开 / 外层超时 / dispose 的防误杀收尾清理
+  （组长在根退出后仍存活的组按 PID/PGID 复用处理，绝不投递组信号）；非 Linux 组查询把 pgrep
+  「无匹配（exit 1）」按成功空结果处理；
 - hook 输出截断上限（捕获 1 MiB / 流、事件摘录 8 KiB）为诊断用途的实现约定常量，非 SPEC 规定值；
 - symlink 相关测试依赖 host 能力：不支持创建 symlink 的平台（如受限 Windows）上相关用例显式 skip（测试报告中可见，不静默 pass）；`removeWorkspace` 的 filesystem 删除失败（`status: "failed"`）路径在 root 运行时难以稳定触发（CAP_DAC_OVERRIDE 绕过权限位），由代码审查覆盖而非运行时用例；
 - M4（before_run / after_run 的实际调度与 agent launch cwd 绑定）与 M5（removeWorkspace 的 sweep / reconciliation 触发）接线已落地；端到端 conformance 已随 #30 收口（`src/config-integration.test.ts`：真实 `WORKFLOW.md` → resolved `ServiceConfig` → 本包公共 API → 真实临时 filesystem → 真实 `sh` hook 子进程，并在同一文件里守住 repo-wide 边界——运行期依赖 domain-only、运行期源码不 import config / orchestrator / agent / observability、不读 `WORKFLOW.md`、不复制 `deriveWorkspaceKey`）。
