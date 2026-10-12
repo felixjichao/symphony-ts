@@ -3,7 +3,7 @@
  * Injects a floating control HUD into ChatGPT Web and orchestrates DecisionTabDriver.
  */
 import { GmBridgeTransport, FetchBridgeTransport, BridgeHttpError, type BridgeTransport } from "./transport";
-import { GmCheckpointStore } from "./checkpoint";
+import { GmCheckpointStore, type CheckpointStore } from "./checkpoint";
 import { ChatGptWebAdapter } from "./adapter";
 import { DecisionTabDriver } from "./driver";
 
@@ -19,11 +19,27 @@ export interface UserscriptInitOptions {
   bridgeBaseUrl?: string | undefined;
   authToken?: string | undefined;
   autoStart?: boolean | undefined;
+  adapter?: ChatGptWebAdapter | undefined;
+  checkpointStore?: CheckpointStore | undefined;
+  transport?: BridgeTransport | undefined;
+  pollIntervalMs?: number | undefined;
 }
 
-export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
+export interface UserscriptController {
+  start: () => Promise<void>;
+  stop: () => void;
+  isRunning: () => boolean;
+  getDriver: () => DecisionTabDriver | null;
+}
+
+export function initSymphonyUserscript(options?: UserscriptInitOptions): UserscriptController {
   if (document.getElementById("symphony-driver-hud")) {
-    return; // Already initialized
+    return {
+      start: async () => {},
+      stop: () => {},
+      isRunning: () => false,
+      getDriver: () => null,
+    };
   }
 
   let bridgeUrl =
@@ -262,14 +278,15 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         GM_setValue("symphony_bridge_url", bridgeUrl);
       }
 
-      const transport = createTransport(bridgeUrl, token);
-      const checkpointStore = new GmCheckpointStore();
-      const adapter = new ChatGptWebAdapter();
+      const transport = options?.transport ?? createTransport(bridgeUrl, token);
+      const checkpointStore = options?.checkpointStore ?? new GmCheckpointStore();
+      const adapter = options?.adapter ?? new ChatGptWebAdapter();
 
       currentDriver = new DecisionTabDriver({
         transport,
         checkpointStore,
         adapter,
+        ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
         onError: (err: Error) => {
           // Auth failures are fatal: polling would loop on 401/403 until credentials
           // are fixed by the operator, so stop and surface the error.
@@ -335,6 +352,13 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
   if (shouldAutoStart) {
     void start();
   }
+
+  return {
+    start,
+    stop,
+    isRunning: () => isRunning,
+    getDriver: () => currentDriver,
+  };
 }
 
 // Automatically init when loaded into browser

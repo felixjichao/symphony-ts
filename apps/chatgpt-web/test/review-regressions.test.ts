@@ -72,7 +72,7 @@ describe("NEST-121 independent review regressions", () => {
         return env.transport.request<T>(method, url, body);
       } };
       const driver = new DecisionTabDriver({ transport, checkpointStore: cp });
-      await driver.resumeCheckpointIfAvailable();
+      await driver.resumeCheckpointIfAvailable().catch(() => null);
       expect(env.service.getSession(session.id)?.bindingGeneration).toBe(1);
       expect(cp.get()?.rebindState?.newExternalSessionRef).toBe("new");
     } finally { await env.close(); }

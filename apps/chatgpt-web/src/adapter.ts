@@ -315,10 +315,9 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       }
     }
 
-    // Wait for composer ready on resumed page dynamically
+    // Wait for composer ready on resumed page dynamically, verifying authentic error/auth UI before success
     const startWait = Date.now();
-    let composer = findComposerElement(this.docSupplier());
-    while (!composer) {
+    while (true) {
       if (options.signal?.aborted) {
         throw new Error("Aborted while resuming ChatGPT conversation");
       }
@@ -337,6 +336,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           observedGeneration: binding.generation,
         });
       }
+      const composer = findComposerElement(this.docSupplier());
+      if (composer) {
+        break;
+      }
       if (Date.now() - startWait > this.timeoutMs) {
         throw new DecisionAdapterError({
           code: "execution_failed",
@@ -345,7 +348,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         });
       }
       await new Promise((r) => setTimeout(r, this.checkIntervalMs));
-      composer = findComposerElement(this.docSupplier());
     }
 
     const handle: ChatGptWebHandle = {

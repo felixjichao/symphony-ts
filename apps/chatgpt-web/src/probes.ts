@@ -242,10 +242,8 @@ export async function waitForStreamingCompletion(
 
 export function detectAuthRequired(doc: Document = document): boolean {
   if (!doc) return false;
-  // If composer element is present, user is authenticated in an active session
-  if (findComposerElement(doc)) {
-    return false;
-  }
+
+  // 1. Authentic auth/login selectors always take precedence
   const authSelectors = [
     "[data-testid='login-button']",
     "[data-testid='auth-button']",
@@ -256,7 +254,13 @@ export function detectAuthRequired(doc: Document = document): boolean {
   for (const selector of authSelectors) {
     if (doc.querySelector(selector)) return true;
   }
-  // Exclude chat message content / articles from general text matching
+
+  // 2. If composer element is present without auth prompts, user is authenticated
+  if (findComposerElement(doc)) {
+    return false;
+  }
+
+  // 3. Exclude chat message content / articles from general text matching
   const hasMessages =
     (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
     Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
@@ -264,6 +268,7 @@ export function detectAuthRequired(doc: Document = document): boolean {
     return false;
   }
 
+  // 4. Fallback text scanning
   const text = doc.body?.textContent || "";
   if (
     (text.includes("Log in") || text.includes("Sign up")) &&
@@ -276,10 +281,9 @@ export function detectAuthRequired(doc: Document = document): boolean {
 
 export function detectConversationNotFound(doc: Document = document): boolean {
   if (!doc) return false;
-  // If composer element is present, this is a healthy interactive conversation, not a 404 page!
-  if (findComposerElement(doc)) {
-    return false;
-  }
+
+  // 1. Explicit authentic error UI elements / testids always indicate conversation failure,
+  // even if the page shell retains a disabled/dangling composer element!
   const notFoundSelectors = [
     "[data-testid='conversation-not-found']",
     "[data-testid='error-page']",
@@ -288,16 +292,8 @@ export function detectConversationNotFound(doc: Document = document): boolean {
   for (const selector of notFoundSelectors) {
     if (doc.querySelector(selector)) return true;
   }
-  // Exclude chat message content / articles from general text matching:
-  // Text inside message articles or turn containers is user/assistant prose, not a page error!
-  const hasMessages =
-    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
-    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
-  if (hasMessages) {
-    return false;
-  }
 
-  // Error page headings / alerts
+  // 2. Explicit error alerts / headings
   const alert = doc.querySelector?.("div[role='alert'], h1, h2, h3");
   if (alert && alert.textContent) {
     const alertText = alert.textContent;
@@ -312,6 +308,21 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     }
   }
 
+  // 3. If composer element is present without authentic error UI, it is a healthy interactive conversation
+  if (findComposerElement(doc)) {
+    return false;
+  }
+
+  // 4. Exclude chat message content / articles from general text matching:
+  // Text inside message articles or turn containers is user/assistant prose, not a page error!
+  const hasMessages =
+    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
+    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
+  if (hasMessages) {
+    return false;
+  }
+
+  // 5. Fallback full-page text matching for minimal error pages
   const text = doc.body?.textContent || "";
   if (
     text.includes("Conversation not found") ||

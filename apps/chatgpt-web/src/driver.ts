@@ -529,7 +529,8 @@ export class DecisionTabDriver implements DecisionTaskController {
             return null;
           }
           // Transient network or server outage (e.g. HTTP 503): preserve checkpoint with full rebindState
-          return null;
+          // and throw error upward to prevent polling/claiming new work from other sessions while this operation is pending
+          throw err;
         }
       }
       this.checkpointStore.delete();
@@ -1103,6 +1104,12 @@ export class DecisionTabDriver implements DecisionTaskController {
     // 1. Check for recoverable checkpoint first
     const resumed = await this.resumeCheckpointIfAvailable();
     if (resumed) return resumed;
+
+    // If an in-progress or retryable checkpoint is still retained in the store (e.g. rebind retry, navigating),
+    // prevent claiming new tasks which would overwrite or corrupt the tab checkpoint
+    if (this.checkpointStore.get()) {
+      return null;
+    }
 
     // 2. Poll & claim next task
     const claimed = await this.claimNextTask();
