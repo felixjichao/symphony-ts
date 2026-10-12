@@ -7,7 +7,6 @@ import {
   SUPERVISOR_SOCKET_ENV,
   SupervisorGitError,
   killProcessGroupSigkill,
-  scanProcessGroupsForLiveMembers,
   spawnGitViaSupervisor,
   terminateOrphanedProcessGroup,
 } from "./git-supervisor";
@@ -301,6 +300,7 @@ function runLocalManagedGit(
     let stderr = "";
     let settled = false;
     let timedOut = false;
+    let closed = false;
     let timer: NodeJS.Timeout | null = null;
 
     const child = spawn("git", args, {
@@ -313,11 +313,15 @@ function runLocalManagedGit(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const cleanup = (): void => {
+    const clearTimer = (): void => {
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
       }
+    };
+
+    const cleanup = (): void => {
+      clearTimer();
       child.stdout?.destroy();
       child.stderr?.destroy();
     };
@@ -343,31 +347,42 @@ function runLocalManagedGit(
         { details: { cleanupConfirmed } },
       );
 
-    timer = setTimeout(() => {
+    // close 事件的共享等待句柄：timeout 收敛在 close 已发生时不得重复注册
+    // （重复注册的监听器永远不会触发，只会空耗宽限上界）。
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((resolveClosePromise) => {
+      resolveClose = resolveClosePromise;
+    });
+
+    /**
+     * timeout 收敛：settle 权归 timeout 所有（timedOut=true 即锁定，正常 close
+     * 收尾此后一律不得 finish 成功）。close 已发生时跳过重复等待，直接进入
+     * 防误杀组确认，让 typed timeout 在扫描预算内尽快收敛。
+     */
+    const runTimeoutTeardown = (): void => {
       timedOut = true;
-      // 有界退出收敛：先对整个进程组发 SIGKILL（原子覆盖组内成员），确认（或到
-      // 上界）后才以 typed git_command_timeout 失败。close 分支只记录终止，不抢先
-      // settle，避免根 close 过早清掉退出确认，也绝不把 timeout 翻成 success。
+      clearTimer();
       void (async () => {
         const deadline = Date.now() + TIMEOUT_EXIT_GRACE_MS;
+        let cleanupConfirmed = true;
         if (child.pid !== undefined) {
-          killProcessGroupSigkill(child.pid);
-          await Promise.race([
-            new Promise<void>((resolveClose) => {
-              child.once("close", () => resolveClose());
-            }),
-            new Promise<void>((resolveDeadline) => {
-              setTimeout(resolveDeadline, Math.max(0, deadline - Date.now())).unref();
-            }),
-          ]);
+          if (!closed) {
+            killProcessGroupSigkill(child.pid);
+            await Promise.race([
+              closePromise,
+              new Promise<void>((resolveDeadline) => {
+                setTimeout(resolveDeadline, Math.max(0, deadline - Date.now())).unref();
+              }),
+            ]);
+          }
+          const outcome = await terminateOrphanedProcessGroup(child.pid, deadline);
+          cleanupConfirmed = outcome.confirmed;
         }
-        const scan = await scanProcessGroupsForLiveMembers(
-          child.pid !== undefined ? [child.pid] : [],
-          deadline,
-        );
-        fail(timeoutError(!scan.queryFailed && scan.leftoverPids.length === 0));
+        fail(timeoutError(cleanupConfirmed));
       })();
-    }, timeoutMs);
+    };
+
+    timer = setTimeout(runTimeoutTeardown, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
       if (stdout.length < 1024 * 1024) {
@@ -390,22 +405,33 @@ function runLocalManagedGit(
     });
 
     child.on("close", (code, signal) => {
+      closed = true;
+      resolveClose();
       if (timedOut) {
-        // 超时已判定：由收敛流程决定何时以 timeout 失败并确认清理；此处只记录
-        // 根进程已终止，绝不抢先 fail（否则会在组扫描完成前提前返回），也绝不 finish。
+        // 超时已判定：收敛流程持有 settle 权；此处只记录根退出，绝不以成功收敛。
         return;
       }
-      // 根正常 close 不等于组已清空：同组的正常 fork / 重挂父子孙可能仍存活。
-      // 本进程是该组的唯一清理方，必须在收敛前完成防误杀收尾（清残留 + 有界确认）；
-      // 确认不成立时以 typed git_command_failed 收敛，绝不宣称「全部退出」。
+      // 根正常 close 接管收尾：先停掉 timeout timer（命令已完成，收尾期间不得
+      // 再触发 timeout），并在首个 await 前后复查 timedOut——timer 回调可能已在
+      // 事件循环排队。一旦 timedOut 成立，typed git_command_timeout 由收敛流程
+      // 保留，本收尾绝不把 timeout 翻成 success。
+      clearTimer();
+      if (timedOut) {
+        return;
+      }
       void (async () => {
         let cleanupConfirmed = true;
         if (child.pid !== undefined) {
+          // 同组的正常 fork / 重挂父子孙可能仍存活：防误杀收尾（清残留 +
+          // 有界确认），确认不成立时以 typed git_command_failed 收敛。
           const outcome = await terminateOrphanedProcessGroup(
             child.pid,
             Date.now() + GROUP_EXIT_CONFIRM_BUDGET_MS,
           );
           cleanupConfirmed = outcome.confirmed;
+        }
+        if (timedOut) {
+          return;
         }
         if (!cleanupConfirmed) {
           fail(
