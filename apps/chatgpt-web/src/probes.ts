@@ -240,10 +240,55 @@ export async function waitForStreamingCompletion(
   }
 }
 
+/**
+ * Checks whether an element is located inside a chat message container / turn content.
+ */
+export function isInsideMessageContainer(element: Element | null): boolean {
+  if (!element) return false;
+  // If browser DOM supports Element.closest:
+  if (typeof (element as unknown as { closest?: (s: string) => Element | null }).closest === "function") {
+    try {
+      const match = (element as unknown as { closest: (s: string) => Element | null }).closest(
+        "article, [data-message-author-role], [data-testid^='conversation-turn-'], [role='article'], .agent-turn, [data-markdown-text-style]"
+      );
+      if (match) return true;
+    } catch {
+      // Fallback to parentElement traversal
+    }
+  }
+
+  // Traversal fallback for mock DOM or environments without closest
+  let curr: Element | null = element;
+  while (curr) {
+    const tagName = curr.tagName ? curr.tagName.toLowerCase() : "";
+    if (tagName === "article") {
+      return true;
+    }
+    const testId = curr.getAttribute?.("data-testid");
+    if (testId && testId.startsWith("conversation-turn-")) {
+      return true;
+    }
+    if (curr.getAttribute?.("data-message-author-role") !== null && curr.getAttribute?.("data-message-author-role") !== undefined) {
+      return true;
+    }
+    if (curr.getAttribute?.("role") === "article") {
+      return true;
+    }
+    if (curr.getAttribute?.("data-markdown-text-style") !== null && curr.getAttribute?.("data-markdown-text-style") !== undefined) {
+      return true;
+    }
+    if (curr.className && typeof curr.className === "string" && curr.className.includes("agent-turn")) {
+      return true;
+    }
+    curr = curr.parentElement;
+  }
+  return false;
+}
+
 export function detectAuthRequired(doc: Document = document): boolean {
   if (!doc) return false;
 
-  // 1. Authentic auth/login selectors always take precedence
+  // 1. Authentic auth/login selectors outside chat messages always take precedence
   const authSelectors = [
     "[data-testid='login-button']",
     "[data-testid='auth-button']",
@@ -252,10 +297,15 @@ export function detectAuthRequired(doc: Document = document): boolean {
     "[data-testid='login-container']",
   ];
   for (const selector of authSelectors) {
-    if (doc.querySelector(selector)) return true;
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (!isInsideMessageContainer(el)) {
+        return true;
+      }
+    }
   }
 
-  // 2. If composer element is present without auth prompts, user is authenticated
+  // 2. If composer element is present without auth prompts outside messages, user is authenticated
   if (findComposerElement(doc)) {
     return false;
   }
@@ -282,7 +332,7 @@ export function detectAuthRequired(doc: Document = document): boolean {
 export function detectConversationNotFound(doc: Document = document): boolean {
   if (!doc) return false;
 
-  // 1. Explicit authentic error UI elements / testids always indicate conversation failure,
+  // 1. Explicit authentic error UI elements / testids outside chat messages always indicate conversation failure,
   // even if the page shell retains a disabled/dangling composer element!
   const notFoundSelectors = [
     "[data-testid='conversation-not-found']",
@@ -290,25 +340,36 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     "[data-testid='error-container']",
   ];
   for (const selector of notFoundSelectors) {
-    if (doc.querySelector(selector)) return true;
-  }
-
-  // 2. Explicit error alerts / headings
-  const alert = doc.querySelector?.("div[role='alert'], h1, h2, h3");
-  if (alert && alert.textContent) {
-    const alertText = alert.textContent;
-    if (
-      alertText.includes("Conversation not found") ||
-      alertText.includes("Unable to load conversation") ||
-      alertText.includes("This conversation may have been deleted") ||
-      alertText.includes("404: Not Found") ||
-      alertText.includes("404 - Not Found")
-    ) {
-      return true;
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (!isInsideMessageContainer(el)) {
+        return true;
+      }
     }
   }
 
-  // 3. If composer element is present without authentic error UI, it is a healthy interactive conversation
+  // 2. Explicit error alerts / headings OUTSIDE message containers
+  const alertSelectors = ["[role='alert']", "h1", "h2", "h3"];
+  for (const selector of alertSelectors) {
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (isInsideMessageContainer(el)) {
+        continue;
+      }
+      const alertText = el.textContent || "";
+      if (
+        alertText.includes("Conversation not found") ||
+        alertText.includes("Unable to load conversation") ||
+        alertText.includes("This conversation may have been deleted") ||
+        alertText.includes("404: Not Found") ||
+        alertText.includes("404 - Not Found")
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // 3. If composer element is present without authentic error UI outside messages, it is a healthy interactive conversation
   if (findComposerElement(doc)) {
     return false;
   }

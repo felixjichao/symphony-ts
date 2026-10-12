@@ -286,4 +286,36 @@ describe("DOM Probes and URL utilities", () => {
     doc2.body.textContent = "Unable to load conversation. This conversation may have been deleted.";
     expect(detectConversationNotFound(doc2 as unknown as Document)).toBe(true);
   });
+
+  it("filters out false-positive error and auth UI inside chat message containers while preserving genuine outer UI", () => {
+    const doc = new MockDocument();
+    // Valid composer
+    doc.body.appendChild(new MockElement("textarea", { id: "prompt-textarea" }));
+
+    // Message containing error heading and login doc link
+    const article = new MockElement("article", { "data-testid": "conversation-turn-1" });
+    const message = new MockElement("div", { "data-message-author-role": "assistant" });
+    const heading = new MockElement("h2");
+    heading.textContent = "Conversation not found";
+    const loginLink = new MockElement("a", { href: "https://example.com/login" });
+    loginLink.textContent = "Login documentation";
+    message.appendChild(heading);
+    message.appendChild(loginLink);
+    article.appendChild(message);
+    doc.body.appendChild(article);
+
+    // Negative case: message descendants must NOT trigger auth or 404
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+
+    // Positive case: outer error element must trigger 404 even with composer present
+    const outerError = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(outerError);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    // Positive case: outer login button must trigger auth required
+    const outerLogin = new MockElement("button", { "data-testid": "login-button" });
+    doc.body.appendChild(outerLogin);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(true);
+  });
 });
