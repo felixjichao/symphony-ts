@@ -285,6 +285,32 @@ export function isInsideMessageContainer(element: Element | null): boolean {
   return false;
 }
 
+export const MESSAGE_CONTAINER_SELECTORS: readonly string[] = [
+  "article",
+  "[data-message-author-role]",
+  "[data-testid^='conversation-turn-']",
+  "[role='article']",
+  ".agent-turn",
+  "[data-markdown-text-style]",
+];
+
+/**
+ * Checks whether any supported chat message containers / turn surfaces exist in the document.
+ */
+export function hasMessageContainers(doc: Document = document): boolean {
+  if (!doc) return false;
+  for (const selector of MESSAGE_CONTAINER_SELECTORS) {
+    try {
+      if (doc.querySelector && doc.querySelector(selector)) {
+        return true;
+      }
+    } catch {
+      // Continue checking next selector
+    }
+  }
+  return false;
+}
+
 export function detectAuthRequired(doc: Document = document): boolean {
   if (!doc) return false;
 
@@ -310,11 +336,8 @@ export function detectAuthRequired(doc: Document = document): boolean {
     return false;
   }
 
-  // 3. Exclude chat message content / articles from general text matching
-  const hasMessages =
-    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
-    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
-  if (hasMessages) {
+  // 3. Exclude chat message content / containers from general text matching
+  if (hasMessageContainers(doc)) {
     return false;
   }
 
@@ -374,12 +397,9 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     return false;
   }
 
-  // 4. Exclude chat message content / articles from general text matching:
+  // 4. Exclude chat message content / containers from general text matching:
   // Text inside message articles or turn containers is user/assistant prose, not a page error!
-  const hasMessages =
-    (doc.querySelectorAll && doc.querySelectorAll("article").length > 0) ||
-    Boolean(doc.querySelector && doc.querySelector("[data-message-author-role]"));
-  if (hasMessages) {
+  if (hasMessageContainers(doc)) {
     return false;
   }
 

@@ -12,6 +12,7 @@ import {
   waitForStreamingCompletion,
   detectAuthRequired,
   detectConversationNotFound,
+  hasMessageContainers,
 } from "../src/probes";
 
 describe("DOM Probes and URL utilities", () => {
@@ -317,5 +318,30 @@ describe("DOM Probes and URL utilities", () => {
     const outerLogin = new MockElement("button", { "data-testid": "login-button" });
     doc.body.appendChild(outerLogin);
     expect(detectAuthRequired(doc as unknown as Document)).toBe(true);
+  });
+
+  it("excludes supported markdown surfaces from fallback text matching while composer is still loading", () => {
+    const doc = new MockDocument();
+    // No composer yet (loading)
+    expect(findComposerElement(doc as unknown as Document)).toBeNull();
+
+    const message = new MockElement("div", { "data-markdown-text-style": "assistant-message" });
+    const heading = new MockElement("h2");
+    heading.textContent = "Conversation not found";
+    message.appendChild(heading);
+    doc.body.appendChild(message);
+    doc.body.textContent = "Conversation not found and Welcome back. Log in";
+
+    // Supported message container is detected
+    expect(hasMessageContainers(doc as unknown as Document)).toBe(true);
+
+    // Negative case: fallback text scanning must NOT trigger because message containers exist
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+
+    // Positive case: genuine error UI outside message container triggers even without composer
+    const realError = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(realError);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
   });
 });
