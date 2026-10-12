@@ -343,6 +343,71 @@ describe("approved bootstrap navigation recovery", () => {
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });
 
+  it("fails closed when the tab leaves the created conversation while the bootstrap reply is pending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-drift-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    await store.open();
+    const service = new DecisionService(store);
+    const bridge = new DecisionBridge(service, { port: 0 });
+    await bridge.start();
+    try {
+      const root = githubDecisionRoot("owner", "repo", 8);
+      let session = await service.createSession(root);
+      session = await service.putBinding(session.id, { adapter: "chatgpt-web", externalSessionRef: "old", resumeUri: "https://chatgpt.com/c/old" });
+      session = await service.breakBinding(session.id);
+      const task = await service.createPlanTask(session.id);
+      await service.putTaskContext(task.id, { strategy: "connector", workItem: root, repository: "owner/repo", prNumber: null, headSha: null });
+      const claim = await service.claimTask(task.id, { owner: "browser-tab" });
+      const cp = new MemoryCheckpointStore();
+      cp.set({
+        schemaVersion: 1,
+        tabId: cp.tabId,
+        taskId: task.id,
+        sessionId: session.id,
+        leaseOwner: claim.lease.owner,
+        leaseToken: claim.lease.token,
+        leaseGeneration: claim.lease.generation,
+        leaseExpiresAtMs: claim.lease.expiresAtMs,
+        bindingGeneration: 1,
+        step: "bootstrap_waiting",
+        attemptId: "a",
+        savedAtMs: Date.now(),
+        baselineCount: 0,
+        targetConvId: "created-by-this-attempt",
+      });
+      const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
+
+      let sends = 0;
+      const doc = new MockDocument();
+      const win = new MockWindow();
+      win.location.href = "https://chatgpt.com/c/created-by-this-attempt";
+      const composer = new MockElement("textarea", { id: "prompt-textarea" });
+      const send = new MockElement("button", { "data-testid": "send-button" });
+      send.addEventListener("click", () => { sends++; });
+      doc.body.appendChild(composer);
+      doc.body.appendChild(send);
+      // While the reply is still pending the tab leaves for another conversation, which then
+      // renders a completion: recovery must not read that reply or bind that conversation.
+      setTimeout(() => {
+        win.location.href = "https://chatgpt.com/c/unrelated-history";
+        const msg = new MockElement("div", { "data-message-author-role": "assistant" });
+        msg.textContent = "Ready for Symphony tasks";
+        doc.body.appendChild(msg);
+      }, 5);
+
+      const adapter = new ChatGptWebAdapter({ doc: doc as unknown as Document, win: win as unknown as Window, stabilizationMs: 1, checkIntervalMs: 1, timeoutMs: 500 });
+      const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter });
+      const outcome = await driver.runOnce();
+
+      expect(sends).toBe(0);
+      expect(outcome?.status).toBe("failed");
+      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect(service.getSession(session.id)?.binding).toBeNull();
+      expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
+      expect(cp.get()).toBeNull();
+    } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it("fails closed during bootstrap_submitting recovery without a recorded created conversation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-confirmed-"));
     const store = new DurableDecisionStore({ storeDir: dir });

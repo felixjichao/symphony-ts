@@ -315,17 +315,29 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     sendBtn.click();
     this.stepListener?.("bootstrap_waiting", { baselineCount, targetConvId: null });
 
-    // Persist the conversation this send creates as soon as its route is observable, so an
-    // interrupted attempt can only ever be recovered against this exact conversation.
+    // Persist the conversation this send creates as soon as its route is observable. The
+    // reference is immutable for the attempt: the first conversation route reached after the
+    // send is what this attempt created, and any later route is a deviation (human
+    // navigation, redirect, restart) that must never re-target the attempt.
     let recordedConvId: string | null = null;
     const recordCreatedConversationRef = () => {
       const currentWin = this.winSupplier();
       const convId = currentWin?.location
         ? extractConversationIdFromUrl(currentWin.location.href)
         : null;
-      if (convId && convId !== recordedConvId) {
-        recordedConvId = convId;
-        this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
+      if (recordedConvId === null) {
+        if (convId) {
+          recordedConvId = convId;
+          this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
+        }
+        return;
+      }
+      if (convId !== null && convId !== recordedConvId) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${convId}" while the bootstrap response was pending; refusing to re-target this attempt`,
+          suggestedAction: "human_intervention",
+        });
       }
     };
 
@@ -335,6 +347,15 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       signal: options.signal,
       onPoll: recordCreatedConversationRef,
     });
+
+    // The reply must have been read from the conversation this attempt created.
+    if (recordedConvId !== null && convId !== recordedConvId) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: `ChatGPT Web conversation "${convId}" is not the conversation this attempt created ("${recordedConvId}"); refusing to bind the attempt to another conversation`,
+        suggestedAction: "human_intervention",
+      });
+    }
 
     const isRollover = session.bindingGeneration > 0 || session.status === "broken-binding";
     const nextGen = session.bindingGeneration === 0 ? 1 : session.bindingGeneration + 1;

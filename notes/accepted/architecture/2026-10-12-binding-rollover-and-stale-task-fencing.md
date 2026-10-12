@@ -25,8 +25,10 @@ In real-world Decision Plane runs (e.g. dogfooding with ChatGPT Web and localhos
 4. **Bootstrap recovery requires the attempt's recorded created conversation**:
    - Conversation creation is checkpointed in phases (`bootstrap_submitting`, `bootstrap_waiting`, `rebind_submitting`).
    - As soon as the send produces the conversation route, `createSession` records that conversation in the checkpoint (`targetConvId`), and any earlier reference is cleared when a new creation attempt starts.
+   - The recorded reference is **immutable for the attempt**: the first conversation route reached after the send is what this attempt created. Every later route change (human navigation, redirect, restart) is a deviation, never a re-definition — a deviation fails the attempt closed instead of updating the reference.
+   - The reference is verified when the wait is cancelled, on every route poll, and again after the reply is read, before any binding is written (creation and recovery alike).
    - Recovering a bootstrap checkpoint only proceeds while the tab shows **exactly that recorded conversation**. Page content is not attempt-unique — every Symphony-created conversation renders the same bootstrap prompt and reply — so text, an arbitrary `/c/<id>` URL, or a "looks sent" page is never accepted as association evidence.
-   - Without a recorded reference, or when the tab shows any other conversation, recovery fails closed with a non-retryable `human_required` failure for operator handoff (no reply is read, no binding is written, no prompt is re-sent).
+   - Without a recorded reference, on any route deviation from it, or when the tab shows any other conversation, recovery fails closed with a non-retryable `human_required` failure for operator handoff (no reply is read, no binding is written, no prompt is re-sent).
 
 ## Alternatives considered
 
@@ -34,6 +36,7 @@ In real-world Decision Plane runs (e.g. dogfooding with ChatGPT Web and localhos
 - **Rely solely on task lease timeout (TTL) for fencing**: Rejected because lease TTL defaults to minutes, during which an old generation worker could write back stale results or race with the new generation worker. Explicit generation fencing rejects stale calls immediately (fail-closed).
 - **Auto-restart driver unconditionally without `sessionStorage`**: Rejected because tabs not intended to act as Symphony drivers (or tabs where an operator intentionally clicked "Stop") must not execute tasks unexpectedly.
 - **Association by URL shape or page text during bootstrap recovery**: Rejected because neither is attempt-unique: a restored or unrelated page also sits on a `/c/<id>` route, and every Symphony-created conversation renders the same bootstrap prompt and reply. Only the conversation recorded by this attempt (`targetConvId`) identifies it.
+- **Re-recording the reference whenever the route changes**: Rejected because a later route is not evidence of creation: a redirect, a human navigation or a restarted tab would silently redefine the attempt to whatever conversation happens to be open, and the real created conversation would be abandoned. The reference is written once and any deviation fails the attempt closed.
 - **Binding the loaded conversation and re-sending when association is unclear**: Rejected because binding an unrelated historical conversation silently abandons the real one and routes later tasks to the wrong context, while re-sending can duplicate external side effects; failing closed with an operator handoff is the safe alternative.
 
 ## Consequences

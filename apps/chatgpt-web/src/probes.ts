@@ -189,7 +189,10 @@ export interface WaitForCompletionOptions {
   readonly stabilizationMs?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
-  /** Invoked once per poll iteration, including when the signal is already aborted. */
+  /**
+   * Invoked once per poll iteration, including when the signal is already aborted. A
+   * callback may throw to fail the wait immediately (e.g. a fail-closed check).
+   */
   readonly onPoll?: (() => void) | undefined;
 }
 

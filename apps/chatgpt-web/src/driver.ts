@@ -1236,6 +1236,31 @@ export class DecisionTabDriver implements DecisionTaskController {
       }
     }
 
+    // The reply was read while the tab must still show the conversation this attempt
+    // created: a route change during the wait must never re-target the binding.
+    const recordedConvId = cp.targetConvId ?? cp.rebindState?.newExternalSessionRef ?? null;
+    if (!recordedConvId || convId !== recordedConvId) {
+      const failRes = await this.submitFailure(task.id, {
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+        error: "human_required",
+        details: {
+          message: `Bootstrap recovery read a reply from "${convId}" but this attempt recorded "${recordedConvId ?? "no conversation"}"; manual intervention required to avoid binding another conversation`,
+        },
+        retryable: false,
+      });
+      this.checkpointStore.delete();
+      return {
+        status: "failed",
+        failure: failRes.failure,
+        receipt: failRes.receipt,
+        superseded: failRes.superseded,
+        session,
+        error: new Error("Bootstrap recovery conversation drifted from the recorded created conversation"),
+      };
+    }
+
     const origin =
       (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getOrigin() : null) ?? "https://chatgpt.com";
     const resumeUri = buildConversationUrl(convId, origin);
