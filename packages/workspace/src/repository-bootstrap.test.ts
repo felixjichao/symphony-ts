@@ -1299,5 +1299,68 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         killPidBestEffort(rootPid);
       }
     }, 20_000);
+    it("直接调用路径：根正常退出但组内 leaf 仍存活时，返回前完成防误杀收尾且无迟到副作用", async () => {
+      // 复审 blocker 的直接路径核对：execGit 成功路径曾以根 close 立即返回，
+      // 释放 ownership——残留 leaf（同组、重挂父）无人清理。现在 close 后先做
+      // 有界防误杀收尾（清残留 + 确认），确认不成立才以 typed 失败收敛。
+      const fakeBin = path.join(tmpBase, "direct-exit-bin");
+      await fs.mkdir(fakeBin, { recursive: true });
+      const leafPidFile = path.join(tmpBase, "direct-exit-leaf.pid");
+      const markerFile = path.join(tmpBase, "direct-exit-late.marker");
+      const leafScript = path.join(tmpBase, "direct-exit-leaf.cjs");
+      const gitScript = path.join(fakeBin, "git");
+
+      await fs.writeFile(
+        leafScript,
+        `const fs = require("node:fs");\n` +
+          `setTimeout(() => fs.writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 1_500);\n` +
+          `setInterval(() => {}, 5000);\n`,
+      );
+      // 假 git：spawn 同组 leaf（stdio ignore）后立即退出 0（每次调用都如此）。
+      await fs.writeFile(
+        gitScript,
+        `#!${process.execPath}\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `const leaf = spawn(process.execPath, [${JSON.stringify(leafScript)}], { stdio: "ignore" });\n` +
+          `require("node:fs").writeFileSync(${JSON.stringify(leafPidFile)}, String(leaf.pid));\n` +
+          `process.exit(0);\n`,
+        { mode: 0o755 },
+      );
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+      let leafPid: number | undefined;
+      try {
+        let thrown: unknown;
+        try {
+          await bootstrapRepository({
+            cwd: workspaceDir,
+            repoUrl: "/unused/local/repo",
+            workspaceKey: "GH-79",
+            timeoutMs: 10_000,
+          });
+        } catch (err: unknown) {
+          thrown = err;
+        }
+
+        // 假 git 每条命令都退出 0 且 close 后 leaf 已被收尾确认——流程推进到
+        // 默认分支探测失败（missing_remote_default_branch），而非 git_command_failed
+        // （后者意味着收尾确认失败，即所有权被提前释放或清理不可信）。
+        expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+        expect((thrown as RepositoryBootstrapError).code).toBe("missing_remote_default_branch");
+
+        // 最后一次注入的 leaf 必须已被清理，且迟到 marker 永不出现。
+        leafPid = await waitForPidFile(leafPidFile, 3_000);
+        expect(await waitForProcessGone(leafPid, 3_000)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 1_700));
+        expect(existsSync(markerFile)).toBe(false);
+      } finally {
+        process.env.PATH = originalPath;
+        if (leafPid === undefined) {
+          leafPid = (await readPidFile(leafPidFile)) ?? undefined;
+        }
+        killPidBestEffort(leafPid);
+      }
+    }, 20_000);
   });
 });

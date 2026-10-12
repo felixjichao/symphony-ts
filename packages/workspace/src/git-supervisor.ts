@@ -63,6 +63,67 @@ export function killProcessGroupSigkill(pgid: number): void {
   }
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 根进程退出后的组收尾预算（毫秒）：扫描确认 / 防误杀收尾均须在此上界内完成。
+ */
+export const GROUP_EXIT_CONFIRM_BUDGET_MS = 1_000;
+
+/** {@link terminateOrphanedProcessGroup} 的结构化结果。 */
+export interface GroupTerminationOutcome {
+  /** 组内已无可运行成员（且查询可信）。 */
+  readonly confirmed: boolean;
+  /** 末次扫描发现的残留可运行成员 PID（用于诊断）。 */
+  readonly leftoverPids: readonly number[];
+  /** 平台查询未能在预算内完成或失败——结果不可信。 */
+  readonly queryFailed: boolean;
+}
+
+/**
+ * 根进程已退出的进程组的有界收尾：清除残留成员并确认组为空。
+ *
+ * 前提是调用方已确认根进程退出（close / exit 事件）。残留成员（同组的正常
+ * fork / 重挂父子孙）被 SIGKILL；若扫描发现「组长仍在」——根已退出而组长 PID
+ * 仍存活只能是 PID/PGID 复用——**绝不投递组信号**，按未确认返回，宁可保留
+ * ownership 也不误杀无关进程。
+ */
+export async function terminateOrphanedProcessGroup(
+  pgid: number,
+  deadline: number,
+): Promise<GroupTerminationOutcome> {
+  for (;;) {
+    const scan = await scanProcessGroupsForLiveMembers([pgid], deadline);
+    if (scan.queryFailed) {
+      return { confirmed: false, leftoverPids: scan.leftoverPids, queryFailed: true };
+    }
+    if (scan.leftoverPids.length === 0) {
+      return { confirmed: true, leftoverPids: [], queryFailed: false };
+    }
+    if (scan.leftoverPids.includes(pgid) || isProcessAlive(pgid)) {
+      // 组长应已退出；其 PID 仍存活 → PID/PGID 复用嫌疑，不误杀。
+      return { confirmed: false, leftoverPids: scan.leftoverPids, queryFailed: false };
+    }
+    killProcessGroupSigkill(pgid);
+    if (Date.now() >= deadline) {
+      const finalScan = await scanProcessGroupsForLiveMembers([pgid], deadline);
+      return {
+        confirmed: !finalScan.queryFailed && finalScan.leftoverPids.length === 0,
+        leftoverPids: finalScan.leftoverPids,
+        queryFailed: finalScan.queryFailed,
+      };
+    }
+    await delay(Math.min(50, deadline - Date.now()));
+  }
+}
+
 /**
  * 扫描给定 PGID 集合中仍「可运行」的成员 PID（排除僵尸 Z / X）。
  *
@@ -132,29 +193,49 @@ async function scanProcFs(targetPgids: readonly number[], deadline: number): Pro
   return { leftoverPids: leftover, queryFailed: false };
 }
 
-async function scanWithPgrep(targetPgids: readonly number[], deadline: number): Promise<GroupScanResult> {
+export async function scanWithPgrep(
+  targetPgids: readonly number[],
+  deadline: number,
+  pgrepPathOverride?: string,
+): Promise<GroupScanResult> {
   const leftover: number[] = [];
   for (const pgid of targetPgids) {
     if (Date.now() >= deadline) {
       return { leftoverPids: leftover, queryFailed: true };
     }
-    const outcome = await new Promise<{ ok: boolean; pids: number[] }>((resolve) => {
+    const outcome = await new Promise<{ status: "matched" | "empty" | "error"; pids: number[] }>((resolve) => {
       const child = spawn("pgrep", ["-g", String(pgid)], {
         stdio: ["ignore", "pipe", "ignore"],
+        ...(pgrepPathOverride !== undefined
+          ? { env: { ...process.env, PATH: pgrepPathOverride } }
+          : {}),
       });
       let output = "";
       child.stdout?.on("data", (chunk: Buffer | string) => {
         output += chunk.toString();
       });
-      const finish = (ok: boolean): void => {
-        const pids = output
-          .split("\n")
-          .map((s) => Number.parseInt(s.trim(), 10))
-          .filter((n) => !Number.isNaN(n));
-        resolve({ ok, pids });
+      const finish = (status: "matched" | "empty" | "error"): void => {
+        const pids =
+          status === "matched"
+            ? output
+                .split("\n")
+                .map((s) => Number.parseInt(s.trim(), 10))
+                .filter((n) => !Number.isNaN(n))
+            : [];
+        resolve({ status, pids });
       };
-      child.on("close", (code) => finish(code === 0));
-      child.on("error", () => resolve({ ok: false, pids: [] }));
+      // BSD pgrep 退出码语义：0 = 有匹配；1 = 无匹配（正常结果，不是查询故障）；
+      // 其余退出码 / spawn 错误 / 预算内未完成（超时终止）才按查询失败处理。
+      child.on("close", (code) => {
+        if (code === 0) {
+          finish("matched");
+        } else if (code === 1) {
+          finish("empty");
+        } else {
+          finish("error");
+        }
+      });
+      child.on("error", () => resolve({ status: "error", pids: [] }));
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
         child.kill("SIGKILL");
@@ -162,10 +243,12 @@ async function scanWithPgrep(targetPgids: readonly number[], deadline: number): 
       }
       setTimeout(() => child.kill("SIGKILL"), remaining).unref();
     });
-    if (!outcome.ok) {
+    if (outcome.status === "error") {
       return { leftoverPids: leftover, queryFailed: true };
     }
-    leftover.push(...outcome.pids);
+    if (outcome.status === "matched") {
+      leftover.push(...outcome.pids);
+    }
   }
   return { leftoverPids: leftover, queryFailed: false };
 }
@@ -211,6 +294,10 @@ interface ManagedOperation {
   signal: string | null;
   /** 终止流程已接管本操作的收尾：close 事件不再重复发 exit 报告 / 解除登记。 */
   terminateInFlight: boolean;
+  /** ownership 已释放：组已确认无可运行成员（登记解除）。 */
+  finalized: boolean;
+  /** 自然退出后的确认 / 收尾去重句柄。 */
+  finalizePromise: Promise<boolean> | null;
   /** 根进程 close（stdio 关闭）时逐个 resolve。 */
   readonly closeWaiters: Array<() => void>;
   /** 登记时创建；根进程 close 时 resolve（等待退出确认用）。 */
@@ -284,38 +371,45 @@ export class GitOperationSupervisor {
   }
 
   /**
-   * 终止全部存活受管 Git 进程组，并在有界窗口内确认退出。
+   * 终止全部未释放 ownership 的受管 Git 进程组（含「根已退出但组仍有残留成员」
+   * 的登记项），并在有界窗口内确认退出。
    *
-   * 顺序：先对全部存活组发 SIGKILL（原子覆盖组内成员，含重挂父子孙），
-   * 再有界等待根进程 close，最后在剩余预算内做组扫描确认无可运行成员。
-   * 到达上界仍不能确认时返回 `exitConfirmed: false`（含残留 PID 与查询状态
-   * 诊断），不宣称全部退出。
+   * 顺序：先对全部未 finalized 的组发终止信号（根已退出的组走防误杀收尾，
+   * 排除 PID/PGID 复用），再有界等待根进程 close，最后在剩余预算内做组扫描
+   * 确认可运行成员已清空。到达上界仍不能确认时返回 `exitConfirmed: false`
+   * （含残留 PID 与查询状态诊断），不宣称全部退出。
    */
   async terminateAll(budgetMs: number): Promise<TerminateAllReport> {
     this.stopping = true;
     const deadline = Date.now() + Math.max(0, budgetMs);
-    const live = [...this.ops.values()].filter((op) => !op.exited);
+    const live = [...this.ops.values()].filter((op) => !op.finalized);
     for (const op of live) {
       op.terminateInFlight = true;
-      killProcessGroupSigkill(op.pgid);
+      if (!op.exited) {
+        killProcessGroupSigkill(op.pgid);
+      }
     }
     for (const op of live) {
-      if (Date.now() >= deadline) {
-        break;
+      if (op.exited || Date.now() >= deadline) {
+        continue;
       }
       await Promise.race([op.closePromise, delay(Math.max(0, deadline - Date.now()))]);
     }
-    const unconfirmed = live.filter((op) => !op.exited);
-    let scan: GroupScanResult = { leftoverPids: [], queryFailed: false };
-    if (Date.now() < deadline || unconfirmed.length > 0) {
-      scan = await scanProcessGroupsForLiveMembers(
-        live.map((op) => op.pgid),
-        deadline,
-      );
-    }
-    const exitConfirmed = unconfirmed.length === 0 && !scan.queryFailed && scan.leftoverPids.length === 0;
+    let exitConfirmed = true;
+    const leftoverPids: number[] = [];
+    let queryFailed = false;
     for (const op of live) {
-      // 向仍连接的请求方补发 exit 报告（terminateAll 接管了 close 报告），
+      const outcome = op.exited
+        ? await terminateOrphanedProcessGroup(op.pgid, deadline)
+        : await this.confirmKilledGroupEmpty(op.pgid, deadline);
+      if (!outcome.confirmed) {
+        exitConfirmed = false;
+      }
+      leftoverPids.push(...outcome.leftoverPids);
+      queryFailed = queryFailed || outcome.queryFailed;
+    }
+    for (const op of live) {
+      // 向仍连接的请求方补发 exit 报告（terminateAll 接管了收尾报告），
       // 保证客户端不悬挂；随后解除登记。
       const socket = op.connection;
       if (socket !== null && !socket.destroyed) {
@@ -326,34 +420,72 @@ export class GitOperationSupervisor {
           cleanupConfirmed: exitConfirmed,
         });
       }
+      op.finalized = true;
       this.ops.delete(op.id);
     }
     return {
       requested: live.length,
       terminated: live.length,
       exitConfirmed,
-      leftoverPids: scan.leftoverPids,
-      queryFailed: scan.queryFailed,
+      leftoverPids,
+      queryFailed,
     };
   }
 
-  /** 关闭监督 socket 并清理临时目录；仍存活的受管操作按组兜底终止（不等待确认）。 */
+  /** 已被组信号终止的运行中操作：有界等待 close 后扫描确认（不重复杀组）。 */
+  private async confirmKilledGroupEmpty(pgid: number, deadline: number): Promise<GroupTerminationOutcome> {
+    for (;;) {
+      const scan = await scanProcessGroupsForLiveMembers([pgid], deadline);
+      if (scan.queryFailed) {
+        return { confirmed: false, leftoverPids: scan.leftoverPids, queryFailed: true };
+      }
+      if (scan.leftoverPids.length === 0) {
+        return { confirmed: true, leftoverPids: [], queryFailed: false };
+      }
+      if (Date.now() >= deadline) {
+        return { confirmed: false, leftoverPids: scan.leftoverPids, queryFailed: false };
+      }
+      await delay(Math.min(50, deadline - Date.now()));
+    }
+  }
+
+  /**
+   * 关闭监督 socket 并清理临时目录；所有未释放 ownership 的受管组做防误杀收尾
+   * （运行中的组直接终止，根已退出的组清残留成员），有界等待确认。
+   */
   async dispose(): Promise<void> {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
     this.stopping = true;
-    for (const op of this.ops.values()) {
-      if (!op.exited) {
-        killProcessGroupSigkill(op.pgid);
-      }
+    const pending = [...this.ops.values()].filter((op) => !op.finalized);
+    for (const op of pending) {
+      op.terminateInFlight = true;
     }
-    await new Promise<void>((resolve) => {
+    const deadline = Date.now() + TERMINATE_CONFIRM_GRACE_MS;
+    const finalizeAll = (async () => {
+      for (const op of pending) {
+        if (!op.exited) {
+          killProcessGroupSigkill(op.pgid);
+        }
+      }
+      for (const op of pending) {
+        if (op.exited) {
+          await terminateOrphanedProcessGroup(op.pgid, deadline);
+        } else {
+          await Promise.race([op.closePromise, delay(Math.max(0, deadline - Date.now()))]);
+          await this.confirmKilledGroupEmpty(op.pgid, deadline);
+        }
+        op.finalized = true;
+        this.ops.delete(op.id);
+      }
+    })();
+    await Promise.allSettled([finalizeAll, new Promise<void>((resolve) => {
       this.server.close(() => resolve());
       // 语义上 close 回调已覆盖；防御性兜底避免悬挂。
       setTimeout(resolve, 500).unref();
-    });
+    })]);
     for (const socket of this.connections) {
       socket.destroy();
     }
@@ -384,12 +516,17 @@ export class GitOperationSupervisor {
     });
     socket.on("close", () => {
       this.connections.delete(socket);
-      // 请求方退出：登记保留由监督者持有（不依赖 PPID），但其操作的输出已无
-      // 消费者——对仍存活的受管组发终止信号（有界后台确认），避免无主 Git 运行
-      // 到自然结束。
+      // 请求方退出：登记保留由监督者持有（不依赖 PPID）。对本次连接的操作：
+      // 未退出的直接终止；根已退出但 ownership 未释放（组仍有残留成员）的做
+      // 防误杀收尾——请求方已消失，输出无消费者，残留必须清掉。
       for (const op of this.ops.values()) {
-        if (op.connection === socket && !op.exited) {
+        if (op.connection !== socket || op.finalized) {
+          continue;
+        }
+        if (!op.exited) {
           void this.terminateOp(op, Date.now() + TERMINATE_CONFIRM_GRACE_MS);
+        } else {
+          void this.finalizeExitedOp(op, Date.now() + TERMINATE_CONFIRM_GRACE_MS);
         }
       }
     });
@@ -424,7 +561,11 @@ export class GitOperationSupervisor {
       return;
     }
     if (op.exited) {
-      sendMessage(socket, { type: "exit", exitCode: op.exitCode, signal: op.signal, cleanupConfirmed: true });
+      // 根已退出：显式 terminate 请求对残留成员做防误杀收尾（不假定组为空）。
+      const confirmed = op.finalized
+        ? true
+        : await this.finalizeExitedOp(op, Date.now() + TERMINATE_CONFIRM_GRACE_MS);
+      sendMessage(socket, { type: "exit", exitCode: op.exitCode, signal: op.signal, cleanupConfirmed: confirmed });
       return;
     }
     const confirmed = await this.terminateOp(op, Date.now() + TERMINATE_CONFIRM_GRACE_MS);
@@ -494,6 +635,8 @@ export class GitOperationSupervisor {
       exitCode: null,
       signal: null,
       terminateInFlight: false,
+      finalized: false,
+      finalizePromise: null,
       closeWaiters: [resolveClose],
       closePromise,
     };
@@ -541,10 +684,54 @@ export class GitOperationSupervisor {
         // 终止流程持有收尾：exit 报告与登记解除由其负责（含组扫描确认）。
         return;
       }
-      sendMessage(socket, { type: "exit", exitCode: code, signal, cleanupConfirmed: true });
-      // 自然退出即解除登记（连接关闭后无需保留）。
-      this.ops.delete(op.id);
+      // 根 close 不释放 ownership：同组的正常 fork / 重挂父子孙可能仍存活。
+      // 先有界确认组是否已无可运行成员——确认空才释放登记；否则保留 ownership
+      // （cleanupConfirmed=false 如实上报），由请求方断开 / terminateAll / dispose
+      // 的防误杀收尾清理（终止流程见 finalizeExitedOp）。
+      const connection = socket;
+      void this.finalizeNaturalExit(op).then((confirmed) => {
+        if (connection !== null && !connection.destroyed) {
+          sendMessage(connection, { type: "exit", exitCode: code, signal, cleanupConfirmed: confirmed });
+        }
+      });
     });
+  }
+
+  /**
+   * 根进程自然退出后的确认：仅扫描（不清理）——组空则释放 ownership 并上报
+   * confirmed；组仍有可运行成员或查询不可信时**保留登记**（cleanupConfirmed=false），
+   * 清理责任由 terminateAll / dispose / 请求方断开的防误杀收尾承担。
+   */
+  private finalizeNaturalExit(op: ManagedOperation): Promise<boolean> {
+    if (op.finalizePromise === null) {
+      op.finalizePromise = (async () => {
+        const deadline = Date.now() + GROUP_EXIT_CONFIRM_BUDGET_MS;
+        const scan = await scanProcessGroupsForLiveMembers([op.pgid], deadline);
+        const confirmed = !scan.queryFailed && scan.leftoverPids.length === 0;
+        if (confirmed) {
+          op.finalized = true;
+          this.ops.delete(op.id);
+        }
+        return confirmed;
+      })();
+    }
+    return op.finalizePromise;
+  }
+
+  /**
+   * 根已退出但 ownership 未释放的收尾：对残留成员发终止信号（带 PID/PGID 复用
+   * 防误杀），确认组为空后释放登记；不能确认时保留 ownership（不宣称清理完成）。
+   */
+  private async finalizeExitedOp(op: ManagedOperation, deadline: number): Promise<boolean> {
+    if (op.finalized) {
+      return true;
+    }
+    const outcome = await terminateOrphanedProcessGroup(op.pgid, deadline);
+    if (outcome.confirmed) {
+      op.finalized = true;
+      this.ops.delete(op.id);
+    }
+    return outcome.confirmed;
   }
 
   /** 终止单个受管操作：组信号 + 有界等待根退出 + 剩余预算内组扫描。 */

@@ -217,7 +217,11 @@ SPEC §17.2 允许当目标 workspace 路径已存在非目录对象时，“rep
   监督者持有 ownership，通信失效时拒绝启动、绝不静默降级为未登记的独立组。边界：这不是
   对任意脚本 `setsid` / `daemonize` 主动脱组的 OS 沙箱；直接调用路径（无 hook）中宿主进程
   自身即监督者，宿主被 SIGKILL 时无清理方（与任何子进程的宿主死亡一致）。到达收尾上界
-  仍不能确认清理时，错误 / 事件携带明确「cleanup unconfirmed」诊断，不宣称全部退出；
+  仍不能确认清理时，错误 / 事件携带明确「cleanup unconfirmed」诊断，不宣称全部退出。根进程自然 close
+  同样不释放仍有可运行成员的组：监督者对自然退出做有界组确认（空 → 释放；非空 / 查询不可信 → 保留
+  登记并如实上报 `cleanupConfirmed=false`），残留由请求方断开 / 外层超时 / dispose 的防误杀收尾清理
+  （组长在根退出后仍存活的组按 PID/PGID 复用处理，绝不投递组信号）；非 Linux 组查询把 pgrep
+  「无匹配（exit 1）」按成功空结果处理；
 - hook 输出截断上限（捕获 1 MiB / 流、事件摘录 8 KiB）为诊断用途的实现约定常量，非 SPEC 规定值；
 - symlink 相关测试依赖 host 能力：不支持创建 symlink 的平台（如受限 Windows）上相关用例显式 skip（测试报告中可见，不静默 pass）；`removeWorkspace` 的 filesystem 删除失败（`status: "failed"`）路径在 root 运行时难以稳定触发（CAP_DAC_OVERRIDE 绕过权限位），由代码审查覆盖而非运行时用例；
 - M4（before_run / after_run 的实际调度与 agent launch cwd 绑定）与 M5（removeWorkspace 的 sweep / reconciliation 触发）接线已落地；端到端 conformance 已随 #30 收口（`src/config-integration.test.ts`：真实 `WORKFLOW.md` → resolved `ServiceConfig` → 本包公共 API → 真实临时 filesystem → 真实 `sh` hook 子进程，并在同一文件里守住 repo-wide 边界——运行期依赖 domain-only、运行期源码不 import config / orchestrator / agent / observability、不读 `WORKFLOW.md`、不复制 `deriveWorkspaceKey`）。

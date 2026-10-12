@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { deriveWorkspaceKey } from "@symphony/domain";
 import {
+  GROUP_EXIT_CONFIRM_BUDGET_MS,
   SUPERVISOR_SOCKET_ENV,
   SupervisorGitError,
   killProcessGroupSigkill,
   scanProcessGroupsForLiveMembers,
   spawnGitViaSupervisor,
+  terminateOrphanedProcessGroup,
 } from "./git-supervisor";
 
 /**
@@ -393,11 +395,34 @@ function runLocalManagedGit(
         // 根进程已终止，绝不抢先 fail（否则会在组扫描完成前提前返回），也绝不 finish。
         return;
       }
-      finish({
-        exitCode: code ?? (signal ? 128 : 0),
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-      });
+      // 根正常 close 不等于组已清空：同组的正常 fork / 重挂父子孙可能仍存活。
+      // 本进程是该组的唯一清理方，必须在收敛前完成防误杀收尾（清残留 + 有界确认）；
+      // 确认不成立时以 typed git_command_failed 收敛，绝不宣称「全部退出」。
+      void (async () => {
+        let cleanupConfirmed = true;
+        if (child.pid !== undefined) {
+          const outcome = await terminateOrphanedProcessGroup(
+            child.pid,
+            Date.now() + GROUP_EXIT_CONFIRM_BUDGET_MS,
+          );
+          cleanupConfirmed = outcome.confirmed;
+        }
+        if (!cleanupConfirmed) {
+          fail(
+            new RepositoryBootstrapError(
+              "git_command_failed",
+              `Git command "git ${args[0] ?? ""}" completed but its process group could not be confirmed clean within ${GROUP_EXIT_CONFIRM_BUDGET_MS}ms`,
+              { details: { cleanupConfirmed: false } },
+            ),
+          );
+          return;
+        }
+        finish({
+          exitCode: code ?? (signal ? 128 : 0),
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+        });
+      })();
     });
   });
 }

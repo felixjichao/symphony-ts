@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GitOperationSupervisor,
   SupervisorGitError,
+  scanWithPgrep,
   spawnGitViaSupervisor,
 } from "./git-supervisor";
 
@@ -120,6 +121,44 @@ function readLine(socket: net.Socket): Promise<string> {
     socket.on("data", onData);
     socket.on("error", onError);
   });
+}
+
+/** 逐行读取直到收到指定类型的消息（跳过其余行）。 */
+async function readMessageUntil(socket: net.Socket, type: string): Promise<Record<string, unknown>> {
+  for (;;) {
+    const line = await readLine(socket);
+    const message = JSON.parse(line) as Record<string, unknown>;
+    if (message.type === type) {
+      return message;
+    }
+  }
+}
+
+/** 构造「根 spawn 同组 leaf（stdio ignore）后立即退出」的假 git（复审探针调度）。 */
+async function writeForkingFakeGit(
+  binDir: string,
+  files: { rootPidFile: string; leafPidFile: string; markerFile: string; markerDelayMs: number },
+): Promise<void> {
+  await fs.mkdir(binDir, { recursive: true });
+  const leafScript = path.join(binDir, "leaf.cjs");
+  await fs.writeFile(
+    leafScript,
+    `const fs = require("node:fs");\n` +
+      `setTimeout(() => fs.writeFileSync(${JSON.stringify(files.markerFile)}, "late", "utf8"), ${files.markerDelayMs});\n` +
+      `setInterval(() => {}, 5000);\n`,
+  );
+  await fs.writeFile(
+    path.join(binDir, "git"),
+    `#!${process.execPath}\n` +
+      `const fs = require("node:fs");\n` +
+      `const { spawn } = require("node:child_process");\n` +
+      `fs.writeFileSync(${JSON.stringify(files.rootPidFile)}, String(process.pid));\n` +
+      `const leaf = spawn(process.execPath, [${JSON.stringify(leafScript)}], { stdio: "ignore" });\n` +
+      `fs.writeFileSync(${JSON.stringify(files.leafPidFile)}, String(leaf.pid));\n` +
+      `// 子进程句柄会撑住事件循环，必须显式退出以模拟「根先退出、leaf 重挂父」。\n` +
+      `process.exit(0);\n`,
+    { mode: 0o755 },
+  );
 }
 
 describe("GitOperationSupervisor (NEST-119 A 修订方案)", () => {
@@ -275,6 +314,186 @@ describe("GitOperationSupervisor (NEST-119 A 修订方案)", () => {
       expect((err as SupervisorGitError).code).toBe("refused");
     } finally {
       await supervisor.dispose();
+    }
+  }, 15_000);
+
+  it("pgrep 无匹配（exit 1）按成功空结果处理，不误报 queryFailed", async () => {
+    // 复审 blocker：BSD pgrep 退出码 1 = 无匹配，不是查询故障。
+    // 选用几乎不可能存在的 PGID，触发「无匹配」分支。
+    const result = await scanWithPgrep([999_999_999], Date.now() + 5_000);
+    expect(result.queryFailed).toBe(false);
+    expect(result.leftoverPids).toHaveLength(0);
+  }, 15_000);
+
+  it("pgrep 查询自身失败（不可执行）按 queryFailed 处理，不得宣称确认", async () => {
+    const emptyBin = path.join(tmpBase, "empty-bin");
+    await fs.mkdir(emptyBin, { recursive: true });
+    const result = await scanWithPgrep([999_999_998], Date.now() + 5_000, emptyBin);    expect(result.queryFailed).toBe(true);
+  }, 15_000);
+
+  it("根正常退出且组无残留成员：确认后释放 ownership（terminateAll requested=0）", async () => {
+    const supervisor = await GitOperationSupervisor.start();
+    try {
+      const result = await spawnGitViaSupervisor(supervisor.socketPath, ["--version"], {
+        cwd: tmpBase,
+        env: process.env,
+        timeoutMs: 10_000,
+      });
+      expect(result.exitCode).toBe(0);
+      // 自然 close 已完成组确认并解除登记：后续 terminateAll 不再看到该组。
+      const report = await supervisor.terminateAll(2_000);
+      expect(report.requested).toBe(0);
+      expect(report.exitConfirmed).toBe(true);
+    } finally {
+      await supervisor.dispose();
+    }
+  }, 15_000);
+
+  it("根先正常退出、同组 leaf 重挂父仍存活：请求方断开后监督者收尾清理", async () => {
+    const binDir = path.join(tmpBase, "bin-fork");
+    const rootPidFile = path.join(tmpBase, "fork-root.pid");
+    const leafPidFile = path.join(tmpBase, "fork-leaf.pid");
+    const markerFile = path.join(tmpBase, "fork-late.marker");
+    await writeForkingFakeGit(binDir, {
+      rootPidFile,
+      leafPidFile,
+      markerFile,
+      markerDelayMs: 1_500,
+    });
+    const supervisor = await GitOperationSupervisor.start();
+    const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` };
+    let leafPid: number | undefined;
+    try {
+      const socket = await connect(supervisor.socketPath);
+      socket.write(
+        `${JSON.stringify({
+          op: "spawn",
+          id: "fork-op",
+          argv: ["git", "fetch", "origin"],
+          cwd: tmpBase,
+          env,
+        })}\n`,
+      );
+      const spawned = await readMessageUntil(socket, "spawned");
+      expect(spawned.type).toBe("spawned");
+      // exit 报告只在自然 close 的组确认（本例：leaf 仍存活 → ownership 保留）后发出。
+      const exit = await readMessageUntil(socket, "exit");
+      expect(exit.type).toBe("exit");
+      expect(exit.cleanupConfirmed).toBe(false);
+
+      leafPid = await waitForPidFile(leafPidFile, 3_000);
+
+      // 请求方退出 → 监督者对已退出未释放的组做防误杀收尾。
+      socket.destroy();
+      expect(await waitForProcessGone(leafPid, 5_000)).toBe(true);
+
+      // 等过 leaf 原本的迟到写入时刻，确认无迟到副作用。
+      await new Promise((resolve) => setTimeout(resolve, 1_700));
+      expect(
+        await fs.readFile(markerFile, "utf8").then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+    } finally {
+      killPidBestEffort(leafPid);
+      await supervisor.dispose();
+    }
+  }, 15_000);
+
+  it("根先正常退出、同组 leaf 重挂父仍存活：外层超时 terminateAll 收敛（复审探针场景）", async () => {
+    const binDir = path.join(tmpBase, "bin-fork-teardown");
+    const rootPidFile = path.join(tmpBase, "fork-teardown-root.pid");
+    const leafPidFile = path.join(tmpBase, "fork-teardown-leaf.pid");
+    const markerFile = path.join(tmpBase, "fork-teardown-late.marker");
+    await writeForkingFakeGit(binDir, {
+      rootPidFile,
+      leafPidFile,
+      markerFile,
+      markerDelayMs: 1_500,
+    });
+    const supervisor = await GitOperationSupervisor.start();
+    const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` };
+    let leafPid: number | undefined;
+    let socket: net.Socket | undefined;
+    try {
+      // 裸 socket 保持连接（模拟 CLI 尚未退出、外层超时未到）：
+      // exit 报告到达时 ownership 仍保留在监督者。
+      socket = await connect(supervisor.socketPath);
+      socket.write(
+        `${JSON.stringify({
+          op: "spawn",
+          id: "fork-teardown-op",
+          argv: ["git", "fetch", "origin"],
+          cwd: tmpBase,
+          env,
+        })}\n`,
+      );
+      const spawned = await readMessageUntil(socket, "spawned");
+      expect(spawned.type).toBe("spawned");
+      const exit = await readMessageUntil(socket, "exit");
+      expect(exit.cleanupConfirmed).toBe(false);
+
+      leafPid = await waitForPidFile(leafPidFile, 3_000);
+      // leaf 尚未被清理（连接仍在、无收尾触发）——ownership 保留在监督者。
+      expect(isProcessRunning(leafPid)).toBe(true);
+
+      const report = await supervisor.terminateAll(2_000);
+      expect(report.requested).toBe(1);
+      expect(report.exitConfirmed).toBe(true);
+      expect(await waitForProcessGone(leafPid, 2_000)).toBe(true);
+
+      // 等过 leaf 原本的迟到写入时刻，确认无迟到副作用。
+      await new Promise((resolve) => setTimeout(resolve, 1_700));
+      expect(
+        await fs.readFile(markerFile, "utf8").then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+    } finally {
+      socket?.destroy();
+      killPidBestEffort(leafPid);
+      await supervisor.dispose();
+    }
+  }, 15_000);
+
+  it("根先正常退出、同组 leaf 仍存活：dispose 兜底清理", async () => {
+    const binDir = path.join(tmpBase, "bin-fork-dispose");
+    const rootPidFile = path.join(tmpBase, "fork-dispose-root.pid");
+    const leafPidFile = path.join(tmpBase, "fork-dispose-leaf.pid");
+    const markerFile = path.join(tmpBase, "fork-dispose-late.marker");
+    await writeForkingFakeGit(binDir, {
+      rootPidFile,
+      leafPidFile,
+      markerFile,
+      markerDelayMs: 1_500,
+    });
+    const supervisor = await GitOperationSupervisor.start();
+    const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` };
+    let leafPid: number | undefined;
+    let socket: net.Socket | undefined;
+    try {
+      socket = await connect(supervisor.socketPath);
+      socket.write(
+        `${JSON.stringify({
+          op: "spawn",
+          id: "fork-dispose-op",
+          argv: ["git", "fetch", "origin"],
+          cwd: tmpBase,
+          env,
+        })}\n`,
+      );
+      await readMessageUntil(socket, "spawned");
+      await readMessageUntil(socket, "exit");
+      leafPid = await waitForPidFile(leafPidFile, 3_000);
+      expect(isProcessRunning(leafPid)).toBe(true);
+
+      await supervisor.dispose();
+      expect(await waitForProcessGone(leafPid, 5_000)).toBe(true);
+    } finally {
+      socket?.destroy();
+      killPidBestEffort(leafPid);
     }
   }, 15_000);
 
