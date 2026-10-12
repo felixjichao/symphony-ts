@@ -1,0 +1,52 @@
+NEST119 macOS evidence run: workspace-direct
+Started UTC: 2026-10-12T08:35:47.427+00:00
+Commit: e16cbaa
+Command: TMPDIR=/private/tmp npm test -w @symphony/workspace -- --maxWorkers=1 --minWorkers=1 --reporter=verbose -t 直接调用 bootstrapRepository 超时后抛出 git_command_timeout [NODE_OPTIONS preload trace enabled]
+
+$ uptime
+16:35  up 26 days,  2:23, 4 users, load averages: 3.67 4.55 4.64
+$ sysctl -n hw.ncpu
+10
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     9626.
+Pages active:                                 209347.
+Pages inactive:                               205349.
+Pages speculative:                              2805.
+Pages throttled:                                   0.
+Pages wired down:                             299178.
+Pages purgeable:                                6871.
+"Translation faults":                    17445593763.
+Pages copy-on-write:                       649423348.
+Pages zero filled:                       11462856306.
+Pages reactivated:                        3869091154.
+Pages purged:                             1165834749.
+File-backed pages:                            136236.
+Anonymous pages:                              281265.
+Pages stored in compressor:                  2926196.
+Pages occupied by compressor:                 287538.
+Decompressions:                           4481552753.
+Compressions:                             5049099162.
+Pageins:                                   381299170.
+Pageouts:                                    9621821.
+Swapins:                                    53891471.
+Swapouts:                                   63456834.
+
+--- command output ---
+npm notice run @symphony/workspace@0.1.0 test
+npm notice run vitest run --maxWorkers=1 --minWorkers=1 --reporter=verbose -t 直接调用 bootstrapRepository 超时后抛出 git_command_timeout
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/packages/workspace
+
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-zDCv5m/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理进程组 3514ms
+
+ Test Files  1 passed | 6 skipped (7)
+      Tests  1 passed | 167 skipped (168)
+   Start at  16:35:47
+   Duration  4.84s (transform 141ms, setup 0ms, collect 267ms, tests 4.01s, environment 0ms, prepare 129ms)
+
+
+Exit code: 0
+Finished UTC: 2026-10-12T08:35:52.573+00:00
