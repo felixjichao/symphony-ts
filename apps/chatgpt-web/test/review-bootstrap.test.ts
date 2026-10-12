@@ -120,6 +120,9 @@ describe("approved bootstrap navigation recovery", () => {
         attemptId: "a",
         savedAtMs: Date.now(),
         baselineCount: 0,
+        // The creation attempt recorded the conversation its send produced before the page
+        // was lost; recovery may only ever continue from exactly this conversation.
+        targetConvId: "recovered-bootstrap",
       });
       const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
 
@@ -132,8 +135,6 @@ describe("approved bootstrap navigation recovery", () => {
       send.addEventListener("click", () => { sends++; });
       doc.body.appendChild(composer);
       doc.body.appendChild(send);
-      // The conversation created by our bootstrap send always renders the sent bootstrap
-      // prompt as a user turn; recovery only proceeds when that association is present.
       const userMsg = new MockElement("div", { "data-message-author-role": "user" });
       userMsg.textContent = BOOTSTRAP_PROMPT;
       doc.body.appendChild(userMsg);
@@ -152,7 +153,7 @@ describe("approved bootstrap navigation recovery", () => {
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });
 
-  it("fails closed during bootstrap_waiting recovery when the loaded conversation is not this attempt's", async () => {
+  it("fails closed during bootstrap_waiting recovery when the tab shows an earlier Symphony bootstrap conversation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-unrelated-"));
     const store = new DurableDecisionStore({ storeDir: dir });
     await store.open();
@@ -183,11 +184,13 @@ describe("approved bootstrap navigation recovery", () => {
         savedAtMs: Date.now(),
         baselineCount: 0,
         targetUri: "https://chatgpt.com/",
+        targetConvId: "created-by-this-attempt",
       });
       const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
 
-      // Healthy unrelated conversation: composer present, an old assistant reply, but the
-      // bootstrap prompt sent by this attempt is nowhere in the conversation.
+      // Healthy page showing an EARLIER Symphony-created conversation: it renders the very
+      // same bootstrap prompt and ready reply, so prompt text alone cannot prove that this
+      // conversation belongs to the current attempt; only the recorded reference can.
       let sends = 0;
       const doc = new MockDocument();
       const win = new MockWindow();
@@ -197,6 +200,9 @@ describe("approved bootstrap navigation recovery", () => {
       send.addEventListener("click", () => { sends++; });
       doc.body.appendChild(composer);
       doc.body.appendChild(send);
+      const oldUserMsg = new MockElement("div", { "data-message-author-role": "user" });
+      oldUserMsg.textContent = BOOTSTRAP_PROMPT;
+      doc.body.appendChild(oldUserMsg);
       const msg = new MockElement("div", { "data-message-author-role": "assistant" });
       msg.textContent = "Ready for Symphony tasks";
       doc.body.appendChild(msg);
@@ -272,7 +278,72 @@ describe("approved bootstrap navigation recovery", () => {
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });
 
-  it("recovers when interrupted during bootstrap_submitting if send status is confirmed", async () => {
+  it("recovers the conversation created by this attempt after an interrupted bootstrap", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-created-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    await store.open();
+    const service = new DecisionService(store);
+    const bridge = new DecisionBridge(service, { port: 0 });
+    await bridge.start();
+    try {
+      const root = githubDecisionRoot("owner", "repo", 7);
+      let session = await service.createSession(root);
+      session = await service.putBinding(session.id, { adapter: "chatgpt-web", externalSessionRef: "old", resumeUri: "https://chatgpt.com/c/old" });
+      session = await service.breakBinding(session.id);
+      const task = await service.createPlanTask(session.id);
+      await service.putTaskContext(task.id, { strategy: "connector", workItem: root, repository: "owner/repo", prNumber: null, headSha: null });
+      const claim = await service.claimTask(task.id, { owner: "browser-tab" });
+      const cp = new MemoryCheckpointStore();
+      cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: task.id, sessionId: session.id, leaseOwner: claim.lease.owner, leaseToken: claim.lease.token, leaseGeneration: claim.lease.generation, leaseExpiresAtMs: claim.lease.expiresAtMs, bindingGeneration: 1, step: "claimed", attemptId: "a", savedAtMs: Date.now() });
+      const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
+
+      // Creation page: the send produces the conversation, then the page is lost while the
+      // reply is still streaming (aborted mid-wait).
+      let sends = 0;
+      const doc = new MockDocument();
+      const win = new MockWindow();
+      win.location.href = "https://chatgpt.com/";
+      const composer = new MockElement("textarea", { id: "prompt-textarea" });
+      const send = new MockElement("button", { "data-testid": "send-button" });
+      doc.body.appendChild(composer);
+      doc.body.appendChild(send);
+      const controller = new AbortController();
+      send.addEventListener("click", () => {
+        sends++;
+        win.location.href = "https://chatgpt.com/c/created-by-this-attempt";
+        controller.abort();
+      });
+      const adapter = new ChatGptWebAdapter({ doc: doc as unknown as Document, win: win as unknown as Window, stabilizationMs: 1, checkIntervalMs: 1, timeoutMs: 500 });
+      // Install the real driver's checkpoint listener for the creation phase.
+      new DecisionTabDriver({ transport, checkpointStore: cp, adapter });
+      await adapter.createSession(session, { signal: controller.signal }).catch(() => null);
+
+      expect(sends).toBe(1);
+      expect(cp.get()?.step).toBe("bootstrap_waiting");
+      expect(cp.get()?.targetConvId).toBe("created-by-this-attempt");
+
+      // The tab is rebuilt on the conversation this attempt created: recovery binds exactly
+      // that conversation and never re-sends the bootstrap.
+      const reloadedDoc = new MockDocument();
+      const reloadedWin = new MockWindow();
+      reloadedWin.location.href = "https://chatgpt.com/c/created-by-this-attempt";
+      reloadedDoc.body.appendChild(new MockElement("textarea", { id: "prompt-textarea" }));
+      reloadedDoc.body.appendChild(new MockElement("button", { "data-testid": "send-button" }));
+      const msg = new MockElement("div", { "data-message-author-role": "assistant" });
+      msg.textContent = "Ready for Symphony tasks";
+      reloadedDoc.body.appendChild(msg);
+      const reloadedAdapter = new ChatGptWebAdapter({ doc: reloadedDoc as unknown as Document, win: reloadedWin as unknown as Window, stabilizationMs: 1, checkIntervalMs: 1, timeoutMs: 500 });
+      const recoveryDriver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter: reloadedAdapter });
+      await recoveryDriver.runOnce();
+
+      expect(sends).toBe(1);
+      expect(service.getSession(session.id)?.binding?.externalSessionRef).toBe("created-by-this-attempt");
+      expect(service.getSession(session.id)?.bindingGeneration).toBe(2);
+      expect(cp.get()).toBeNull();
+    } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("fails closed during bootstrap_submitting recovery without a recorded created conversation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-confirmed-"));
     const store = new DurableDecisionStore({ storeDir: dir });
     await store.open();
@@ -305,6 +376,8 @@ describe("approved bootstrap navigation recovery", () => {
       });
       const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
 
+      // A healthy page at some conversation with a reply cannot be tied to this attempt:
+      // its send may have created a conversation elsewhere, so binding it would be a guess.
       let sends = 0;
       const doc = new MockDocument();
       const win = new MockWindow();
@@ -314,8 +387,6 @@ describe("approved bootstrap navigation recovery", () => {
       send.addEventListener("click", () => { sends++; });
       doc.body.appendChild(composer);
       doc.body.appendChild(send);
-      // The conversation created by our bootstrap send always renders the sent bootstrap
-      // prompt as a user turn; recovery only proceeds when that association is present.
       const userMsg = new MockElement("div", { "data-message-author-role": "user" });
       userMsg.textContent = BOOTSTRAP_PROMPT;
       doc.body.appendChild(userMsg);
@@ -325,11 +396,13 @@ describe("approved bootstrap navigation recovery", () => {
 
       const adapter = new ChatGptWebAdapter({ doc: doc as unknown as Document, win: win as unknown as Window, stabilizationMs: 1, checkIntervalMs: 1, timeoutMs: 500 });
       const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter });
-      await driver.runOnce();
+      const outcome = await driver.runOnce();
 
       expect(sends).toBe(0);
-      expect(service.getSession(session.id)?.binding?.externalSessionRef).toBe("confirmed-conv");
-      expect(service.getSession(session.id)?.bindingGeneration).toBe(2);
+      expect(outcome?.status).toBe("failed");
+      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect(service.getSession(session.id)?.binding).toBeNull();
+      expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
       expect(cp.get()).toBeNull();
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });

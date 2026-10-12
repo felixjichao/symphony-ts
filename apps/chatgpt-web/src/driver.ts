@@ -880,10 +880,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       });
 
       try {
-        const win =
-          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
-          (globalThis as unknown as { window?: Window }).window;
-        const currentConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
         const doc =
           (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
           (globalThis as unknown as { document?: Document }).document;
@@ -905,26 +901,12 @@ export class DecisionTabDriver implements DecisionTaskController {
           }
         }
 
-        let isConfirmedSent = false;
-        if (doc) {
-          const isGenerating = findStopButton(doc) !== null;
-          const isStoredConv =
-            currentConvId !== null &&
-            (cp.targetConvId === currentConvId || cp.rebindState?.newExternalSessionRef === currentConvId);
-          const isTargetUriMismatch =
-            Boolean(cp.targetUri && currentConvId && !cp.targetUri.includes(currentConvId) && !isStoredConv);
-
-          if (isGenerating) {
-            isConfirmedSent = true;
-          } else if (!isTargetUriMismatch) {
-            const count = cp.baselineCount ?? 0;
-            if (getAllAssistantTurns(doc).length > count) {
-              isConfirmedSent = true;
-            }
-          }
-        }
-
-        if (isConfirmedSent) {
+        // A recorded created-conversation reference is the only attempt-unique evidence.
+        // Without it — or with the tab showing a different conversation — this attempt's
+        // conversation cannot be identified: fail closed instead of reading a reply,
+        // binding, or re-sending.
+        const isAssociated = this.isBootstrapConversationAssociated(cp);
+        if (isAssociated) {
           this.updateCheckpointStep("bootstrap_waiting", { baselineCount: cp.baselineCount ?? 0 });
           return await this.resumeBootstrapWaiting(
             taskRes.task,
@@ -935,7 +917,8 @@ export class DecisionTabDriver implements DecisionTaskController {
             cp
           );
         } else {
-          // Cannot confirm bootstrap prompt was sent! Fail safely and hand off to human to prevent duplicate execution
+          // Cannot identify the conversation this attempt created: hand off to a human to
+          // prevent duplicate execution or binding an unrelated conversation.
           const failRes = await this.submitFailure(taskRes.task.id, {
             owner: lease.owner,
             token: lease.token,
@@ -943,7 +926,7 @@ export class DecisionTabDriver implements DecisionTaskController {
             error: "human_required",
             details: {
               message:
-                "Uncertain bootstrap prompt submission state during recovery (bootstrap_submitting could not be confirmed as sent); manual intervention required to prevent duplicate execution",
+                "Cannot confirm the loaded ChatGPT conversation was created by this bootstrap attempt during bootstrap_submitting recovery (no matching recorded created conversation); manual intervention required to prevent duplicate execution",
             },
             retryable: false,
           });
@@ -954,7 +937,7 @@ export class DecisionTabDriver implements DecisionTaskController {
             receipt: failRes.receipt,
             superseded: failRes.superseded,
             session: sessionRes.session,
-            error: new Error("Uncertain bootstrap prompt submission state during recovery"),
+            error: new Error("Unconfirmed bootstrap conversation association during recovery"),
           };
         }
       } finally {
@@ -1144,9 +1127,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       }
 
       // Never read a reply, or bind, a conversation that cannot be tied back to this
-      // bootstrap attempt: the loaded conversation must be the one this send created,
-      // proven by the sent bootstrap prompt (or a matching recorded conversation).
-      const isAssociated = await this.confirmBootstrapConversationAssociation(cp, signal);
+      // bootstrap attempt: the tab must show the exact conversation recorded for this
+      // attempt (the only attempt-unique evidence).
+      const isAssociated = this.isBootstrapConversationAssociated(cp);
       if (!isAssociated) {
         const failRes = await this.submitFailure(task.id, {
           owner: lease.owner,
@@ -1155,7 +1138,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           error: "human_required",
           details: {
             message:
-              "Cannot confirm the loaded ChatGPT conversation was created by this bootstrap attempt during recovery; manual intervention required to avoid reading or binding an unrelated conversation",
+              "Cannot confirm the loaded ChatGPT conversation was created by this bootstrap attempt during recovery (no matching recorded created conversation); manual intervention required to avoid reading or binding an unrelated conversation",
           },
           retryable: false,
         });
@@ -1304,38 +1287,23 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   /**
-   * Confirms the conversation currently loaded in the tab was created by this bootstrap
-   * attempt. Recovery must never read a reply from, or bind, a conversation whose relation
-   * to the bootstrap send cannot be positively established (fail closed instead).
+   * Confirms the tab currently shows the exact conversation recorded for this bootstrap
+   * attempt. Only a recorded, attempt-specific conversation reference proves association:
+   * page content (including the bootstrap prompt) is shared by every Symphony-created
+   * conversation, so recovery fails closed without a matching reference.
    */
-  private async confirmBootstrapConversationAssociation(
-    cp: DriverCheckpoint,
-    signal: AbortSignal
-  ): Promise<boolean> {
-    const recordedConvId = cp.rebindState?.newExternalSessionRef ?? cp.targetConvId ?? null;
+  private isBootstrapConversationAssociated(cp: DriverCheckpoint): boolean {
+    const recordedConvId = cp.targetConvId ?? cp.rebindState?.newExternalSessionRef ?? null;
     const adapterWithAssociation = this.adapter as unknown as {
-      confirmBootstrapConversationAssociated?: (
-        recordedConvId: string | null,
-        options: { signal?: AbortSignal | undefined }
-      ) => Promise<boolean>;
+      isBootstrapConversationAssociated?: (recordedConvId: string | null) => boolean;
     };
-    if (typeof adapterWithAssociation.confirmBootstrapConversationAssociated === "function") {
-      return await adapterWithAssociation.confirmBootstrapConversationAssociated(recordedConvId, {
-        signal,
-      });
+    if (typeof adapterWithAssociation.isBootstrapConversationAssociated === "function") {
+      return adapterWithAssociation.isBootstrapConversationAssociated(recordedConvId);
     }
     const win =
       (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
       (globalThis as unknown as { window?: Window }).window;
-    const doc =
-      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
-      (globalThis as unknown as { document?: Document }).document;
-    if (!doc) return false;
-    return isConversationAssociatedWithBootstrap(
-      doc,
-      win?.location?.href ?? null,
-      recordedConvId
-    );
+    return isConversationAssociatedWithBootstrap(win?.location?.href ?? null, recordedConvId);
   }
 
   private async resumeWaitingResponse(

@@ -138,6 +138,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     baselineCount: number;
     baselineTurn?: HTMLElement | null | undefined;
     signal?: AbortSignal | undefined;
+    onPoll?: (() => void) | undefined;
   }): Promise<string> {
     const doc = this.docSupplier();
     if (detectConversationNotFound(doc)) {
@@ -163,6 +164,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
+      onPoll: options.onPoll,
     });
 
     if (detectConversationNotFound(doc)) {
@@ -198,34 +200,16 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   }
 
   /**
-   * Positive association evidence that the conversation currently loaded in the tab is the
-   * one created by this bootstrap attempt. Recovery must not read the reply of, or bind to,
-   * a conversation that cannot be tied back to the bootstrap prompt we sent.
+   * True only when the tab currently shows the exact conversation recorded for this
+   * bootstrap attempt. Page content — including the bootstrap prompt text — is shared by
+   * every Symphony-created conversation, so it cannot substitute for the recorded
+   * reference: recovery must fail closed instead of binding an ambiguous conversation.
    */
   isBootstrapConversationAssociated(recordedConvId: string | null): boolean {
     return isConversationAssociatedWithBootstrap(
-      this.docSupplier(),
       this.winSupplier()?.location?.href ?? null,
       recordedConvId
     );
-  }
-
-  async confirmBootstrapConversationAssociated(
-    recordedConvId: string | null,
-    options: { timeoutMs?: number | undefined; signal?: AbortSignal | undefined } = {}
-  ): Promise<boolean> {
-    // Same budget as the bootstrap response wait: a freshly loaded conversation may need
-    // a moment before its turns (including the bootstrap prompt) are rendered.
-    const timeout = options.timeoutMs ?? this.timeoutMs;
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      if (options.signal?.aborted) return false;
-      if (this.isBootstrapConversationAssociated(recordedConvId)) {
-        return true;
-      }
-      await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 200)));
-    }
-    return this.isBootstrapConversationAssociated(recordedConvId);
   }
 
   async inspectBinding(
@@ -268,12 +252,14 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const origin = (win?.location as { origin?: string })?.origin || this.origin;
     const newChatUrl = new URL("/", origin).href;
 
-    // 1. Ensure we are starting from a clean new conversation, not an existing thread
+    // 1. Ensure we are starting from a clean new conversation, not an existing thread.
+    // Any previously recorded conversation reference is cleared: it belongs to an earlier
+    // attempt and must never be matched against the conversation this attempt creates.
     if (win && win.location) {
       const currentConvId = extractConversationIdFromUrl(win.location.href);
       if (currentConvId) {
         // If the browser tab is on an existing conversation, navigate to root / new chat
-        this.stepListener?.("navigating", { targetUri: newChatUrl });
+        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
         win.location.assign(newChatUrl);
 
         // Wait for route to actually change to new chat
@@ -292,10 +278,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           await new Promise((r) => setTimeout(r, this.checkIntervalMs));
         }
       } else {
-        this.stepListener?.("navigating", { targetUri: newChatUrl });
+        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
       }
     } else {
-      this.stepListener?.("navigating", { targetUri: newChatUrl });
+      this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
     }
 
     // Wait for composer element to be available and ready in dynamic docSupplier
@@ -327,12 +313,27 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     this.stepListener?.("bootstrap_submitting", { baselineCount });
     sendBtn.click();
-    this.stepListener?.("bootstrap_waiting", { baselineCount });
+    this.stepListener?.("bootstrap_waiting", { baselineCount, targetConvId: null });
+
+    // Persist the conversation this send creates as soon as its route is observable, so an
+    // interrupted attempt can only ever be recovered against this exact conversation.
+    let recordedConvId: string | null = null;
+    const recordCreatedConversationRef = () => {
+      const currentWin = this.winSupplier();
+      const convId = currentWin?.location
+        ? extractConversationIdFromUrl(currentWin.location.href)
+        : null;
+      if (convId && convId !== recordedConvId) {
+        recordedConvId = convId;
+        this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
+      }
+    };
 
     const convId = await this.waitForBootstrapResponse({
       baselineCount,
       baselineTurn,
       signal: options.signal,
+      onPoll: recordCreatedConversationRef,
     });
 
     const isRollover = session.bindingGeneration > 0 || session.status === "broken-binding";
