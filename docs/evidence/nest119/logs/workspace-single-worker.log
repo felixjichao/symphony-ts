@@ -1,0 +1,386 @@
+NEST119 macOS acceptance: workspace-single-worker-final
+Started UTC: 2026-10-12T08:29:58.841+00:00
+Finished UTC: 2026-10-12T08:31:08.266+00:00
+Commit: e16cbaa
+Command: TMPDIR=/private/tmp npm test -w @symphony/workspace -- --maxWorkers=1 --minWorkers=1 --reporter=verbose
+
+--- host before ---
+$ sw_vers
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+$ uname -a
+Darwin iMac-3.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:11:03 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T8132 arm64
+$ node --version
+v24.15.0
+$ npm --version
+12.2.0
+$ zsh --version
+zsh 5.9 (arm64-apple-darwin25.0)
+$ sysctl -n hw.ncpu
+10
+$ uptime
+16:29  up 26 days,  2:17, 4 users, load averages: 4.75 5.23 4.79
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5305.
+Pages active:                                 197984.
+Pages inactive:                               195993.
+Pages speculative:                               743.
+Pages throttled:                                   0.
+Pages wired down:                             338798.
+Pages purgeable:                                1485.
+"Translation faults":                    17417810424.
+Pages copy-on-write:                       644970509.
+Pages zero filled:                       11452036712.
+Pages reactivated:                        3866767616.
+Pages purged:                             1165567870.
+File-backed pages:                            112876.
+Anonymous pages:                              281844.
+Pages stored in compressor:                  2866594.
+Pages occupied by compressor:                 275257.
+Decompressions:                           4478512855.
+Compressions:                             5045661034.
+Pageins:                                   380811439.
+Pageouts:                                    9617393.
+Swapins:                                    53816255.
+Swapouts:                                   63367998.
+
+--- command output ---
+npm notice run @symphony/workspace@0.1.0 test
+npm notice run vitest run --maxWorkers=1 --minWorkers=1 --reporter=verbose
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/packages/workspace
+
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-Aq07Fl/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > URL 脱敏与规范化 > sanitizeRepoUrl 脱敏包含用户名密码或仅 Token 的 URL
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-kzFqJZ/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > URL 脱敏与规范化 > normalizeGitUrl 正确消除 .git、尾斜杠与凭据
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-g9STDw/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 全新工作区检出 (AC #1, #2) > 全新工作区克隆仓库，发现默认分支并创建确定性 issue 分支 398ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-p10MWi/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 全新工作区检出 (AC #1, #2) > 支持显式传入 issueBranch 396ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-Bx4cOf/remote.git'...
+done.
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-Bx4cOf/trunk.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 全新工作区检出 (AC #1, #2) > 正确发现非 main 的默认分支（如 trunk） 523ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-xz3Ppi/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-xz3Ppi/helper-work'...
+done.
+Switched to a new branch 'symphony/GH-79'
+To /private/tmp/symphony-bootstrap-test-xz3Ppi/remote.git
+ * [new branch]      symphony/GH-79 -> symphony/GH-79
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 全新工作区检出 (AC #1, #2) > 远端同名 issue 分支已存在时，全新工作区安全复用远端分支成果 545ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-Ax5aIK/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 无新改动时重复执行可重入（status = reused） 819ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-gAth8H/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-gAth8H/pusher-work'...
+done.
+To /private/tmp/symphony-bootstrap-test-gAth8H/remote.git
+   82f6c27..270d3b2  main -> main
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 默认分支更新后，工作区干净且 HEAD 为祖先时安全快进 (fast_forwarded) 926ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-cvg0sC/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-cvg0sC/pusher-work2'...
+done.
+To /private/tmp/symphony-bootstrap-test-cvg0sC/remote.git
+   2917f72..802b7ba  main -> main
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 有未提交或未跟踪工作时，默认分支更新不覆盖未提交内容 (status = reused) 838ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-qzHRGb/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-qzHRGb/pusher-work3'...
+done.
+To /private/tmp/symphony-bootstrap-test-qzHRGb/remote.git
+   bf5b8eb..6684beb  main -> main
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 已存在独立 issue 提交时，默认分支更新不覆盖已完成提交 (status = reused) 936ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-VgP6zR/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-VgP6zR/pusher-work-staged'...
+done.
+To /private/tmp/symphony-bootstrap-test-VgP6zR/remote.git
+   5af67c0..1be2982  main -> main
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 有暂存区（index dirty）改动时，默认分支更新不覆盖暂存区内容 (status = reused) 842ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-SkubZi/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-SkubZi/trunk-helper'...
+done.
+Switched to a new branch 'trunk'
+To /private/tmp/symphony-bootstrap-test-SkubZi/remote.git
+ * [new branch]      trunk -> trunk
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 远端默认分支由 main 变更到 trunk 时，能动态检测新默认分支并建立基准 (Blocker 2) 1249ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-A4CYHR/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-A4CYHR/trunk-helper-fail'...
+done.
+Switched to a new branch 'trunk'
+To /private/tmp/symphony-bootstrap-test-A4CYHR/remote.git
+ * [new branch]      trunk -> trunk
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 可重入与重启复用 (AC #3, #4) > 远端默认分支变更但本地 origin/HEAD 刷新失败时拒绝静默降级为旧缓存 (Blocker 1 回归) 1682ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-cifCYg/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 空 URL 或空白 URL 抛出 invalid_repository_url
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-y0iGSr/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 非空但无 .git 的目录拒绝执行并抛出 unrecognized_non_empty_directory
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-5VWL93/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 已存在仓库的 origin 与请求 URL 不匹配时拒绝并抛出 repository_url_mismatch 419ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-dOWSIr/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 存在中间状态（如 MERGE_HEAD）时安全拒绝并抛出 git_operation_in_progress 388ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-vaXP4y/remote.git'...
+done.
+Switched to branch 'main'
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 工作区在非目标分支且包含未提交改动时拒绝切换分支 (dirty_working_tree_on_switch) 672ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-g2gjZl/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 非法分支名通过 git check-ref-format 校验拒绝 (invalid_branch_name)
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-4CmXv5/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 带敏感 Token 的 URL 报错时不泄露密码（覆盖 token@ 与 user:pass@，且仅使用本地环境）
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-fDTUH7/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 已存在仓库 origin 包含 Token 时，origin mismatch 错误脱敏双方凭据 415ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-drJWQT/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 日志回调 log 不会输出未脱敏的凭据
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-YzTxd0/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 配置 git identity 失败时严格抛出 git_command_failed 错误 (config_identity) 748ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-GUMx5J/remote.git'...
+done.
+Cloning into '/private/tmp/symphony-bootstrap-test-GUMx5J/pusher-ff-fail'...
+done.
+To /private/tmp/symphony-bootstrap-test-GUMx5J/remote.git
+   9a71af3..0525ae3  main -> main
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 边界保护与安全错误分类 (AC #5) > 快进合并失败时严格抛出 git_command_failed 错误 (fast_forward) 963ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-r2DVlg/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > parseRepositoryBootstrapArgs 正确解析选项、--target 与位置参数
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-fs6CX5/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > parseRepositoryBootstrapArgs 拒绝未知选项和缺失选项值
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-m2w2fp/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > 执行 --help 输出使用说明并返回 0
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-ydYull/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > 缺少 repo URL 时输出错误并返回 1
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-U3bsx7/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > 参数校验失败（如未知选项、缺值）时向 stderr 输出错误并返回 1
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-fYFabm/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > 支持通过 --target 指定工作区目录执行 bootstrap (Blocker 3) 370ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-4LEcHH/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > CLI 报错输出时对 repo 凭据脱敏 488ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-2krFgU/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > CLI 执行入口 (runRepositoryBootstrapCli) > 成功执行 bootstrap 输出摘要并返回 0 374ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-uwSegJ/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 外层 hook 超时终止时清理受管 Git 进程组（独立组 + 监督者 ownership），不残留孤儿子进程 5388ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-dMnWKb/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > hook 内 CLI bootstrap 经监督通路正常完成（成功路径不降级、不被误杀） 637ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-OlPsea/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 外层 hook 超时清理同一 hook 内多个并发受管 Git 进程组 5688ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-alQGGW/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 直接调用 bootstrapRepository 超时后抛出 git_command_timeout 并清理进程组 3513ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-GFRJlk/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 组终止覆盖 fork + exit 后重挂父的孙进程（原冻结算法的逃逸窗口），且不产生迟到副作用 7675ms
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-YlfUbo/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 直接调用路径：根正常退出但组内 leaf 仍存活时，返回前完成防误杀收尾且无迟到副作用 2821ms
+ ✓ src/config-integration.test.ts > WORKFLOW.md → config → workspace：root 由 config 解析为 absolute（SPEC §5.3.3 / §6.1 / §9.1） > $VAR 形态的 workspace.root 在 config 侧成为 absolute，manager 原样消费该 typed config
+ ✓ src/config-integration.test.ts > WORKFLOW.md → config → workspace：root 由 config 解析为 absolute（SPEC §5.3.3 / §6.1 / §9.1） > 相对路径与 tilde 同样在 config 侧绝对化；workspace 拒绝未经解析的相对 root
+ ✓ src/config-integration.test.ts > provisioning：deterministic create / reuse、collision、non-directory policy（SPEC §9.1–§9.2 / §17.2） > 同 identifier 两次 createWorkspace：同一路径、createdNow true→false、已有内容不动
+ ✓ src/config-integration.test.ts > provisioning：deterministic create / reuse、collision、non-directory policy（SPEC §9.1–§9.2 / §17.2） > 净化后同文的不同 identifier 经 domain 权威 deriveWorkspaceKey 落到不同目录
+ ✓ src/config-integration.test.ts > provisioning：deterministic create / reuse、collision、non-directory policy（SPEC §9.1–§9.2 / §17.2） > 已存在的同名 regular file 触发 existing_non_directory，且对象未被删除或替换
+ ✓ src/config-integration.test.ts > provisioning：deterministic create / reuse、collision、non-directory policy（SPEC §9.1–§9.2 / §17.2） > 已存在的同名 symlink > 指向 root 外的 symlink 先被 containment gate 拒绝（unsafe_path / symlink_escape），链接与目标都原样保留
+ ✓ src/config-integration.test.ts > provisioning：deterministic create / reuse、collision、non-directory policy（SPEC §9.1–§9.2 / §17.2） > 已存在的同名 symlink > 在 canonical root 内指向普通文件的 symlink 触发 existing_non_directory，链接本身不被删除或替换
+ ✓ src/config-integration.test.ts > execution-boundary 安全不变量（SPEC §9.5，root 来自 config 解析结果） > root equality / out-of-root / symlink escape 各自映射到细分 unsafeReason
+ ✓ src/config-integration.test.ts > execution-boundary 安全不变量（SPEC §9.5，root 来自 config 解析结果） > workspace 目录事后被换成逃逸 symlink > safety primitive 与 removeWorkspace 都拒绝出根目标，且不删除 root 外目录
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > after_create → before_run → after_run → before_remove 各恰好一次，cwd 恒为 workspace path 670ms
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > reuse 路径不运行 after_create；重新加载后的 effective hooks 被下一次调用采用 371ms
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > `hooks.timeout_ms` 走生产 timeout / 进程组终止路径：after_create → hook_timeout
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > after_create 失败：新建目录被清理；已存在目录既不运行 hook 也绝不被删
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > before_run fatal / after_run best-effort：同一次失败只执行一次，且不覆盖调用方结果 351ms
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > after_run timeout 与 before_remove 失败都是 best-effort：不 throw、cleanup 继续 428ms
+ ✓ src/config-integration.test.ts > 四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.3.4 / §9.4 / §17.2，真实 sh 子进程） > safe cleanup + missing 幂等：目录已消失后不再运行 hook
+ ✓ src/config-integration.test.ts > repo-wide 边界：workspace 是 §9 的唯一 owner（SPEC §9 / §17.2 / AGENTS.md 依赖方向） > 运行期依赖只有 @symphony/domain，@symphony/config 仅作为 devDependency
+ ✓ src/config-integration.test.ts > repo-wide 边界：workspace 是 §9 的唯一 owner（SPEC §9 / §17.2 / AGENTS.md 依赖方向） > 运行期源码不 import config / orchestrator / agent / observability，不读 WORKFLOW.md，不复制 deriveWorkspaceKey
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > symlink 能力探测结果显式可见（不支持时相关用例为显式 skip）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 1：正常 root/key 通过 > 已存在目录：safe=true、exists=true、canonicalPath 为 realpath 结果
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 1：正常 root/key 通过 > 尚不存在路径：不因目标缺失跳过校验，safe=true、exists=false、canonicalPath 为推定落点
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 1：正常 root/key 通过 > 多级尚不存在路径（root/a/b）：safe，推定落点仍在 root 下
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 1：正常 root/key 通过 > root 自身尚不存在（递归创建语义）：canonicalRoot 按最近已存在 ancestor 推定，createWorkspace 端到端可用
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 1：正常 root/key 通过 > 带冗余 segment / 尾斜杠的合法路径规范化后通过
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > workspace path == root：workspace_equals_root（含尾斜杠形态）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > 相对路径与空串：必须绝对路径，拒绝为 workspace_outside_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > ../ 逃逸：workspace_outside_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > sibling 目录：workspace_outside_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > 前缀混淆（<root>2 形态）：segment 级判定拒绝，证明非裸 startsWith(root)
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 2/3：root 本身、非绝对路径与 lexical 出根被拒绝 > root 的父目录：workspace_outside_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > symlink 指向 root 外已存在目录：workspace_symlink_escape，且链接不被删除
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > symlink 指向 root 外文件：workspace_symlink_escape
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > dangling symlink（目标不存在）：无法 canonicalize，fail-closed 为 workspace_path_unreadable 且保留 cause
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > 中间 ancestor 是 dangling symlink：fail-closed 为 workspace_path_unreadable（与目标级 dangling 对称，PR #32 审查）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > root 投影途中的 ancestor 是 dangling symlink：root 无法 canonicalize，workspace_path_unreadable
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > symlink 环（ELOOP）：workspace_path_unreadable 且保留 cause
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > symlink 指向 root 内另一位置：canonical 仍在 root 下，放行
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > 多跳内部 symlink 链（a→b→c 均在 root 内）：放行，canonicalPath 为最终真实路径
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > symlink 绕回 root 本身：workspace_equals_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > 尚不存在路径的已存在 ancestor 经 symlink 逃逸：workspace_symlink_escape
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > 尚不存在路径的已存在 ancestor 是内部 symlink：按 canonical 推定落点，放行
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 4：workspace symlink 指向 root 外被拒绝（真实 symlink） > 已存在目录经中间 symlink 到达但 canonical 逃逸：workspace_symlink_escape（canonical 校验不只看最终元素）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 5：configured root 自身经 symlink 解析后以 canonical root 判定 > root（symlink 形态）下的合法 workspace 通过，canonicalRoot 为解析后的真实目录
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 5：configured root 自身经 symlink 解析后以 canonical root 判定 > root（symlink 形态）下 workspace symlink 指向真实 root 外：workspace_symlink_escape
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 5：configured root 自身经 symlink 解析后以 canonical root 判定 > canonical 形态直书路径（绕过 configured root 的 lexical 前缀）：workspace_outside_root
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 6：破坏性动作前重验可阻止创建后被替换的 symlink escape（TOCTOU） > 目录创建并通过校验后被替换为 root 外 symlink：重验必须失败
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 6：破坏性动作前重验可阻止创建后被替换的 symlink escape（TOCTOU） > 目录创建后被替换为 dangling symlink：重验 fail-closed 为 workspace_path_unreadable
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 验收 6：破坏性动作前重验可阻止创建后被替换的 symlink escape（TOCTOU） > 校验是无状态纯 fs 判定：目录被替换为 root 内另一真实目录后重验仍通过
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 错误面：四类 reason、invalid_root 映射与 cause 保留 > root 是常规文件：validate 返回 invalid_root，assert 抛 invalid_root_path（M3.1 错误面保持）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 错误面：四类 reason、invalid_root 映射与 cause 保留 > 中间 ancestor 是普通文件（ENOTDIR）：workspace_path_unreadable 且保留 cause
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 错误面：四类 reason、invalid_root 映射与 cause 保留 > 不可读目录（chmod 000）ancestor：workspace_path_unreadable（root 运行时权限位不适用，显式 skip）
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 错误面：四类 reason、invalid_root 映射与 cause 保留 > assert 的 options 透传 workspaceKey / identifier 诊断上下文
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > 错误面：四类 reason、invalid_root 映射与 cause 保留 > resolveWorkspacePathFromKey 的同步 lexical 拒绝同样携带 unsafeReason 细分
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > root 自身形态的 invalid_root 错误面（symlink） > root 是 dangling symlink：invalid_root / invalid_root_path
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > createWorkspace 接入 safety gate 与 M4 / M5 复用（验收 7） > 逃逸 symlink 占据 workspace path：createWorkspace 抛 unsafe_path 且不删除不替换
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > createWorkspace 接入 safety gate 与 M4 / M5 复用（验收 7） > root 内 symlink 占据 workspace path：containment 放行后仍按 M3.1 语义 existing_non_directory
+ ✓ src/path-safety.test.ts > workspace path safety boundary（SPEC §9.5 / §17.2，#28） > createWorkspace 接入 safety gate 与 M4 / M5 复用（验收 7） > API 不依赖 orchestrator / agent：resolve → assert（launch 前）→ create → assert（cleanup 前）复用模式
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > symlink 能力探测结果显式可见（不支持时相关用例为显式 skip）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > 验收 1：hook 实际 cwd === workspace path（在 cwd 落地文件 + pwd -P 实证）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > multiline shell 脚本按序执行（sh -lc 接收整段多行脚本）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > non-zero exit → 抛 hook_execution_failed（fatal），事件 outcome=failed 且携带 exitCode
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > timeout → 抛 hook_timeout，终止整个进程组（孙进程不留孤儿、marker 永不出现），无残留 handle 958ms
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > 验收 2：timeout 使用调用时传入的当前 effective timeoutMs（无内部旧值缓存） 640ms
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > 完成判定用 close 而非 exit：脚本秒退码 0 但后台进程持有 stdio → 拖到 timeout（审查 Suggestion 1 语义锁定）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > close 语义的文档化解法：后台进程重定向 stdio 后不拖住 close → 秒退码 0 即 success
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > 输出捕获有硬上限：无界刷屏被截断，事件 outputTruncated=true 且摘录受界
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > hook runner 执行层（验收 1 / 2：cwd、multiline、non-zero、timeout、effective timeoutMs） > 未配置脚本（null）→ no-op 成功，不 spawn、不发事件
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > createdNow=true 时执行 after_create（marker 落地），provisioning 成功
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > 复用目录（createdNow=false）不运行 after_create，且既有内容分毫不动
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > after_create non-zero → 抛 hook_execution_failed，且 best-effort 删除本次新建的半成品目录
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > after_create timeout → 抛 hook_timeout，且清理本次新建目录
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > 无 hooks 选项时 createWorkspace 行为与 M3.1 一致（不运行 hook、正常创建）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_create（验收 3：仅新建执行、失败只清理新建目录、复用绝不打扰） > after_create 失败清理同样过 containment 校验（symlink 逃逸拒删） > after_create 把新建目录替换成指向 root 外的 symlink 后失败 → 清理拒删，root 外目标不被触碰
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_run（验收 4：每 attempt 显式调用、failure/timeout 可判别 fatal、不调度 retry） > 每次调用恰好运行一次（无内建 retry / 多次执行） 337ms
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_run（验收 4：每 attempt 显式调用、failure/timeout 可判别 fatal、不调度 retry） > failure 抛可判别 fatal 错误，供 M4 中止当前 attempt
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_run（验收 4：每 attempt 显式调用、failure/timeout 可判别 fatal、不调度 retry） > timeout 抛可判别 fatal hook_timeout
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_run（验收 4：每 attempt 显式调用、failure/timeout 可判别 fatal、不调度 retry） > spawn failure（cwd 不存在）→ hook_execution_failed（非零 / 超时之外的 failed 路径）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_run（验收 4：每 attempt 显式调用、failure/timeout 可判别 fatal、不调度 retry） > spawn 前安全重验 > workspace path 为逃逸 symlink → 抛 unsafe_path（fatal，不执行 shell）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_run（验收 5：best-effort 永不 throw、不覆盖 attempt outcome、失败可见） > success → 正常返回，不发事件
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_run（验收 5：best-effort 永不 throw、不覆盖 attempt outcome、失败可见） > failure → 调用仍正常返回（不 throw、不改写 outcome），但产生 operator-visible 事件
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_run（验收 5：best-effort 永不 throw、不覆盖 attempt outcome、失败可见） > timeout → 调用仍正常返回，产生 timeout 事件
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_run（验收 5：best-effort 永不 throw、不覆盖 attempt outcome、失败可见） > 未配置 after_run → no-op 正常返回
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > after_run（验收 5：best-effort 永不 throw、不覆盖 attempt outcome、失败可见） > unsafe 路径 best-effort > workspace path 为逃逸 symlink → 不 throw、不执行 shell，发 failed 事件说明 skipped
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > existing 目录：运行 before_remove 后删除 → status removed，目录消失
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > before_remove failure → operator 事件，但 cleanup 继续（status removed，目录仍被删）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > before_remove timeout → operator 事件，但 cleanup 继续（status removed）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > missing workspace → 幂等成功（status missing），不运行 before_remove
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > 无 hooks 选项也能删除（before_remove 不运行）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > 非法 identifier → 抛 invalid_identifier（输入校验，与 createWorkspace 一致）
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > 非目录对象（regular file）在 workspace 路径 → refused existing_non_directory，文件不被删除
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > containment：unsafe / out-of-root target 拒绝删除（验收 7） > workspace path 为指向 root 外的 symlink → refused，不运行 hook、symlink 与 root 外目标均不被触碰
+ ✓ src/hooks.test.ts > workspace lifecycle hooks + safe cleanup（SPEC §9.4 / §15.4 / §17.2，#29） > before_remove + cleanup（验收 6 / 7：best-effort hook、containment、幂等、可判别结果） > containment：unsafe / out-of-root target 拒绝删除（验收 7） > TOCTOU：before_remove 运行期间把目录换成逃逸 symlink → 删除前重验拒绝，root 外目标不被删
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > spawn 经监督者创建并登记后授予启动许可，exit 报告携带退出码与输出
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > git 无法 spawn（ENOENT）时报告 spawn_failed，不静默降级
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > cwd 不存在或非目录时拒绝启动（invalid_cwd）
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 超时 terminate 触发组终止，exit 报告携带 cleanupConfirmed，受管进程真实退出 2044ms
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 请求方（客户端连接）提前退出后，登记保留在监督者并由其终止受管组 556ms
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > stopAccepting 后拒绝新 spawn（不静默降级为未登记的独立组）
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > pgrep 无匹配（exit 1）按成功空结果处理，不误报 queryFailed
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > pgrep 查询自身失败（不可执行）按 queryFailed 处理，不得宣称确认
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 根正常退出且组无残留成员：确认后释放 ownership（terminateAll requested=0）
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 根先正常退出、同组 leaf 重挂父仍存活：请求方断开后监督者收尾清理 2244ms
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 根先正常退出、同组 leaf 重挂父仍存活：外层超时 terminateAll 收敛（复审探针场景） 2428ms
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 根先正常退出、同组 leaf 仍存活：dispose 兜底清理 980ms
+ ✓ src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > terminateAll 在有界窗口内确认全部受管组退出 1213ms
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 构造与配置校验 > 接受合法的绝对路径 root 并规范化
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 构造与配置校验 > 构造器不再持有 hooks 快照（#29：hooks 改为调用时传入当前 effective 值，避免 reload 后旧值缓存）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 构造与配置校验 > 拒绝空配置、缺失 workspace 或非法 root
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性 key 派生与 domain 权威复用（SPEC §4.2 / §9.1） > 直接复用 @symphony/domain 的 deriveWorkspaceKey
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性 key 派生与 domain 权威复用（SPEC §4.2 / §9.1） > 未被净化的合法字符 identifier 保持原 key（无后缀）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性 key 派生与 domain 权威复用（SPEC §4.2 / §9.1） > 含非允许字符的 identifier 被净化并追加 16-hex hash 稳定后缀（防碰撞）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性 key 派生与 domain 权威复用（SPEC §4.2 / §9.1） > 净化后同文的不同 identifier 通过 domain hash 得到不同 key（SPEC §17.2）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性 key 派生与 domain 权威复用（SPEC §4.2 / §9.1） > 空字符串或非法 identifier 抛出类型化 invalid_identifier 错误
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性路径解析与基础安全边界（SPEC §9.1 / §9.5 Invariant 2） > 相同 identifier + root 稳定得到相同 path
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性路径解析与基础安全边界（SPEC §9.1 / §9.5 Invariant 2） > 冲突 identifier 得到不同路径
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性路径解析与基础安全边界（SPEC §9.1 / §9.5 Invariant 2） > 拒绝逃逸或等同于 workspace.root 的不安全路径（SPEC §9.5）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 确定性路径解析与基础安全边界（SPEC §9.1 / §9.5 Invariant 2） > resolveWorkspacePathFromKey 校验入参并阻止逃逸
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 本地文件系统 provisioning：创建与复用（SPEC §9.2 / §17.2） > 首次创建缺失目录：createdNow=true 且真实目录就绪
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 本地文件系统 provisioning：创建与复用（SPEC §9.2 / §17.2） > 再次调用创建：同路径原样复用且 createdNow=false
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 本地文件系统 provisioning：创建与复用（SPEC §9.2 / §17.2） > ensureWorkspace 为 createWorkspace 别名，行为一致
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 本地文件系统 provisioning：创建与复用（SPEC §9.2 / §17.2） > 当 workspace.root 尚未在磁盘上创建时，自动递归创建 root 与 workspace
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 安全失败策略：已存在非目录对象不删除不替换（SPEC §17.2 Implementation Policy） > 同路径已有 regular file 时安全失败：不被删除，抛出 existing_non_directory
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 安全失败策略：已存在非目录对象不删除不替换（SPEC §17.2 Implementation Policy） > 同路径已有符号链接时安全失败：不被删除，抛出 existing_non_directory
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 并发与竞态安全（SPEC §9.2 / §17.2） > 并发调用 createWorkspace 最终一致得到可用目录，无抛出且 createdNow 语义明确
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 并发与竞态安全（SPEC §9.2 / §17.2） > EEXIST 重判逻辑：若并发冲突创建的是目录，成功复用（createdNow=false）
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 并发与竞态安全（SPEC §9.2 / §17.2） > EEXIST 重判逻辑：若并发冲突创建的是非目录文件，安全失败为 existing_non_directory
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 文件系统异常与错误契约（SPEC §9 / §17.2） > 当 root 本身是文件（ENOTDIR）时抛出 invalid_root_path 并保留 cause
+ ✓ src/manager.test.ts > WorkspaceManager (SPEC §9.1–§9.2 / §17.2) > 文件系统异常与错误契约（SPEC §9 / §17.2） > 错误码契约覆盖预留的 hook_execution_failed 与 hook_timeout
+ ✓ src/repository-bootstrap-race.test.ts > 正常 close 收尾与 timeout 的收尾所有权 > timer 先触发（执行中超时）时，close 收尾不得把 typed git_command_timeout 翻成成功
+ ✓ src/repository-bootstrap-race.test.ts > 正常 close 收尾与 timeout 的收尾所有权 > close 接管收尾后停掉原 timer：慢确认期间无假 timeout、零组终止信号，命令以成功收敛 8147ms
+
+ Test Files  7 passed (7)
+      Tests  168 passed (168)
+   Start at  16:29:59
+   Duration  69.00s (transform 181ms, setup 0ms, collect 324ms, tests 68.02s, environment 0ms, prepare 151ms)
+
+
+Exit code: 0
+
+--- host after ---
+$ sw_vers
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+$ uname -a
+Darwin iMac-3.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:11:03 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T8132 arm64
+$ node --version
+v24.15.0
+$ npm --version
+12.2.0
+$ zsh --version
+zsh 5.9 (arm64-apple-darwin25.0)
+$ sysctl -n hw.ncpu
+10
+$ uptime
+16:31  up 26 days,  2:18, 4 users, load averages: 3.77 4.85 4.68
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    23011.
+Pages active:                                 206271.
+Pages inactive:                               205155.
+Pages speculative:                               779.
+Pages throttled:                                   0.
+Pages wired down:                             295801.
+Pages purgeable:                                5989.
+"Translation faults":                    17422980517.
+Pages copy-on-write:                       645952290.
+Pages zero filled:                       11453937333.
+Pages reactivated:                        3867006247.
+Pages purged:                             1165573031.
+File-backed pages:                            114857.
+Anonymous pages:                              297348.
+Pages stored in compressor:                  2873084.
+Pages occupied by compressor:                 282342.
+Decompressions:                           4478709087.
+Compressions:                             5045885723.
+Pageins:                                   380834717.
+Pageouts:                                    9618597.
+Swapins:                                    53825463.
+Swapouts:                                   63367998.

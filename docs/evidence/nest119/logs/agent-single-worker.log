@@ -1,0 +1,312 @@
+NEST119 macOS acceptance: agent-single-worker-final
+Started UTC: 2026-10-12T08:34:14.434+00:00
+Finished UTC: 2026-10-12T08:34:35.225+00:00
+Commit: e16cbaa
+Command: TMPDIR=/private/tmp npm test -w @symphony/agent -- --maxWorkers=1 --minWorkers=1 --reporter=verbose
+
+--- host before ---
+$ sw_vers
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+$ uname -a
+Darwin iMac-3.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:11:03 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T8132 arm64
+$ node --version
+v24.15.0
+$ npm --version
+12.2.0
+$ zsh --version
+zsh 5.9 (arm64-apple-darwin25.0)
+$ sysctl -n hw.ncpu
+10
+$ uptime
+16:34  up 26 days,  2:21, 4 users, load averages: 3.83 4.86 4.75
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5322.
+Pages active:                                 198733.
+Pages inactive:                               196030.
+Pages speculative:                              1686.
+Pages throttled:                                   0.
+Pages wired down:                             323391.
+Pages purgeable:                               11911.
+"Translation faults":                    17440711163.
+Pages copy-on-write:                       648688182.
+Pages zero filled:                       11461402109.
+Pages reactivated:                        3868691417.
+Pages purged:                             1165788115.
+File-backed pages:                            129919.
+Anonymous pages:                              266530.
+Pages stored in compressor:                  2942229.
+Pages occupied by compressor:                 288266.
+Decompressions:                           4480992184.
+Compressions:                             5048481535.
+Pageins:                                   381258105.
+Pageouts:                                    9621143.
+Swapins:                                    53878824.
+Swapouts:                                   63456834.
+
+--- command output ---
+npm notice run @symphony/agent@0.1.0 test
+npm notice run vitest run --maxWorkers=1 --minWorkers=1 --reporter=verbose
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/packages/agent
+
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > 验收 1: 能够进行前置检查、运行项目验证、提交 (commit) 并推送到远端 (push)
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > fails closed before merge when the current Issue requirements cannot be read
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > 验收 2: 无 PR 时自动创建，已有 PR 时自动复用
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > 验收 3 & 4: CI failed 进入修复循环并再次 push，CI green 后进入 land 判断并 squash merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > repairCommand (reference profile): CI 失败 → 执行 --repair-cmd → 新 SHA → green → land
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > 验收 5 & 6: 修复次数超限终止，输出 Blocker 交接报告并移除 symphony-ready 标签停止派发
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 1 回归: 严格校验 PR 所属标记，拒绝无 marker 或外来 PR
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 2 回归: 真实执行 validationCommand，失败时禁止 commit/push/land
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 9 回归: 未显式 optInLand 时只停在 ready_to_land，不执行 merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 7 (Origin 仓库与主机核验): 拒绝非 github.com 或异主机 origin URL，推送前安全终止
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 8 (CI 安全校验): 当 PR 缺少 headRefOid 或与当前已推送 HEAD 不一致时等待/拒绝进入 Land
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 9 (已合入重入终态闭环): 已 MERGED PR 且 Issue CLOSED 时返回 completed 与真实 mergeSha，不误判人工介入
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 9 (已合入但 Issue OPEN 时触发 reconciliation): 输出交接并移除 ready 标签，避免调度器重复派发
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 4 (真实失败诊断与权限/Infra 区分): 遇到权限或 Infra 错误时安全终止交接，不浪费代码修复预算
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > Blocker 6 (修复异常持久化预算): repair 抛出异常前已记录 spentRepairs，阻止重启后预算重置
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 1: CI green + review approve at SHA-A -> 允许 land SHA-A
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 2: SHA-A 审查通过后 PR HEAD 变动到 SHA-B -> 阻止 merge 并要求对 SHA-B 重新审查
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 3 & 4: review requests changes -> function repair，新 SHA 和 supersession
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 3 & 4: review requests changes -> command repair，新 SHA 和 supersession
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 3 & 4: review requests changes -> resumed-command repair，新 SHA 和 supersession
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 5: needs_human -> 进入交付交接 (review_needs_human)，绝不自动 merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 6: 审查任务失败或结果缺失/格式错误 -> fail-closed 阻止 merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 7: optInLand 开启时若未配置 reviewGate -> fail-closed 严禁静默 fallback 到纯 CI auto-merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 8 (diff 获取失败 fail-closed): commit-pinned diff 获取失败时安全终止并请求人工介入，绝不发布空 diff 或浮动 diff
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 9 (Phase 7 Pre-merge 安全保护): 审查通过后但 merge 前 CI rerun 失败或 ownership 被篡改时阻止 merge
+ ✓ src/delivery/delivery-skill-runner.test.ts > Codex Delivery + Land Workflow Skill Runner > NEST-103 独立审查门禁 (Decision Review Gate before auto-merge) > 验收 10 (diff 与 commit SHA 绑定与完整性校验): PR diff 混入非目标 SHA 的变更文件时阻止发布审查并安全终止
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #1, #2, #3: 正常启动流与身份 / cwd 校验 > 完整走通 initialize → initialized → thread/start → turn/start 并提取正确身份与 cwd
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #1, #2, #3: 正常启动流与身份 / cwd 校验 > pass-through policy 映射正确：非 null 原样写出，null / undefined 缺席
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > turn.status === 'completed' 时正常 resolve
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > turn.status === 'failed' 时 reject 为 turn_failed 且携带诊断消息与详情
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > turn.status === 'interrupted' 时 reject 为 turn_cancelled 且携带诊断
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > turn.status === 'inProgress'（非终态）时 reject 为 protocol_error，且后续 startTurn 立即以 fatal protocol_error 拒绝并不发出新请求
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > turn/completed 缺失 threadId 或传 null 时 reject 为 protocol_error 并发射 malformed 事件
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > early-completed 路径下缺失 threadId 时 reject 为 protocol_error 并发射 malformed 事件，不补造身份
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > payload 形状非法（缺少 turn.id）时 reject 为 protocol_error
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #4: completion 必须以 turn.status 判定，不能只看 method > 忽略不匹配当前 turnId 的迟到/异常通知，继续等待正确 turnId 结算
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #5: silent turn timeout 与 output 重置 timer > turn stream 持续静默时在 turnTimeoutMs 到期后报 turn_timeout，且不主动 kill 进程
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #5: silent turn timeout 与 output 重置 timer > 持续 notification 输出会重置 silence timer，turn 正常完成不超时
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #5: silent turn timeout 与 output 重置 timer > stderr 诊断流刷屏不重置 silence timer，依然发生 turn_timeout
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #6: early process exit / response error / invalid response shape > turn 运行中子进程非预期早退时 reject 为 port_exit
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #6: early process exit / response error / invalid response shape > turn/start 收到 JSON-RPC error 响应时 reject 为 response_error
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #6: early process exit / response error / invalid response shape > thread/start 缺少 thread.id 时 startup 失败，reject 为 protocol_error 且不遗留子进程
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #6: early process exit / response error / invalid response shape > initialize 缺少 userAgent 时 startup 失败，reject 为 protocol_error 且清理子进程
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #6: early process exit / response error / invalid response shape > turn/start 响应状态非 inProgress 时 reject 为 protocol_error
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #7: 同 thread 连续两个 turn 与单活跃 turn 不变量 > 同一个 session 连续执行两个 turn：thread ID 不变，turn ID 改变，sessionId 正确合成
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #7: 同 thread 连续两个 turn 与单活跃 turn 不变量 > 并发调用 startTurn 时违反单活跃 turn 不变量，第二次调用立即拒绝为 protocol_error
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > 验收 #7: 同 thread 连续两个 turn 与单活跃 turn 不变量 > session 停止后调用 startTurn 立即拒绝为 port_exit
+ ✓ src/app-server-session.test.ts > Codex App-Server Session Lifecycle (SPEC §10.2 / §10.3 / §10.6 / §17.5, M4.3) > stop() 幂等与进程有界关停 > 连续多次 stop() 幂等成功，子进程确定性退出
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > v2 command approval 在 never policy 下自动批准并完成 turn
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > v2 file change approval 在 never policy 下自动批准并完成 turn
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > legacy command approval (execCommandApproval) 在 never policy 下返回 approved
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > legacy file change approval (applyPatchApproval) 在 never policy 下返回 approved
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > 数字类型 request ID 原样回复，不被类型转换破坏
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > 畸形 legacy command approval (execCommandApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 1: approval never 路径参数化与完成 turn > 畸形 legacy file change approval (applyPatchApproval) 参数不获批准，回包 -32602，发射 malformed 并以 protocol_error 失败
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 2: 非 never 审批请求拒绝并不 hang，稳定失败 > string 策略 (on-request) 拒绝请求并以 approval_required 终结
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 2: 非 never 审批请求拒绝并不 hang，稳定失败 > object / null / 缺省 policy 绝不推断为 never
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 2: 非 never 审批请求拒绝并不 hang，稳定失败 > legacy command approval 在非 never 下回复 abort 并报告 approval_required
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 2: 非 never 审批请求拒绝并不 hang，稳定失败 > item/permissions/requestApproval 即便在 never 下也不自动同意，返回 error 并失败
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 2: 非 never 审批请求拒绝并不 hang，稳定失败 > 畸形 item/permissions/requestApproval 参数回包 -32602，发射 malformed 并以 protocol_error 失败
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 3: 人工输入请求不 hang，稳定失败 > item/tool/requestUserInput 返回 error 并在本地失败为 turn_input_required
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 3: 人工输入请求不 hang，稳定失败 > mcpServer/elicitation/request 返回 cancel 响应并在本地失败为 turn_input_required
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 4: unsupported dynamic tool call 返回 structured failure 并继续 session > item/tool/call 返回 success: false 与 contentItems，turn 顺利完成且后续 turn 可执行
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 5: usage 与 rate-limit 遥测提取 > thread/tokenUsage/updated 提取 total 快照，不累加、不填零
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 5: usage 与 rate-limit 遥测提取 > 非法 usage 字段记录 malformed 事件，不填零且不破坏正常 turn
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 5: usage 与 rate-limit 遥测提取 > account/rateLimits/updated 提取 opaque 快照，account 级不强加 turn 身份
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 6: malformed / notification / other-message 不污染正常关联 > 坏 JSON 行被记录为 malformed，协议恢复后 turn 仍正常完成
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 6: malformed / notification / other-message 不污染正常关联 > 未知 response ID 报告为 other_message，不影响正常 pending 关联
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 6: malformed / notification / other-message 不污染正常关联 > approval request 参数非法时返回 invalid-params (-32602) 并以 protocol_error 终结
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 7: 时序、早到请求与生命周期收敛 > completion 早于 start response：有界暂存并在取得身份后先发 session_started 再发终态事件
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 7: 时序、早到请求与生命周期收敛 > 异 thread / 异 turn completion 夹入不影响当前 turn 结算
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 7: 时序、早到请求与生命周期收敛 > 在等待 turn/start 响应期间发生 fatal request：外部 Promise 立即失败不挂起
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 7: 时序、早到请求与生命周期收敛 > listener 抛出异常不破坏 session 执行与回复
+ ✓ src/app-server-session.test.ts > Codex App-Server Headless Requests & Runtime Event Mapping (SPEC §10.4 / §10.5 / §10.6 / §17.5, M4.4) > 验收 7: 时序、早到请求与生命周期收敛 > thread 启动阶段只发射 session_started (不带 turnId)，启动失败发射 startup_failed
+ ✓ src/config-integration.test.ts > Suite 1: Workspace 创建 / 复用 / 生命周期 hooks 与进程关停 (SPEC §9 / §10.7) > 同 identifier 两次 attempt：路径不变、createdNow 翻转、after_create 仅执行一次、文件保留、after_run 前进程已关停 1151ms
+ ✓ src/config-integration.test.ts > Suite 2: Workflow 解析与 Prompt 严格渲染 (SPEC §5 / §6 / §12) > 支持 $VAR root、相对 root、snake_case 字段展开与 attempt 变量
+ ✓ src/config-integration.test.ts > Suite 2: Workflow 解析与 Prompt 严格渲染 (SPEC §5 / §6 / §12) > 首轮 attempt=null 时渲染为 null，空正文沿用默认 prompt 模板
+ ✓ src/config-integration.test.ts > Suite 2: Workflow 解析与 Prompt 严格渲染 (SPEC §5 / §6 / §12) > 未知模板变量在 launch 前严格失败，子进程不启动，after_run 仍安全执行
+ ✓ src/config-integration.test.ts > Suite 3: before_run 与 after_run 失败处理与 non-masking 不变量 (SPEC §9.4 / §10.7) > before_run 非零退出或超时阻止 launch，进入安全的 after_run 394ms
+ ✓ src/config-integration.test.ts > Suite 3: before_run 与 after_run 失败处理与 non-masking 不变量 (SPEC §9.4 / §10.7) > success + after_run 非零退出或超时均保留原成功结果，并产生 operator hook 事件 449ms
+ ✓ src/config-integration.test.ts > Suite 3: before_run 与 after_run 失败处理与 non-masking 不变量 (SPEC §9.4 / §10.7) > failure + after_run 非零或超时保留原 failure 错误，不被 hook 失败掩盖
+ ✓ src/config-integration.test.ts > Suite 4: Child cwd、bash -lc 展开与 Launch Boundary Containment (SPEC §10.1 / §17.2) > 真实子进程 cwd、wire 参数 cwd 均等于 per-issue workspace 绝对路径，且经 bash -lc 展开
+ ✓ src/config-integration.test.ts > Suite 4: Child cwd、bash -lc 展开与 Launch Boundary Containment (SPEC §10.1 / §17.2) > before_run 偷换逃逸 symlink 被 launch 安全拒绝，子进程零启动，外部目录原样保留
+ ✓ src/config-integration.test.ts > Suite 5: initialize / thread / turn 握手与错误参数化 (SPEC §10.2 / §10.3 / §17.5) > transcript 严格保证 initialize → initialized → thread/start → turn/start 时序与身份传递
+ ✓ src/config-integration.test.ts > Suite 5: initialize / thread / turn 握手与错误参数化 (SPEC §10.2 / §10.3 / §17.5) > 参数化启动异常：缺失 userAgent 的非法 initialize 响应 稳定映射为 protocol_error 并回收进程
+ ✓ src/config-integration.test.ts > Suite 5: initialize / thread / turn 握手与错误参数化 (SPEC §10.2 / §10.3 / §17.5) > 参数化启动异常：缺失 thread.id 的 thread/start 响应 稳定映射为 protocol_error 并回收进程
+ ✓ src/config-integration.test.ts > Suite 5: initialize / thread / turn 握手与错误参数化 (SPEC §10.2 / §10.3 / §17.5) > 参数化启动异常：turn/start 收到 JSON-RPC error 稳定映射为 response_error 并回收进程
+ ✓ src/config-integration.test.ts > Suite 5: initialize / thread / turn 握手与错误参数化 (SPEC §10.2 / §10.3 / §17.5) > 参数化启动异常：turn/start 收到非 inProgress 状态 稳定映射为 protocol_error 并回收进程
+ ✓ src/config-integration.test.ts > Suite 6: 终态判定与提前退出映射 (SPEC §10.6 / §14.1 / §17.5) > turn.status completed / failed / interrupted 准确映射，且失败后不触发 continuation
+ ✓ src/config-integration.test.ts > Suite 6: 终态判定与提前退出映射 (SPEC §10.6 / §14.1 / §17.5) > 握手前退出码 127 映射为 codex_not_found，其他非零退出映射为 port_exit
+ ✓ src/config-integration.test.ts > Suite 7: Timeout、stderr 与 framing 隔离 (SPEC §10.3 / §10.6) > silent initialize 触发 response_timeout，silent turn 触发 turn_timeout 447ms
+ ✓ src/config-integration.test.ts > Suite 7: Timeout、stderr 与 framing 隔离 (SPEC §10.3 / §10.6) > 有效 periodic output 延长 silence 窗口；stderr 噪声不能延长且伪造 protocol 不进入解析器 667ms
+ ✓ src/config-integration.test.ts > Suite 8: Headless Server Requests (Approval / Input / Tool) (SPEC §10.4 / §10.5) > approval never 自动同意并完成 turn，非 never 稳定失败为 approval_required
+ ✓ src/config-integration.test.ts > Suite 8: Headless Server Requests (Approval / Input / Tool) (SPEC §10.4 / §10.5) > 人工输入请求立即以 turn_input_required 失败
+ ✓ src/config-integration.test.ts > Suite 8: Headless Server Requests (Approval / Input / Tool) (SPEC §10.4 / §10.5) > unsupported tool 返回结构化失败且两轮 turn 连续成功完成
+ ✓ src/config-integration.test.ts > Suite 9: Telemetry 映射与多轮 Continuation 循环 (SPEC §10.2 / §10.4 / §12.3) > 遥测快照无损映射到 AgentEvent；多轮 continuation 共用同一 live thread，首轮模板后轮 guidance
+ ✓ src/config-integration.test.ts > Suite 9: Telemetry 映射与多轮 Continuation 循环 (SPEC §10.2 / §10.4 / §12.3) > 达到 max_turns 硬上限以 max_turns 正常结束
+ ✓ src/config-integration.test.ts > Suite 9: Telemetry 映射与多轮 Continuation 循环 (SPEC §10.2 / §10.4 / §12.3) > decider 超时映射为 continuation_timeout，进程与 after_run 正常清理 400ms
+ ✓ src/config-integration.test.ts > Suite 10: Launch 负例补充 (SPEC §9.5 / §17.2) > root equality 与 lexical out-of-root 经公共 startAppServerSession 稳定拒绝为 invalid_workspace_cwd
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 1: 真实 strict renderer 与未知变量在 launch 前失败 > 正常模板使用真实 config 严格渲染，变量全部展开到首轮 prompt
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 1: 真实 strict renderer 与未知变量在 launch 前失败 > unknown variable 在 child launch 之前报错，阻止子进程启动，但 after_run 依然执行
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 2: before_run failure 阻断 child launch > before_run 退出非零时阻止子进程启动，抛出 hook_execution_failed，且 after_run 执行 388ms
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 3: normal attempt 执行 after_run 与 workspace 保持 > 正常 attempt 执行 after_run，子进程退出，目录与业务文件保留，再次运行复用且不重复 after_create 748ms
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 3: normal attempt 执行 after_run 与 workspace 保持 > 正常 attempt 成功但在 after_run hook 失败（exit non-zero）时，结果仍正常返回且不被覆盖
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 3: normal attempt 执行 after_run 与 workspace 保持 > 正常 attempt 成功但 after_run hook 自身超时时，结果仍正常返回且超时被记录
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > startup exit 127 映射为 codex_not_found，执行 after_run
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > turn 失败抛出 turn_failed，执行 after_run，且 after_run non-zero 不覆盖原结果
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > turn silence timeout 执行 after_run，抛出 turn_timeout，且子进程 PID 已终止 433ms
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > before_run timeout 阻止子进程启动，抛出 hook_timeout，且 after_run 执行 351ms
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > startup read timeout 抛出 response_timeout，执行 after_run，且子进程 PID 已终止 1429ms
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 5: continuation 复用同一 thread，新 turn ID 由 app-server 返回 > 多次 turn 复用同一 thread，首轮使用模板渲染，后续轮使用 guidance，新 turn ID 各异
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 6: maxTurns 硬上限限制 > maxTurns=1 时即使 decider 返回 continue 也立即以 max_turns 结束，不启动第 2 轮
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 6: maxTurns 硬上限限制 > maxTurns=2 时跑满 2 轮后以 max_turns 结束，不发起第 3 轮
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 7: 可替换 decider，无 tracker/eligibility 依赖，异常与超时收敛 > decider 抛错时以 continuation_failed 失败，保留 cause
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 7: 可替换 decider，无 tracker/eligibility 依赖，异常与超时收敛 > decider 返回异 ID 工单时以 continuation_failed 失败
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 7: 可替换 decider，无 tracker/eligibility 依赖，异常与超时收敛 > decider 超时时以 continuation_timeout 失败，迟到 resolve/reject 不触发 unhandled rejection
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 7: 可替换 decider，无 tracker/eligibility 依赖，异常与超时收敛 > 换不同 state/labels/dispatchable 的同 ID 快照，agent 照常发起续轮并将刷新快照透传到后续 context
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 7: 可替换 decider，无 tracker/eligibility 依赖，异常与超时收敛 > 外部 decider 抛出 AgentError 被统一包装为 continuation_failed 并保留 cause（公共 API probe 回归）
+ ✓ src/contracts.test.ts > AgentError — SPEC §10.6 稳定错误面 > 覆盖 §10.6 全部推荐 category，名字逐字一致
+ ✓ src/contracts.test.ts > AgentError — SPEC §10.6 稳定错误面 > message 原样保留，code 是唯一判别式，Error 语义不变
+ ✓ src/contracts.test.ts > AgentError — SPEC §10.6 稳定错误面 > 底层异常经 cause 保留，但不成为公共契约（第三方类型不外露）
+ ✓ src/contracts.test.ts > AgentError — SPEC §10.6 稳定错误面 > 未提供的诊断字段是缺席，不是 null / 空串
+ ✓ src/contracts.test.ts > AgentEvent — SPEC §10.4 稳定事件面 > §10.4 示例事件名全部在契约清单内
+ ✓ src/contracts.test.ts > AgentEvent — SPEC §10.4 稳定事件面 > 必填三件套 + 可选上下文齐备时，事件可 JSON 往返且信息不丢
+ ✓ src/contracts.test.ts > AgentEvent — SPEC §10.4 稳定事件面 > launch 前的事件只有三件套；session 上下文缺席而不是空串
+ ✓ src/contracts.test.ts > AgentEvent — SPEC §10.4 稳定事件面 > event 是开放 string：未知事件名仍是合法事件（不冻结为 enum）
+ ✓ src/contracts.test.ts > AgentEvent — SPEC §10.4 稳定事件面 > isAgentEventName 正确收窄已知事件名，未知事件返回 false
+ ✓ src/contracts.test.ts > Continuation decision — §10.2 / §10.3 注入契约 > decision 只有 stop / continue 两个可判别分支
+ ✓ src/contracts.test.ts > Continuation decision — §10.2 / §10.3 注入契约 > decider 只依赖 Symphony 侧上下文，不接触 raw Codex payload
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > domain / config / agent 公共源码不出现 Codex schema 成员或生成类型名
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > agent 运行期不 import tracker / orchestrator / observability，也不 import Codex SDK（TypeScript AST 深度检查）
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > agent 的 package 依赖只有 domain / config / workspace，测试脚本不再 passWithNoTests
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > runner 复用 config 的 renderPrompt 与 workspace 的 WorkspaceManager，不引入 Liquid 或 containment 算法副本
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > containment 算法边界守卫能准确检出基于 realpath 与 path.relative 的重复实现（反例校验）
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > 高层 runner、continuation 与 Symphony 契约面不出现 wire method 字面量，协议词汇仅收敛在 session adapter
+ ✓ src/contracts.test.ts > 结构边界：不复制 Codex generated schema、依赖方向不越界（issue 验收 #3） > spawn 唯一落在 process-launcher.ts，且 low-level launcher/transport 实现不从 index.ts 导出
+ ✓ src/transport.test.ts > §10.3 transport framing：stdio 上的 newline-delimited JSON > partial line 跨 chunk：换行前不成帧，也不误报 malformed 543ms
+ ✓ src/transport.test.ts > §10.3 transport framing：stdio 上的 newline-delimited JSON > 一次 write 多条 NDJSON：每行独立成帧且顺序保持
+ ✓ src/transport.test.ts > §10.3 transport framing：stdio 上的 newline-delimited JSON > 本地写出也是 `JSON.stringify` + 单个换行
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > 并发请求乱序返回：每个 response 只结算它自己的请求 358ms
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > readTimeoutMs 到期报 response_timeout 并清理 pending；transport 仍可用
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > 迟到的 response 命中已清理的 id：报告 protocol issue，不误结算、不 crash 455ms
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > JSON-RPC error response 映射为 typed response_error（不 resolve 成半成品）
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > 数字与字符串 ID 严格隔离：数字 ID response 不得误结算同值的字符串 ID request
+ ✓ src/transport.test.ts > §10.6 request id 关联与 pending request 生命周期 > onActivity 仅在收到有效协议输入时触发，stderr 与 malformed 不触发
+ ✓ src/transport.test.ts > §10.3 / §17.5 stderr 与协议流物理隔离 > stderr 上伪造本请求的合法 response：不得结算 pending
+ ✓ src/transport.test.ts > §10.3 / §17.5 stderr 与协议流物理隔离 > stderr 持续刷屏 + 超长诊断行：有界缓冲，协议往返不受影响
+ ✓ src/transport.test.ts > §10.1 bounded buffering：oversized / malformed 不成灾 > 永不换行的超长行：丢弃 + 报 oversized_line + 之后仍能正常成帧
+ ✓ src/transport.test.ts > §10.1 bounded buffering：oversized / malformed 不成灾 > 非 JSON 行与不可判别 envelope：逐条报 malformed_line 后继续服务
+ ✓ src/transport.test.ts > §10.1 bounded buffering：oversized / malformed 不成灾 > stdout 上的通知原样转发，未知 method 不被 transport 解释
+ ✓ src/transport.test.ts > §10.3 / §17.5 进程退出与有界 shutdown > 子进程带非零码退出：pending 报 port_exit（含 exitCode 诊断），onExit 恰好一次
+ ✓ src/transport.test.ts > §10.3 / §17.5 进程退出与有界 shutdown > shutdown 窗口内的 pending 由 port_exit 结算，而不是等 read timeout
+ ✓ src/transport.test.ts > §10.3 / §17.5 进程退出与有界 shutdown > 忽略 SIGTERM 的子进程：stop() 在窗口后升级 SIGKILL 并等它真的消失 331ms
+ ✓ src/transport.test.ts > §10.3 / §17.5 进程退出与有界 shutdown > bash 未 exec 的孙进程随进程组一起终止，不遗留 subprocess
+ ✓ src/transport.test.ts > transport 的双向面（M4.4 的 policy 由上层注入） > 对端发起的 request 被转发，回信后对端据此完成原请求
+ ✓ src/transport.test.ts > transport 的双向面（M4.4 的 policy 由上层注入） > sendNotification 不带 id、不等回信；对端也不会为它回信
+ ✓ src/transport.test.ts > transport 的双向面（M4.4 的 policy 由上层注入） > listener 自己抛异常不得破坏 transport 或冒泡给调用方
+ ✓ src/process-launcher.test.ts > §10.1 / §17.5 launch 形态：bash -lc + workspace cwd > fixture 自报 process.cwd() 就是 workspace path，且 PID 是被 launch 的那个进程
+ ✓ src/process-launcher.test.ts > §10.1 / §17.5 launch 形态：bash -lc + workspace cwd > command 确实经 `bash -lc` 解释：shell 展开发生在子进程侧
+ ✓ src/process-launcher.test.ts > §10.1 / §17.5 launch 形态：bash -lc + workspace cwd > shell 前缀赋值形态由 shell 解析，transport 不参与 argv 拆解
+ ✓ src/process-launcher.test.ts > §9.5 / §17.2 launch 前的 workspace cwd containment 重验 > workspace path 等于 root：拒绝 launch，且 child 从未启动
+ ✓ src/process-launcher.test.ts > §9.5 / §17.2 launch 前的 workspace cwd containment 重验 > out-of-root 路径：拒绝 launch，且 child 从未启动
+ ✓ src/process-launcher.test.ts > §9.5 / §17.2 launch 前的 workspace cwd containment 重验 > workspace 目录被替换成逃逸 symlink：launch 前重验拦下，child 未启动
+ ✓ src/process-launcher.test.ts > §9.5 / §17.2 launch 前的 workspace cwd containment 重验 > createWorkspace 通过后再被换成逃逸 symlink：同一 gate 在 launch 前重验（§17.2 收口）
+ ✓ src/process-launcher.test.ts > §9.5 / §17.2 launch 前的 workspace cwd containment 重验 > gate 恰好被调用一次、参数就是实际 spawn 的 cwd
+ ✓ src/process-launcher.test.ts > §10.6 / §17.2 launch 失败面 > 空 command：launch_failed，不 spawn、不做 gate 校验
+ ✓ src/process-launcher.test.ts > §10.6 / §17.2 launch 失败面 > containment 通过但目录不存在：spawn 失败映射为 launch_failed 并保留原始 cause
+ ✓ src/process-launcher.test.ts > §10.6 / §17.2 launch 失败面 > launch 失败的错误只经 cause 保留底层异常，不透传未类型化异常
+ ✓ src/process-launcher.test.ts > §10.1 子进程环境：显式 env + generic excludeEnvNames > 继承集合可点名剔除，显式 env 后写优先；不含任何硬编码 secret 名单
+ ✓ src/process-launcher.test.ts > §10.1 子进程环境：显式 env + generic excludeEnvNames > 不注入 excludeEnvNames 时按父进程环境继承（fixture 读得到 PATH）
+ ✓ src/process-launcher.test.ts > transport 与 launch 边界的衔接 > 未 await stop 就退出：pid 可读、closed 翻转、重复 stop 幂等
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":false,"staged":false,"repair":false}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":false,"staged":false,"repair":true}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":false,"staged":true,"repair":false}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":false,"staged":true,"repair":true} 329ms
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":true,"staged":false,"repair":false}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":true,"staged":false,"repair":true}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":true,"staged":true,"repair":false}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > commits source without runtime state: {"tracked":true,"staged":true,"repair":true}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > persists a pending deadline before interruption and expires across restart without repair
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > unknown classic rules fail closed even with a ruleset: Not Found (HTTP 404)
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > unknown classic rules fail closed even with a ruleset: Resource not accessible (HTTP 403)
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed classic protection: {}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed classic protection: {"contexts":[42]}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed classic protection: {"checks":[{}]}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > consumes required checks from every active-rules page
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed active rules: {}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed active rules: {"type":"required_status_checks","parameters":{}}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects malformed active rules: {"type":"required_status_checks","parameters":{"required_status_checks":[{}]}}
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > fails closed on empty or malformed paginated output: ""
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > fails closed on empty or malformed paginated output: "[]\n{bad json"
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > fails closed on empty or malformed paginated output: "[]\n{}"
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > fails closed on empty or malformed paginated output: "[]\nnull"
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > fails closed on empty or malformed paginated output: "[]\n[{}]"
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > only diagnoses the run referenced by the failed job, never an unrelated first run
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > hands off log retrieval failure without consuming repair budget: Resource not accessible by integration (HTTP 403)
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > hands off log retrieval failure without consuming repair budget: network unavailable
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > refuses incomplete logs even when one failed run has usable logs
+ ✓ src/delivery/delivery-review-regressions.test.ts > third-review delivery regressions > rejects non-network origin protocols
+ ✓ src/cancellation.test.ts > attempt 级取消 — M5.2 / #51 > 启动前已 abort：不创建 workspace、不 spawn，抛 turn_cancelled
+ ✓ src/cancellation.test.ts > attempt 级取消 — M5.2 / #51 > 握手期 abort：终止已 launch 的子进程并抛 turn_cancelled
+ ✓ src/cancellation.test.ts > attempt 级取消 — M5.2 / #51 > continuation 等待被外部 abort 立即收敛为 turn_cancelled
+ ✓ src/delivery/git-gh-runner.test.ts > git-gh-runner credential sanitization > sanitizes classic personal access tokens (ghp_*)
+ ✓ src/delivery/git-gh-runner.test.ts > git-gh-runner credential sanitization > sanitizes fine-grained personal access tokens (github_pat_*)
+ ✓ src/delivery/git-gh-runner.test.ts > git-gh-runner credential sanitization > sanitizes authorization bearer tokens
+ ✓ src/delivery/git-gh-runner.test.ts > git-gh-runner credential sanitization > sanitizes embedded user:password URLs
+ ✓ src/delivery/git-gh-runner.test.ts > structured GitHub output > preserves compact JSON and SHA fields when HTTPS and SSH URLs coexist
+ ✓ src/delivery/git-gh-runner.test.ts > structured GitHub output > redacts actual credentials without crossing JSON string boundaries
+
+ Test Files  10 passed (10)
+      Tests  208 passed (208)
+   Start at  16:34:14
+   Duration  20.33s (transform 323ms, setup 0ms, collect 815ms, tests 18.56s, environment 1ms, prepare 250ms)
+
+
+Exit code: 0
+
+--- host after ---
+$ sw_vers
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+$ uname -a
+Darwin iMac-3.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:11:03 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T8132 arm64
+$ node --version
+v24.15.0
+$ npm --version
+12.2.0
+$ zsh --version
+zsh 5.9 (arm64-apple-darwin25.0)
+$ sysctl -n hw.ncpu
+10
+$ uptime
+16:34  up 26 days,  2:22, 4 users, load averages: 3.82 4.79 4.73
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    21615.
+Pages active:                                 183606.
+Pages inactive:                               183923.
+Pages speculative:                              1233.
+Pages throttled:                                   0.
+Pages wired down:                             323092.
+Pages purgeable:                                2464.
+"Translation faults":                    17443683760.
+Pages copy-on-write:                       649298419.
+Pages zero filled:                       11462109925.
+Pages reactivated:                        3868890517.
+Pages purged:                             1165814154.
+File-backed pages:                            128045.
+Anonymous pages:                              240717.
+Pages stored in compressor:                  2962703.
+Pages occupied by compressor:                 300597.
+Decompressions:                           4481259705.
+Compressions:                             5048810449.
+Pageins:                                   381281985.
+Pageouts:                                    9621330.
+Swapins:                                    53884587.
+Swapouts:                                   63456834.

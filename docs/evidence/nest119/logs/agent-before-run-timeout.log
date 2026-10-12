@@ -1,0 +1,50 @@
+NEST119 macOS evidence run: agent-target
+Started UTC: 2026-10-12T08:35:24.413+00:00
+Commit: e16cbaa
+Command: TMPDIR=/private/tmp npm test -w @symphony/agent -- --maxWorkers=1 --minWorkers=1 --reporter=verbose -t before_run timeout 阻止子进程启动 [NODE_OPTIONS preload trace enabled]
+
+$ uptime
+16:35  up 26 days,  2:23, 4 users, load averages: 3.87 4.65 4.68
+$ sysctl -n hw.ncpu
+10
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8461.
+Pages active:                                 215476.
+Pages inactive:                               213966.
+Pages speculative:                               671.
+Pages throttled:                                   0.
+Pages wired down:                             302063.
+Pages purgeable:                                7468.
+"Translation faults":                    17444479134.
+Pages copy-on-write:                       649311315.
+Pages zero filled:                       11462398472.
+Pages reactivated:                        3869008169.
+Pages purged:                             1165832529.
+File-backed pages:                            130290.
+Anonymous pages:                              299823.
+Pages stored in compressor:                  2901340.
+Pages occupied by compressor:                 273358.
+Decompressions:                           4481458617.
+Compressions:                             5048973338.
+Pageins:                                   381291592.
+Pageouts:                                    9621798.
+Swapins:                                    53891109.
+Swapouts:                                   63456834.
+
+--- command output ---
+npm notice run @symphony/agent@0.1.0 test
+npm notice run vitest run --maxWorkers=1 --minWorkers=1 --reporter=verbose -t before_run timeout 阻止子进程启动
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/packages/agent
+
+ ✓ src/agent-runner.test.ts > Agent Runner — SPEC §10.7 / §12 / §16.5 Worker Attempt Primitive > 验收 4: startup / turn / timeout 失败均执行 after_run 且不覆盖结果 > before_run timeout 阻止子进程启动，抛出 hook_timeout，且 after_run 执行 360ms
+
+ Test Files  1 passed | 9 skipped (10)
+      Tests  1 passed | 207 skipped (208)
+   Start at  16:35:24
+   Duration  1.95s (transform 303ms, setup 0ms, collect 754ms, tests 361ms, environment 1ms, prepare 198ms)
+
+
+Exit code: 0
+Finished UTC: 2026-10-12T08:35:26.739+00:00

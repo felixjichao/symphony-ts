@@ -1,0 +1,52 @@
+NEST119 macOS evidence run: workspace-outer
+Started UTC: 2026-10-12T08:35:33.810+00:00
+Commit: e16cbaa
+Command: TMPDIR=/private/tmp npm test -w @symphony/workspace -- --maxWorkers=1 --minWorkers=1 --reporter=verbose -t 外层 hook 超时终止时清理受管 Git 进程组 [NODE_OPTIONS preload trace enabled]
+
+$ uptime
+16:35  up 26 days,  2:23, 4 users, load averages: 4.04 4.66 4.68
+$ sysctl -n hw.ncpu
+10
+$ vm_stat
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    14902.
+Pages active:                                 204287.
+Pages inactive:                               198430.
+Pages speculative:                              1626.
+Pages throttled:                                   0.
+Pages wired down:                             303114.
+Pages purgeable:                                6414.
+"Translation faults":                    17444932946.
+Pages copy-on-write:                       649362827.
+Pages zero filled:                       11462556922.
+Pages reactivated:                        3869071196.
+Pages purged:                             1165834069.
+File-backed pages:                            132925.
+Anonymous pages:                              271418.
+Pages stored in compressor:                  2927439.
+Pages occupied by compressor:                 291696.
+Decompressions:                           4481524330.
+Compressions:                             5049069018.
+Pageins:                                   381294615.
+Pageouts:                                    9621815.
+Swapins:                                    53891199.
+Swapouts:                                   63456834.
+
+--- command output ---
+npm notice run @symphony/workspace@0.1.0 test
+npm notice run vitest run --maxWorkers=1 --minWorkers=1 --reporter=verbose -t 外层 hook 超时终止时清理受管 Git 进程组
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/packages/workspace
+
+Cloning into bare repository '/private/tmp/symphony-bootstrap-test-uTBN2V/remote.git'...
+done.
+ ✓ src/repository-bootstrap.test.ts > Repository Workspace Bootstrap (SPEC §9 / §17.2) > 进程生命周期与超时清理 (Blocker 回归) > 外层 hook 超时终止时清理受管 Git 进程组（独立组 + 监督者 ownership），不残留孤儿子进程 5434ms
+
+ Test Files  1 passed | 6 skipped (7)
+      Tests  1 passed | 167 skipped (168)
+   Start at  16:35:34
+   Duration  6.74s (transform 144ms, setup 0ms, collect 276ms, tests 5.89s, environment 1ms, prepare 129ms)
+
+
+Exit code: 0
+Finished UTC: 2026-10-12T08:35:40.798+00:00

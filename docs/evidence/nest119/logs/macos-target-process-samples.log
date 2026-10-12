@@ -1,0 +1,25 @@
+=== agent-before-run-timeout ===
+2026-10-12T08:35:25.620+00:00 OBS {"pid": 57090, "ppid": 57059, "pgid": 57090, "state": "Rs", "etime": "00:00", "command": "sh -lc sleep 10"}
+2026-10-12T08:35:25.655+00:00 OBS {"pid": 57090, "ppid": 57059, "pgid": 57090, "state": "Ss", "etime": "00:00", "command": "sh -lc sleep 10"}
+2026-10-12T08:35:25.655+00:00 OBS {"pid": 57117, "ppid": 57090, "pgid": 57090, "state": "S", "etime": "00:00", "command": "sh -lc sleep 10"}
+2026-10-12T08:35:25.723+00:00 EXIT pid=57117 no longer present in ps
+2026-10-12T08:35:25.794+00:00 EXIT pid=57090 no longer present in ps
+=== workspace-hook-timeout ===
+2026-10-12T08:35:35.136+00:00 OBS {"pid": 58193, "ppid": 57743, "pgid": 58193, "state": "Ss", "etime": "00:00", "command": "sh -lc node \"/Volumes/Data/symphony-ts/apps/cli/dist/bin/symphony.js\" repo-bootstrap --repo \"/private/tmp/symphony-bootstrap-test-uTBN2V/remote.git\" --target \"/private/tmp/symphony-bootstrap-test-uTBN2V/workspace-GH-79\""}
+2026-10-12T08:35:35.294+00:00 OBS {"pid": 58193, "ppid": 57743, "pgid": 58193, "state": "Ss", "etime": "00:00", "command": "node /Volumes/Data/symphony-ts/apps/cli/dist/bin/symphony.js repo-bootstrap --repo /private/tmp/symphony-bootstrap-test-uTBN2V/remote.git --target /private/tmp/symphony-bootstrap-test-uTBN2V/workspace-GH-79"}
+2026-10-12T08:35:35.327+00:00 OBS {"pid": 58193, "ppid": 57743, "pgid": 58193, "state": "Rs", "etime": "00:00", "command": "node /Volumes/Data/symphony-ts/apps/cli/dist/bin/symphony.js repo-bootstrap --repo /private/tmp/symphony-bootstrap-test-uTBN2V/remote.git --target /private/tmp/symphony-bootstrap-test-uTBN2V/workspace-GH-79"}
+2026-10-12T08:35:35.392+00:00 OBS {"pid": 58193, "ppid": 57743, "pgid": 58193, "state": "Ss", "etime": "00:00", "command": "node /Volumes/Data/symphony-ts/apps/cli/dist/bin/symphony.js repo-bootstrap --repo /private/tmp/symphony-bootstrap-test-uTBN2V/remote.git --target /private/tmp/symphony-bootstrap-test-uTBN2V/workspace-GH-79"}
+2026-10-12T08:35:35.454+00:00 OBS {"pid": 58579, "ppid": 57743, "pgid": 58579, "state": "Ss", "etime": "00:00", "command": "/Library/Developer/CommandLineTools/usr/bin/git fetch --prune origin"}
+2026-10-12T08:35:35.454+00:00 OBS {"pid": 58580, "ppid": 58579, "pgid": 58579, "state": "R", "etime": "00:00", "command": "/bin/sh /private/tmp/symphony-bootstrap-test-uTBN2V/upload-pack-hook.sh /private/tmp/symphony-bootstrap-test-uTBN2V/remote.git"}
+2026-10-12T08:35:35.489+00:00 OBS {"pid": 58580, "ppid": 58579, "pgid": 58579, "state": "S", "etime": "00:00", "command": "/bin/sh /private/tmp/symphony-bootstrap-test-uTBN2V/upload-pack-hook.sh /private/tmp/symphony-bootstrap-test-uTBN2V/remote.git"}
+2026-10-12T08:35:36.035+00:00 OBS {"pid": 58580, "ppid": 58579, "pgid": 58579, "state": "S", "etime": "00:01", "command": "sleep 20"}
+2026-10-12T08:35:40.148+00:00 EXIT pid=58579 no longer present in ps
+2026-10-12T08:35:40.148+00:00 EXIT pid=58580 no longer present in ps
+2026-10-12T08:35:40.175+00:00 EXIT pid=58193 no longer present in ps
+=== workspace-direct-timeout ===
+2026-10-12T08:35:48.936+00:00 OBS {"pid": 59455, "ppid": 58871, "pgid": 59455, "state": "Ss", "etime": "00:00", "command": "/Library/Developer/CommandLineTools/usr/bin/git fetch --prune origin"}
+2026-10-12T08:35:48.936+00:00 OBS {"pid": 59456, "ppid": 59455, "pgid": 59455, "state": "S", "etime": "00:00", "command": "/bin/sh /private/tmp/symphony-bootstrap-test-zDCv5m/upload-pack-standalone.sh /private/tmp/symphony-bootstrap-test-zDCv5m/remote.git"}
+2026-10-12T08:35:49.358+00:00 OBS {"pid": 59456, "ppid": 59455, "pgid": 59455, "state": "R", "etime": "00:01", "command": "sleep 20"}
+2026-10-12T08:35:49.387+00:00 OBS {"pid": 59456, "ppid": 59455, "pgid": 59455, "state": "S", "etime": "00:01", "command": "sleep 20"}
+2026-10-12T08:35:51.933+00:00 EXIT pid=59456 no longer present in ps
+2026-10-12T08:35:51.933+00:00 EXIT pid=59455 no longer present in ps
