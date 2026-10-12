@@ -102,7 +102,22 @@ export interface TaskExecutionFailureOutcome {
   readonly error: unknown;
 }
 
-export type TaskExecutionOutcome = TaskExecutionSuccessOutcome | TaskExecutionFailureOutcome;
+/**
+ * Terminal outcome for the supersede/cancel race: the bridge rejected the result or
+ * failure submission because the task became non-actionable while executing. Nothing
+ * was recorded for the execution (no receipt, no failure) and the stale outcome must
+ * never be accepted; the executor drops local state and newer tasks take over.
+ */
+export interface TaskExecutionSupersededOutcome {
+  readonly status: "superseded";
+  readonly session: DecisionSession;
+  readonly error: unknown;
+}
+
+export type TaskExecutionOutcome =
+  | TaskExecutionSuccessOutcome
+  | TaskExecutionFailureOutcome
+  | TaskExecutionSupersededOutcome;
 
 export async function executeTaskWithAdapter(
   options: ExecuteTaskWithAdapterOptions
