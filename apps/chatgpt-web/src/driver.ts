@@ -9,6 +9,7 @@ import {
   type DecisionLease,
   type DecisionContextBundle,
   type DecisionResult,
+  type DecisionAdapterErrorCode,
   DecisionAdapterError,
 } from "@symphony/domain/decision";
 import {
@@ -1195,13 +1196,16 @@ export class DecisionTabDriver implements DecisionTaskController {
       }
     } catch (bootstrapErr) {
       if (!signal.aborted) {
+        const failure = this.classifyRecoveryFailure(bootstrapErr, {
+          message: "Failed waiting for bootstrap response during checkpoint recovery",
+        });
         const failRes = await this.submitFailure(task.id, {
           owner: lease.owner,
           token: lease.token,
           generation: lease.generation,
-          error: "execution_failed",
-          details: { message: "Failed waiting for bootstrap response during checkpoint recovery" },
-          retryable: true,
+          error: failure.error,
+          details: failure.details,
+          retryable: failure.retryable,
         }).catch(() => null);
 
         this.checkpointStore.delete();
@@ -1312,6 +1316,32 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   /**
+   * Maps an error raised during checkpoint recovery to the structured failure fields the
+   * Decision protocol expects. Typed `DecisionAdapterError` failures keep their own code,
+   * suggested action and retryability — the same classification the coordinator applies —
+   * so upstream keeps e.g. `human_required` / `human_intervention` as a non-retryable human
+   * handoff and `binding_broken` as a rebind signal. Ordinary wait/network errors remain a
+   * retryable `execution_failed`.
+   */
+  private classifyRecoveryFailure(
+    err: unknown,
+    fallbackDetails: Record<string, unknown>
+  ): { error: DecisionAdapterErrorCode; retryable: boolean; details: Record<string, unknown> } {
+    if (err instanceof DecisionAdapterError) {
+      return {
+        error: err.code,
+        retryable: err.retryable,
+        details: {
+          code: err.code,
+          message: err.message,
+          suggestedAction: err.suggestedAction,
+        },
+      };
+    }
+    return { error: "execution_failed", retryable: true, details: fallbackDetails };
+  }
+
+  /**
    * Confirms the tab currently shows the exact conversation recorded for this bootstrap
    * attempt. Only a recorded, attempt-specific conversation reference proves association:
    * page content (including the bootstrap prompt) is shared by every Symphony-created
@@ -1356,13 +1386,16 @@ export class DecisionTabDriver implements DecisionTaskController {
       });
     } catch (modelErr) {
       if (!signal.aborted) {
+        const failure = this.classifyRecoveryFailure(modelErr, {
+          message: "Failed waiting for response during checkpoint recovery",
+        });
         const failRes = await this.submitFailure(task.id, {
           owner: lease.owner,
           token: lease.token,
           generation: lease.generation,
-          error: "execution_failed",
-          details: { message: "Failed waiting for response during checkpoint recovery" },
-          retryable: true,
+          error: failure.error,
+          details: failure.details,
+          retryable: failure.retryable,
         }).catch(() => null);
 
         this.checkpointStore.delete();
