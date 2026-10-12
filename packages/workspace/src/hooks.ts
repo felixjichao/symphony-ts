@@ -1,4 +1,9 @@
 import { spawn } from "node:child_process";
+import {
+  GitOperationSupervisor,
+  SUPERVISOR_SOCKET_ENV,
+  type TerminateAllReport,
+} from "./git-supervisor";
 
 /**
  * Workspace lifecycle hook 执行层（SPEC §5.3.4 / §9.4 / §15.4，#29 / M3.3）。
@@ -17,6 +22,13 @@ import { spawn } from "node:child_process";
  *   config reload 后的新调用即用新值；§5.3.4 / §6.2，验收 2）；
  * - timeout 后终止整个 hook 子进程**进程组**（detached + 负 pid SIGKILL），
  *   确保脚本派生的孙进程不成为孤儿，且不残留 timer / stdio handle（§15.4）；
+ * - **受管 Git 进程组监督（NEST-119 A 修订方案）**：每次 hook 执行时宿主建立一个
+ *   {@link GitOperationSupervisor}（Unix socket），hook 内 CLI / 库经本地 IPC 请求
+ *   创建 Git 操作——创建与登记由监督者串行完成后才授予启动许可，即使请求方或
+ *   中间进程退出，登记仍保留在监督者内存中（不依赖 PPID 可追溯）。外层超时：
+ *   先停止接纳新受管操作，再向已持有的 Git 组及原 hook 组发终止信号，并在
+ *   {@link HOOK_GIT_TEARDOWN_GRACE_MS} 统一上界内确认；通信失效或监督者无法建立时
+ *   拒绝执行并报告错误，绝不静默降级成未登记的独立组；
  * - stdout / stderr 捕获用于诊断，但捕获缓冲有硬上限
  *   （{@link HOOK_OUTPUT_CAPTURE_LIMIT}），事件 / message 只携带更小的摘录
  *   （{@link HOOK_OUTPUT_EXCERPT_LIMIT}），避免无界输出（§15.4 "SHOULD be truncated"）；
@@ -54,6 +66,13 @@ export const HOOK_OUTPUT_EXCERPT_LIMIT = 8 * 1024;
  * 本回退仅防御绕过 config 直接构造 `HooksConfig` 的调用方。
  */
 export const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
+
+/**
+ * 外层 hook 超时后，清理本次 hook 登记的受管 Git 进程组（NEST-119 A 修订方案）
+ * 的统一收尾上界（毫秒）。整个 timeout 收敛仍是有界的：
+ * `timeoutMs + HOOK_GIT_TEARDOWN_GRACE_MS + 组扫描预算`。
+ */
+export const HOOK_GIT_TEARDOWN_GRACE_MS = 2_000;
 
 /**
  * operator-visible hook 事件（callback 契约，SPEC §9.4 "Log hook start, failures,
@@ -222,25 +241,31 @@ export function emitWorkspaceHookEvent(
  *
  * 行为：
  * - `script` 为 `null` / 空白 → 立即返回 `success`（未配置该 hook，不 spawn）；
+ * - 为本次执行建立受管 Git 监督者（{@link GitOperationSupervisor}）并把 socket
+ *   路径注入 hook 环境（{@link SUPERVISOR_SOCKET_ENV}）；监督者无法建立 → 返回
+ *   `failed`（不 spawn，发 operator 事件）——绝不静默降级为未登记的独立 Git 组；
  * - `sh -lc <script>`，cwd = `params.cwd`，detached（独立进程组）；
  * - stdout / stderr 捕获至 {@link HOOK_OUTPUT_CAPTURE_LIMIT}（超限停止累积、置 truncated）；
- * - `timeoutMs`（归一化后）到期 → SIGKILL 整个进程组，`outcome = "timeout"`；
+ * - `timeoutMs`（归一化后）到期 → 先停止接纳并终止本次登记的受管 Git 进程组
+ *   （有界确认，{@link HOOK_GIT_TEARDOWN_GRACE_MS}），再 SIGKILL 整个 hook 进程组，
+ *   `outcome = "timeout"`；清理未确认时在 message / 事件中携带明确诊断；
  * - 退出码非 0 → `outcome = "failed"`；spawn failure（如 `sh` 缺失）→ `failed`；
  * - failed / timeout 经 `onEvent` 发 operator-visible 事件；
- * - 无论结果如何，清理 timer 与 stdio，不留 handle。
+ * - 无论结果如何，清理 timer 与 stdio、关闭监督者，不留 handle。
  *
  * **完成判定用 `close`（stdio 关闭）而非 `exit`（进程退出）**（PR #33 审查 Suggestion 1）：
  * 这样能读到脚本产生的全部输出。副作用是——脚本本身退出码 0、但留下**持有继承
  * stdout/stderr 的后台进程**（如 `daemon &` 未重定向）时，`close` 会被后台进程拖住，
- * 直到 `timeoutMs` 到期 SIGKILL 整个进程组，结果为 `timeout` 而非 `success`（对
- * `after_create` 还会触发半成品清理）。此行为确定、有界（≤ timeoutMs）、与「孙进程不留
- * 孤儿」一致，非缺陷；确需 daemonize 的 hook 应自行重定向 stdio（如 `daemon >/dev/null 2>&1 &`）
- * 以免拖住 `close`。见 README Known limitations 与 workspace-hook-execution-contract Note。
+ * 直到 `timeoutMs` 到期走上述超时收敛，结果为 `timeout` 而非 `success`（对
+ * `after_create` 还会触发半成品清理）。此行为确定、有界（≤ timeoutMs + 收尾上界）、
+ * 与「孙进程不留孤儿」一致，非缺陷；确需 daemonize 的 hook 应自行重定向 stdio
+ * （如 `daemon >/dev/null 2>&1 &`）以免拖住 `close`。见 README Known limitations
+ * 与 workspace-hook-execution-contract Note。
  *
  * 本函数**不做**路径安全校验：调用方必须在 spawn 前对 `cwd` 完成
  * `assertWorkspacePathSafe`（#28 不变量：执行 shell 前路径必须安全）。
  */
-export function executeWorkspaceHook(
+export async function executeWorkspaceHook(
   params: ExecuteWorkspaceHookParams,
 ): Promise<WorkspaceHookResult> {
   const {
@@ -255,7 +280,7 @@ export function executeWorkspaceHook(
   const timeoutMs = resolveHookTimeoutMs(params.timeoutMs);
 
   if (script === null || script.trim().length === 0) {
-    return Promise.resolve({
+    return {
       hook,
       outcome: "success",
       exitCode: 0,
@@ -265,7 +290,38 @@ export function executeWorkspaceHook(
       truncated: false,
       timedOut: false,
       message: `hook "${hook}" not configured; skipped`,
+    };
+  }
+
+  // 受管 Git 监督者（NEST-119 A 修订方案）：创建与登记由监督者串行完成，外层
+  // 超时据此清理 hook 内的 Git 进程组。建立失败 → 拒绝执行（failed），不降级。
+  let supervisor: GitOperationSupervisor;
+  try {
+    supervisor = await GitOperationSupervisor.start();
+  } catch (err: unknown) {
+    const message = `hook "${hook}" failed to start managed git supervisor: ${err instanceof Error ? err.message : String(err)}`;
+    const result: WorkspaceHookResult = {
+      hook,
+      outcome: "failed",
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      truncated: false,
+      timedOut: false,
+      message,
+      error: err,
+    };
+    emitHookEvent(onEvent, {
+      hook,
+      workspacePath,
+      ...(identifier !== undefined ? { identifier } : {}),
+      ...(workspaceKey !== undefined ? { workspaceKey } : {}),
+      outcome: "failed",
+      outputTruncated: false,
+      message,
     });
+    return result;
   }
 
   return new Promise<WorkspaceHookResult>((resolve) => {
@@ -275,6 +331,9 @@ export function executeWorkspaceHook(
     let settled = false;
     let timedOut = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
+    let teardownStarted = false;
+    let teardownDone: Promise<void> = Promise.resolve();
+    let managedCleanupSummary = "";
 
     const child = spawn("sh", ["-lc", script], {
       cwd,
@@ -282,6 +341,7 @@ export function executeWorkspaceHook(
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        [SUPERVISOR_SOCKET_ENV]: supervisor.socketPath,
         ...(workspaceKey !== undefined ? { SYMPHONY_WORKSPACE_KEY: workspaceKey } : {}),
         ...(identifier !== undefined ? { SYMPHONY_ISSUE_IDENTIFIER: identifier } : {}),
       },
@@ -299,6 +359,11 @@ export function executeWorkspaceHook(
       child.stderr?.destroy();
     };
 
+    const disposeSupervisor = (): void => {
+      // 双重 dispose 幂等（超时路径已在 teardown 中先 dispose）。
+      void supervisor.dispose().catch(() => undefined);
+    };
+
     const finish = (result: WorkspaceHookResult): void => {
       if (settled) {
         return;
@@ -306,6 +371,7 @@ export function executeWorkspaceHook(
       settled = true;
       clearTimers();
       destroyStreams();
+      disposeSupervisor();
       resolve(result);
     };
 
@@ -373,7 +439,7 @@ export function executeWorkspaceHook(
 
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
       if (timedOut) {
-        const message = `hook "${hook}" timed out after ${timeoutMs}ms; terminated process group`;
+        const message = `hook "${hook}" timed out after ${timeoutMs}ms; terminated process group${managedCleanupSummary}`;
         const result: WorkspaceHookResult = {
           hook,
           outcome: "timeout",
@@ -386,7 +452,8 @@ export function executeWorkspaceHook(
           message,
         };
         emitHookEvent(onEvent, buildEvent("timeout", code, signal, message));
-        finish(result);
+        // 等待受管 Git 组清理收敛（有界）后再返回，保证诊断完整；防兜底竞速。
+        void Promise.race([teardownDone, delay(TEARDOWN_RACE_FALLBACK_MS)]).then(() => finish(result));
         return;
       }
       if (code === 0) {
@@ -422,7 +489,66 @@ export function executeWorkspaceHook(
 
     timeoutTimer = setTimeout(() => {
       timedOut = true;
-      killProcessGroup(child.pid);
+      runTeardown();
     }, timeoutMs);
+
+    /**
+     * 外层超时的统一收尾（NEST-119 A 修订方案 stopping 顺序）：
+     * 1. 锁定关闭——监督者拒绝接纳新的受管操作（含既有连接上的 spawn 请求）；
+     * 2. 对已登记的受管 Git 进程组发终止信号并在统一上界内有界确认退出；
+     * 3. SIGKILL 原 hook 进程组（含尚未退出的 sh / CLI）；
+     * 4. 监督者收尾（socket 关闭、临时目录清理、残余兜底终止）。
+     * 到达上界仍不能确认清理时，诊断写入 managedCleanupSummary，不宣称全部退出。
+     */
+    function runTeardown(): void {
+      if (teardownStarted) {
+        return;
+      }
+      teardownStarted = true;
+      teardownDone = (async () => {
+        let report: TerminateAllReport | undefined;
+        let teardownError: string | undefined;
+        try {
+          supervisor.stopAccepting();
+          report = await supervisor.terminateAll(HOOK_GIT_TEARDOWN_GRACE_MS);
+        } catch (err: unknown) {
+          teardownError = err instanceof Error ? err.message : String(err);
+        }
+        killProcessGroup(child.pid);
+        managedCleanupSummary = buildManagedCleanupSummary(report, teardownError);
+        await supervisor.dispose().catch(() => undefined);
+      })();
+    }
   });
+}
+
+/** teardownDone 竞速兜底：正常时 teardown 有界完成，仅防御异常悬挂。 */
+const TEARDOWN_RACE_FALLBACK_MS = 3_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 把 terminateAll 报告转成附加诊断（无受管操作时返回空串，不打扰既有消息面）。 */
+function buildManagedCleanupSummary(
+  report: TerminateAllReport | undefined,
+  teardownError: string | undefined,
+): string {
+  if (teardownError !== undefined) {
+    return `; WARNING: managed git cleanup failed: ${teardownError}`;
+  }
+  if (report === undefined || report.requested === 0) {
+    return "";
+  }
+  if (report.exitConfirmed) {
+    return `; managed git operation groups terminated (count=${report.requested}, exit confirmed)`;
+  }
+  const parts = [`; WARNING: managed git cleanup not confirmed within ${HOOK_GIT_TEARDOWN_GRACE_MS}ms`];
+  if (report.leftoverPids.length > 0) {
+    parts.push(`leftover pids: ${report.leftoverPids.join(",")}`);
+  }
+  if (report.queryFailed) {
+    parts.push("group membership query did not complete within budget");
+  }
+  return parts.join("; ");
 }

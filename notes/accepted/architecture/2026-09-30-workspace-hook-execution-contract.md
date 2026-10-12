@@ -53,9 +53,14 @@ M3.1 只在 `WorkspaceManagerOptions` 预留了一个 `hooks` 构造器字段与
    残留。finalize 时清理 timer、destroy stdio，不残留 handle。完成判定用 **`close`（stdio
    关闭）而非 `exit`（进程退出）**，以捕获脚本的全部输出；代价是「脚本秒退码 0 但后台进程
    持有继承的 stdout/stderr」会把 `close` 拖到 timeout（结果 `timeout`，进程组被 SIGKILL）
-   ——确定、有界（≤ timeoutMs）、与不留孤儿一致，属文档化语义而非缺陷（PR #33 审查
+   ——确定、有界（≤ timeoutMs + 受管 Git 收尾上界）、与不留孤儿一致，属文档化语义而非缺陷（PR #33 审查
    Suggestion 1，README Known limitations 同步记载；确需 daemonize 的 hook 应自行重定向
-   stdio）。`child.stdout` / `child.stderr` 挂 no-op `error` 监听：管道读 EIO 类故障时
+   stdio）。NEST-119 A 修订方案补充：hook 内的 Git 操作由每次执行时宿主建立的
+   `GitOperationSupervisor`（Unix socket）持有独立进程组 ownership——外层超时先停止接纳
+   新受管操作、终止已登记的 Git 组（有界确认），再 SIGKILL hook 进程组；监督者无法建立时
+   hook 拒绝执行（failed），绝不静默降级为未登记的独立 Git 组。机制详见
+   [repository workspace bootstrap note](2026-10-04-repository-workspace-bootstrap.md)。
+   `child.stdout` / `child.stderr` 挂 no-op `error` 监听：管道读 EIO 类故障时
    stream 级 'error' 若无监听会成为 uncaught exception 击穿长驻 orchestrator 进程，
    降级为输出捕获中断、结果仍由进程级路径收敛（PR #33 审查 Suggestion 2）。
 7. **destructive 动作前一律复用 #28 containment 校验，双重校验收窄 TOCTOU**：

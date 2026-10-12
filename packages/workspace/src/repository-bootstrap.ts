@@ -1,8 +1,14 @@
-import { spawn, execFileSync } from "node:child_process";
-import * as nodeFs from "node:fs";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { deriveWorkspaceKey } from "@symphony/domain";
+import {
+  SUPERVISOR_SOCKET_ENV,
+  SupervisorGitError,
+  killProcessGroupSigkill,
+  scanProcessGroupsForLiveMembers,
+  spawnGitViaSupervisor,
+} from "./git-supervisor";
 
 /**
  * 仓库 bootstrap 错误码（SPEC §9 / §17.2）。
@@ -190,195 +196,103 @@ interface GitExecResult {
 }
 
 /**
- * 递归查询指定进程的所有存活子孙 PID。
- * 优先读取 Linux /proc 文件系统；不可用时降级为 pgrep -P。
- */
-export function getDescendantPids(parentPid: number): number[] {
-  const result: number[] = [];
-  try {
-    const ppidMap = new Map<number, number[]>();
-    const entries = nodeFs.readdirSync("/proc");
-    for (const entry of entries) {
-      if (!/^\d+$/.test(entry)) continue;
-      const pid = parseInt(entry, 10);
-      try {
-        const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, "utf8");
-        const lastParen = stat.lastIndexOf(")");
-        if (lastParen !== -1) {
-          const rest = stat.slice(lastParen + 2).trimStart().split(" ");
-          const ppidStr = rest[1];
-          if (ppidStr !== undefined) {
-            const ppid = parseInt(ppidStr, 10);
-            if (!Number.isNaN(ppid)) {
-              const list = ppidMap.get(ppid);
-              if (list) {
-                list.push(pid);
-              } else {
-                ppidMap.set(ppid, [pid]);
-              }
-            }
-          }
-        }
-      } catch {
-        // 进程可能在读取期间退出
-      }
-    }
-    const queue = [parentPid];
-    while (queue.length > 0) {
-      const curr = queue.shift()!;
-      const children = ppidMap.get(curr);
-      if (children) {
-        for (const child of children) {
-          result.push(child);
-          queue.push(child);
-        }
-      }
-    }
-    return result;
-  } catch {
-    // /proc 不可用时的备选方案（例如 BSD/macOS）
-    try {
-      const output = execFileSync("pgrep", ["-P", String(parentPid)], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const pids = output
-        .split("\n")
-        .map((s) => parseInt(s.trim(), 10))
-        .filter((n) => !Number.isNaN(n));
-      for (const p of pids) {
-        result.push(p);
-        result.push(...getDescendantPids(p));
-      }
-    } catch {
-      // 忽略
-    }
-    return result;
-  }
-}
-
-/**
- * 进程树清理的收敛参数（均有界）。
+ * `execGit` 超时后等待 Git 进程组退出并确认清理的有界窗口（毫秒）。
  *
- * `SUBTREE_POLL_INTERVAL_MS` 是冻结 / 退出确认轮询间隔；`SUBTREE_MAX_FREEZE_ROUNDS`
- * 限制「枚举 → 冻结」轮次上限，避免异常进程持续派生时无界循环。
- */
-const SUBTREE_POLL_INTERVAL_MS = 20;
-const SUBTREE_MAX_FREEZE_ROUNDS = 100;
-
-/** 向 PID 发送信号；进程已退出或无权限时忽略（best-effort）。 */
-function signalPid(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // 已退出 / 不可达；忽略
-  }
-}
-
-/** 目标 PID 是否仍存活（不含僵尸语义：僵尸的可运行性由调用方按平台判定）。 */
-function isPidRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * 冻结根进程及其子孙（`SIGSTOP`），并返回本次观察到的全部 PID。
- *
- * 冻结顺序（先冻结、再枚举、后终止）用于消除「枚举与终止之间新派生进程」的竞态：
- * 被冻结的进程无法继续 `fork`，因此反复「枚举存活集合 + 冻结新发现」会收敛。
- * 固定信号不改变进程组：本函数按 PID 操作，Git 仍继承外层 hook 进程组（SPEC §9.4 / §17.2）。
- */
-async function freezeProcessTree(rootPid: number, deadline: number): Promise<Set<number>> {
-  const observed = new Set<number>([rootPid]);
-  signalPid(rootPid, "SIGSTOP");
-  for (let round = 0; round < SUBTREE_MAX_FREEZE_ROUNDS; round++) {
-    let grew = false;
-    for (const pid of [...observed]) {
-      for (const descendant of getDescendantPids(pid)) {
-        if (!observed.has(descendant)) {
-          observed.add(descendant);
-          grew = true;
-        }
-        signalPid(descendant, "SIGSTOP");
-      }
-    }
-    if (!grew || Date.now() >= deadline) {
-      break;
-    }
-    await delay(SUBTREE_POLL_INTERVAL_MS);
-  }
-  return observed;
-}
-
-/**
- * 终止 `rootPid` 及其全部子孙，并在有界窗口内确认它们已退出。
- *
- * 仅「枚举一次 → 杀根」不足以承诺清理：子孙可能在枚举之后、根被终止之前派生新进程；
- * 根被回收后，新子孙重挂父进程，无法再通过父子关系发现（NEST-119 审查竞态）。因此这里
- * 采用 **先冻结、再枚举、后终止，并确认退出** 的顺序：
- * 1. `SIGSTOP` 根进程，使其无法继续派生；
- * 2. 反复枚举并 `SIGSTOP` 子孙，直到存活集合稳定（冻结的进程不会再 `fork`）；
- * 3. `SIGKILL` 观察到的全部子孙，最后 `SIGKILL` 根；
- * 4. 有界等待所有观察到的 PID 退出；超出上界返回 `false`，由调用方在有限时间内决定结果。
- *
- * 不使用独立进程组：Git 子树必须继续继承外层 hook 进程组，供 hook 超时整体清理。
- * 版本信息 / 平台差异（macOS 无 `/proc`）由 {@link getDescendantPids} 的 `pgrep` 回退覆盖。
- */
-export async function terminateProcessTree(rootPid: number, graceMs: number): Promise<boolean> {
-  const deadline = Date.now() + Math.max(0, graceMs);
-  const observed = await freezeProcessTree(rootPid, deadline);
-
-  for (const pid of observed) {
-    if (pid !== rootPid) {
-      signalPid(pid, "SIGKILL");
-    }
-  }
-  signalPid(rootPid, "SIGKILL");
-
-  while (Date.now() < deadline) {
-    let alive = false;
-    for (const pid of observed) {
-      if (isPidRunning(pid)) {
-        alive = true;
-        signalPid(pid, "SIGKILL"); // 兜底：重挂 / 迟到的观察对象
-      }
-    }
-    if (!alive) {
-      return true;
-    }
-    await delay(SUBTREE_POLL_INTERVAL_MS);
-  }
-
-  for (const pid of observed) {
-    if (isPidRunning(pid)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * `execGit` 超时后等待 Git 子树退出并确认清理的有界窗口（毫秒）。
- *
- * SIGKILL 投递后进程通常立即退出，此处仅是上界：即便确认迟迟不成立（例如子孙持续派生），
+ * SIGKILL 投递后进程通常立即退出，此处仅是上界：即便确认迟迟不成立，
  * 也必须在有限时间内以 typed `git_command_timeout` 收敛，避免调用方无界等待。
- * 见 SPEC §9.4 / §17.2 与外层 hook 进程组清理契约。
+ * 见 SPEC §9.4 / §17.2 与 NEST-119 A 修订方案（独立 Git 进程组 + 持久 ownership）。
  */
 const TIMEOUT_EXIT_GRACE_MS = 2_000;
 
+interface ExecGitOptions {
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly envOverride?: Record<string, string> | undefined;
+}
+
+/**
+ * 执行一条 Git 命令（NEST-119 A 修订方案：受管独立进程组）。
+ *
+ * - **hook 内**（宿主注入了 {@link SUPERVISOR_SOCKET_ENV}）：Git 的创建、登记与
+ *   清理由 hook 宿主的 {@link GitOperationSupervisor} 持有——经本地 IPC 请求创建，
+ *   登记完成后才授予启动许可；超时由监督者对 Git 进程组发终止信号并有界确认。
+ *   通信失效时拒绝启动并报错，绝不静默降级成未登记的独立组。
+ * - **直接调用**：本进程即监督者——detached spawn（独立进程组）并持有句柄，
+ *   超时 `kill(-pgid)` 原子覆盖组内成员（含 fork / 重挂父子孙）后有界确认。
+ *
+ * 两条路径都保留原 typed `git_command_timeout` / `git_command_failed` /
+ * `git_not_found` 错误面；迟到 close 不把 timeout 翻成 success；到达确认上界
+ * 仍不能确认清理时，错误 details 携带明确诊断。
+ */
 async function execGit(
   args: readonly string[],
   cwd: string,
   timeoutMs: number,
   envOverride?: Record<string, string>,
+): Promise<GitExecResult> {
+  return execGitManaged({ args, cwd, timeoutMs, ...(envOverride !== undefined ? { envOverride } : {}) });
+}
+
+async function execGitManaged(options: ExecGitOptions): Promise<GitExecResult> {
+  const { args, cwd, timeoutMs } = options;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    ...options.envOverride,
+  };
+  const supervisorSocket = process.env[SUPERVISOR_SOCKET_ENV];
+  if (supervisorSocket !== undefined && supervisorSocket.length > 0) {
+    try {
+      return await spawnGitViaSupervisor(supervisorSocket, args, { cwd, env, timeoutMs });
+    } catch (err: unknown) {
+      throw mapSupervisorGitError(err, args, timeoutMs);
+    }
+  }
+  return runLocalManagedGit(args, cwd, env, timeoutMs);
+}
+
+function mapSupervisorGitError(err: unknown, args: readonly string[], timeoutMs: number): RepositoryBootstrapError {
+  if (err instanceof SupervisorGitError) {
+    if (err.code === "timeout") {
+      const details: Record<string, unknown> = { cleanupConfirmed: err.cleanupConfirmed === true };
+      if (err.exitCode !== undefined) {
+        details.gitExitCode = err.exitCode;
+      }
+      if (err.signal !== undefined) {
+        details.gitSignal = err.signal;
+      }
+      return new RepositoryBootstrapError(
+        "git_command_timeout",
+        `Git command "git ${args[0] ?? ""}" timed out after ${timeoutMs}ms${err.cleanupConfirmed === true ? "" : " (subprocess group cleanup could not be confirmed within bound)"}`,
+        { details },
+      );
+    }
+    if (err.code === "spawn_failed" && err.errno === "ENOENT") {
+      return new RepositoryBootstrapError("git_not_found", "git executable not found in PATH", { cause: err });
+    }
+    return new RepositoryBootstrapError(
+      "git_command_failed",
+      `Managed git execution failed (${err.code}): ${err.message}`,
+      { cause: err },
+    );
+  }
+  return new RepositoryBootstrapError(
+    "git_command_failed",
+    `Managed git execution failed: ${err instanceof Error ? err.message : String(err)}`,
+    { cause: err },
+  );
+}
+
+/**
+ * 直接调用路径：本进程即监督者。Git 以 detached spawn 放入独立进程组并持有句柄；
+ * 超时对组发 SIGKILL（原子覆盖组内正常 fork / 重挂父子孙）后有界确认退出。
+ */
+function runLocalManagedGit(
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
 ): Promise<GitExecResult> {
   return new Promise((resolve, reject) => {
     let stdout = "";
@@ -387,16 +301,14 @@ async function execGit(
     let timedOut = false;
     let timer: NodeJS.Timeout | null = null;
 
-    // 不使用 detached: true，使 Git 子树继承外层 hook 进程组（SPEC §9.4 / §17.2），
-    // 从而在外层 hook 超时或取消时能被整体杀死，不留孤儿子树。
     const child = spawn("git", args, {
       cwd,
+      env,
+      // 独立进程组（POSIX 下 detached 即新 session / pgid === pid）：
+      // 超时清理用 kill(-pgid) 原子覆盖组内成员，不再依赖父子快照枚举
+      // （NEST-119 审查证明快照 + 冻结无法闭合 fork + exit 重挂父窗口）。
+      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-        ...envOverride,
-      },
     });
 
     const cleanup = (): void => {
@@ -422,22 +334,36 @@ async function execGit(
       reject(err);
     };
 
-    const timeoutError = (): RepositoryBootstrapError =>
+    const timeoutError = (cleanupConfirmed: boolean): RepositoryBootstrapError =>
       new RepositoryBootstrapError(
         "git_command_timeout",
-        `Git command "git ${args[0] ?? ""}" timed out after ${timeoutMs}ms`,
+        `Git command "git ${args[0] ?? ""}" timed out after ${timeoutMs}ms${cleanupConfirmed ? "" : " (subprocess group cleanup could not be confirmed within bound)"}`,
+        { details: { cleanupConfirmed } },
       );
 
     timer = setTimeout(() => {
       timedOut = true;
-      // 有界退出收敛：先冻结再终止整个子树，确认（或到上界）后才以 typed
-      // git_command_timeout 失败。close 分支只记录终止，不抢先 settle，避免根 close
-      // 过早清掉子树退出确认（NEST-119 审查竞态）。
+      // 有界退出收敛：先对整个进程组发 SIGKILL（原子覆盖组内成员），确认（或到
+      // 上界）后才以 typed git_command_timeout 失败。close 分支只记录终止，不抢先
+      // settle，避免根 close 过早清掉退出确认，也绝不把 timeout 翻成 success。
       void (async () => {
+        const deadline = Date.now() + TIMEOUT_EXIT_GRACE_MS;
         if (child.pid !== undefined) {
-          await terminateProcessTree(child.pid, TIMEOUT_EXIT_GRACE_MS);
+          killProcessGroupSigkill(child.pid);
+          await Promise.race([
+            new Promise<void>((resolveClose) => {
+              child.once("close", () => resolveClose());
+            }),
+            new Promise<void>((resolveDeadline) => {
+              setTimeout(resolveDeadline, Math.max(0, deadline - Date.now())).unref();
+            }),
+          ]);
         }
-        fail(timeoutError());
+        const scan = await scanProcessGroupsForLiveMembers(
+          child.pid !== undefined ? [child.pid] : [],
+          deadline,
+        );
+        fail(timeoutError(!scan.queryFailed && scan.leftoverPids.length === 0));
       })();
     }, timeoutMs);
 
@@ -463,8 +389,8 @@ async function execGit(
 
     child.on("close", (code, signal) => {
       if (timedOut) {
-        // 超时已判定：由收敛流程决定何时以 timeout 失败并确认子树清理；此处只记录
-        // 根进程已终止，绝不抢先 fail（否则会在遗漏子孙仍存活时提前返回），也绝不 finish。
+        // 超时已判定：由收敛流程决定何时以 timeout 失败并确认清理；此处只记录
+        // 根进程已终止，绝不抢先 fail（否则会在组扫描完成前提前返回），也绝不 finish。
         return;
       }
       finish({
