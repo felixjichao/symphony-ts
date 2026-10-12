@@ -34,6 +34,8 @@ import {
   buildConversationUrl,
   extractConversationIdFromUrl,
   waitForStreamingCompletion,
+  detectConversationNotFound,
+  detectAuthRequired,
 } from "./probes";
 import { canonicalJsonEqual } from "./canonical-json";
 
@@ -519,53 +521,73 @@ export class DecisionTabDriver implements DecisionTaskController {
       throw err;
     }
 
-    if (sessionRes?.session) {
-      const isStaleRollover =
-        cp.bindingGeneration > 0
-          ? sessionRes.session.bindingGeneration > cp.bindingGeneration
-          : sessionRes.session.bindingGeneration > 1;
-      if (isStaleRollover) {
-        this.checkpointStore.delete();
-        return null;
-      }
+    const currentTask = taskRes?.task;
+    const currentSession = sessionRes?.session;
+    if (!currentTask || !currentSession) {
+      this.checkpointStore.delete();
+      return null;
+    }
+
+    const currentLease = currentTask.lease;
+    const isClaimValid =
+      currentLease !== null &&
+      currentLease !== undefined &&
+      (currentTask.status === "claimed" || currentTask.status === "running") &&
+      currentLease.owner === cp.leaseOwner &&
+      currentLease.token === cp.leaseToken &&
+      currentLease.generation === cp.leaseGeneration &&
+      currentLease.expiresAtMs > Date.now() &&
+      !isCheckpointExpired(cp, Date.now());
+
+    const isStaleRollover =
+      cp.bindingGeneration > 0
+        ? currentSession.bindingGeneration > cp.bindingGeneration
+        : currentSession.bindingGeneration > 1;
+    if (isStaleRollover) {
+      this.checkpointStore.delete();
+      return null;
     }
 
     if (cp.step === "rebind_submitting") {
-      if (cp.rebindState && sessionRes?.session) {
+      if (cp.rebindState) {
         if (
           cp.rebindState.expectedGeneration > 0 &&
-          sessionRes.session.bindingGeneration > cp.rebindState.expectedGeneration
+          currentSession.bindingGeneration > cp.rebindState.expectedGeneration
         ) {
           this.checkpointStore.delete();
           return null;
         }
         if (
           cp.rebindState.expectedGeneration === 0 &&
-          sessionRes.session.bindingGeneration > 1
+          currentSession.bindingGeneration > 1
         ) {
           this.checkpointStore.delete();
           return null;
         }
         if (
           cp.rebindState.expectedGeneration === 0 &&
-          sessionRes.session.bindingGeneration === 1
+          currentSession.bindingGeneration === 1
         ) {
-          if (taskRes?.task && (taskRes.task.status === "claimed" || taskRes.task.status === "running")) {
-            const lease: DecisionLease = {
-              owner: cp.leaseOwner,
-              token: cp.leaseToken,
-              generation: cp.leaseGeneration,
-              expiresAtMs: cp.leaseExpiresAtMs,
-            };
-            this.saveCheckpoint("claimed", taskRes.task, sessionRes.session, lease);
-            const context = await this.fetchContext(taskRes.task.id);
-            return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
+          if (!isClaimValid) {
+            this.checkpointStore.delete();
+            return null;
           }
-          this.checkpointStore.delete();
-          return null;
+          const lease: DecisionLease = {
+            owner: cp.leaseOwner,
+            token: cp.leaseToken,
+            generation: cp.leaseGeneration,
+            expiresAtMs: cp.leaseExpiresAtMs,
+          };
+          this.saveCheckpoint("claimed", currentTask, currentSession, lease);
+          const context = await this.fetchContext(currentTask.id);
+          return await this.executeClaimedTask(currentTask, currentSession, lease, context);
         }
         try {
           if (cp.rebindState.expectedGeneration === 0) {
+            if (!isClaimValid) {
+              this.checkpointStore.delete();
+              return null;
+            }
             const updatedSession = await this.putBinding(cp.sessionId, {
               adapter: this.adapter?.name ?? "chatgpt-web",
               externalSessionRef: cp.rebindState.newExternalSessionRef,
@@ -574,17 +596,15 @@ export class DecisionTabDriver implements DecisionTaskController {
               token: cp.leaseToken,
               generation: cp.leaseGeneration,
             });
-            if (taskRes?.task && (taskRes.task.status === "claimed" || taskRes.task.status === "running")) {
-              const lease: DecisionLease = {
-                owner: cp.leaseOwner,
-                token: cp.leaseToken,
-                generation: cp.leaseGeneration,
-                expiresAtMs: cp.leaseExpiresAtMs,
-              };
-              this.saveCheckpoint("claimed", taskRes.task, updatedSession, lease);
-              const context = await this.fetchContext(taskRes.task.id);
-              return await this.executeClaimedTask(taskRes.task, updatedSession, lease, context);
-            }
+            const lease: DecisionLease = {
+              owner: cp.leaseOwner,
+              token: cp.leaseToken,
+              generation: cp.leaseGeneration,
+              expiresAtMs: cp.leaseExpiresAtMs,
+            };
+            this.saveCheckpoint("claimed", currentTask, updatedSession, lease);
+            const context = await this.fetchContext(currentTask.id);
+            return await this.executeClaimedTask(currentTask, updatedSession, lease, context);
           } else {
             await this.rebindSession(cp.sessionId, {
               adapter: this.adapter?.name ?? "chatgpt-web",
@@ -782,7 +802,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
 
     // 3. For ongoing uncompleted execution, verify checkpoint expiry & lease validity via heartbeat
-    if (isCheckpointExpired(cp, Date.now())) {
+    if (!isClaimValid || isCheckpointExpired(cp, Date.now())) {
       this.checkpointStore.delete();
       return null;
     }
@@ -863,26 +883,43 @@ export class DecisionTabDriver implements DecisionTaskController {
           (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
           (globalThis as unknown as { window?: Window }).window;
         const currentConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
-        const oldRef = sessionRes.session.binding?.externalSessionRef;
-        const hasNewConversationUrl = currentConvId !== null && currentConvId !== oldRef;
+        const doc =
+          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+          (globalThis as unknown as { document?: Document }).document;
 
-        const adapterWithProbes = this.adapter as unknown as {
-          confirmPromptSubmitted?: (opts: { baselineCount: number; signal?: AbortSignal }) => Promise<boolean>;
-          isPromptConfirmedSent?: (doc?: unknown, baselineCount?: number) => boolean;
-        };
-        let isConfirmedSent = hasNewConversationUrl;
-        if (!isConfirmedSent) {
-          if (typeof adapterWithProbes.confirmPromptSubmitted === "function") {
-            isConfirmedSent = await adapterWithProbes.confirmPromptSubmitted({
-              baselineCount: cp.baselineCount ?? 0,
-              signal,
-            }).catch(() => false);
-          } else if (typeof adapterWithProbes.isPromptConfirmedSent === "function") {
-            isConfirmedSent = adapterWithProbes.isPromptConfirmedSent(undefined, cp.baselineCount ?? 0);
-          } else if (typeof (globalThis as unknown as { document?: Document }).document !== "undefined") {
-            const doc = (globalThis as unknown as { document: Document }).document;
+        if (doc && (detectConversationNotFound(doc) || detectAuthRequired(doc))) {
+          this.checkpointStore.delete();
+          if (detectConversationNotFound(doc)) {
+            throw new DecisionAdapterError({
+              code: "binding_broken",
+              message: "Conversation not found during bootstrap_submitting recovery",
+              suggestedAction: "rebind",
+            });
+          } else {
+            throw new DecisionAdapterError({
+              code: "human_required",
+              message: "Authentication required during bootstrap_submitting recovery",
+              suggestedAction: "human_intervention",
+            });
+          }
+        }
+
+        let isConfirmedSent = false;
+        if (doc) {
+          const isGenerating = findStopButton(doc) !== null;
+          const isStoredConv =
+            currentConvId !== null &&
+            (cp.targetConvId === currentConvId || cp.rebindState?.newExternalSessionRef === currentConvId);
+          const isTargetUriMismatch =
+            Boolean(cp.targetUri && currentConvId && !cp.targetUri.includes(currentConvId) && !isStoredConv);
+
+          if (isGenerating) {
+            isConfirmedSent = true;
+          } else if (!isTargetUriMismatch) {
             const count = cp.baselineCount ?? 0;
-            isConfirmedSent = findStopButton(doc) !== null || getAllAssistantTurns(doc).length > count;
+            if (getAllAssistantTurns(doc).length > count) {
+              isConfirmedSent = true;
+            }
           }
         }
 
@@ -1092,6 +1129,21 @@ export class DecisionTabDriver implements DecisionTaskController {
           (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
           (globalThis as unknown as { document?: Document }).document;
 
+        if (doc && detectConversationNotFound(doc)) {
+          throw new DecisionAdapterError({
+            code: "binding_broken",
+            message: "Conversation not found during bootstrap waiting recovery",
+            suggestedAction: "rebind",
+          });
+        }
+        if (doc && detectAuthRequired(doc)) {
+          throw new DecisionAdapterError({
+            code: "human_required",
+            message: "Authentication required during bootstrap waiting recovery",
+            suggestedAction: "human_intervention",
+          });
+        }
+
         await waitForStreamingCompletion({
           doc,
           baselineCount,
@@ -1101,6 +1153,21 @@ export class DecisionTabDriver implements DecisionTaskController {
           checkIntervalMs: 50,
           signal,
         });
+
+        if (doc && detectConversationNotFound(doc)) {
+          throw new DecisionAdapterError({
+            code: "binding_broken",
+            message: "Conversation not found after bootstrap waiting recovery",
+            suggestedAction: "rebind",
+          });
+        }
+        if (doc && detectAuthRequired(doc)) {
+          throw new DecisionAdapterError({
+            code: "human_required",
+            message: "Authentication required after bootstrap waiting recovery",
+            suggestedAction: "human_intervention",
+          });
+        }
 
         convId = win?.location ? extractConversationIdFromUrl(win.location.href) ?? "" : "";
         if (!convId) {
@@ -1135,6 +1202,26 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
       }
       throw bootstrapErr;
+    }
+
+    const doc =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+      (globalThis as unknown as { document?: Document }).document;
+    if (doc) {
+      if (detectConversationNotFound(doc)) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: "Conversation not found before rebind in resumeBootstrapWaiting",
+          suggestedAction: "rebind",
+        });
+      }
+      if (detectAuthRequired(doc)) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: "Authentication required before rebind in resumeBootstrapWaiting",
+          suggestedAction: "human_intervention",
+        });
+      }
     }
 
     const origin =

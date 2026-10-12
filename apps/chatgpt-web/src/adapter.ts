@@ -139,6 +139,21 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     signal?: AbortSignal | undefined;
   }): Promise<string> {
     const doc = this.docSupplier();
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found during bootstrap response wait",
+        suggestedAction: "rebind",
+      });
+    }
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required during bootstrap response wait",
+        suggestedAction: "human_intervention",
+      });
+    }
+
     await waitForStreamingCompletion({
       doc,
       baselineCount: options.baselineCount,
@@ -148,6 +163,21 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
     });
+
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found after bootstrap response wait",
+        suggestedAction: "rebind",
+      });
+    }
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required after bootstrap response wait",
+        suggestedAction: "human_intervention",
+      });
+    }
 
     const win = this.winSupplier();
     let convId: string | null = null;

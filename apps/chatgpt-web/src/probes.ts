@@ -3,6 +3,8 @@
  * Isolates DOM volatility so UI drift is localized.
  */
 
+import { DecisionAdapterError } from "@symphony/domain/decision";
+
 export const SELECTORS = {
   composer: [
     "#prompt-textarea",
@@ -196,6 +198,22 @@ export async function waitForStreamingCompletion(
 
     if (Date.now() - start > timeoutMs) {
       throw new Error(`Timeout waiting for ChatGPT response after ${timeoutMs}ms`);
+    }
+
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found while waiting for ChatGPT response",
+        suggestedAction: "rebind",
+      });
+    }
+
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required while waiting for ChatGPT response",
+        suggestedAction: "human_intervention",
+      });
     }
 
     const turns = getAllAssistantTurns(doc);
