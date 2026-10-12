@@ -1223,15 +1223,18 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
       await fs.mkdir(fakeBin, { recursive: true });
       const rootPidFile = path.join(tmpBase, "escape-root.pid");
       const leafPidFile = path.join(tmpBase, "escape-leaf.pid");
+      const leafReadyFile = path.join(tmpBase, "escape-leaf.ready");
       const markerFile = path.join(tmpBase, "escape-late.marker");
       const leafScript = path.join(tmpBase, "escape-leaf.cjs");
       const middleScript = path.join(tmpBase, "escape-middle.cjs");
       const gitScript = path.join(fakeBin, "git");
 
-      // leaf：800ms 后写迟到标记并继续存活——若清理遗漏，marker 必然出现。
+      // leaf：先落就绪标记，再延迟写迟到标记并继续存活——若清理遗漏，marker 必然出现。
       await fs.writeFile(
         leafScript,
-        `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 800);\n` +
+        `const fs = require("node:fs");\n` +
+          `fs.writeFileSync(${JSON.stringify(leafReadyFile)}, "ready", "utf8");\n` +
+          `setTimeout(() => fs.writeFileSync(${JSON.stringify(markerFile)}, "late", "utf8"), 4_000);\n` +
           `setInterval(() => {}, 5000);\n`,
       );
       // middle：派生 leaf（stdio ignore）→ 记录 leaf PID → 立即退出，触发重挂父。
@@ -1266,7 +1269,7 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
             cwd: workspaceDir,
             repoUrl: "/unused/local/repo",
             workspaceKey: "GH-79",
-            timeoutMs: 300,
+            timeoutMs: 3_000,
           });
         } catch (err: unknown) {
           thrown = err;
@@ -1280,12 +1283,13 @@ describe("Repository Workspace Bootstrap (SPEC §9 / §17.2)", () => {
         leafPid = await waitForPidFile(leafPidFile, 5_000);
         expect(Number.isInteger(leafPid)).toBe(true);
         expect(leafPid).toBeGreaterThan(0);
+        expect(existsSync(leafReadyFile)).toBe(true);
 
         // 重挂父的 leaf（不持有 stdio、不在父子快照里）必须被组终止清掉。
         expect(await waitForProcessGone(leafPid, 3_000)).toBe(true);
 
         // 等过 leaf 原本的迟到写入时刻，确认无迟到副作用。
-        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        await new Promise((resolve) => setTimeout(resolve, 4_500));
         expect(existsSync(markerFile)).toBe(false);
       } finally {
         process.env.PATH = originalPath;

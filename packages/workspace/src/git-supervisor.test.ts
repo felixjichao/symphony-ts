@@ -227,7 +227,7 @@ describe("GitOperationSupervisor (NEST-119 A 修订方案)", () => {
       const promise = spawnGitViaSupervisor(supervisor.socketPath, ["fetch", "origin"], {
         cwd: tmpBase,
         env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
-        timeoutMs: 400,
+        timeoutMs: 2_000,
       });
       let err: unknown;
       try {

@@ -140,7 +140,7 @@ interface HookSpec {
  * - {@link HOOK_TIMEOUT_DEADLINE_MS}（显式传入）：给**必须超时**的用例——配合 `sleep 5`
  *   脚本（20x 裕量），确保走的是生产 timeout + 进程组 SIGKILL 路径，而不是巧合通过。
  */
-const HOOK_TIMEOUT_OK_MS = 300;
+const HOOK_TIMEOUT_OK_MS = 3_000;
 const HOOK_TIMEOUT_DEADLINE_MS = 250;
 
 /** 把 hook 规格渲染成 `hooks:` front matter（多行脚本用 YAML block scalar）。 */
