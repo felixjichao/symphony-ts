@@ -23,6 +23,7 @@ import type {
   GetTaskContextResponse,
   PutBindingRequest,
   RebindSessionRequest,
+  BreakBindingRequest,
   StartTaskRequest,
   SubmitFailureRequest,
   SubmitFailureResponse,
@@ -373,10 +374,11 @@ export class DecisionBridgeClient {
     );
   }
 
-  async breakBinding(sessionId: string): Promise<{ session: DecisionSession }> {
+  async breakBinding(sessionId: string, params?: BreakBindingRequest): Promise<{ session: DecisionSession }> {
     return await this.request<{ session: DecisionSession }>(
       "POST",
-      `/v1/sessions/${encodeURIComponent(sessionId)}/break-binding`
+      `/v1/sessions/${encodeURIComponent(sessionId)}/break-binding`,
+      params
     );
   }
 

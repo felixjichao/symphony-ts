@@ -622,10 +622,23 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
         operationKeyPrefix: "op:worker-1",
       });
 
-      expect(outcome.status).toBe("completed");
+      expect(outcome.status).toBe("superseded");
       // Session rebind was automatically performed by coordinator to generation 2
       expect(outcome.session.bindingGeneration).toBe(2);
       expect(outcome.session.binding?.generation).toBe(2);
+
+      // Active uncompleted task lease was fenced back to pending
+      const fencedTask = service.getTask(task.id);
+      expect(fencedTask?.status).toBe("pending");
+
+      // Attempting to start/submit on old lease is rejected
+      await expect(
+        service.startTask(task.id, {
+          owner: claim.lease.owner,
+          token: claim.lease.token,
+          generation: claim.lease.generation,
+        })
+      ).rejects.toThrow(DecisionConflictError);
 
       // CAS conflict: late callback with stale expectedGeneration=1 is rejected
       await expect(
@@ -640,6 +653,118 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
       // Reading back session confirms binding generation remains 2
       const freshSession = await service.getSession(session.id);
       expect(freshSession?.bindingGeneration).toBe(2);
+
+      // Re-claim under generation 2 succeeds and completes
+      const healthyAdapter = new FakeDecisionExecutorAdapter();
+      const claim2 = await service.claimTask(task.id, { owner: "worker-2" });
+      expect(claim2.task.claimGeneration).toBe(claim.task.claimGeneration + 1);
+
+      const outcome2 = await executeTaskWithAdapter({
+        controller: service,
+        adapter: healthyAdapter,
+        task: claim2.task,
+        session: claim2.session,
+        lease: claim2.lease,
+        context: {
+          strategy: "connector",
+          workItem: root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+        operationKeyPrefix: "op:worker-2",
+      });
+      expect(outcome2.status).toBe("completed");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers from broken binding detected during resumeSession and fences old lease", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-adapter-resume-break-"));
+    try {
+      const store = new DurableDecisionStore({ storeDir: tempDir });
+      await store.open();
+      const service = new DecisionService(store);
+
+      let session = await service.createSession(root);
+      session = await service.putBinding(session.id, {
+        adapter: "fake-executor",
+        externalSessionRef: "chat-generation-1",
+        resumeUri: "https://fake.local/chat/1",
+      });
+      expect(session.bindingGeneration).toBe(1);
+
+      // Adapter reports usable binding initially, but resumeSession fails with binding_broken
+      const resumeBrokenAdapter = new FakeDecisionExecutorAdapter({
+        inspectBindingStatus: "usable",
+        resumeSessionError: new DecisionAdapterError({
+          code: "binding_broken",
+          message: "Conversation not found (404 deleted)",
+          suggestedAction: "rebind",
+          observedGeneration: 1,
+        }),
+      });
+
+      const task = await service.createPlanTask(session.id, {
+        operationKey: "op:plan:resume-break:1",
+      });
+      const claim = await service.claimTask(task.id, { owner: "worker-1" });
+
+      const outcome = await executeTaskWithAdapter({
+        controller: service,
+        adapter: resumeBrokenAdapter,
+        task: claim.task,
+        session: claim.session,
+        lease: claim.lease,
+        context: {
+          strategy: "connector",
+          workItem: root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+        operationKeyPrefix: "op:worker-1",
+      });
+
+      expect(outcome.status).toBe("superseded");
+      expect(outcome.session.bindingGeneration).toBe(2);
+      expect(outcome.session.binding?.generation).toBe(2);
+
+      // Old claim was fenced back to pending
+      const fencedTask = service.getTask(task.id);
+      expect(fencedTask?.status).toBe("pending");
+
+      // Attempting to heartbeat/start old lease fails
+      await expect(
+        service.startTask(task.id, {
+          owner: claim.lease.owner,
+          token: claim.lease.token,
+          generation: claim.lease.generation,
+        })
+      ).rejects.toThrow(DecisionConflictError);
+
+      // Re-claiming under generation 2 succeeds
+      const healthyAdapter = new FakeDecisionExecutorAdapter();
+      const claim2 = await service.claimTask(task.id, { owner: "worker-2" });
+      expect(claim2.task.claimGeneration).toBe(claim.task.claimGeneration + 1);
+
+      const outcome2 = await executeTaskWithAdapter({
+        controller: service,
+        adapter: healthyAdapter,
+        task: claim2.task,
+        session: claim2.session,
+        lease: claim2.lease,
+        context: {
+          strategy: "connector",
+          workItem: root,
+          repository: "owner/repo",
+          prNumber: null,
+          headSha: null,
+        },
+        operationKeyPrefix: "op:worker-2",
+      });
+      expect(outcome2.status).toBe("completed");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -881,6 +1006,7 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
         resumeSessionError: new DecisionAdapterError({
           code: "binding_broken",
           message: "Session expired on remote provider during resumeSession",
+          suggestedAction: "fail_closed",
         }),
       });
 
@@ -1047,9 +1173,9 @@ describe("Adapter Lifecycle, CAS Rebind, and Store Coordination", () => {
         })
       ).rejects.toThrow(DecisionConflictError);
 
-      // Task must remain in claimed state — NOT failed!
+      // Task must remain in pending state (fenced by concurrent rebind) — NOT failed!
       const storedTask2 = service.getTask(task2.id);
-      expect(storedTask2?.status).toBe("claimed");
+      expect(storedTask2?.status).toBe("pending");
       expect(service.getReceipt(task2.id)).toBeNull();
 
       await store.close();

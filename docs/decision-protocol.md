@@ -152,8 +152,11 @@ positive generation. Core neither parses routes nor depends on conversation cont
 These references must not contain credentials. First binding has generation 1;
 rebind must increment by exactly 1. Losing the binding clears it while retaining
 `bindingGeneration`; rebind cannot reset the counter. Rebinding does not invalidate
-review facts or erase planning history. Completed sessions must be explicitly
-reopened before rebinding, retaining their root and historical decisions.
+review facts or erase planning history. Rebinding fences tasks claimed prior to the binding
+generation increment by releasing active non-completed claims back to `pending` with cleared leases
+and recording the new generation barrier; stale claims attempting to start, heartbeat, or submit
+results against prior binding generations are rejected with HTTP 409 Conflict. Completed sessions
+must be explicitly reopened before rebinding, retaining their root and historical decisions.
 
 Session completion requires the complete current task set for that session, with
 only terminal tasks and no task newer than `now`. The caller/store must read that set
@@ -403,6 +406,7 @@ The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Age
 - `POST /v1/sessions` — Create or retrieve an issue session with `{ root }`.
 - `PUT /v1/sessions/:id/binding` — Bind or update executor binding with `{ adapter, externalSessionRef, resumeUri? }`.
 - `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check: `{ adapter, externalSessionRef, resumeUri?, expectedGeneration, operationKey? }`.
+- `POST /v1/sessions/:id/break-binding` — Break executor binding with optional `{ adapter?, externalSessionRef?, expectedGeneration? }` payload when conversation is broken or human intervention is required.
 
 Security boundaries:
 - Loopback-only binding (`127.0.0.1` by default).

@@ -239,3 +239,46 @@ export async function waitForStreamingCompletion(
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
+
+export function detectAuthRequired(doc: Document = document): boolean {
+  if (!doc) return false;
+  const authSelectors = [
+    "[data-testid='login-button']",
+    "[data-testid='auth-button']",
+    "a[href*='/auth/login']",
+    "a[href*='/login']",
+    "[data-testid='login-container']",
+  ];
+  for (const selector of authSelectors) {
+    if (doc.querySelector(selector)) return true;
+  }
+  const text = doc.body?.textContent || "";
+  if (
+    (text.includes("Log in") || text.includes("Sign up")) &&
+    (text.includes("Welcome back") || text.includes("Get started"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function detectConversationNotFound(doc: Document = document): boolean {
+  if (!doc) return false;
+  const notFoundSelectors = [
+    "[data-testid='conversation-not-found']",
+    "[data-testid='error-page']",
+  ];
+  for (const selector of notFoundSelectors) {
+    if (doc.querySelector(selector)) return true;
+  }
+  const text = doc.body?.textContent || "";
+  if (
+    text.includes("Conversation not found") ||
+    text.includes("Unable to load conversation") ||
+    text.includes("This conversation may have been deleted") ||
+    text.includes("404: Not Found")
+  ) {
+    return true;
+  }
+  return false;
+}

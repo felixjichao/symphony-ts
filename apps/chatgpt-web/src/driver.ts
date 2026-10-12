@@ -232,6 +232,23 @@ export class DecisionTabDriver implements DecisionTaskController {
     return res.session;
   }
 
+  async breakBinding(
+    sessionId: string,
+    params?: {
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
+      expectedGeneration?: number | undefined;
+    }
+  ): Promise<DecisionSession> {
+    const res = await this.transport.request<{ session: DecisionSession }>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/break-binding`,
+      params
+    );
+    return res.session;
+  }
+
   async rebindSession(
     sessionId: string,
     params: {
@@ -245,6 +262,13 @@ export class DecisionTabDriver implements DecisionTaskController {
       generation?: number | undefined;
     }
   ): Promise<DecisionSession> {
+    this.updateCheckpointStep("rebind_submitting", {
+      rebindState: {
+        newExternalSessionRef: params.externalSessionRef,
+        newResumeUri: params.resumeUri,
+        expectedGeneration: params.expectedGeneration,
+      },
+    });
     const res = await this.transport.request<{ session: DecisionSession }>(
       "POST",
       `/v1/sessions/${encodeURIComponent(sessionId)}/rebind`,
@@ -273,6 +297,11 @@ export class DecisionTabDriver implements DecisionTaskController {
       baselineCount?: number;
       targetUri?: string;
       targetConvId?: string | null;
+      rebindState?: {
+        readonly newExternalSessionRef: string;
+        readonly newResumeUri: string | null;
+        readonly expectedGeneration: number;
+      };
     }
   ): void {
     const cp: DriverCheckpoint = {
@@ -292,6 +321,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
       ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
       ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+      ...(meta?.rebindState !== undefined ? { rebindState: meta.rebindState } : {}),
     };
     this.checkpointStore.set(cp);
   }
@@ -303,6 +333,11 @@ export class DecisionTabDriver implements DecisionTaskController {
       baselineCount?: number;
       targetUri?: string;
       targetConvId?: string | null;
+      rebindState?: {
+        readonly newExternalSessionRef: string;
+        readonly newResumeUri: string | null;
+        readonly expectedGeneration: number;
+      };
     }
   ): void {
     const existing = this.checkpointStore.get();
@@ -315,6 +350,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
         ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
         ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+        ...(meta?.rebindState !== undefined ? { rebindState: meta.rebindState } : {}),
       });
       return;
     }
@@ -445,6 +481,35 @@ export class DecisionTabDriver implements DecisionTaskController {
       }
       // Transient network or server error: preserve checkpoint and throw to allow retry
       throw err;
+    }
+
+    if (sessionRes?.session && sessionRes.session.bindingGeneration > cp.bindingGeneration) {
+      this.checkpointStore.delete();
+      return null;
+    }
+
+    if (cp.step === "rebind_submitting") {
+      if (cp.rebindState && sessionRes?.session) {
+        if (sessionRes.session.bindingGeneration > cp.rebindState.expectedGeneration) {
+          this.checkpointStore.delete();
+          return null;
+        }
+        try {
+          await this.rebindSession(cp.sessionId, {
+            adapter: this.adapter.name,
+            externalSessionRef: cp.rebindState.newExternalSessionRef,
+            resumeUri: cp.rebindState.newResumeUri,
+            expectedGeneration: cp.rebindState.expectedGeneration,
+            owner: cp.leaseOwner,
+            token: cp.leaseToken,
+            generation: cp.leaseGeneration,
+          });
+        } catch {
+          // Ignore error
+        }
+      }
+      this.checkpointStore.delete();
+      return null;
     }
 
     if (taskRes?.task?.status === "completed") {
@@ -1022,7 +1087,18 @@ export class DecisionTabDriver implements DecisionTaskController {
     const context = await this.fetchContext(claimed.task.id);
 
     // 4. Execute
-    return await this.executeClaimedTask(claimed.task, claimed.session, claimed.lease, context);
+    const outcome = await this.executeClaimedTask(claimed.task, claimed.session, claimed.lease, context);
+    if (outcome && outcome.status === "superseded") {
+      // Rollover invalidation fences the current task; immediately re-poll to reclaim under new generation
+      this.checkpointStore.delete();
+      this.stopHeartbeat();
+      const nextClaimed = await this.claimNextTask();
+      if (nextClaimed) {
+        const nextContext = await this.fetchContext(nextClaimed.task.id);
+        return await this.executeClaimedTask(nextClaimed.task, nextClaimed.session, nextClaimed.lease, nextContext);
+      }
+    }
+    return outcome;
   }
 
   async start(): Promise<void> {

@@ -301,6 +301,11 @@ export function releaseExpiredDecisionTask(task: DecisionTask, now: UtcTimestamp
   requireValue(task.lease !== null && now >= task.lease.expiresAtMs, "claim has not expired");
   return parseDecisionTask({ ...task, status: "pending", lease: null, updatedAtMs: now });
 }
+export function releaseDecisionTaskForBindingInvalidation(task: DecisionTask, now: UtcTimestampMs): DecisionTask {
+  parseDecisionTask(task); checkNow(task.updatedAtMs, now);
+  requireValue(task.lease !== null && (task.status === "claimed" || task.status === "running"), "only actively leased tasks can be released for binding invalidation");
+  return parseDecisionTask({ ...task, status: "pending", lease: null, updatedAtMs: now });
+}
 export function cancelDecisionTask(task: DecisionTask, now: UtcTimestampMs): DecisionTask {
   parseDecisionTask(task); checkNow(task.updatedAtMs, now);
   requireValue(["pending", "claimed", "running"].includes(task.status), "only unfinished tasks can cancel");

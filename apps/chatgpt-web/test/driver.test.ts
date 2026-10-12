@@ -1567,5 +1567,88 @@ describe("DecisionTabDriver", () => {
     // Stale candidate result must not survive; driver continues with newer tasks
     expect(cpStore.get()).toBeNull();
   });
+
+  it("breakBinding calls /v1/sessions/:id/break-binding with credentials", async () => {
+    let calledPath = "";
+    let calledBody: unknown = null;
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(_method: string, path: string, body?: unknown): Promise<T> => {
+        calledPath = path;
+        calledBody = body;
+        return { session: sampleSession } as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: new MemoryCheckpointStore(),
+      ownerId: "driver-1",
+    });
+
+    await driver.breakBinding("session-1", {
+      owner: "driver-1",
+      token: "tok-1",
+      generation: 1,
+      expectedGeneration: 1,
+    });
+
+    expect(calledPath).toBe("/v1/sessions/session-1/break-binding");
+    expect(calledBody).toEqual({
+      owner: "driver-1",
+      token: "tok-1",
+      generation: 1,
+      expectedGeneration: 1,
+    });
+  });
+
+  it("discards stale generation checkpoint when session has been rebound (bindingGeneration > cp.bindingGeneration)", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: cpStore.tabId,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: sampleLease.owner,
+      leaseToken: sampleLease.token,
+      leaseGeneration: sampleLease.generation,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 1, // Checkpoint saved at generation 1
+      step: "started",
+      attemptId: "attempt-1",
+      savedAtMs: Date.now(),
+    });
+
+    const reboundSession: DecisionSession = {
+      ...sampleSession,
+      bindingGeneration: 2, // Session is now at generation 2
+    };
+
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: { ...sampleTask, status: "pending" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/v1/sessions/")) {
+          return { session: reboundSession } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      ownerId: "driver-1",
+    });
+
+    const resumed = await driver.resumeCheckpointIfAvailable();
+    expect(resumed).toBeNull();
+    // Stale generation checkpoint must be discarded
+    expect(cpStore.get()).toBeNull();
+  });
 });
 

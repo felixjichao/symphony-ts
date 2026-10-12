@@ -221,8 +221,36 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
     }
   };
 
+  const DRIVER_ENABLED_STORAGE_KEY = "symphony_driver_enabled";
+
+  const isDriverEnabledInTab = (): boolean => {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      try {
+        return window.sessionStorage.getItem(DRIVER_ENABLED_STORAGE_KEY) === "true";
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const setDriverEnabledInTab = (enabled: boolean): void => {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      try {
+        if (enabled) {
+          window.sessionStorage.setItem(DRIVER_ENABLED_STORAGE_KEY, "true");
+        } else {
+          window.sessionStorage.removeItem(DRIVER_ENABLED_STORAGE_KEY);
+        }
+      } catch {
+        // Ignore storage errors in restricted sandboxes
+      }
+    }
+  };
+
   const start = async () => {
     try {
+      setDriverEnabledInTab(true);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -248,6 +276,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
           const isAuthError =
             err instanceof BridgeHttpError && (err.status === 401 || err.status === 403);
           if (isAuthError) {
+            setDriverEnabledInTab(false);
             if (currentDriver) {
               currentDriver.stop();
               currentDriver = null;
@@ -266,6 +295,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
       updateUI(true, "Connecting & polling...");
       // Fire driver start in background
       currentDriver.start().catch((err: unknown) => {
+        setDriverEnabledInTab(false);
         if (currentDriver) {
           currentDriver.stop();
           currentDriver = null;
@@ -274,6 +304,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         updateUI(false, `Driver stopped on error: ${msg}`, true);
       });
     } catch (err: unknown) {
+      setDriverEnabledInTab(false);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -284,6 +315,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
   };
 
   const stop = () => {
+    setDriverEnabledInTab(false);
     if (currentDriver) {
       currentDriver.stop();
       currentDriver = null;
@@ -299,7 +331,8 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
     }
   });
 
-  if (options?.autoStart) {
+  const shouldAutoStart = options?.autoStart ?? isDriverEnabledInTab();
+  if (shouldAutoStart) {
     void start();
   }
 }

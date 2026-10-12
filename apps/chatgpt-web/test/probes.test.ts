@@ -10,6 +10,8 @@ import {
   extractConversationIdFromUrl,
   buildConversationUrl,
   waitForStreamingCompletion,
+  detectAuthRequired,
+  detectConversationNotFound,
 } from "../src/probes";
 
 describe("DOM Probes and URL utilities", () => {
@@ -257,5 +259,31 @@ describe("DOM Probes and URL utilities", () => {
       timeoutMs: 500,
     });
     expect(result).toBe(newTurn);
+  });
+
+  it("detects authentication / login required in DOM", () => {
+    const doc = new MockDocument();
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+
+    const loginBtn = new MockElement("button", { "data-testid": "login-button" });
+    doc.body.appendChild(loginBtn);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(true);
+
+    const doc2 = new MockDocument();
+    doc2.body.textContent = "Welcome back. Log in with your OpenAI account to continue.";
+    expect(detectAuthRequired(doc2 as unknown as Document)).toBe(true);
+  });
+
+  it("detects conversation 404 / deleted in DOM", () => {
+    const doc = new MockDocument();
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+
+    const notFoundEl = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(notFoundEl);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    const doc2 = new MockDocument();
+    doc2.body.textContent = "Unable to load conversation. This conversation may have been deleted.";
+    expect(detectConversationNotFound(doc2 as unknown as Document)).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   completeDecisionTask,
   failDecisionTask,
   releaseExpiredDecisionTask,
+  releaseDecisionTaskForBindingInvalidation,
   cancelDecisionTask,
   supersedeDecisionTask,
   rebindDecisionSession,
@@ -176,6 +177,22 @@ export class DecisionService {
       };
 
       draft.sessions[sessionId] = updated;
+
+      if (session.bindingGeneration === 0 && nextGen === 1) {
+        if (!draft.claimBindingGenerations) {
+          (draft as { claimBindingGenerations: Record<string, number> }).claimBindingGenerations = {};
+        }
+        for (const t of Object.values(draft.tasks)) {
+          if (
+            t.sessionId === sessionId &&
+            (t.status === "claimed" || t.status === "running") &&
+            draft.claimBindingGenerations[t.id] === 0
+          ) {
+            draft.claimBindingGenerations[t.id] = 1;
+          }
+        }
+      }
+
       return updated;
     });
   }
@@ -274,6 +291,19 @@ export class DecisionService {
       const updated = rebindDecisionSession(session, binding, now);
       draft.sessions[sessionId] = updated;
 
+      if (!draft.claimBindingGenerations) {
+        (draft as { claimBindingGenerations: Record<string, number> }).claimBindingGenerations = {};
+      }
+      for (const t of Object.values(draft.tasks)) {
+        if (
+          t.sessionId === sessionId &&
+          (t.status === "claimed" || t.status === "running")
+        ) {
+          draft.tasks[t.id] = releaseDecisionTaskForBindingInvalidation(t, now);
+          delete draft.claimBindingGenerations[t.id];
+        }
+      }
+
       if (params.operationKey) {
         const receipt: OperationReceipt = {
           schemaVersion: 1,
@@ -296,11 +326,55 @@ export class DecisionService {
     });
   }
 
-  async breakBinding(sessionId: string): Promise<DecisionSession> {
+  async breakBinding(
+    sessionId: string,
+    params?: {
+      owner?: string | undefined;
+      token?: string | undefined;
+      generation?: number | undefined;
+      expectedGeneration?: number | undefined;
+    }
+  ): Promise<DecisionSession> {
     return await this.store.transaction((draft) => {
       const session = draft.sessions[sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
       const now = this.clock();
+
+      if (params?.owner !== undefined || params?.token !== undefined || params?.generation !== undefined) {
+        const activeLeaseTask = Object.values(draft.tasks).find(
+          (t) =>
+            t.sessionId === sessionId &&
+            (t.status === "claimed" || t.status === "running") &&
+            t.lease !== null &&
+            now < t.lease.expiresAtMs
+        );
+        if (!activeLeaseTask || !activeLeaseTask.lease) {
+          throw new DecisionConflictError("No active lease found on session matching credentials for break binding");
+        }
+        if (
+          activeLeaseTask.lease.owner !== params.owner ||
+          activeLeaseTask.lease.token !== params.token ||
+          activeLeaseTask.lease.generation !== params.generation
+        ) {
+          throw new DecisionConflictError("Stale or invalid lease credentials for break binding");
+        }
+      }
+
+      if (params?.expectedGeneration !== undefined) {
+        if (session.bindingGeneration > params.expectedGeneration) {
+          throw new DecisionConflictError(
+            `Stale breakBinding request: expectedGeneration was ${params.expectedGeneration}, but session is at ${session.bindingGeneration}`
+          );
+        }
+        if (session.status === "broken-binding" && session.bindingGeneration === params.expectedGeneration) {
+          return session;
+        }
+      }
+
+      if (session.status === "broken-binding") {
+        return session;
+      }
+
       const updated = breakDecisionBinding(session, now);
       draft.sessions[sessionId] = updated;
       return updated;
@@ -1045,6 +1119,10 @@ export class DecisionService {
 
       const updated = claimDecisionTask(task, lease, now);
       draft.tasks[taskId] = updated;
+      if (!draft.claimBindingGenerations) {
+        (draft as { claimBindingGenerations: Record<string, number> }).claimBindingGenerations = {};
+      }
+      draft.claimBindingGenerations[taskId] = session.bindingGeneration;
 
       return { task: updated, session, lease };
     });
@@ -1066,6 +1144,14 @@ export class DecisionService {
         task.lease.generation !== params.generation
       ) {
         throw new DecisionConflictError("Stale or invalid claim credentials");
+      }
+
+      const session = draft.sessions[task.sessionId];
+      const claimBindingGen = draft.claimBindingGenerations?.[taskId];
+      if (session && claimBindingGen !== undefined && session.bindingGeneration !== claimBindingGen) {
+        throw new DecisionConflictError(
+          `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
+        );
       }
 
       const now = this.clock();
@@ -1098,6 +1184,14 @@ export class DecisionService {
         task.lease.generation !== params.generation
       ) {
         throw new DecisionConflictError("Stale or invalid claim credentials");
+      }
+
+      const session = draft.sessions[task.sessionId];
+      const claimBindingGen = draft.claimBindingGenerations?.[taskId];
+      if (session && claimBindingGen !== undefined && session.bindingGeneration !== claimBindingGen) {
+        throw new DecisionConflictError(
+          `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
+        );
       }
 
       const now = this.clock();
@@ -1157,6 +1251,14 @@ export class DecisionService {
         throw new DecisionConflictError("Stale or invalid claim credentials");
       }
 
+      const session = draft.sessions[task.sessionId];
+      const claimBindingGen = draft.claimBindingGenerations?.[taskId];
+      if (session && claimBindingGen !== undefined && session.bindingGeneration !== claimBindingGen) {
+        throw new DecisionConflictError(
+          `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
+        );
+      }
+
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
@@ -1166,6 +1268,7 @@ export class DecisionService {
 
       const completed = completeDecisionTask(task, params.result, task.lease, now);
       draft.tasks[taskId] = completed;
+      delete draft.claimBindingGenerations?.[taskId];
       draft.results[taskId] = params.result;
 
       if (task.kind === "plan" && params.result.kind === "plan") {
@@ -1255,6 +1358,14 @@ export class DecisionService {
         throw new DecisionConflictError("Stale or invalid claim credentials");
       }
 
+      const session = draft.sessions[task.sessionId];
+      const claimBindingGen = draft.claimBindingGenerations?.[taskId];
+      if (session && claimBindingGen !== undefined && session.bindingGeneration !== claimBindingGen) {
+        throw new DecisionConflictError(
+          `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
+        );
+      }
+
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
@@ -1262,6 +1373,7 @@ export class DecisionService {
 
       const failed = failDecisionTask(task, task.lease, now);
       draft.tasks[taskId] = failed;
+      delete draft.claimBindingGenerations?.[taskId];
 
       const failure: DecisionTaskFailure = {
         schemaVersion: 1,

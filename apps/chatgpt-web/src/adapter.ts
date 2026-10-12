@@ -22,10 +22,13 @@ import {
   findSendButton,
   findStopButton,
   getAllAssistantTurns,
+  countAssistantTurns,
   extractCodeBlocksFromTurn,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
   buildConversationUrl,
+  detectAuthRequired,
+  detectConversationNotFound,
 } from "./probes";
 import {
   BOOTSTRAP_PROMPT,
@@ -269,6 +272,23 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
+    if (detectAuthRequired(this.docSupplier())) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "ChatGPT Web authentication / login required",
+        suggestedAction: "human_intervention",
+      });
+    }
+
+    if (detectConversationNotFound(this.docSupplier())) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
+        suggestedAction: "rebind",
+        observedGeneration: binding.generation,
+      });
+    }
+
     const win = this.winSupplier();
     if (win && win.location && binding.resumeUri) {
       const currentUrl = win.location.href;
@@ -285,6 +305,21 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       while (extractConversationIdFromUrl(win.location.href) !== targetConvId) {
         if (options.signal?.aborted) {
           throw new Error("Aborted while waiting for route navigation to conversation");
+        }
+        if (detectAuthRequired(this.docSupplier())) {
+          throw new DecisionAdapterError({
+            code: "human_required",
+            message: "ChatGPT Web authentication / login required",
+            suggestedAction: "human_intervention",
+          });
+        }
+        if (detectConversationNotFound(this.docSupplier())) {
+          throw new DecisionAdapterError({
+            code: "binding_broken",
+            message: `ChatGPT conversation "${targetConvId}" not found or deleted`,
+            suggestedAction: "rebind",
+            observedGeneration: binding.generation,
+          });
         }
         if (Date.now() - startWaitRoute > this.timeoutMs) {
           throw new DecisionAdapterError({
@@ -303,6 +338,21 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     while (!composer) {
       if (options.signal?.aborted) {
         throw new Error("Aborted while resuming ChatGPT conversation");
+      }
+      if (detectAuthRequired(this.docSupplier())) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: "ChatGPT Web authentication / login required",
+          suggestedAction: "human_intervention",
+        });
+      }
+      if (detectConversationNotFound(this.docSupplier())) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
+          suggestedAction: "rebind",
+          observedGeneration: binding.generation,
+        });
       }
       if (Date.now() - startWait > this.timeoutMs) {
         throw new DecisionAdapterError({
@@ -350,7 +400,8 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     let promptText = "";
-    if (handle?.isRollover) {
+    const turnCount = countAssistantTurns(doc);
+    if (handle?.isRollover || (session.bindingGeneration > 1 && turnCount <= 1)) {
       promptText += formatHandoffPrompt(task, context, session.bindingGeneration);
     } else if (isContinuation) {
       promptText += formatContinuationHeader(task, prevSha);

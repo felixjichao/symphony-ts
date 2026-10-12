@@ -10,7 +10,8 @@ export type DriverStep =
   | "prompt_submitting"
   | "waiting_response"
   | "result_extracted"
-  | "completed";
+  | "completed"
+  | "rebind_submitting";
 
 export interface DriverCheckpoint {
   readonly schemaVersion: 1;
@@ -29,6 +30,11 @@ export interface DriverCheckpoint {
   readonly targetConvId?: string | null | undefined;
   readonly baselineCount?: number | undefined;
   readonly candidateResult?: unknown | undefined;
+  readonly rebindState?: {
+    readonly newExternalSessionRef: string;
+    readonly newResumeUri: string | null;
+    readonly expectedGeneration: number;
+  } | undefined;
 }
 
 export interface CheckpointStore {

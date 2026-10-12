@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { ChatGptWebAdapter } from "../src/adapter";
-import type {
-  DecisionSession,
-  DecisionPlanTask,
-  DecisionExecutionRequest,
+import {
+  type DecisionSession,
+  type DecisionPlanTask,
+  type DecisionExecutionRequest,
+  DecisionAdapterError,
 } from "@symphony/domain/decision";
 import { MockDocument, MockElement, MockWindow } from "./mock-dom";
 
@@ -287,5 +288,167 @@ describe("ChatGptWebAdapter", () => {
     if (outcome.result.kind === "plan") {
       expect(outcome.result.content.plan).toContain("Step 1: Implement feature");
     }
+  });
+
+  it("resumeSession detects conversation not found / 404 and throws binding_broken rebind error", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/missing-conv-id";
+
+    // Simulate 404 in DOM
+    const notFoundEl = new MockElement("div", { "data-testid": "conversation-not-found" });
+    notFoundEl.textContent = "Unable to load conversation";
+    doc.body.appendChild(notFoundEl);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+    });
+
+    const binding = {
+      schemaVersion: 1,
+      adapter: "chatgpt-web",
+      externalSessionRef: "missing-conv-id",
+      resumeUri: "https://chatgpt.com/c/missing-conv-id",
+      generation: 1,
+    };
+
+    try {
+      await adapter.resumeSession(baseSession, binding);
+      expect.unreachable();
+    } catch (err: unknown) {
+      expect(err instanceof DecisionAdapterError).toBe(true);
+      if (err instanceof DecisionAdapterError) {
+        expect(err.code).toBe("binding_broken");
+        expect(err.suggestedAction).toBe("rebind");
+      }
+    }
+  });
+
+  it("resumeSession detects auth / login required and throws human_required error", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/target-conv-id";
+
+    const loginBtn = new MockElement("button", { "data-testid": "login-button" });
+    doc.body.appendChild(loginBtn);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+    });
+
+    const binding = {
+      schemaVersion: 1,
+      adapter: "chatgpt-web",
+      externalSessionRef: "target-conv-id",
+      resumeUri: "https://chatgpt.com/c/target-conv-id",
+      generation: 1,
+    };
+
+    try {
+      await adapter.resumeSession(baseSession, binding);
+      expect.unreachable();
+    } catch (err: unknown) {
+      expect(err instanceof DecisionAdapterError).toBe(true);
+      if (err instanceof DecisionAdapterError) {
+        expect(err.code).toBe("human_required");
+        expect(err.suggestedAction).toBe("human_intervention");
+      }
+    }
+  });
+
+  it("executeTask includes handoff prompt for rollover sessions (bindingGeneration > 1)", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/rollover-conv-id";
+
+    const planTask: DecisionPlanTask = {
+      schemaVersion: 1,
+      id: "github%3Aowner%2Frepo%231:plan:1",
+      sessionId: "github:owner/repo#1",
+      kind: "plan",
+      revision: 1,
+      status: "running",
+      lease: {
+        owner: "driver",
+        token: "tok",
+        generation: 1,
+        expiresAtMs: 200_000,
+      },
+      claimGeneration: 1,
+      lastClaimToken: "tok",
+      createdAtMs: 1000,
+      updatedAtMs: 1000,
+    };
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    const sendBtn = new MockElement("button", { "data-testid": "send-button" });
+    doc.body.appendChild(composer);
+    doc.body.appendChild(sendBtn);
+
+    const resultJson = {
+      schemaVersion: 1,
+      taskId: planTask.id,
+      sessionId: planTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Rollover Plan",
+        acceptanceCriteria: ["Criteria 1"],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: 2000,
+    };
+
+    sendBtn.addEventListener("click", () => {
+      const turn = new MockElement("article", { "data-testid": "conversation-turn-2" });
+      const msg = new MockElement("div", { "data-message-author-role": "assistant" });
+      msg.textContent = `Here is the plan:\n\`\`\`symphony-result\n${JSON.stringify(resultJson, null, 2)}\n\`\`\``;
+      turn.appendChild(msg);
+      doc.body.appendChild(turn);
+    });
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 10,
+      stabilizationMs: 20,
+    });
+
+    const rolloverSession: DecisionSession = {
+      ...baseSession,
+      binding: {
+        schemaVersion: 1,
+        adapter: "chatgpt-web",
+        externalSessionRef: "rollover-conv-id",
+        resumeUri: "https://chatgpt.com/c/rollover-conv-id",
+        generation: 2,
+      },
+      bindingGeneration: 2,
+    };
+
+    const request: DecisionExecutionRequest = {
+      task: planTask,
+      session: rolloverSession,
+      context: {
+        strategy: "materialized",
+        workItem: { provider: "github", key: "owner/repo#1" },
+        repository: "owner/repo",
+        issue: { repository: "owner/repo", number: 1, title: "Test", body: "Body" },
+        plan: null,
+        pullRequest: null,
+        diff: null,
+        ci: null,
+        repositoryInstructions: null,
+        previousReviews: [],
+        unresolvedFindings: [],
+      },
+    };
+
+    await adapter.executeTask(request);
+    expect(composer.value).toContain("[Symphony Session Rollover");
   });
 });
