@@ -11,7 +11,9 @@ export type DriverStep =
   | "waiting_response"
   | "result_extracted"
   | "completed"
-  | "rebind_submitting";
+  | "rebind_submitting"
+  | "bootstrap_submitting"
+  | "bootstrap_waiting";
 
 export interface DriverCheckpoint {
   readonly schemaVersion: 1;

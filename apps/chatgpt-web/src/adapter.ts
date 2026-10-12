@@ -117,6 +117,55 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     return this.docSupplier();
   }
 
+  getOrigin(): string {
+    return this.origin;
+  }
+
+  getTimeoutMs(): number {
+    return this.timeoutMs;
+  }
+
+  getStabilizationMs(): number {
+    return this.stabilizationMs;
+  }
+
+  getCheckIntervalMs(): number {
+    return this.checkIntervalMs;
+  }
+
+  async waitForBootstrapResponse(options: {
+    baselineCount: number;
+    baselineTurn?: HTMLElement | null | undefined;
+    signal?: AbortSignal | undefined;
+  }): Promise<string> {
+    const doc = this.docSupplier();
+    await waitForStreamingCompletion({
+      doc,
+      baselineCount: options.baselineCount,
+      baselineTurn: options.baselineTurn ?? null,
+      timeoutMs: this.timeoutMs,
+      stabilizationMs: this.stabilizationMs,
+      checkIntervalMs: this.checkIntervalMs,
+      signal: options.signal,
+    });
+
+    const win = this.winSupplier();
+    let convId: string | null = null;
+    if (win && win.location) {
+      convId = extractConversationIdFromUrl(win.location.href);
+    }
+
+    if (!convId) {
+      throw new DecisionAdapterError({
+        code: "execution_failed",
+        message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
+        suggestedAction: "retry",
+      });
+    }
+
+    return convId;
+  }
+
   async inspectBinding(
     session: DecisionSession,
     _options: { signal?: AbortSignal | undefined } = {}
@@ -154,14 +203,14 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionSessionCreationResult> {
     const win = this.winSupplier();
+    const origin = (win?.location as { origin?: string })?.origin || this.origin;
+    const newChatUrl = new URL("/", origin).href;
 
     // 1. Ensure we are starting from a clean new conversation, not an existing thread
     if (win && win.location) {
       const currentConvId = extractConversationIdFromUrl(win.location.href);
       if (currentConvId) {
         // If the browser tab is on an existing conversation, navigate to root / new chat
-        const origin = (win.location as { origin?: string }).origin || this.origin;
-        const newChatUrl = new URL("/", origin).href;
         this.stepListener?.("navigating", { targetUri: newChatUrl });
         win.location.assign(newChatUrl);
 
@@ -180,7 +229,11 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           }
           await new Promise((r) => setTimeout(r, this.checkIntervalMs));
         }
+      } else {
+        this.stepListener?.("navigating", { targetUri: newChatUrl });
       }
+    } else {
+      this.stepListener?.("navigating", { targetUri: newChatUrl });
     }
 
     // Wait for composer element to be available and ready in dynamic docSupplier
@@ -209,32 +262,16 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
-    sendBtn.click();
 
-    // Wait for bootstrap response
-    await waitForStreamingCompletion({
-      doc,
+    this.stepListener?.("bootstrap_submitting", { baselineCount });
+    sendBtn.click();
+    this.stepListener?.("bootstrap_waiting", { baselineCount });
+
+    const convId = await this.waitForBootstrapResponse({
       baselineCount,
       baselineTurn,
-      timeoutMs: this.timeoutMs,
-      stabilizationMs: this.stabilizationMs,
-      checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
     });
-
-    let convId: string | null = null;
-    if (win && win.location) {
-      convId = extractConversationIdFromUrl(win.location.href);
-    }
-
-    // Must be a real conversation ID from URL. Do NOT synthesize dummy references!
-    if (!convId) {
-      throw new DecisionAdapterError({
-        code: "execution_failed",
-        message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
-        suggestedAction: "retry",
-      });
-    }
 
     const isRollover = session.bindingGeneration > 0 || session.status === "broken-binding";
     const nextGen = session.bindingGeneration === 0 ? 1 : session.bindingGeneration + 1;
@@ -246,10 +283,18 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       generation: nextGen,
     };
 
+    this.stepListener?.("rebind_submitting", {
+      rebindState: {
+        newExternalSessionRef: convId,
+        newResumeUri: binding.resumeUri,
+        expectedGeneration: session.bindingGeneration,
+      },
+    });
+
     const handle: ChatGptWebHandle = {
       conversationId: convId,
       bootstrapped: true,
-      isRollover,
+      ...(isRollover ? { isRollover: true } : {}),
     };
 
     return {

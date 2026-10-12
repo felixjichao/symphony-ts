@@ -9,6 +9,7 @@ import {
   type DecisionLease,
   type DecisionContextBundle,
   type DecisionResult,
+  DecisionAdapterError,
 } from "@symphony/domain/decision";
 import {
   executeTaskWithAdapter,
@@ -27,7 +28,13 @@ import {
   isCheckpointExpired,
 } from "./checkpoint";
 import { ChatGptWebAdapter, type ChatGptWebAdapterOptions } from "./adapter";
-import { findStopButton, getAllAssistantTurns } from "./probes";
+import {
+  findStopButton,
+  getAllAssistantTurns,
+  buildConversationUrl,
+  extractConversationIdFromUrl,
+  waitForStreamingCompletion,
+} from "./probes";
 import { canonicalJsonEqual } from "./canonical-json";
 
 function isValidMatchingResultReceipt(
@@ -344,9 +351,17 @@ export class DecisionTabDriver implements DecisionTaskController {
         readonly newExternalSessionRef: string;
         readonly newResumeUri: string | null;
         readonly expectedGeneration: number;
+        readonly operationKey?: string | undefined;
       };
     }
   ): void {
+    let rebindState = meta?.rebindState;
+    if (rebindState && !rebindState.operationKey) {
+      rebindState = {
+        ...rebindState,
+        operationKey: `driver:${this.ownerId}:rebind:${rebindState.expectedGeneration + 1}`,
+      };
+    }
     const existing = this.checkpointStore.get();
     if (existing) {
       this.checkpointStore.set({
@@ -357,12 +372,15 @@ export class DecisionTabDriver implements DecisionTaskController {
         ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
         ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
         ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
-        ...(meta?.rebindState !== undefined ? { rebindState: meta.rebindState } : {}),
+        ...(rebindState !== undefined ? { rebindState } : {}),
       });
       return;
     }
     if (this.activeTask && this.activeSession && this.activeLease) {
-      this.saveCheckpoint(step, this.activeTask, this.activeSession, this.activeLease, meta);
+      this.saveCheckpoint(step, this.activeTask, this.activeSession, this.activeLease, {
+        ...meta,
+        ...(rebindState !== undefined ? { rebindState } : {}),
+      });
     }
   }
 
@@ -508,16 +526,27 @@ export class DecisionTabDriver implements DecisionTaskController {
           return null;
         }
         try {
-          await this.rebindSession(cp.sessionId, {
-            adapter: this.adapter?.name ?? "chatgpt-web",
-            externalSessionRef: cp.rebindState.newExternalSessionRef,
-            resumeUri: cp.rebindState.newResumeUri,
-            expectedGeneration: cp.rebindState.expectedGeneration,
-            ...(cp.rebindState.operationKey ? { operationKey: cp.rebindState.operationKey } : {}),
-            owner: cp.leaseOwner,
-            token: cp.leaseToken,
-            generation: cp.leaseGeneration,
-          });
+          if (cp.rebindState.expectedGeneration === 0) {
+            await this.putBinding(cp.sessionId, {
+              adapter: this.adapter?.name ?? "chatgpt-web",
+              externalSessionRef: cp.rebindState.newExternalSessionRef,
+              resumeUri: cp.rebindState.newResumeUri,
+              owner: cp.leaseOwner,
+              token: cp.leaseToken,
+              generation: cp.leaseGeneration,
+            });
+          } else {
+            await this.rebindSession(cp.sessionId, {
+              adapter: this.adapter?.name ?? "chatgpt-web",
+              externalSessionRef: cp.rebindState.newExternalSessionRef,
+              resumeUri: cp.rebindState.newResumeUri,
+              expectedGeneration: cp.rebindState.expectedGeneration,
+              ...(cp.rebindState.operationKey ? { operationKey: cp.rebindState.operationKey } : {}),
+              owner: cp.leaseOwner,
+              token: cp.leaseToken,
+              generation: cp.leaseGeneration,
+            });
+          }
           this.checkpointStore.delete();
           return null;
         } catch (err: unknown) {
@@ -617,6 +646,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           generation: cp.leaseGeneration,
           result: cp.candidateResult as DecisionResult,
         });
+        this.checkpointStore.delete();
         return {
           status: "completed",
           result: submitRes.result,
@@ -762,8 +792,165 @@ export class DecisionTabDriver implements DecisionTaskController {
       const win =
         (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
         (globalThis as unknown as { window?: Window }).window;
+      const currentConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
+      const oldRef = sessionRes.session.binding?.externalSessionRef;
+      // If we are already on a newly created conversation (different from the old binding),
+      // do not blindly navigate back to root "/"! Recover by completing rebind directly.
+      if (currentConvId && currentConvId !== oldRef) {
+        const origin =
+          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getOrigin() : null) ?? "https://chatgpt.com";
+        const resumeUri = buildConversationUrl(currentConvId, origin);
+        const expectedGen = sessionRes.session.bindingGeneration;
+        const opKey = `driver:${this.ownerId}:rebind:${expectedGen + 1}`;
+        this.updateCheckpointStep("rebind_submitting", {
+          rebindState: {
+            newExternalSessionRef: currentConvId,
+            newResumeUri: resumeUri,
+            expectedGeneration: expectedGen,
+            operationKey: opKey,
+          },
+        });
+        let updatedSession: DecisionSession;
+        if (expectedGen === 0) {
+          updatedSession = await this.putBinding(sessionRes.session.id, {
+            adapter: this.adapter?.name ?? "chatgpt-web",
+            externalSessionRef: currentConvId,
+            resumeUri,
+            owner: lease.owner,
+            token: lease.token,
+            generation: lease.generation,
+          });
+        } else {
+          updatedSession = await this.rebindSession(sessionRes.session.id, {
+            adapter: this.adapter?.name ?? "chatgpt-web",
+            externalSessionRef: currentConvId,
+            resumeUri,
+            expectedGeneration: expectedGen,
+            operationKey: opKey,
+            owner: lease.owner,
+            token: lease.token,
+            generation: lease.generation,
+          });
+        }
+        this.checkpointStore.delete();
+        return {
+          status: "superseded",
+          session: updatedSession,
+          error: new Error(
+            `Task "${cp.taskId}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
+          ),
+        };
+      }
       if (win && cp.targetUri && win.location && win.location.href !== cp.targetUri) {
         win.location.assign(cp.targetUri);
+      }
+    }
+
+    if (cp.step === "bootstrap_submitting") {
+      this.activeTask = taskRes.task;
+      this.activeSession = sessionRes.session;
+      this.activeLease = lease;
+      this.activeAbortController = new AbortController();
+      const signal = this.activeAbortController.signal;
+
+      this.startHeartbeat(taskRes.task, lease, () => {
+        this.activeAbortController?.abort();
+      });
+
+      try {
+        const win =
+          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
+          (globalThis as unknown as { window?: Window }).window;
+        const currentConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
+        const oldRef = sessionRes.session.binding?.externalSessionRef;
+        const hasNewConversationUrl = currentConvId !== null && currentConvId !== oldRef;
+
+        const adapterWithProbes = this.adapter as unknown as {
+          confirmPromptSubmitted?: (opts: { baselineCount: number; signal?: AbortSignal }) => Promise<boolean>;
+          isPromptConfirmedSent?: (doc?: unknown, baselineCount?: number) => boolean;
+        };
+        let isConfirmedSent = hasNewConversationUrl;
+        if (!isConfirmedSent) {
+          if (typeof adapterWithProbes.confirmPromptSubmitted === "function") {
+            isConfirmedSent = await adapterWithProbes.confirmPromptSubmitted({
+              baselineCount: cp.baselineCount ?? 0,
+              signal,
+            }).catch(() => false);
+          } else if (typeof adapterWithProbes.isPromptConfirmedSent === "function") {
+            isConfirmedSent = adapterWithProbes.isPromptConfirmedSent(undefined, cp.baselineCount ?? 0);
+          } else if (typeof (globalThis as unknown as { document?: Document }).document !== "undefined") {
+            const doc = (globalThis as unknown as { document: Document }).document;
+            const count = cp.baselineCount ?? 0;
+            isConfirmedSent = findStopButton(doc) !== null || getAllAssistantTurns(doc).length > count;
+          }
+        }
+
+        if (isConfirmedSent) {
+          this.updateCheckpointStep("bootstrap_waiting", { baselineCount: cp.baselineCount ?? 0 });
+          return await this.resumeBootstrapWaiting(
+            taskRes.task,
+            sessionRes.session,
+            lease,
+            cp.baselineCount ?? 0,
+            signal
+          );
+        } else {
+          // Cannot confirm bootstrap prompt was sent! Fail safely and hand off to human to prevent duplicate execution
+          const failRes = await this.submitFailure(taskRes.task.id, {
+            owner: lease.owner,
+            token: lease.token,
+            generation: lease.generation,
+            error: "human_required",
+            details: {
+              message:
+                "Uncertain bootstrap prompt submission state during recovery (bootstrap_submitting could not be confirmed as sent); manual intervention required to prevent duplicate execution",
+            },
+            retryable: false,
+          });
+          this.checkpointStore.delete();
+          return {
+            status: "failed",
+            failure: failRes.failure,
+            receipt: failRes.receipt,
+            superseded: failRes.superseded,
+            session: sessionRes.session,
+            error: new Error("Uncertain bootstrap prompt submission state during recovery"),
+          };
+        }
+      } finally {
+        this.stopHeartbeat();
+        this.activeAbortController = null;
+        this.activeTask = null;
+        this.activeSession = null;
+        this.activeLease = null;
+      }
+    }
+
+    if (cp.step === "bootstrap_waiting") {
+      this.activeTask = taskRes.task;
+      this.activeSession = sessionRes.session;
+      this.activeLease = lease;
+      this.activeAbortController = new AbortController();
+      const signal = this.activeAbortController.signal;
+
+      this.startHeartbeat(taskRes.task, lease, () => {
+        this.activeAbortController?.abort();
+      });
+
+      try {
+        return await this.resumeBootstrapWaiting(
+          taskRes.task,
+          sessionRes.session,
+          lease,
+          cp.baselineCount ?? 0,
+          signal
+        );
+      } finally {
+        this.stopHeartbeat();
+        this.activeAbortController = null;
+        this.activeTask = null;
+        this.activeSession = null;
+        this.activeLease = null;
       }
     }
 
@@ -873,6 +1060,128 @@ export class DecisionTabDriver implements DecisionTaskController {
     // 5. Normal claimed / started execution
     const context = await this.fetchContext(taskRes.task.id);
     return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
+  }
+
+  private async resumeBootstrapWaiting(
+    task: DecisionTask,
+    session: DecisionSession,
+    lease: DecisionLease,
+    baselineCount: number,
+    signal: AbortSignal
+  ): Promise<TaskExecutionOutcome> {
+    const adapterWithBootstrap = this.adapter as unknown as {
+      waitForBootstrapResponse?: (opts: {
+        baselineCount: number;
+        signal?: AbortSignal;
+      }) => Promise<string>;
+    };
+
+    let convId: string;
+    try {
+      if (typeof adapterWithBootstrap.waitForBootstrapResponse === "function") {
+        convId = await adapterWithBootstrap.waitForBootstrapResponse({
+          baselineCount,
+          signal,
+        });
+      } else {
+        const win =
+          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
+          (globalThis as unknown as { window?: Window }).window;
+        const doc =
+          (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+          (globalThis as unknown as { document?: Document }).document;
+
+        await waitForStreamingCompletion({
+          doc,
+          baselineCount,
+          baselineTurn: null,
+          timeoutMs: this.adapter instanceof ChatGptWebAdapter ? this.adapter.getTimeoutMs() : 60_000,
+          stabilizationMs: 1,
+          checkIntervalMs: 50,
+          signal,
+        });
+
+        convId = win?.location ? extractConversationIdFromUrl(win.location.href) ?? "" : "";
+        if (!convId) {
+          throw new DecisionAdapterError({
+            code: "execution_failed",
+            message: "Failed to extract conversation ID after bootstrap waiting recovery",
+            suggestedAction: "retry",
+          });
+        }
+      }
+    } catch (bootstrapErr) {
+      if (!signal.aborted) {
+        const failRes = await this.submitFailure(task.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          error: "execution_failed",
+          details: { message: "Failed waiting for bootstrap response during checkpoint recovery" },
+          retryable: true,
+        }).catch(() => null);
+
+        this.checkpointStore.delete();
+        if (failRes) {
+          return {
+            status: "failed",
+            failure: failRes.failure,
+            receipt: failRes.receipt,
+            superseded: failRes.superseded,
+            session,
+            error: bootstrapErr,
+          };
+        }
+      }
+      throw bootstrapErr;
+    }
+
+    const origin =
+      (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getOrigin() : null) ?? "https://chatgpt.com";
+    const resumeUri = buildConversationUrl(convId, origin);
+    const expectedGen = session.bindingGeneration;
+    const opKey = `driver:${this.ownerId}:rebind:${expectedGen + 1}`;
+
+    this.updateCheckpointStep("rebind_submitting", {
+      rebindState: {
+        newExternalSessionRef: convId,
+        newResumeUri: resumeUri,
+        expectedGeneration: expectedGen,
+        operationKey: opKey,
+      },
+    });
+
+    let updatedSession: DecisionSession;
+    if (expectedGen === 0) {
+      updatedSession = await this.putBinding(session.id, {
+        adapter: this.adapter.name,
+        externalSessionRef: convId,
+        resumeUri,
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+      });
+    } else {
+      updatedSession = await this.rebindSession(session.id, {
+        adapter: this.adapter.name,
+        externalSessionRef: convId,
+        resumeUri,
+        expectedGeneration: expectedGen,
+        operationKey: opKey,
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+      });
+    }
+
+    this.checkpointStore.delete();
+    return {
+      status: "superseded",
+      session: updatedSession,
+      error: new Error(
+        `Task "${task.id}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
+      ),
+    };
   }
 
   private async resumeWaitingResponse(
@@ -1052,7 +1361,9 @@ export class DecisionTabDriver implements DecisionTaskController {
         currentCp?.candidateResult ||
         currentCp?.step === "result_extracted" ||
         currentCp?.step === "navigating" ||
-        currentCp?.step === "rebind_submitting"
+        currentCp?.step === "rebind_submitting" ||
+        currentCp?.step === "bootstrap_submitting" ||
+        currentCp?.step === "bootstrap_waiting"
       ) {
         throw err;
       }
