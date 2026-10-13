@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Binding rollover recovery and stale-task fencing](accepted/architecture/2026-10-12-binding-rollover-and-stale-task-fencing.md) — session 换绑与失效会话恢复契约：coordinator 捕获 `resumeSession` 并通过 rebind 恢复、rebind 时将 active claims 释放回 pending 并进行 generation 围栏防护、ChatGPT userscript 基于 sessionStorage 保持跨页面导航/刷新自动恢复（NEST-121 / #122）。
 - [Supersede race recovery](accepted/architecture/2026-10-11-supersede-race-recovery.md) — supersede/cancel 与 driver 执行竞态的恢复契约：终端 superseded outcome、status 复核而非消息匹配、userscript 仅对 401/403 停机（NEST-118 / #116）。
 - [Delivery review gate](accepted/architecture/2026-10-10-delivery-review-gate.md) — SHA-bound independent review gate before auto-merge, review task materialization, polling, and findings repair (NEST-103 / #98).
 - [Decision store and bridge](accepted/architecture/2026-10-09-decision-store-bridge.md) — durable task/session snapshot store, cross-process lock, and localhost Web Agent Bridge (NEST-100 / #95).

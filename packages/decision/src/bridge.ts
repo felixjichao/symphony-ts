@@ -626,7 +626,19 @@ export class DecisionBridge {
     const breakMatch = /^\/v1\/sessions\/([^/]+)\/break-binding$/.exec(pathname);
     if (method === "POST" && breakMatch) {
       const id = decodeURIComponent(breakMatch[1]!);
-      const session = await this.service.breakBinding(id);
+      const body = await this.readJsonBody(req);
+      const b = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const owner = typeof b["owner"] === "string" ? b["owner"] : undefined;
+      const token = typeof b["token"] === "string" ? b["token"] : undefined;
+      const generation = typeof b["generation"] === "number" ? b["generation"] : undefined;
+      const expectedGeneration =
+        typeof b["expectedGeneration"] === "number" ? b["expectedGeneration"] : undefined;
+      const session = await this.service.breakBinding(id, {
+        ...(owner ? { owner } : {}),
+        ...(token ? { token } : {}),
+        ...(generation !== undefined ? { generation } : {}),
+        ...(expectedGeneration !== undefined ? { expectedGeneration } : {}),
+      });
       this.sendJson(res, 200, { session });
       return;
     }

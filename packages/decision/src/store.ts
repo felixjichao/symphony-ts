@@ -8,6 +8,7 @@ import {
   parseDecisionReviewTarget,
   parseDecisionContextBundle,
   validateDecisionContextForTask,
+  releaseDecisionTaskForBindingInvalidation,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
@@ -194,6 +195,16 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
   }
   if (typeof record.operationReceipts !== "object" || record.operationReceipts === null) {
     throw new CorruptedStoreError("operationReceipts table must be an object");
+  }
+  if (record.claimBindingGenerations !== undefined) {
+    if (typeof record.claimBindingGenerations !== "object" || record.claimBindingGenerations === null) {
+      throw new CorruptedStoreError("claimBindingGenerations table must be an object");
+    }
+    for (const [key, gen] of Object.entries(record.claimBindingGenerations)) {
+      if (typeof gen !== "number" || !Number.isSafeInteger(gen) || gen < 0) {
+        throw new CorruptedStoreError(`Invalid binding generation for task "${key}"`);
+      }
+    }
   }
 
   // Validate sessions
@@ -512,6 +523,7 @@ export function createEmptyStoreRecord(): DecisionStoreRecord {
     operationReceipts: {},
     contexts: {},
     plans: {},
+    claimBindingGenerations: {},
   };
 }
 
@@ -573,10 +585,24 @@ export class DurableDecisionStore {
       throw new CorruptedStoreError(`Store file validation failed: ${(valErr as Error).message}`);
     }
 
+    const claimBindingGens: Record<string, number> = candidate.claimBindingGenerations
+      ? { ...candidate.claimBindingGenerations }
+      : {};
+    const tasks: Record<string, DecisionTask> = { ...candidate.tasks };
+    if (!candidate.claimBindingGenerations) {
+      for (const [id, task] of Object.entries(tasks)) {
+        if (task.status === "claimed" || task.status === "running") {
+          tasks[id] = releaseDecisionTaskForBindingInvalidation(task, task.updatedAtMs);
+        }
+      }
+    }
+
     this.state = {
       ...candidate,
+      tasks,
       contexts: candidate.contexts ?? {},
       plans: candidate.plans ?? {},
+      claimBindingGenerations: claimBindingGens,
     };
   }
 
@@ -682,6 +708,9 @@ export class DurableDecisionStore {
       }
 
       const draft: DecisionStoreRecord = structuredClone(this.state);
+      if (!draft.claimBindingGenerations) {
+        (draft as { claimBindingGenerations: Record<string, number> }).claimBindingGenerations = {};
+      }
       const result = await mutator(draft);
 
       (draft as { transactionSequence: number }).transactionSequence = this.state.transactionSequence + 1;

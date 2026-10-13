@@ -3,6 +3,8 @@
  * Isolates DOM volatility so UI drift is localized.
  */
 
+import { DecisionAdapterError } from "@symphony/domain/decision";
+
 export const SELECTORS = {
   composer: [
     "#prompt-textarea",
@@ -101,6 +103,22 @@ export function countAssistantTurns(doc: Document = document): number {
   return getAllAssistantTurns(doc).length;
 }
 
+/**
+ * Verifies that the conversation currently loaded in the tab is the exact conversation
+ * recorded for this bootstrap attempt. Only a durable, attempt-specific conversation
+ * reference can prove association: page content (including the bootstrap prompt text)
+ * is not attempt-unique, because a conversation created by an earlier attempt renders
+ * the same prompt.
+ */
+export function isConversationAssociatedWithBootstrap(
+  currentUrl: string | null,
+  recordedConvId: string | null
+): boolean {
+  if (!recordedConvId) return false;
+  const convId = currentUrl ? extractConversationIdFromUrl(currentUrl) : null;
+  return convId !== null && convId === recordedConvId;
+}
+
 export function findLatestAssistantTurn(doc: Document = document): HTMLElement | null {
   const turns = getAllAssistantTurns(doc);
   return turns.length > 0 ? (turns[turns.length - 1] ?? null) : null;
@@ -171,6 +189,11 @@ export interface WaitForCompletionOptions {
   readonly stabilizationMs?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Invoked once per poll iteration, including when the signal is already aborted. A
+   * callback may throw to fail the wait immediately (e.g. a fail-closed check).
+   */
+  readonly onPoll?: (() => void) | undefined;
 }
 
 export async function waitForStreamingCompletion(
@@ -190,12 +213,30 @@ export async function waitForStreamingCompletion(
   let turnObserved = false;
 
   while (true) {
+    options.onPoll?.();
+
     if (signal?.aborted) {
       throw new Error("Aborted while waiting for assistant completion");
     }
 
     if (Date.now() - start > timeoutMs) {
       throw new Error(`Timeout waiting for ChatGPT response after ${timeoutMs}ms`);
+    }
+
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found while waiting for ChatGPT response",
+        suggestedAction: "rebind",
+      });
+    }
+
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required while waiting for ChatGPT response",
+        suggestedAction: "human_intervention",
+      });
     }
 
     const turns = getAllAssistantTurns(doc);
@@ -238,4 +279,180 @@ export async function waitForStreamingCompletion(
 
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+}
+
+/**
+ * Checks whether an element is located inside a chat message container / turn content.
+ */
+export function isInsideMessageContainer(element: Element | null): boolean {
+  if (!element) return false;
+  // If browser DOM supports Element.closest:
+  if (typeof (element as unknown as { closest?: (s: string) => Element | null }).closest === "function") {
+    try {
+      const match = (element as unknown as { closest: (s: string) => Element | null }).closest(
+        "article, [data-message-author-role], [data-testid^='conversation-turn-'], [role='article'], .agent-turn, [data-markdown-text-style]"
+      );
+      if (match) return true;
+    } catch {
+      // Fallback to parentElement traversal
+    }
+  }
+
+  // Traversal fallback for mock DOM or environments without closest
+  let curr: Element | null = element;
+  while (curr) {
+    const tagName = curr.tagName ? curr.tagName.toLowerCase() : "";
+    if (tagName === "article") {
+      return true;
+    }
+    const testId = curr.getAttribute?.("data-testid");
+    if (testId && testId.startsWith("conversation-turn-")) {
+      return true;
+    }
+    if (curr.getAttribute?.("data-message-author-role") !== null && curr.getAttribute?.("data-message-author-role") !== undefined) {
+      return true;
+    }
+    if (curr.getAttribute?.("role") === "article") {
+      return true;
+    }
+    if (curr.getAttribute?.("data-markdown-text-style") !== null && curr.getAttribute?.("data-markdown-text-style") !== undefined) {
+      return true;
+    }
+    if (curr.className && typeof curr.className === "string" && curr.className.includes("agent-turn")) {
+      return true;
+    }
+    curr = curr.parentElement;
+  }
+  return false;
+}
+
+export const MESSAGE_CONTAINER_SELECTORS: readonly string[] = [
+  "article",
+  "[data-message-author-role]",
+  "[data-testid^='conversation-turn-']",
+  "[role='article']",
+  ".agent-turn",
+  "[data-markdown-text-style]",
+];
+
+/**
+ * Checks whether any supported chat message containers / turn surfaces exist in the document.
+ */
+export function hasMessageContainers(doc: Document = document): boolean {
+  if (!doc) return false;
+  for (const selector of MESSAGE_CONTAINER_SELECTORS) {
+    try {
+      if (doc.querySelector && doc.querySelector(selector)) {
+        return true;
+      }
+    } catch {
+      // Continue checking next selector
+    }
+  }
+  return false;
+}
+
+export function detectAuthRequired(doc: Document = document): boolean {
+  if (!doc) return false;
+
+  // 1. Authentic auth/login selectors outside chat messages always take precedence
+  const authSelectors = [
+    "[data-testid='login-button']",
+    "[data-testid='auth-button']",
+    "a[href*='/auth/login']",
+    "a[href*='/login']",
+    "[data-testid='login-container']",
+  ];
+  for (const selector of authSelectors) {
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (!isInsideMessageContainer(el)) {
+        return true;
+      }
+    }
+  }
+
+  // 2. If composer element is present without auth prompts outside messages, user is authenticated
+  if (findComposerElement(doc)) {
+    return false;
+  }
+
+  // 3. Exclude chat message content / containers from general text matching
+  if (hasMessageContainers(doc)) {
+    return false;
+  }
+
+  // 4. Fallback text scanning
+  const text = doc.body?.textContent || "";
+  if (
+    (text.includes("Log in") || text.includes("Sign up")) &&
+    (text.includes("Welcome back") || text.includes("Get started"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function detectConversationNotFound(doc: Document = document): boolean {
+  if (!doc) return false;
+
+  // 1. Explicit authentic error UI elements / testids outside chat messages always indicate conversation failure,
+  // even if the page shell retains a disabled/dangling composer element!
+  const notFoundSelectors = [
+    "[data-testid='conversation-not-found']",
+    "[data-testid='error-page']",
+    "[data-testid='error-container']",
+  ];
+  for (const selector of notFoundSelectors) {
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (!isInsideMessageContainer(el)) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Explicit error alerts / headings OUTSIDE message containers
+  const alertSelectors = ["[role='alert']", "h1", "h2", "h3"];
+  for (const selector of alertSelectors) {
+    const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
+    for (const el of candidates) {
+      if (isInsideMessageContainer(el)) {
+        continue;
+      }
+      const alertText = el.textContent || "";
+      if (
+        alertText.includes("Conversation not found") ||
+        alertText.includes("Unable to load conversation") ||
+        alertText.includes("This conversation may have been deleted") ||
+        alertText.includes("404: Not Found") ||
+        alertText.includes("404 - Not Found")
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // 3. If composer element is present without authentic error UI outside messages, it is a healthy interactive conversation
+  if (findComposerElement(doc)) {
+    return false;
+  }
+
+  // 4. Exclude chat message content / containers from general text matching:
+  // Text inside message articles or turn containers is user/assistant prose, not a page error!
+  if (hasMessageContainers(doc)) {
+    return false;
+  }
+
+  // 5. Fallback full-page text matching for minimal error pages
+  const text = doc.body?.textContent || "";
+  if (
+    text.includes("Conversation not found") ||
+    text.includes("Unable to load conversation") ||
+    text.includes("This conversation may have been deleted") ||
+    text.includes("404: Not Found")
+  ) {
+    return true;
+  }
+  return false;
 }

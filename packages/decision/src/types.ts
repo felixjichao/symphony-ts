@@ -89,6 +89,7 @@ export interface DecisionStoreRecord {
   readonly operationReceipts: Record<string, OperationReceipt>;
   readonly contexts: Record<string, DecisionContextBundle>;
   readonly plans: Record<string, DecisionPlanRecord>;
+  readonly claimBindingGenerations: Record<string, number>;
 }
 
 export interface DecisionStoreConfig {
@@ -207,6 +208,13 @@ export interface RebindSessionRequest {
   readonly owner?: string | undefined;
   readonly token?: string | undefined;
   readonly generation?: number | undefined;
+}
+
+export interface BreakBindingRequest {
+  readonly owner?: string | undefined;
+  readonly token?: string | undefined;
+  readonly generation?: number | undefined;
+  readonly expectedGeneration?: number | undefined;
 }
 
 export interface CreateSessionRequest {

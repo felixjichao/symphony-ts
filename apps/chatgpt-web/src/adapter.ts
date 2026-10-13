@@ -22,10 +22,14 @@ import {
   findSendButton,
   findStopButton,
   getAllAssistantTurns,
+  countAssistantTurns,
   extractCodeBlocksFromTurn,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
   buildConversationUrl,
+  detectAuthRequired,
+  detectConversationNotFound,
+  isConversationAssociatedWithBootstrap,
 } from "./probes";
 import {
   BOOTSTRAP_PROMPT,
@@ -114,6 +118,100 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     return this.docSupplier();
   }
 
+  getOrigin(): string {
+    return this.origin;
+  }
+
+  getTimeoutMs(): number {
+    return this.timeoutMs;
+  }
+
+  getStabilizationMs(): number {
+    return this.stabilizationMs;
+  }
+
+  getCheckIntervalMs(): number {
+    return this.checkIntervalMs;
+  }
+
+  async waitForBootstrapResponse(options: {
+    baselineCount: number;
+    baselineTurn?: HTMLElement | null | undefined;
+    signal?: AbortSignal | undefined;
+    onPoll?: (() => void) | undefined;
+  }): Promise<string> {
+    const doc = this.docSupplier();
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found during bootstrap response wait",
+        suggestedAction: "rebind",
+      });
+    }
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required during bootstrap response wait",
+        suggestedAction: "human_intervention",
+      });
+    }
+
+    await waitForStreamingCompletion({
+      doc,
+      baselineCount: options.baselineCount,
+      baselineTurn: options.baselineTurn ?? null,
+      timeoutMs: this.timeoutMs,
+      stabilizationMs: this.stabilizationMs,
+      checkIntervalMs: this.checkIntervalMs,
+      signal: options.signal,
+      onPoll: options.onPoll,
+    });
+
+    if (detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: "Conversation not found after bootstrap response wait",
+        suggestedAction: "rebind",
+      });
+    }
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "Authentication required after bootstrap response wait",
+        suggestedAction: "human_intervention",
+      });
+    }
+
+    const win = this.winSupplier();
+    let convId: string | null = null;
+    if (win && win.location) {
+      convId = extractConversationIdFromUrl(win.location.href);
+    }
+
+    if (!convId) {
+      throw new DecisionAdapterError({
+        code: "execution_failed",
+        message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
+        suggestedAction: "retry",
+      });
+    }
+
+    return convId;
+  }
+
+  /**
+   * True only when the tab currently shows the exact conversation recorded for this
+   * bootstrap attempt. Page content — including the bootstrap prompt text — is shared by
+   * every Symphony-created conversation, so it cannot substitute for the recorded
+   * reference: recovery must fail closed instead of binding an ambiguous conversation.
+   */
+  isBootstrapConversationAssociated(recordedConvId: string | null): boolean {
+    return isConversationAssociatedWithBootstrap(
+      this.winSupplier()?.location?.href ?? null,
+      recordedConvId
+    );
+  }
+
   async inspectBinding(
     session: DecisionSession,
     _options: { signal?: AbortSignal | undefined } = {}
@@ -151,15 +249,17 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionSessionCreationResult> {
     const win = this.winSupplier();
+    const origin = (win?.location as { origin?: string })?.origin || this.origin;
+    const newChatUrl = new URL("/", origin).href;
 
-    // 1. Ensure we are starting from a clean new conversation, not an existing thread
+    // 1. Ensure we are starting from a clean new conversation, not an existing thread.
+    // Any previously recorded conversation reference is cleared: it belongs to an earlier
+    // attempt and must never be matched against the conversation this attempt creates.
     if (win && win.location) {
       const currentConvId = extractConversationIdFromUrl(win.location.href);
       if (currentConvId) {
         // If the browser tab is on an existing conversation, navigate to root / new chat
-        const origin = (win.location as { origin?: string }).origin || this.origin;
-        const newChatUrl = new URL("/", origin).href;
-        this.stepListener?.("navigating", { targetUri: newChatUrl });
+        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
         win.location.assign(newChatUrl);
 
         // Wait for route to actually change to new chat
@@ -177,7 +277,11 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           }
           await new Promise((r) => setTimeout(r, this.checkIntervalMs));
         }
+      } else {
+        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
       }
+    } else {
+      this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
     }
 
     // Wait for composer element to be available and ready in dynamic docSupplier
@@ -206,30 +310,56 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
-    sendBtn.click();
 
-    // Wait for bootstrap response
-    await waitForStreamingCompletion({
-      doc,
+    this.stepListener?.("bootstrap_submitting", { baselineCount });
+    sendBtn.click();
+    this.stepListener?.("bootstrap_waiting", { baselineCount, targetConvId: null });
+
+    // Persist the conversation this send creates as soon as its route is observable. The
+    // reference is immutable for the attempt: the first conversation route reached after the
+    // send is what this attempt created, and any later route is a deviation (human
+    // navigation, redirect, restart) that must never re-target the attempt.
+    let recordedConvId: string | null = null;
+    const recordCreatedConversationRef = () => {
+      const currentWin = this.winSupplier();
+      const convId = currentWin?.location
+        ? extractConversationIdFromUrl(currentWin.location.href)
+        : null;
+      if (recordedConvId === null) {
+        // A cancelled attempt never takes its creation reference from a route observed after
+        // the interruption: that route may be an unrelated conversation (user navigation,
+        // redirect). Without a recorded reference the recovery fails closed instead.
+        if (options.signal?.aborted) {
+          return;
+        }
+        if (convId) {
+          recordedConvId = convId;
+          this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
+        }
+        return;
+      }
+      if (convId !== null && convId !== recordedConvId) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${convId}" while the bootstrap response was pending; refusing to re-target this attempt`,
+          suggestedAction: "human_intervention",
+        });
+      }
+    };
+
+    const convId = await this.waitForBootstrapResponse({
       baselineCount,
       baselineTurn,
-      timeoutMs: this.timeoutMs,
-      stabilizationMs: this.stabilizationMs,
-      checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
+      onPoll: recordCreatedConversationRef,
     });
 
-    let convId: string | null = null;
-    if (win && win.location) {
-      convId = extractConversationIdFromUrl(win.location.href);
-    }
-
-    // Must be a real conversation ID from URL. Do NOT synthesize dummy references!
-    if (!convId) {
+    // The reply must have been read from the conversation this attempt created.
+    if (recordedConvId !== null && convId !== recordedConvId) {
       throw new DecisionAdapterError({
-        code: "execution_failed",
-        message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
-        suggestedAction: "retry",
+        code: "human_required",
+        message: `ChatGPT Web conversation "${convId}" is not the conversation this attempt created ("${recordedConvId}"); refusing to bind the attempt to another conversation`,
+        suggestedAction: "human_intervention",
       });
     }
 
@@ -243,10 +373,18 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       generation: nextGen,
     };
 
+    this.stepListener?.("rebind_submitting", {
+      rebindState: {
+        newExternalSessionRef: convId,
+        newResumeUri: binding.resumeUri,
+        expectedGeneration: session.bindingGeneration,
+      },
+    });
+
     const handle: ChatGptWebHandle = {
       conversationId: convId,
       bootstrapped: true,
-      isRollover,
+      ...(isRollover ? { isRollover: true } : {}),
     };
 
     return {
@@ -286,6 +424,21 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         if (options.signal?.aborted) {
           throw new Error("Aborted while waiting for route navigation to conversation");
         }
+        if (detectAuthRequired(this.docSupplier())) {
+          throw new DecisionAdapterError({
+            code: "human_required",
+            message: "ChatGPT Web authentication / login required",
+            suggestedAction: "human_intervention",
+          });
+        }
+        if (detectConversationNotFound(this.docSupplier())) {
+          throw new DecisionAdapterError({
+            code: "binding_broken",
+            message: `ChatGPT conversation "${targetConvId}" not found or deleted`,
+            suggestedAction: "rebind",
+            observedGeneration: binding.generation,
+          });
+        }
         if (Date.now() - startWaitRoute > this.timeoutMs) {
           throw new DecisionAdapterError({
             code: "execution_failed",
@@ -297,12 +450,30 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       }
     }
 
-    // Wait for composer ready on resumed page dynamically
+    // Wait for composer ready on resumed page dynamically, verifying authentic error/auth UI before success
     const startWait = Date.now();
-    let composer = findComposerElement(this.docSupplier());
-    while (!composer) {
+    while (true) {
       if (options.signal?.aborted) {
         throw new Error("Aborted while resuming ChatGPT conversation");
+      }
+      if (detectAuthRequired(this.docSupplier())) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: "ChatGPT Web authentication / login required",
+          suggestedAction: "human_intervention",
+        });
+      }
+      if (detectConversationNotFound(this.docSupplier())) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
+          suggestedAction: "rebind",
+          observedGeneration: binding.generation,
+        });
+      }
+      const composer = findComposerElement(this.docSupplier());
+      if (composer) {
+        break;
       }
       if (Date.now() - startWait > this.timeoutMs) {
         throw new DecisionAdapterError({
@@ -312,7 +483,6 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         });
       }
       await new Promise((r) => setTimeout(r, this.checkIntervalMs));
-      composer = findComposerElement(this.docSupplier());
     }
 
     const handle: ChatGptWebHandle = {
@@ -350,7 +520,8 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
 
     let promptText = "";
-    if (handle?.isRollover) {
+    const turnCount = countAssistantTurns(doc);
+    if (handle?.isRollover || (session.bindingGeneration > 1 && turnCount <= 1)) {
       promptText += formatHandoffPrompt(task, context, session.bindingGeneration);
     } else if (isContinuation) {
       promptText += formatContinuationHeader(task, prevSha);

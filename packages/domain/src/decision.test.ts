@@ -6,6 +6,7 @@ import {
   parseDecisionResult, parseDecisionSession, parseExecutorBinding, parseDecisionLease,
   parseDecisionReviewTarget, claimDecisionTask, startDecisionTask, heartbeatDecisionTask,
   completeDecisionTask, failDecisionTask, cancelDecisionTask, supersedeDecisionTask, releaseExpiredDecisionTask,
+  releaseDecisionTaskForBindingInvalidation,
   validateDecisionResultForTask, isDecisionReviewApproved, rebindDecisionSession,
   breakDecisionBinding, completeDecisionSession, reopenDecisionSession,
   serializePlanCommentMarker, parsePlanCommentMarker, formatPlanCommentMarkdown,
@@ -110,6 +111,7 @@ describe("Decision task transition table", () => {
     { name: "cancel", allowed: ["pending", "claimed", "running"], next: "cancelled", run: (t: DecisionTask) => cancelDecisionTask(t, 6) },
     { name: "supersede", allowed: statuses.filter(s => s !== "superseded"), next: "superseded", run: (t: DecisionTask) => supersedeDecisionTask(t, 6) },
     { name: "release expiry", allowed: ["claimed", "running"], next: "pending", run: (t: DecisionTask) => releaseExpiredDecisionTask(t, 100) },
+    { name: "release binding invalidation", allowed: ["claimed", "running"], next: "pending", run: (t: DecisionTask) => releaseDecisionTaskForBindingInvalidation(t, 6) },
   ];
   for (const operation of operations) for (const status of statuses) {
     it(`${status} → ${operation.name}: ${operation.allowed.includes(status) ? "legal" : "illegal"}`, () => {
