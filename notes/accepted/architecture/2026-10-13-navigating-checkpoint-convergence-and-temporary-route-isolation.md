@@ -7,6 +7,8 @@ During real-browser dogfooding of ChatGPT Web automation (`apps/chatgpt-web`, SP
    When an active binding points to a conversation that was deleted or no longer exists, ChatGPT Web redirects back to the homepage `/`. In browser automation, cross-page navigations unload the document and destroy in-memory timers (such as `Date.now() - startWaitRoute` inside `adapter.resumeSession`). When the tab reconstituted at `/`, `resumeCheckpointIfAvailable` observed that the current URL did not match `targetUri` and unconditionally called `location.assign(targetUri)` again, creating an infinite navigation loop.
 2. **Bootstrap Route Drift False Alarm due to Temporary Routes**:
    In modern ChatGPT Web (Edge + Tampermonkey), starting a new conversation from root `/` transitions first through a client-side temporary route (e.g. `/c/local-chatgpt`) before the backend assigns the canonical conversation UUID (e.g. `/c/<UUID>`). `recordCreatedConversationRef` immediately latched onto `local-chatgpt` as the durable conversation reference; when the subsequent formal UUID appeared, the attempt was falsely aborted as an unrecoverable route drift (`human_required`), preventing automated bootstrap and rollover.
+3. **Scenario A Dead Route Divergence to Root and Navigation Budget Reset**:
+   When resuming an existing session with an invalid/deleted conversation reference in ChatGPT Web, the SPA redirects back to homepage `/`. In `adapter.resumeSession`, waiting for composer previously either adopted the root composer or timed out as `execution_failed / retryable: true`, failing the task at generation 1 rather than triggering broken-binding rebind rollover (generation 1 → 2). Concurrently, `resumeCheckpointIfAvailable` prematurely demoted navigating checkpoints to `claimed` upon initial URL match, and step transitions reset attempt counters, disrupting the cross-page retry budget and heartbeat lease renewal state.
 
 ## Decision
 1. **Navigating Checkpoint Failure Convergence & Unrecoverable Rebind**:
@@ -17,12 +19,19 @@ During real-browser dogfooding of ChatGPT Web automation (`apps/chatgpt-web`, SP
      - If not at the target URI, it evaluates whether attempts exceeded `maxNavigationAttempts` or the deadline expired (`isBudgetExhausted`).
      - When unrecoverable, it executes `rebindUnrecoverableSession()`: breaks binding, creates a fresh session via `adapter.createSession()`, rebinds on the bridge with incremented `bindingGeneration` (N -> N+1), deletes the checkpoint, and returns `{ status: "superseded" }`.
      - Otherwise, it increments `navigationAttempts`, updates the checkpoint, calls `win.location.assign(targetUri)`, and checks `nowAtTarget` (returning `null` for real asynchronous navigation, or advancing to execution for synchronous test environments).
-2. **Client Temporary Route Isolation**:
+   - **Preserving Navigation Budget and Step Across Checkpoints**:
+     - In `updateCheckpointStep`, track `isSameTarget` across step updates. When continuing navigation to the same target URI / conversation ID across step transitions, preserve accumulated `navigationAttempts`, `navigationStartedAtMs`, and `navigationDeadlineMs`, incrementing attempts if re-entering navigating rather than resetting them to 1.
+     - In `resumeCheckpointIfAvailable` under `cp.step === "navigating"`, do not prematurely demote navigating checkpoints to `claimed` merely on URL match before route stability and composer readiness are confirmed by the adapter.
+     - Preserve authoritative heartbeat `leaseExpiresAtMs` renewal in `checkpointStore` during checkpoint resumption, avoiding redundant overwrites from stale in-memory snapshots.
+2. **Resume Route Departure and Timeout Rebind Classification**:
+   - In `adapter.resumeSession`, classify route navigation timeout as `binding_broken / rebind` with `observedGeneration: binding.generation`.
+   - In the composer-wait loop of `resumeSession`, detect route departure from `targetConvId` (e.g. redirected to root `/`), immediately throwing `binding_broken / rebind` rather than falsely adopting the root composer or timing out as `execution_failed / retry`.
+3. **Client Temporary Route Isolation**:
    - Added `isTemporaryConversationRoute(convId)` in `probes.ts` recognizing `local-chatgpt`, `local-*`, `temporary`, and `temp-*`.
    - Added `extractFormalConversationIdFromUrl` and updated `isConversationAssociatedWithBootstrap` to ignore temporary routes.
    - In `adapter.ts`: `recordCreatedConversationRef` ignores temporary routes only prior to latching the formal conversation reference. Once latched, any route departure (whether to a temporary route, another conversation UUID, or a route without conversation ID such as homepage `/`) triggers immutable association protection with non-retryable `human_required`.
    - If bootstrap streaming completes without obtaining an authoritative formal conversation reference (e.g. tab remains on a temporary route), it fails closed with non-retryable `human_required` (`retryable: false`), preventing duplicate bootstrap prompt submissions.
-3. **Browser-Safe Decision Error Export**:
+4. **Browser-Safe Decision Error Export**:
    - Exported `DecisionConflictError` from `@symphony/decision/adapter` so `apps/chatgpt-web` maintains zero Node built-in dependencies in browser bundles.
 
 ## Alternatives considered
@@ -32,8 +41,12 @@ During real-browser dogfooding of ChatGPT Web automation (`apps/chatgpt-web`, SP
    Rejected because `local-chatgpt` is a client-local route that cannot be resumed in a new tab or subsequent browser session, violating durable decision recovery across tabs.
 3. **Failing closed immediately on the first redirect to homepage `/`**:
    Rejected because SPA client routing and network transitions may momentarily bounce to root before resolving. A bounded retry budget (default 3 attempts / 180s) ensures convergence without prematurely aborting transient routing jitter.
+4. **Retrying dead conversations as `execution_failed` at the same generation**:
+   Rejected because a deleted or nonexistent conversation will never recover under the same external reference; re-attempting without rebind causes task exhaustion rather than establishing a fresh valid binding.
 
 ## Consequences
 - Navigating checkpoints converge deterministically across document reconstitutions, automatically rolling over unrecoverable bindings (N -> N+1) without human intervention or infinite navigation loops.
+- Scenario A dead conversation routes automatically trigger broken-binding rebind rollover from generation 1 to generation 2 without requiring manual break-binding or failing the task with retryable execution error.
 - Real ChatGPT Web workflows navigating `/ → /c/local-chatgpt → /c/<UUID>` succeed smoothly without false route drift aborts.
 - `apps/chatgpt-web` userscript bundle size remains compact (~87 kB) with zero Node built-in dependencies.
+- Note: Scenario A recovery is verified through unit and regression fixtures in `test/scenario-a-resume.test.ts`; live browser dogfood acceptance on ChatGPT Web with operator login session remains pending under NEST-120.

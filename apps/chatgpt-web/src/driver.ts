@@ -406,18 +406,25 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
     const existing = this.checkpointStore.get();
     if (existing) {
-      const isEnteringNavigating = step === "navigating" && existing.step !== "navigating";
+      const isSameTarget =
+        Boolean(meta?.targetUri && existing.targetUri === meta.targetUri) ||
+        Boolean(meta?.targetConvId && existing.targetConvId === meta.targetConvId);
+      const isEnteringNavigating = step === "navigating" && existing.step !== "navigating" && !isSameTarget;
       const navStarted =
         meta?.navigationStartedAtMs ??
-        (isEnteringNavigating ? Date.now() : existing.navigationStartedAtMs);
+        (isEnteringNavigating ? Date.now() : (existing.navigationStartedAtMs ?? (step === "navigating" ? Date.now() : undefined)));
       const navDeadline =
         meta?.navigationDeadlineMs ??
         (isEnteringNavigating
           ? Date.now() + this.navigationTimeoutMs
-          : existing.navigationDeadlineMs);
+          : (existing.navigationDeadlineMs ?? (step === "navigating" ? Date.now() + this.navigationTimeoutMs : undefined)));
       const navAttempts =
         meta?.navigationAttempts ??
-        (isEnteringNavigating ? 1 : existing.navigationAttempts);
+        (isEnteringNavigating
+          ? 1
+          : (isSameTarget && existing.step !== "navigating"
+              ? (existing.navigationAttempts ?? 1) + 1
+              : existing.navigationAttempts));
 
       this.checkpointStore.set({
         ...existing,
@@ -425,8 +432,12 @@ export class DecisionTabDriver implements DecisionTaskController {
         savedAtMs: Date.now(),
         ...(meta?.candidateResult !== undefined ? { candidateResult: meta.candidateResult } : {}),
         ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
-        ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
-        ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+        ...(meta?.targetUri !== undefined
+          ? { targetUri: meta.targetUri }
+          : (existing.targetUri !== undefined ? { targetUri: existing.targetUri } : {})),
+        ...(meta?.targetConvId !== undefined
+          ? { targetConvId: meta.targetConvId }
+          : (existing.targetConvId !== undefined ? { targetConvId: existing.targetConvId } : {})),
         ...(rebindState !== undefined ? { rebindState } : {}),
         ...(navStarted !== undefined ? { navigationStartedAtMs: navStarted } : {}),
         ...(navDeadline !== undefined ? { navigationDeadlineMs: navDeadline } : {}),
@@ -866,8 +877,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       );
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
         renewedExpiry = hbRes.expiresAtMs;
+        const currentStored = this.checkpointStore.get() ?? cp;
         this.checkpointStore.set({
-          ...cp,
+          ...currentStored,
           leaseExpiresAtMs: renewedExpiry,
           savedAtMs: Date.now(),
         });
@@ -943,8 +955,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
 
         const nextAttempts = attempts + 1;
+        const currentStored = this.checkpointStore.get() ?? cp;
         this.checkpointStore.set({
-          ...cp,
+          ...currentStored,
+          leaseExpiresAtMs: renewedExpiry,
           navigationAttempts: nextAttempts,
           navigationStartedAtMs: startedAt,
           navigationDeadlineMs: deadline,
@@ -966,7 +980,9 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
       }
 
-      this.saveCheckpoint("claimed", taskRes.task, sessionRes.session, lease);
+      // Do NOT demote navigating checkpoint to "claimed" solely on URL match, which
+      // would erase the accumulated navigation attempt budget and deadlines before
+      // the adapter confirms route stability and composer readiness.
     }
 
     if (cp.step === "bootstrap_submitting") {
