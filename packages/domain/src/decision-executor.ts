@@ -36,6 +36,7 @@ export class DecisionAdapterError extends Error {
   readonly retryable: boolean;
   readonly suggestedAction: DecisionAdapterSuggestedAction;
   readonly observedGeneration?: number | undefined;
+  readonly promptSubmitted?: boolean | undefined;
   readonly details: Record<string, unknown>;
 
   constructor(options: {
@@ -44,6 +45,7 @@ export class DecisionAdapterError extends Error {
     readonly retryable?: boolean | undefined;
     readonly suggestedAction?: DecisionAdapterSuggestedAction | undefined;
     readonly observedGeneration?: number | undefined;
+    readonly promptSubmitted?: boolean | undefined;
     readonly rawDetails?: unknown | undefined;
     readonly cause?: unknown | undefined;
   }) {
@@ -51,6 +53,7 @@ export class DecisionAdapterError extends Error {
     this.name = "DecisionAdapterError";
     this.code = options.code;
     this.observedGeneration = options.observedGeneration;
+    this.promptSubmitted = options.promptSubmitted;
 
     if (options.suggestedAction !== undefined) {
       this.suggestedAction = options.suggestedAction;
@@ -82,6 +85,7 @@ export class DecisionAdapterError extends Error {
       message: this.message,
       suggestedAction: this.suggestedAction,
       ...(this.observedGeneration !== undefined ? { observedGeneration: this.observedGeneration } : {}),
+      ...(this.promptSubmitted !== undefined ? { promptSubmitted: this.promptSubmitted } : {}),
       ...(options.rawDetails !== undefined ? { rawDetails: options.rawDetails } : {}),
     };
   }
