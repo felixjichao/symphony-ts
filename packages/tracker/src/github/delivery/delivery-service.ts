@@ -11,6 +11,8 @@
  */
 import {
   evaluateChecksAutoMergePolicy,
+  githubWorkKey,
+  type GitHubObservation,
   formatPrBody,
   validatePrOwnership,
   DeliveryError,
@@ -305,6 +307,80 @@ export class GitHubDeliveryService {
         details: { count: candidates.length, numbers: candidates.map(c => c.number) },
       },
     );
+  }
+
+  /** Read-only observation, including terminal PRs and deleted head branches.
+   * Explicit references or a complete paginated marker search establish association.
+   * PR state, exact HEAD and observed CI are read together; no merge authorization.
+   */
+  async observeWork(context: DeliveryContext, options: ReadPrOptions = {}): Promise<GitHubObservation> {
+    this.validateContext(context);
+    const [owner, repo] = context.repo.split("/");
+    const workKey = githubWorkKey(owner!, repo!, context.issueNumber);
+    const issueResponse = await this.runner.exec([
+      "issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "state,url",
+    ]);
+    const issue = JSON.parse(issueResponse.stdout) as { state: string; url: string };
+    if (!["OPEN", "CLOSED"].includes(issue.state) || typeof issue.url !== "string") {
+      throw new DeliveryError("Invalid issue observation", { code: "cli_malformed_response" });
+    }
+    let prNumber = options.prNumber;
+    if (prNumber === undefined) {
+      const response = await this.runner.exec([
+        "api", `repos/${context.repo}/pulls?state=all&per_page=100`, "--paginate", "--jq", "@json",
+      ]);
+      const entries = parseJsonStream(response.stdout);
+      const candidates: number[] = [];
+      for (const value of entries) {
+        if (value === null || typeof value !== "object") {
+          throw new DeliveryError("Invalid PR candidate", { code: "cli_malformed_response" });
+        }
+        const entry = value as { number: number; body: string | null };
+        if (!Number.isSafeInteger(entry.number) || entry.number < 1 ||
+            (entry.body !== null && typeof entry.body !== "string")) {
+          throw new DeliveryError("Invalid PR candidate", { code: "cli_malformed_response" });
+        }
+        if (validatePrOwnership(entry.body ?? "", context).valid) candidates.push(entry.number);
+      }
+      if (candidates.length > 1) throw new DeliveryError("Ambiguous PR association", { code: "ownership_refusal" });
+      prNumber = candidates[0];
+    }
+    const base = { workKey, issue: { state: issue.state === "OPEN" ? "open" as const : "closed" as const, url: issue.url } };
+    if (prNumber === undefined) return { ...base, pullRequest: null, ci: null };
+    if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new DeliveryError("Invalid PR reference", { code: "invalid_context" });
+    const response = await this.runner.exec([
+      "pr", "view", String(prNumber), "--repo", context.repo, "--json",
+      "number,body,state,isDraft,headRefName,headRefOid,baseRefName,url,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+    ]);
+    const raw = JSON.parse(response.stdout) as RawPrJson;
+    const terminal = raw.state === "CLOSED" || raw.state === "MERGED";
+    const headRepo = raw.headRepositoryOwner?.login && raw.headRepository?.name
+      ? `${raw.headRepositoryOwner.login}/${raw.headRepository.name}`.toLowerCase() : null;
+    if (raw.number !== prNumber || !validatePrOwnership(raw.body ?? "", context).valid ||
+        raw.headRefName !== context.headBranch || raw.baseRefName !== context.baseBranch ||
+        raw.isCrossRepository !== false || (headRepo !== null && headRepo !== context.repo.toLowerCase()) ||
+        (!terminal && headRepo === null)) {
+      throw new DeliveryError("Unverified PR association", { code: "ownership_refusal" });
+    }
+    if (!["OPEN", "CLOSED", "MERGED"].includes(raw.state) ||
+        !/^[0-9a-f]{40}$/.test(raw.headRefOid) || typeof raw.isDraft !== "boolean" || typeof raw.url !== "string") {
+      throw new DeliveryError("Invalid PR observation", { code: "cli_malformed_response" });
+    }
+    if (raw.statusCheckRollup !== null && !Array.isArray(raw.statusCheckRollup)) {
+      throw new DeliveryError("CI unavailable", { code: "checks_unknown" });
+    }
+    const checks = (raw.statusCheckRollup ?? []).map((item) => this.normalizeCheckItem(item, []));
+    if (checks.some((check) => check.conclusion === "UNKNOWN")) {
+      throw new DeliveryError("CI unknown", { code: "checks_unknown" });
+    }
+    const status = evaluateChecksAutoMergePolicy([], checks).status;
+    return {
+      ...base,
+      pullRequest: { number: raw.number, state: raw.state === "MERGED" ? "merged" : raw.state === "CLOSED" ? "closed" : "open",
+        url: raw.url, headSha: raw.headRefOid, isDraft: raw.isDraft },
+      ci: status === "none" ? null : { headSha: raw.headRefOid,
+        status: status === "passed" ? "success" : status === "failing" ? "failure" : "pending" },
+    };
   }
 
   /**

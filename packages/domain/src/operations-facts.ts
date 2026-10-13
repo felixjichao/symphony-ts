@@ -133,6 +133,7 @@ export interface GitHubPullRequestFacts {
 }
 
 export interface GitHubCiFacts {
+  readonly headSha?: string;
   readonly status: GitHubCiStatusFacts;
 }
 
@@ -154,6 +155,9 @@ export interface GitHubWorkFacts {
 }
 
 export interface RuntimeAttemptFacts {
+  readonly sessionId?: string | null;
+  readonly threadId?: string | null;
+  readonly turnId?: string | null;
   readonly issueId: string;
   readonly issueIdentifier: string;
   /** First attempt is `null`; retries / continuations are `>= 1` (§4.1.5). */
@@ -197,6 +201,10 @@ export interface DecisionSessionFacts {
 }
 
 interface DecisionTaskFactsBase {
+  /** Omitted means unsupported; null means observed absent. Never contains a token. */
+  readonly lease?: { readonly owner: string; readonly generation: number; readonly expiresAtMs: UtcTimestampMs } | null;
+  readonly claimGeneration?: number;
+  readonly claimBindingGeneration?: number | null;
   readonly taskId: string;
   readonly revision: number;
   readonly status: DecisionTaskStatus;
@@ -264,6 +272,7 @@ export type ExecutorStatusFacts = "online" | "busy" | "stale" | "offline" | "unk
 export type ExecutorRole = "planner" | "implementer" | "reviewer";
 
 export interface ExecutorFacts {
+  readonly bindingGeneration?: number | null;
   readonly id: string;
   readonly role: ExecutorRole | null;
   readonly adapter: string;
@@ -274,3 +283,16 @@ export interface ExecutorFacts {
   readonly currentWorkKey: WorkKey | null;
   readonly provenance: FactProvenance;
 }
+
+/** A source bundle distinguishes successful absence from unknown/unavailable reads. */
+export interface OperationSourceResult<T> extends SourceStatus {
+  readonly facts: T | null;
+}
+export interface OperationFactCollection {
+  readonly github: OperationSourceResult<GitHubWorkFacts>;
+  readonly runtime: OperationSourceResult<readonly RuntimeWorkFacts[]>;
+  readonly decision: OperationSourceResult<DecisionWorkFacts>;
+  readonly executor: OperationSourceResult<readonly ExecutorFacts[]>;
+}
+export type DecisionObservation = Omit<DecisionWorkFacts, "provenance">;
+export type GitHubObservation = Omit<GitHubWorkFacts, "provenance">;

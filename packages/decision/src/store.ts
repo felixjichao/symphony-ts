@@ -9,6 +9,11 @@ import {
   parseDecisionContextBundle,
   validateDecisionContextForTask,
   releaseDecisionTaskForBindingInvalidation,
+  decisionSessionId,
+  type WorkKey,
+  type DecisionObservation,
+  type DecisionTaskFacts,
+  type DecisionResultFacts,
   type DecisionSession,
   type DecisionTask,
   type DecisionResult,
@@ -533,6 +538,7 @@ export class DurableDecisionStore {
   private readonly lock: StoreLock;
   private state: DecisionStoreRecord = createEmptyStoreRecord();
   private poisoned = false;
+  private observationAvailable = false;
   private poisonReason: string | null = null;
   private transactionQueue: Promise<unknown> = Promise.resolve();
 
@@ -559,6 +565,7 @@ export class DurableDecisionStore {
         // Initialize brand new store file
         this.state = createEmptyStoreRecord();
         await this.persistDirect(this.state);
+        this.observationAvailable = true;
         return;
       }
       throw err;
@@ -604,12 +611,50 @@ export class DurableDecisionStore {
       plans: candidate.plans ?? {},
       claimBindingGenerations: claimBindingGens,
     };
+    this.observationAvailable = true;
   }
 
   async close(): Promise<void> {
+    this.observationAvailable = false;
     // Wait for in-flight transaction
     await this.transactionQueue.catch(() => {});
     await this.lock.release();
+  }
+
+  /** Single synchronous committed-state observation; no expiry cleanup or transactions. */
+  observeWork(workKey: WorkKey): DecisionObservation {
+    if (!this.observationAvailable || this.poisoned) throw new StorePoisonedError("Store unavailable");
+    const sessionId = decisionSessionId(workKey);
+    const session = this.state.sessions[sessionId];
+    const tasks: DecisionTaskFacts[] = Object.values(this.state.tasks)
+      .filter((task) => task.sessionId === sessionId).map((task) => {
+        const base = {
+          taskId: task.id, revision: task.revision, status: task.status,
+          createdAtMs: task.createdAtMs, updatedAtMs: task.updatedAtMs,
+          claimGeneration: task.claimGeneration,
+          claimBindingGeneration: this.state.claimBindingGenerations?.[task.id] ?? null,
+          lease: task.lease === null ? null : {
+            owner: task.lease.owner, generation: task.lease.generation, expiresAtMs: task.lease.expiresAtMs,
+          },
+        };
+        return task.kind === "plan" ? { ...base, kind: "plan" } : {
+          ...base, kind: "review", target: { ...task.target },
+        };
+      });
+    const results: DecisionResultFacts[] = Object.values(this.state.results)
+      .filter((result) => result.sessionId === sessionId).map((result) => ({
+        taskId: result.taskId, revision: result.revision, createdAtMs: result.createdAtMs,
+        outcome: result.kind === "plan" ? { kind: "plan", verdict: result.verdict } : {
+          kind: "review", verdict: result.verdict, target: { ...result.target },
+        },
+      }));
+    return {
+      workKey: { ...workKey }, tasks, results,
+      session: session ? {
+        sessionId: session.id, status: session.status, bindingGeneration: session.bindingGeneration,
+        adapter: session.binding?.adapter ?? null, updatedAtMs: session.updatedAtMs,
+      } : null,
+    };
   }
 
   getState(): DecisionStoreRecord {

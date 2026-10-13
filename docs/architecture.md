@@ -37,7 +37,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
-| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；后续 source reader / projector 落点 | domain |
+| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader / 单次 collector；后续 projector 落点 | domain（Decision / observability / tracker 为测试 devDependencies） |
 | `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务、执行器适配层 | domain |
 | `apps/chatgpt-web` | —（Decision 执行器） | Decision 扩展 | ChatGPT Web 执行器适配器与 Tampermonkey 浏览器决策驱动器 | domain, decision |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
@@ -53,7 +53,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
 
-`operations` 是 **Observation Plane / 只读投影层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，后续 source reader / projector 在 `@symphony/operations` 实现，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
+`operations` 是 **Observation Plane / 只读投影层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader 与单次 collector 在 `@symphony/operations` 实现，后续 projector 在同一边界落地，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
 
 ## 历史：M0 协议栈 scaffold 已删除
 
@@ -76,3 +76,5 @@ host stop 同步关闭 EffectiveRuntime 提交与 watcher，再调用既有 loop
 `@symphony/domain` owns the provider-neutral [Decision protocol](decision-protocol.md): Issue-root session identity, versioned Plan/Review facts, exact HEAD review approval, lease fencing and executor binding generations. Pure validators/transitions have no I/O or reverse dependencies. Conversation continuity is advisory; it never supplies authoritative workflow state. This independent extension preserves Symphony §7 orchestration and current delivery behavior.
 
 `@symphony/decision` provides durable task/session snapshot persistence, single-writer process lock (`store.lock`), lease coordination, and the localhost Web Agent Bridge HTTP server. Subpath `@symphony/decision/adapter` defines browser-safe executor adapter primitives, context strategies, and fail-closed result extraction. `apps/cli` exposes the bridge via `symphony decision bridge`. `apps/chatgpt-web` delivers the concrete browser-side userscript adapter and driver. See [Decision Note](../notes/accepted/architecture/2026-10-08-decision-contracts.md), [Decision Store & Bridge Note](../notes/accepted/architecture/2026-10-09-decision-store-bridge.md), [Executor Adapter Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md), and [ChatGPT Web Adapter Note](../notes/accepted/architecture/2026-10-10-chatgpt-web-adapter.md).
+
+Operational source acquisition uses injected read-only ports. GitHub delivery supplies a marker-validated observation, runtime supplies the existing snapshot, Decision supplies a synchronous committed-state whitelist view, and executor supplies an explicit inventory or remains unknown. Freshness policy is source-specific; collection waits for all reads and retains independent failures. See [source readers note](../notes/accepted/architecture/2026-10-13-operational-source-readers.md).
