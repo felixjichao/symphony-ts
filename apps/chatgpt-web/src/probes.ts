@@ -421,6 +421,38 @@ export function detectAuthRequired(doc: Document = document): boolean {
   return false;
 }
 
+export const CONVERSATION_NOT_FOUND_PATTERNS: readonly string[] = [
+  "conversation not found",
+  "unable to load conversation",
+  "unable to access conversation",
+  "this conversation may have been deleted",
+  "you do not have access to this conversation",
+  "you don't have access to this conversation",
+  "access denied",
+  "404: not found",
+  "404 - not found",
+  "找不到对话",
+  "无法加载对话",
+  "无法访问对话",
+  "此对话可能已被删除",
+  "该对话可能已被删除",
+  "对话不存在",
+  "无权访问此对话",
+  "你无权访问此对话",
+  "无权访问",
+];
+
+export function textMatchesNotFoundPattern(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  for (const pattern of CONVERSATION_NOT_FOUND_PATTERNS) {
+    if (lower.includes(pattern.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function detectConversationNotFound(doc: Document = document): boolean {
   if (!doc) return false;
 
@@ -440,22 +472,30 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     }
   }
 
-  // 2. Explicit error alerts / headings OUTSIDE message containers
-  const alertSelectors = ["[role='alert']", "h1", "h2", "h3"];
+  // 2. Explicit error alerts / dialogs / toasts / modals / headings / banners OUTSIDE message containers.
+  // Authentic error UI takes strict precedence over a background/lingering shell composer element!
+  const alertSelectors = [
+    "[role='alert']",
+    "[role='dialog']",
+    "[role='alertdialog']",
+    "div[class*='modal']",
+    "div[class*='toast']",
+    "div[data-state='open']",
+    "div[class*='banner']",
+    "div[class*='error']",
+    "[data-testid*='error']",
+    ".text-token-text-error",
+    "h1",
+    "h2",
+    "h3",
+  ];
   for (const selector of alertSelectors) {
     const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
     for (const el of candidates) {
       if (isInsideMessageContainer(el)) {
         continue;
       }
-      const alertText = el.textContent || "";
-      if (
-        alertText.includes("Conversation not found") ||
-        alertText.includes("Unable to load conversation") ||
-        alertText.includes("This conversation may have been deleted") ||
-        alertText.includes("404: Not Found") ||
-        alertText.includes("404 - Not Found")
-      ) {
+      if (textMatchesNotFoundPattern(el.textContent || "")) {
         return true;
       }
     }
@@ -472,14 +512,9 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     return false;
   }
 
-  // 5. Fallback full-page text matching for minimal error pages
+  // 5. Fallback full-page text matching for minimal error pages (when no composer and no message containers)
   const text = doc.body?.textContent || "";
-  if (
-    text.includes("Conversation not found") ||
-    text.includes("Unable to load conversation") ||
-    text.includes("This conversation may have been deleted") ||
-    text.includes("404: Not Found")
-  ) {
+  if (textMatchesNotFoundPattern(text)) {
     return true;
   }
   return false;

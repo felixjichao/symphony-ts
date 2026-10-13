@@ -81,11 +81,47 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly checkIntervalMs: number;
   private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null = null;
 
-  private async waitForSendButton(signal?: AbortSignal): Promise<HTMLButtonElement> {
+  private async waitForSendButton(options: {
+    signal?: AbortSignal | undefined;
+    targetConvId?: string | null | undefined;
+    observedGeneration?: number | undefined;
+  } = {}): Promise<HTMLButtonElement> {
     const startedAt = Date.now();
     while (true) {
-      if (signal?.aborted) throw new Error("Task execution aborted");
-      const button = findSendButton(this.docSupplier());
+      if (options.signal?.aborted) throw new Error("Task execution aborted");
+
+      const doc = this.docSupplier();
+      if (detectAuthRequired(doc)) {
+        throw new DecisionAdapterError({
+          code: "human_required",
+          message: "ChatGPT Web authentication / login required while waiting for send button",
+          suggestedAction: "human_intervention",
+        });
+      }
+      if (options.targetConvId) {
+        if (detectConversationNotFound(doc)) {
+          throw new DecisionAdapterError({
+            code: "binding_broken",
+            message: `ChatGPT conversation "${options.targetConvId}" not found or deleted while waiting for send button`,
+            suggestedAction: "rebind",
+            observedGeneration: options.observedGeneration,
+          });
+        }
+        const win = this.winSupplier();
+        if (win && win.location) {
+          const currentConvId = extractConversationIdFromUrl(win.location.href);
+          if (currentConvId !== options.targetConvId) {
+            throw new DecisionAdapterError({
+              code: "binding_broken",
+              message: `ChatGPT navigated away from conversation "${options.targetConvId}" to "${win.location.href}" while waiting for send button`,
+              suggestedAction: "rebind",
+              observedGeneration: options.observedGeneration,
+            });
+          }
+        }
+      }
+
+      const button = findSendButton(doc);
       if (button && !button.disabled) return button;
       if (Date.now() - startedAt >= this.timeoutMs) {
         throw new DecisionAdapterError({
@@ -307,7 +343,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     setComposerText(composer, BOOTSTRAP_PROMPT);
 
     const doc = this.docSupplier();
-    const sendBtn = await this.waitForSendButton(options.signal);
+    const sendBtn = await this.waitForSendButton({ signal: options.signal });
 
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;
@@ -491,6 +527,42 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       }
       const composer = findComposerElement(this.docSupplier());
       if (composer) {
+        // Verify route and health stability before confirming resume:
+        // Client-side router might render a lingering shell composer before redirecting to root
+        // or popping up an asynchronous access-denied error dialog.
+        const stabilizationTimeout = Math.min(this.stabilizationMs, 500);
+        if (stabilizationTimeout > 0) {
+          const stabStart = Date.now();
+          while (Date.now() - stabStart < stabilizationTimeout) {
+            if (options.signal?.aborted) {
+              throw new Error("Aborted while resuming ChatGPT conversation");
+            }
+            if (detectAuthRequired(this.docSupplier())) {
+              throw new DecisionAdapterError({
+                code: "human_required",
+                message: "ChatGPT Web authentication / login required",
+                suggestedAction: "human_intervention",
+              });
+            }
+            if (detectConversationNotFound(this.docSupplier())) {
+              throw new DecisionAdapterError({
+                code: "binding_broken",
+                message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
+                suggestedAction: "rebind",
+                observedGeneration: binding.generation,
+              });
+            }
+            if (win && win.location && extractConversationIdFromUrl(win.location.href) !== targetConvId) {
+              throw new DecisionAdapterError({
+                code: "binding_broken",
+                message: `ChatGPT navigated away from conversation "${targetConvId}" to "${win.location.href}"`,
+                suggestedAction: "rebind",
+                observedGeneration: binding.generation,
+              });
+            }
+            await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 200)));
+          }
+        }
         break;
       }
       if (Date.now() - startWait > this.timeoutMs) {
@@ -517,6 +589,35 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   ): Promise<DecisionExecutionOutcome> {
     const { task, session, context } = request;
     const doc = this.docSupplier();
+
+    const targetConvId = session.binding?.externalSessionRef ?? null;
+    const win = this.winSupplier();
+    if (targetConvId && win && win.location) {
+      const currentConvId = extractConversationIdFromUrl(win.location.href);
+      if (currentConvId !== targetConvId) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: `ChatGPT navigated away from bound conversation "${targetConvId}" to "${win.location.href}" before execution`,
+          suggestedAction: "rebind",
+          observedGeneration: session.bindingGeneration,
+        });
+      }
+    }
+    if (targetConvId && detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: `ChatGPT conversation "${targetConvId}" not found or inaccessible before execution`,
+        suggestedAction: "rebind",
+        observedGeneration: session.bindingGeneration,
+      });
+    }
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "ChatGPT Web authentication / login required before execution",
+        suggestedAction: "human_intervention",
+      });
+    }
 
     const composer = findComposerElement(doc);
     if (!composer) {
@@ -562,7 +663,11 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     setComposerText(composer, promptText);
 
-    const sendBtn = await this.waitForSendButton(options.signal);
+    const sendBtn = await this.waitForSendButton({
+      signal: options.signal,
+      targetConvId,
+      observedGeneration: session.bindingGeneration,
+    });
 
     const initialTurns = getAllAssistantTurns(doc);
     const baselineCount = initialTurns.length;

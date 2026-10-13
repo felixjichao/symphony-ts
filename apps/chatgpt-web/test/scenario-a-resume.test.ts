@@ -11,6 +11,7 @@ import {
   githubDecisionRoot,
 } from "@symphony/domain/decision";
 import { ChatGptWebAdapter } from "../src/adapter";
+import { detectConversationNotFound } from "../src/probes";
 import { DecisionTabDriver } from "../src/driver";
 import { MemoryCheckpointStore } from "../src/checkpoint";
 import { FetchBridgeTransport } from "../src/transport";
@@ -381,5 +382,191 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
       await store.close();
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("detectConversationNotFound recognizes authentic access-denied UI (e.g. '你无权访问此对话' / 'Access denied') even when shell composer is present", () => {
+    const doc = new MockDocument();
+    // Simulate lingering/background shell composer
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    // 1. Chinese access denied modal/dialog/alert
+    const dialog = new MockElement("div", { role: "dialog" });
+    const heading = new MockElement("h2");
+    heading.textContent = "你无权访问此对话";
+    dialog.appendChild(heading);
+    doc.body.appendChild(dialog);
+
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    // 2. English access denied toast/alert
+    doc.body.removeChild(dialog);
+    const toast = new MockElement("div", { class: "toast-container text-token-text-error" });
+    toast.textContent = "You do not have access to this conversation";
+    doc.body.appendChild(toast);
+
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    // 3. Clean page with composer only returns false
+    doc.body.removeChild(toast);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+  });
+
+  it("resumeSession rejects with binding_broken rebind when ChatGPT shows '你无权访问此对话' alongside shell composer", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/dead-conv-id";
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    const alert = new MockElement("div", { role: "alert" });
+    alert.textContent = "你无权访问此对话";
+    doc.body.appendChild(alert);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      stabilizationMs: 20,
+      timeoutMs: 100,
+    });
+
+    const binding = sampleSession.binding!;
+    await expect(adapter.resumeSession(sampleSession, binding)).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+      observedGeneration: 1,
+    });
+  });
+
+  it("resumeSession rejects with binding_broken rebind when route redirects to root during stabilization window after composer is found", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/dead-conv-id";
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      stabilizationMs: 50,
+      timeoutMs: 200,
+    });
+
+    // Simulate SPA redirecting to root 10ms after resumeSession starts checking stabilization
+    setTimeout(() => {
+      win.location.href = "https://chatgpt.com/";
+    }, 10);
+
+    const binding = sampleSession.binding!;
+    await expect(adapter.resumeSession(sampleSession, binding)).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+      observedGeneration: 1,
+    });
+  });
+
+  it("executeTask rejects with binding_broken rebind before execution if window location has departed from target conversation to root", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/"; // Already redirected away to root
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      timeoutMs: 100,
+    });
+
+    await expect(
+      adapter.executeTask({
+        task: sampleTask,
+        session: sampleSession,
+        context: sampleContext,
+      })
+    ).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+      observedGeneration: 1,
+    });
+  });
+
+  it("executeTask rejects with binding_broken rebind before execution if detectConversationNotFound is true", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/dead-conv-id";
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    const modal = new MockElement("div", { role: "dialog" });
+    modal.textContent = "你无权访问此对话";
+    doc.body.appendChild(modal);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      timeoutMs: 100,
+    });
+
+    await expect(
+      adapter.executeTask({
+        task: sampleTask,
+        session: sampleSession,
+        context: sampleContext,
+      })
+    ).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+      observedGeneration: 1,
+    });
+  });
+
+  it("waitForSendButton immediately rejects with binding_broken rebind if route departs or access denied appears during wait, rather than timing out at 180s", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/dead-conv-id";
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    doc.body.appendChild(composer);
+
+    const sendBtn = new MockElement("button", { "data-testid": "send-button" });
+    sendBtn.disabled = true; // Disabled button
+    doc.body.appendChild(sendBtn);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      timeoutMs: 10_000, // 10 seconds timeout
+    });
+
+    // 15ms into execution, tab navigates away to root
+    setTimeout(() => {
+      win.location.href = "https://chatgpt.com/";
+    }, 15);
+
+    const start = Date.now();
+    await expect(
+      adapter.executeTask({
+        task: sampleTask,
+        session: sampleSession,
+        context: sampleContext,
+      })
+    ).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+      observedGeneration: 1,
+    });
+
+    // Must fail fast within ~100ms, not after the 10s timeout
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 });
