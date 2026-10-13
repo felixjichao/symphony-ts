@@ -453,6 +453,73 @@ export function textMatchesNotFoundPattern(text: string): boolean {
   return false;
 }
 
+export function isMessageContainerElement(el: Element): boolean {
+  if (!el) return false;
+  const tagName = el.tagName ? el.tagName.toLowerCase() : "";
+  if (tagName === "article") {
+    return true;
+  }
+  const testId = el.getAttribute?.("data-testid");
+  if (testId && testId.startsWith("conversation-turn-")) {
+    return true;
+  }
+  if (
+    el.getAttribute?.("data-message-author-role") !== null &&
+    el.getAttribute?.("data-message-author-role") !== undefined
+  ) {
+    return true;
+  }
+  if (el.getAttribute?.("role") === "article") {
+    return true;
+  }
+  if (
+    el.getAttribute?.("data-markdown-text-style") !== null &&
+    el.getAttribute?.("data-markdown-text-style") !== undefined
+  ) {
+    return true;
+  }
+  if (el.className && typeof el.className === "string" && el.className.includes("agent-turn")) {
+    return true;
+  }
+  return false;
+}
+
+export function getTextExcludingMessages(node: Node | Element): string {
+  if (!node) return "";
+  const el = node as Element;
+  if (isMessageContainerElement(el)) {
+    return "";
+  }
+  // Standard DOM text node
+  if ("nodeType" in node && (node as Node).nodeType === 3 /* Node.TEXT_NODE */) {
+    return node.textContent || "";
+  }
+  // Standard DOM childNodes traversal
+  const childNodes = (node as { childNodes?: ArrayLike<Node> }).childNodes;
+  if (childNodes && childNodes.length > 0) {
+    let text = "";
+    for (let i = 0; i < childNodes.length; i++) {
+      const child = childNodes[i]!;
+      if ((child as Node).nodeType === 3) {
+        text += child.textContent || "";
+      } else {
+        text += getTextExcludingMessages(child);
+      }
+    }
+    return text;
+  }
+  // Children traversal (standard DOM or MockElement)
+  const children = (el as { children?: ArrayLike<Element> }).children;
+  if (children && children.length > 0) {
+    let text = "";
+    for (let i = 0; i < children.length; i++) {
+      text += getTextExcludingMessages(children[i]!);
+    }
+    return text;
+  }
+  return node.textContent || "";
+}
+
 export function detectConversationNotFound(doc: Document = document): boolean {
   if (!doc) return false;
 
@@ -474,13 +541,13 @@ export function detectConversationNotFound(doc: Document = document): boolean {
 
   // 2. Explicit error alerts / dialogs / toasts / modals / headings / banners OUTSIDE message containers.
   // Authentic error UI takes strict precedence over a background/lingering shell composer element!
+  // Any descendant message containers are stripped so chat quotes do not false-positive.
   const alertSelectors = [
     "[role='alert']",
     "[role='dialog']",
     "[role='alertdialog']",
     "div[class*='modal']",
     "div[class*='toast']",
-    "div[data-state='open']",
     "div[class*='banner']",
     "div[class*='error']",
     "[data-testid*='error']",
@@ -495,7 +562,8 @@ export function detectConversationNotFound(doc: Document = document): boolean {
       if (isInsideMessageContainer(el)) {
         continue;
       }
-      if (textMatchesNotFoundPattern(el.textContent || "")) {
+      const text = getTextExcludingMessages(el);
+      if (textMatchesNotFoundPattern(text)) {
         return true;
       }
     }

@@ -569,4 +569,161 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
     // Must fail fast within ~100ms, not after the 10s timeout
     expect(Date.now() - start).toBeLessThan(1000);
   });
+
+  it("detectConversationNotFound does not falsely trigger on chat article text inside open wrappers or modal containers", () => {
+    const doc = new MockDocument();
+    const openWrapper = new MockElement("div", { "data-state": "open" });
+    const article = new MockElement("article");
+    article.textContent = "The user asked about: You do not have access to this conversation";
+    openWrapper.appendChild(article);
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    openWrapper.appendChild(composer);
+    doc.body.appendChild(openWrapper);
+
+    // Healthy conversation where message quotes not-found text inside an open wrapper
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+
+    // Also with role='dialog' or modal wrapping an article
+    const modalWrapper = new MockElement("div", { role: "dialog" });
+    const article2 = new MockElement("article");
+    article2.textContent = "无法访问此对话：详情请看设置";
+    modalWrapper.appendChild(article2);
+    modalWrapper.appendChild(composer);
+    doc.body.appendChild(modalWrapper);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+  });
+
+  it("executeTask prioritizes authentication error over route departure when redirected to root with login button", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/"; // Redirected to root
+
+    // Login button present
+    const loginBtn = new MockElement("button", { "data-testid": "login-button" });
+    loginBtn.textContent = "Log in";
+    doc.body.appendChild(loginBtn);
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      timeoutMs: 100,
+    });
+
+    await expect(
+      adapter.executeTask({
+        task: sampleTask,
+        session: sampleSession,
+        context: sampleContext,
+      })
+    ).rejects.toMatchObject({
+      code: "human_required",
+      suggestedAction: "human_intervention",
+    });
+  });
+
+  it("triggers automated rebind rollover and fences lease when route departs to root during executeTask before prompt submit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pr127-pre-submit-rebind-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    await store.open();
+    const service = new DecisionService(store);
+    const bridge = new DecisionBridge(service, { port: 0 });
+    await bridge.start();
+
+    try {
+      const root = githubDecisionRoot("owner", "repo", 127);
+      let session = await service.createSession(root);
+      session = await service.putBinding(session.id, {
+        adapter: "chatgpt-web",
+        externalSessionRef: "target-conv-1",
+        resumeUri: "https://chatgpt.com/c/target-conv-1",
+      });
+      const task = await service.createPlanTask(session.id);
+      await service.putTaskContext(task.id, {
+        strategy: "connector",
+        workItem: root,
+        repository: "owner/repo",
+        prNumber: null,
+        headSha: null,
+      });
+
+      const doc = new MockDocument();
+      const win = new MockWindow();
+      win.location.href = "https://chatgpt.com/c/target-conv-1";
+
+      const composer = new MockElement("textarea", { id: "prompt-textarea" });
+      doc.body.appendChild(composer);
+
+      const sendBtn = new MockElement("button", { "data-testid": "send-button" });
+      sendBtn.disabled = true;
+      doc.body.appendChild(sendBtn);
+
+      const adapter = new ChatGptWebAdapter({
+        doc: doc as unknown as Document,
+        win: win as unknown as Window,
+        checkIntervalMs: 5,
+        timeoutMs: 5000,
+      });
+
+      // Mock createSession to simulate creating generation 2 conversation during rollover
+      vi.spyOn(adapter, "createSession").mockResolvedValue({
+        binding: {
+          schemaVersion: 1,
+          adapter: "chatgpt-web",
+          externalSessionRef: "new-target-conv-2",
+          resumeUri: "https://chatgpt.com/c/new-target-conv-2",
+          generation: 2,
+        },
+        handle: { conversationId: "new-target-conv-2", bootstrapped: true, isRollover: true },
+      });
+
+      const cpStore = new MemoryCheckpointStore();
+      const driver = new DecisionTabDriver({
+        adapter,
+        checkpointStore: cpStore,
+        transport: new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` }),
+        ownerId: "driver-test-1",
+      });
+
+      // Claim task and start execution
+      const claim = await service.claimTask(task.id, { owner: "driver-test-1", ttlMs: 60_000 });
+
+      const context: DecisionContextBundle = {
+        strategy: "connector",
+        workItem: root,
+        repository: "owner/repo",
+        prNumber: null,
+        headSha: null,
+      };
+
+      // While executeTask is waiting for send button, page navigates away to root
+      setTimeout(() => {
+        win.location.href = "https://chatgpt.com/";
+      }, 20);
+
+      const outcome = await driver.executeClaimedTask(task, session, claim.lease, context);
+
+      // Outcome MUST be superseded with generation 2 (not failed!)
+      expect(outcome.status).toBe("superseded");
+      expect(outcome.session.bindingGeneration).toBe(2);
+      expect(outcome.session.binding?.externalSessionRef).toBe("new-target-conv-2");
+
+      // Verify authoritative state on Bridge/Service
+      const authoritativeSession = service.getSession(session.id);
+      expect(authoritativeSession?.bindingGeneration).toBe(2);
+      expect(authoritativeSession?.binding?.externalSessionRef).toBe("new-target-conv-2");
+
+      // Verify task status is reset to pending upon rebind, and old lease is invalidated
+      const authoritativeTask = service.getTask(task.id);
+      expect(authoritativeTask?.status).toBe("pending");
+
+      // Checkpoint store is cleaned up
+      expect(cpStore.get()).toBeNull();
+    } finally {
+      await bridge.stop();
+      await store.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

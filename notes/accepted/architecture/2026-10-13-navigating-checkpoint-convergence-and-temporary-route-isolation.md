@@ -37,9 +37,11 @@ During real-browser dogfooding of ChatGPT Web automation (`apps/chatgpt-web`, SP
    - Exported `DecisionConflictError` from `@symphony/decision/adapter` so `apps/chatgpt-web` maintains zero Node built-in dependencies in browser bundles.
 5. **Authentic Access Denied Detection and Execution Route Continuity Verification**:
    - Extended `detectConversationNotFound` in `probes.ts` with `CONVERSATION_NOT_FOUND_PATTERNS` covering Chinese and English permission/not-found variations ("你无权访问此对话", "无权访问此对话", "无权访问", "找不到对话", "对话不存在", "无法加载对话", "You do not have access to this conversation", "Access denied", "404 - Not Found", etc.).
-   - Authentic error UI (`[role='alert']`, `[role='dialog']`, `div[class*='modal']`, `div[class*='toast']`, `h1-h3`) outside message containers takes strict precedence over lingering shell composer elements (`#prompt-textarea`).
+   - Authentic error UI (`[role='alert']`, `[role='dialog']`, `div[class*='modal']`, `div[class*='toast']`, `h1-h3`) outside message containers takes strict precedence over lingering shell composer elements (`#prompt-textarea`). Text extraction explicitly strips descendant chat message containers (`getTextExcludingMessages`), preventing in-chat quotes from triggering false positive not-found errors.
    - Added a route stabilization window in `adapter.resumeSession` to detect asynchronous redirect/error before confirming resume.
-   - Added route continuity and health checks in `adapter.executeTask` pre-flight and polling loop in `waitForSendButton`: if route departs to root or conversation is not found, immediately throws `binding_broken / rebind`, terminating fast rather than timing out after 180s.
+   - In `adapter.executeTask` pre-flight checks, preserved authentication priority by checking `detectAuthRequired` first before route departures, ensuring login obstacles surface as `human_required / human_intervention` rather than false broken bindings.
+   - Added route continuity and health checks in `adapter.executeTask` pre-flight and polling loop in `waitForSendButton`: if route departs to root or conversation is not found before prompt submission, throws `binding_broken / rebind` with `promptSubmitted: false`.
+   - In `coordinator.ts` (`executeTaskWithAdapter`), pre-submit rebind errors during `executeTask` (`promptSubmitted: false`) trigger automated CAS rebind and session rollover (generation N -> N+1) and task supersede under lease, while post-submission errors remain fail-closed to prevent duplicate prompt submission.
 
 ## Alternatives considered
 1. **Relying solely on `adapter.resumeSession` in-memory timeout**:

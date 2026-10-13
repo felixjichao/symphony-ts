@@ -105,6 +105,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
             message: `ChatGPT conversation "${options.targetConvId}" not found or deleted while waiting for send button`,
             suggestedAction: "rebind",
             observedGeneration: options.observedGeneration,
+            promptSubmitted: false,
           });
         }
         const win = this.winSupplier();
@@ -116,6 +117,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
               message: `ChatGPT navigated away from conversation "${options.targetConvId}" to "${win.location.href}" while waiting for send button`,
               suggestedAction: "rebind",
               observedGeneration: options.observedGeneration,
+              promptSubmitted: false,
             });
           }
         }
@@ -592,6 +594,22 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     const targetConvId = session.binding?.externalSessionRef ?? null;
     const win = this.winSupplier();
+    if (detectAuthRequired(doc)) {
+      throw new DecisionAdapterError({
+        code: "human_required",
+        message: "ChatGPT Web authentication / login required before execution",
+        suggestedAction: "human_intervention",
+      });
+    }
+    if (targetConvId && detectConversationNotFound(doc)) {
+      throw new DecisionAdapterError({
+        code: "binding_broken",
+        message: `ChatGPT conversation "${targetConvId}" not found or inaccessible before execution`,
+        suggestedAction: "rebind",
+        observedGeneration: session.bindingGeneration,
+        promptSubmitted: false,
+      });
+    }
     if (targetConvId && win && win.location) {
       const currentConvId = extractConversationIdFromUrl(win.location.href);
       if (currentConvId !== targetConvId) {
@@ -600,23 +618,9 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           message: `ChatGPT navigated away from bound conversation "${targetConvId}" to "${win.location.href}" before execution`,
           suggestedAction: "rebind",
           observedGeneration: session.bindingGeneration,
+          promptSubmitted: false,
         });
       }
-    }
-    if (targetConvId && detectConversationNotFound(doc)) {
-      throw new DecisionAdapterError({
-        code: "binding_broken",
-        message: `ChatGPT conversation "${targetConvId}" not found or inaccessible before execution`,
-        suggestedAction: "rebind",
-        observedGeneration: session.bindingGeneration,
-      });
-    }
-    if (detectAuthRequired(doc)) {
-      throw new DecisionAdapterError({
-        code: "human_required",
-        message: "ChatGPT Web authentication / login required before execution",
-        suggestedAction: "human_intervention",
-      });
     }
 
     const composer = findComposerElement(doc);
