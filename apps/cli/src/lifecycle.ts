@@ -6,6 +6,7 @@ import { parseCliArgs, resolveWorkflowPath } from "./args";
 import { runDeliverySkillCli } from "./delivery-skill-cli";
 import { runGithubDogfoodCli } from "./dogfood";
 import { runDecisionBridgeCli } from "./decision-bridge-cli";
+import { runPlanningCli } from "./planning-cli";
 import { createHost, type CreateHostOptions, type SymphonyHost } from "./host";
 
 export interface LifecycleProcess {
@@ -66,6 +67,12 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         stderr: shell.stderr,
       });
     }
+    if (args.subcommand === "plan") {
+      return await runPlanningCli(args.subcommandArgs ?? [], {
+        stdout: shell.stdout,
+        stderr: shell.stderr,
+      });
+    }
     if (args.help) {
       shell.stdout.write(
         "Usage: symphony [workflow-path]\n" +
@@ -74,15 +81,22 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "       symphony delivery-skill [run|halt] [options]\n" +
         "       symphony pr <action> [options]\n" +
         "       symphony dogfood github --target <owner/repo> [options]\n" +
-        "       symphony decision bridge --store <dir> [options]\n\n" +
+        "       symphony decision bridge --store <dir> [options]\n" +
+        "       symphony plan <action> [options]\n\n" +
         "Commands:\n" +
         "  repo-bootstrap       Bootstrap git repository in workspace and create issue branch\n" +
         "  workspace bootstrap  Alias for repo-bootstrap\n" +
         "  delivery-skill       Execute delivery + land workflow skill or halt dispatch\n" +
         "  pr                   GitHub delivery primitives (ensure, read, checks, land, verify)\n" +
         "  dogfood              Opt-in real GitHub + real Codex end-to-end dogfood harness\n" +
-        "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n\n" +
+        "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n" +
+        "  plan                 Pre-execution planning gate (start, clarify, replan, retry, status, sync)\n\n" +
         "Options:\n" +
+        "  --enable-planning       Enable Decision Plane planning gate for dispatch\n" +
+        "  --no-planning           Explicitly disable Decision Plane planning gate\n" +
+        "  --decision-store <dir>  Path to durable decision store directory\n" +
+        "  --decision-bridge-url <url> Decision bridge URL for remote gate checks\n" +
+        "  --decision-bridge-token <token> Decision bridge authentication token\n" +
         "  -h, --help           Show this help message\n" +
         "  -v, --version        Show version information\n"
       );
@@ -94,7 +108,14 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
       return 0;
     }
     const workflowPath = resolveWorkflowPath(args.workflowPath, options.hostOptions?.cwd);
-    host = await (options.createHost ?? createHost)({ ...options.hostOptions, workflowPath });
+    host = await (options.createHost ?? createHost)({
+      ...options.hostOptions,
+      workflowPath,
+      ...(args.enablePlanning !== undefined ? { enablePlanning: args.enablePlanning } : {}),
+      ...(args.decisionStoreDir !== undefined ? { decisionStoreDir: args.decisionStoreDir } : {}),
+      ...(args.decisionBridgeUrl !== undefined ? { decisionBridgeUrl: args.decisionBridgeUrl } : {}),
+      ...(args.decisionBridgeToken !== undefined ? { decisionBridgeToken: args.decisionBridgeToken } : {}),
+    });
   } catch {
     fail("startup");
     return exitCode;

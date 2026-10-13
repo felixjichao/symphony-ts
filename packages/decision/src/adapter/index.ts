@@ -22,6 +22,7 @@ export {
   type ExecuteTaskWithAdapterOptions,
   type TaskExecutionSuccessOutcome,
   type TaskExecutionFailureOutcome,
+  type TaskExecutionSupersededOutcome,
   type TaskExecutionOutcome,
 } from "./coordinator";
 

@@ -2,7 +2,7 @@
  * @symphony/domain — GitHub delivery and auto-merge policy types and pure functions (SPEC §11.5 / MVP.3).
  */
 import type { DecisionReviewTarget, DecisionTask, DecisionResult } from "./decision";
-import type { DecisionContextBundle } from "./decision-context";
+import type { DecisionContextBundle, DecisionMaterializedPlan } from "./decision-context";
 
 export interface DeliveryContext {
   readonly repo: string;
@@ -341,7 +341,8 @@ export type DeliveryErrorCode =
   | "pr_closed_unmerged"
   | "review_gate_required"
   | "review_not_approved"
-  | "session_mismatch";
+  | "session_mismatch"
+  | "requirements_unavailable";
 
 export interface DeliveryErrorOptions extends ErrorOptions {
   readonly code: DeliveryErrorCode;
@@ -400,7 +401,14 @@ export interface DeliveryReviewGate {
    * Validates that task is completed, verdict is approve, and target PR & HEAD SHA match.
    */
   verifyReviewApproval(
-    target: DecisionReviewTarget & { readonly sessionId?: string },
+    target: DecisionReviewTarget & {
+      readonly sessionId?: string;
+      readonly requirements?: {
+        readonly title: string;
+        readonly body: string;
+        readonly clarifications?: readonly string[] | undefined;
+      } | undefined;
+    },
   ): Promise<DeliveryReviewApprovalResult>;
 
   /**
@@ -531,6 +539,7 @@ export interface DeliverySkillConfig {
   readonly reviewGate?: DeliveryReviewGate | undefined;
   readonly sessionId?: string | undefined;
   readonly reviewPollIntervalSeconds?: number | undefined;
+  readonly plan?: DecisionMaterializedPlan | null | undefined;
 }
 
 export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";

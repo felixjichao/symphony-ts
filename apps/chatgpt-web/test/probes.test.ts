@@ -10,6 +10,10 @@ import {
   extractConversationIdFromUrl,
   buildConversationUrl,
   waitForStreamingCompletion,
+  detectAuthRequired,
+  detectConversationNotFound,
+  hasMessageContainers,
+  isConversationAssociatedWithBootstrap,
 } from "../src/probes";
 
 describe("DOM Probes and URL utilities", () => {
@@ -257,5 +261,101 @@ describe("DOM Probes and URL utilities", () => {
       timeoutMs: 500,
     });
     expect(result).toBe(newTurn);
+  });
+
+  it("detects authentication / login required in DOM", () => {
+    const doc = new MockDocument();
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+
+    const loginBtn = new MockElement("button", { "data-testid": "login-button" });
+    doc.body.appendChild(loginBtn);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(true);
+
+    const doc2 = new MockDocument();
+    doc2.body.textContent = "Welcome back. Log in with your OpenAI account to continue.";
+    expect(detectAuthRequired(doc2 as unknown as Document)).toBe(true);
+  });
+
+  it("detects conversation 404 / deleted in DOM", () => {
+    const doc = new MockDocument();
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+
+    const notFoundEl = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(notFoundEl);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    const doc2 = new MockDocument();
+    doc2.body.textContent = "Unable to load conversation. This conversation may have been deleted.";
+    expect(detectConversationNotFound(doc2 as unknown as Document)).toBe(true);
+  });
+
+  it("filters out false-positive error and auth UI inside chat message containers while preserving genuine outer UI", () => {
+    const doc = new MockDocument();
+    // Valid composer
+    doc.body.appendChild(new MockElement("textarea", { id: "prompt-textarea" }));
+
+    // Message containing error heading and login doc link
+    const article = new MockElement("article", { "data-testid": "conversation-turn-1" });
+    const message = new MockElement("div", { "data-message-author-role": "assistant" });
+    const heading = new MockElement("h2");
+    heading.textContent = "Conversation not found";
+    const loginLink = new MockElement("a", { href: "https://example.com/login" });
+    loginLink.textContent = "Login documentation";
+    message.appendChild(heading);
+    message.appendChild(loginLink);
+    article.appendChild(message);
+    doc.body.appendChild(article);
+
+    // Negative case: message descendants must NOT trigger auth or 404
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+
+    // Positive case: outer error element must trigger 404 even with composer present
+    const outerError = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(outerError);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+
+    // Positive case: outer login button must trigger auth required
+    const outerLogin = new MockElement("button", { "data-testid": "login-button" });
+    doc.body.appendChild(outerLogin);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(true);
+  });
+
+  it("excludes supported markdown surfaces from fallback text matching while composer is still loading", () => {
+    const doc = new MockDocument();
+    // No composer yet (loading)
+    expect(findComposerElement(doc as unknown as Document)).toBeNull();
+
+    const message = new MockElement("div", { "data-markdown-text-style": "assistant-message" });
+    const heading = new MockElement("h2");
+    heading.textContent = "Conversation not found";
+    message.appendChild(heading);
+    doc.body.appendChild(message);
+    doc.body.textContent = "Conversation not found and Welcome back. Log in";
+
+    // Supported message container is detected
+    expect(hasMessageContainers(doc as unknown as Document)).toBe(true);
+
+    // Negative case: fallback text scanning must NOT trigger because message containers exist
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(false);
+    expect(detectAuthRequired(doc as unknown as Document)).toBe(false);
+
+    // Positive case: genuine error UI outside message container triggers even without composer
+    const realError = new MockElement("div", { "data-testid": "conversation-not-found" });
+    doc.body.appendChild(realError);
+    expect(detectConversationNotFound(doc as unknown as Document)).toBe(true);
+  });
+
+  it("associates a conversation with this bootstrap attempt only via a matching recorded reference", () => {
+    const url = "https://chatgpt.com/c/recovery-conv";
+
+    // Without a recorded created-conversation reference there is no association evidence
+    expect(isConversationAssociatedWithBootstrap(url, null)).toBe(false);
+    // Not on a conversation route
+    expect(isConversationAssociatedWithBootstrap("https://chatgpt.com/", "recovery-conv")).toBe(false);
+    // A different conversation is never accepted, whatever its content
+    expect(isConversationAssociatedWithBootstrap(url, "other-conv")).toBe(false);
+    // Only the exact recorded conversation route is associated
+    expect(isConversationAssociatedWithBootstrap(url, "recovery-conv")).toBe(true);
   });
 });

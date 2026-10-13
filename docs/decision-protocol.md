@@ -77,6 +77,66 @@ resurrect superseded A; it needs a fresh task/result. This predicate only establ
 the review condition. CI, ownership, permissions and the final HEAD reread before
 merge remain delivery responsibilities. No current delivery call site is wired to it.
 
+## Planning workflow and dispatch eligibility
+
+Pre-execution planning determines whether an Issue has sufficient product/technical clarity to enter autonomous execution without turning Symphony Core into a planning state machine.
+
+### Plan task lifecycle and triggers
+
+PlanTasks share the same Issue-rooted `DecisionSession` as later ReviewTasks.
+- **Trigger kinds**:
+  - `initial`: Initial plan generation for an Issue.
+  - `clarification`: Clarification round continuing after `needs_clarification`. Incorporates operator answers into task context while preserving the same DecisionSession.
+  - `requirements_changed`: Requirements were modified on the issue; creates a new plan revision, superseding earlier plan tasks.
+  - `retry`: Re-executes planning after an infrastructure or model execution failure.
+- **Verdicts**:
+  - `ready`: Implementation plan is complete and accepted.
+  - `needs_clarification`: Plan requires clarification; questions are surfaced to the operator. Issue is NOT eligible for dispatch.
+  - `needs_human`: Complex requirements or explicit handoff required. Issue is NOT eligible for dispatch.
+
+### Requirement fingerprinting
+
+To detect requirement drift between planning and autonomous dispatch/delivery, requirements are normalized and hashed:
+`fingerprint = sha256(trimmedTitle + "::" + trimmedBody + "::" + clarifications.map(trim).join(";"))`
+
+Dispatch and review gate verification compute the fingerprint of current GitHub Issue requirements against the latest plan's requirement fingerprint. If they differ, dispatch and review approval fail closed with `requirements_changed`.
+
+### Context preservation
+
+Plan task creation preserves complete execution context (`DecisionMaterializedContext`) including:
+- Root work-item and repository.
+- Issue title and enriched body (combining issue description with clarification notes).
+- Prior materialized plan when replanning or continuing after clarification.
+
+This ensures Web Driver and API executors can read `/v1/tasks/:id/context` reliably upon claiming a task.
+
+### Operation key idempotency and conflict semantics
+
+To protect against duplicate task creation and network retries:
+1. `createPlanTask` records an `OperationReceipt` binding `sessionId`, `triggerKind`, `fingerprint`, and `previousTaskId`.
+2. When the same `operationKey` is supplied:
+   - **Idempotent replay**: If `sessionId`, `triggerKind`, `fingerprint`, and `previousTaskId` match, the existing task is returned, even if superseded or failed. No new revision is allocated and no receipt is overwritten.
+   - **Conflicting input**: If any normalized parameter differs, `createPlanTask` rejects with `DecisionConflictError`. Explicit new tasks must use a new operation key.
+
+### Dispatch eligibility (`DecisionPlanningGate`)
+
+An issue is eligible for autonomous dispatch only when:
+1. The latest plan task for the session has `status === "completed"`.
+2. The plan verdict is `ready`.
+3. The plan content has zero unresolved clarifications (`clarifications.length === 0`).
+4. The plan has been published to GitHub with a verified comment (`publishedCommentId !== null`).
+5. Current issue requirements match the plan's requirement fingerprint.
+
+All other states (`no_plan`, `plan_status_pending/running/failed`, `needs_clarification`, `needs_human`, `requirements_changed`, `plan_not_published_to_github`) fail closed.
+
+### Review approval invalidation
+
+`verifyReviewApproval` links code review to the accepted implementation plan:
+1. If the session has a plan, it must be `status === "completed"`, `verdict === "ready"`, and published to GitHub.
+2. If new planning is triggered (`requirements_changed` or pending plan), prior review approvals are invalidated immediately.
+3. The review task's evaluated context must reference the exact latest plan revision (`taskId` and `revision`).
+4. If current requirements have drifted, review approval is invalidated.
+
 ## Session lifecycle and executor binding
 
 | Operation | Allowed source | Destination |
@@ -92,8 +152,11 @@ positive generation. Core neither parses routes nor depends on conversation cont
 These references must not contain credentials. First binding has generation 1;
 rebind must increment by exactly 1. Losing the binding clears it while retaining
 `bindingGeneration`; rebind cannot reset the counter. Rebinding does not invalidate
-review facts or erase planning history. Completed sessions must be explicitly
-reopened before rebinding, retaining their root and historical decisions.
+review facts or erase planning history. Rebinding fences tasks claimed prior to the binding
+generation increment by releasing active non-completed claims back to `pending` with cleared leases
+and recording the new generation barrier; stale claims attempting to start, heartbeat, or submit
+results against prior binding generations are rejected with HTTP 409 Conflict. Completed sessions
+must be explicitly reopened before rebinding, retaining their root and historical decisions.
 
 Session completion requires the complete current task set for that session, with
 only terminal tasks and no task newer than `now`. The caller/store must read that set
@@ -343,6 +406,7 @@ The bridge exposes a local HTTP interface (default `127.0.0.1:4040`) for Web Age
 - `POST /v1/sessions` — Create or retrieve an issue session with `{ root }`.
 - `PUT /v1/sessions/:id/binding` — Bind or update executor binding with `{ adapter, externalSessionRef, resumeUri? }`.
 - `POST /v1/sessions/:id/rebind` — Rebind executor with compare-and-swap generation check: `{ adapter, externalSessionRef, resumeUri?, expectedGeneration, operationKey? }`.
+- `POST /v1/sessions/:id/break-binding` — Break executor binding with optional `{ owner?, token?, generation?, expectedGeneration? }` lease credentials and compare-and-swap expectedGeneration check when conversation is broken or human intervention is required.
 
 Security boundaries:
 - Loopback-only binding (`127.0.0.1` by default).

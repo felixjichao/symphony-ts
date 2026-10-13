@@ -1,0 +1,16 @@
+{"case": "agent-before-run-timeout", "at": "2026-10-12T08:35:25.581Z", "process": 57059, "event": "spawn", "pid": 57090, "ppid": 57059, "command": "sh", "args": ["-lc", "sleep 10"], "detached": true}
+{"case": "agent-before-run-timeout", "at": "2026-10-12T08:35:25.733Z", "process": 57059, "event": "kill", "pid": -57090, "signal": "SIGKILL"}
+{"case": "agent-before-run-timeout", "at": "2026-10-12T08:35:25.734Z", "process": 57059, "event": "close", "pid": 57090, "exitCode": null, "signal": "SIGKILL", "stderr": ""}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:35.109Z", "process": 57743, "event": "spawn", "pid": 58193, "ppid": 57743, "command": "sh", "args": ["-lc", "node \"/Volumes/Data/symphony-ts/apps/cli/dist/bin/symphony.js\" repo-bootstrap --repo \"/private/tmp/symphony-bootstrap-test-uTBN2V/remote.git\" --target \"/private/tmp/symphony-bootstrap-test-uTBN2V/workspace-GH-79\""], "detached": true}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:35.418Z", "process": 57743, "event": "spawn", "pid": 58579, "ppid": 57743, "command": "git", "args": ["fetch", "--prune", "origin"], "detached": true}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.110Z", "process": 57743, "event": "kill", "pid": -58579, "signal": "SIGKILL"}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.110Z", "process": 57743, "event": "close", "pid": 58579, "exitCode": null, "signal": "SIGKILL", "stderr": ""}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.124Z", "process": 57743, "event": "kill", "pid": -58193, "signal": "SIGKILL"}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.127Z", "process": 57743, "event": "close", "pid": 58193, "exitCode": null, "signal": "SIGKILL", "stderr": ""}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.128Z", "process": 57743, "event": "kill", "pid": 58580, "signal": 0}
+{"case": "workspace-hook-timeout", "at": "2026-10-12T08:35:40.128Z", "process": 57743, "event": "kill", "pid": 58580, "signal": "SIGKILL"}
+{"case": "workspace-direct-timeout", "at": "2026-10-12T08:35:48.899Z", "process": 58871, "event": "spawn", "pid": 59455, "ppid": 58871, "command": "git", "args": ["fetch", "--prune", "origin"], "detached": true}
+{"case": "workspace-direct-timeout", "at": "2026-10-12T08:35:51.901Z", "process": 58871, "event": "kill", "pid": -59455, "signal": "SIGKILL"}
+{"case": "workspace-direct-timeout", "at": "2026-10-12T08:35:51.901Z", "process": 58871, "event": "close", "pid": 59455, "exitCode": null, "signal": "SIGKILL", "stderr": ""}
+{"case": "workspace-direct-timeout", "at": "2026-10-12T08:35:51.913Z", "process": 58871, "event": "kill", "pid": 59456, "signal": 0}
+{"case": "workspace-direct-timeout", "at": "2026-10-12T08:35:51.914Z", "process": 58871, "event": "kill", "pid": 59456, "signal": "SIGKILL"}

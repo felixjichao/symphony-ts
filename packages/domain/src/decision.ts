@@ -301,6 +301,11 @@ export function releaseExpiredDecisionTask(task: DecisionTask, now: UtcTimestamp
   requireValue(task.lease !== null && now >= task.lease.expiresAtMs, "claim has not expired");
   return parseDecisionTask({ ...task, status: "pending", lease: null, updatedAtMs: now });
 }
+export function releaseDecisionTaskForBindingInvalidation(task: DecisionTask, now: UtcTimestampMs): DecisionTask {
+  parseDecisionTask(task); checkNow(task.updatedAtMs, now);
+  requireValue(task.lease !== null && (task.status === "claimed" || task.status === "running"), "only actively leased tasks can be released for binding invalidation");
+  return parseDecisionTask({ ...task, status: "pending", lease: null, updatedAtMs: now });
+}
 export function cancelDecisionTask(task: DecisionTask, now: UtcTimestampMs): DecisionTask {
   parseDecisionTask(task); checkNow(task.updatedAtMs, now);
   requireValue(["pending", "claimed", "running"].includes(task.status), "only unfinished tasks can cancel");
@@ -347,3 +352,132 @@ export function reopenDecisionSession(session: DecisionSession, now: UtcTimestam
   requireValue(session.status === "completed", "only completed sessions can reopen");
   return parseDecisionSession({ ...session, status: "active", updatedAtMs: now });
 }
+
+export interface PlanCommentMarker {
+  readonly schemaVersion: 1;
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly revision: number;
+  readonly triggerKind: "initial" | "requirements_changed" | "clarification" | "retry";
+  readonly fingerprint: string;
+  readonly verdict: "ready" | "needs_clarification" | "needs_human";
+}
+
+const PLAN_MARKER_START = "<!-- symphony-plan-marker:";
+const PLAN_MARKER_END = "-->";
+
+export function serializePlanCommentMarker(marker: PlanCommentMarker): string {
+  const json = JSON.stringify({
+    schemaVersion: 1,
+    repo: marker.repo,
+    issueNumber: marker.issueNumber,
+    sessionId: marker.sessionId,
+    taskId: marker.taskId,
+    revision: marker.revision,
+    triggerKind: marker.triggerKind,
+    fingerprint: marker.fingerprint,
+    verdict: marker.verdict,
+  });
+  return `${PLAN_MARKER_START} ${json} ${PLAN_MARKER_END}`;
+}
+
+export function parsePlanCommentMarker(body: string): PlanCommentMarker | null {
+  const startIndex = body.indexOf(PLAN_MARKER_START);
+  if (startIndex === -1) return null;
+  const endIndex = body.indexOf(PLAN_MARKER_END, startIndex);
+  if (endIndex === -1) return null;
+  const jsonStr = body.substring(startIndex + PLAN_MARKER_START.length, endIndex).trim();
+  try {
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    if (parsed["schemaVersion"] !== 1) return null;
+    if (
+      typeof parsed["repo"] !== "string" ||
+      typeof parsed["issueNumber"] !== "number" ||
+      typeof parsed["sessionId"] !== "string" ||
+      typeof parsed["taskId"] !== "string" ||
+      typeof parsed["revision"] !== "number" ||
+      typeof parsed["triggerKind"] !== "string" ||
+      typeof parsed["fingerprint"] !== "string" ||
+      typeof parsed["verdict"] !== "string"
+    ) {
+      return null;
+    }
+    if (!["initial", "requirements_changed", "clarification", "retry"].includes(parsed["triggerKind"])) {
+      return null;
+    }
+    if (!["ready", "needs_clarification", "needs_human"].includes(parsed["verdict"])) {
+      return null;
+    }
+    return parsed as unknown as PlanCommentMarker;
+  } catch {
+    return null;
+  }
+}
+
+export interface FormatPlanCommentOptions {
+  readonly marker: PlanCommentMarker;
+  readonly planResult: DecisionPlanResult;
+  readonly title?: string | undefined;
+}
+
+export function formatPlanCommentMarkdown(options: FormatPlanCommentOptions): string {
+  const { marker, planResult } = options;
+  const { content } = planResult;
+  const title = options.title ?? `Symphony Implementation Plan (rev ${marker.revision})`;
+  const markerString = serializePlanCommentMarker(marker);
+
+  let md = `## ${title}\n\n`;
+  md += `**Verdict:** \`${planResult.verdict}\` ｜ **Revision:** \`${marker.revision}\` ｜ **Trigger:** \`${marker.triggerKind}\`\n\n`;
+  md += `**Requirement Fingerprint:** \`${marker.fingerprint}\`\n\n`;
+  md += `### Plan Summary\n\n${content.plan}\n\n`;
+
+  if (content.acceptanceCriteria.length > 0) {
+    md += `### Acceptance Criteria\n\n`;
+    for (const item of content.acceptanceCriteria) {
+      md += `- ${item}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (content.risks.length > 0) {
+    md += `### Risks & Considerations\n\n`;
+    for (const item of content.risks) {
+      md += `- ${item}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (content.clarifications.length > 0) {
+    md += `### Questions / Clarifications\n\n`;
+    for (const item of content.clarifications) {
+      md += `- ${item}\n`;
+    }
+    md += `\n`;
+  }
+
+  const detailsPayload = JSON.stringify(planResult, null, 2);
+  md += `<details>\n<summary>Structured Decision Payload</summary>\n\n\`\`\`json\n${detailsPayload}\n\`\`\`\n</details>\n\n`;
+  md += `${markerString}\n`;
+
+  return md;
+}
+
+export interface PlanningEligibilityResult {
+  readonly eligible: boolean;
+  readonly sessionId: string;
+  readonly reason?: string | undefined;
+  readonly plan?: {
+    readonly taskId: string;
+    readonly revision: number;
+    readonly plan: string;
+    readonly acceptanceCriteria: readonly string[];
+    readonly risks: readonly string[];
+    readonly clarifications: readonly string[];
+  } | null | undefined;
+  readonly verdict?: "ready" | "needs_clarification" | "needs_human" | undefined;
+  readonly fingerprint?: string | undefined;
+  readonly publishedCommentId?: number | string | null | undefined;
+}
+

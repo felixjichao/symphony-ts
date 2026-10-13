@@ -140,7 +140,7 @@ interface HookSpec {
  * - {@link HOOK_TIMEOUT_DEADLINE_MS}（显式传入）：给**必须超时**的用例——配合 `sleep 5`
  *   脚本（20x 裕量），确保走的是生产 timeout + 进程组 SIGKILL 路径，而不是巧合通过。
  */
-const HOOK_TIMEOUT_OK_MS = 300;
+const HOOK_TIMEOUT_OK_MS = 3_000;
 const HOOK_TIMEOUT_DEADLINE_MS = 250;
 
 /** 把 hook 规格渲染成 `hooks:` front matter（多行脚本用 YAML block scalar）。 */
@@ -583,6 +583,7 @@ describe("四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.
     ]);
     const manager = managerFrom(eff);
     const hooks = eff.serviceConfig.hooks;
+    const cleanupHooks = { ...hooks, timeoutMs: HOOK_TIMEOUT_OK_MS };
     const identifier = "NEST-64-best-effort";
     const workspace = await manager.createWorkspace(identifier);
     const events = eventCollector();
@@ -591,7 +592,12 @@ describe("四 hook 的 timing / cwd / timeout / fatal-vs-best-effort（SPEC §5.
     // attempt 后的 workspace 仍然存在——after_run 的超时不影响世界。
     expect((await lstatOrNull(workspace.path))?.isDirectory()).toBe(true);
 
-    const removed = await manager.removeWorkspace(identifier, { hooks, onHookEvent: events.sink });
+    // after_run 负责触发 250ms 超时；后续 before_remove 只验证非零退出与 cleanup，
+    // 不应继续复用同一个紧预算，否则 macOS 调度负载会把 echo/exit fixture 误判为 timeout。
+    const removed = await manager.removeWorkspace(identifier, {
+      hooks: cleanupHooks,
+      onHookEvent: events.sink,
+    });
     expect(removed.status).toBe("removed");
     expect(events.events.map((event) => [event.hook, event.outcome, event.exitCode])).toEqual([
       ["after_run", "timeout", undefined],

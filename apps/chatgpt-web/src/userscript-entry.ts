@@ -2,8 +2,8 @@
  * Tampermonkey userscript entrypoint.
  * Injects a floating control HUD into ChatGPT Web and orchestrates DecisionTabDriver.
  */
-import { GmBridgeTransport, FetchBridgeTransport, type BridgeTransport } from "./transport";
-import { GmCheckpointStore } from "./checkpoint";
+import { GmBridgeTransport, FetchBridgeTransport, BridgeHttpError, type BridgeTransport } from "./transport";
+import { GmCheckpointStore, type CheckpointStore } from "./checkpoint";
 import { ChatGptWebAdapter } from "./adapter";
 import { DecisionTabDriver } from "./driver";
 
@@ -19,11 +19,27 @@ export interface UserscriptInitOptions {
   bridgeBaseUrl?: string | undefined;
   authToken?: string | undefined;
   autoStart?: boolean | undefined;
+  adapter?: ChatGptWebAdapter | undefined;
+  checkpointStore?: CheckpointStore | undefined;
+  transport?: BridgeTransport | undefined;
+  pollIntervalMs?: number | undefined;
 }
 
-export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
+export interface UserscriptController {
+  start: () => Promise<void>;
+  stop: () => void;
+  isRunning: () => boolean;
+  getDriver: () => DecisionTabDriver | null;
+}
+
+export function initSymphonyUserscript(options?: UserscriptInitOptions): UserscriptController {
   if (document.getElementById("symphony-driver-hud")) {
-    return; // Already initialized
+    return {
+      start: async () => {},
+      stop: () => {},
+      isRunning: () => false,
+      getDriver: () => null,
+    };
   }
 
   let bridgeUrl =
@@ -221,8 +237,36 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
     }
   };
 
+  const DRIVER_ENABLED_STORAGE_KEY = "symphony_driver_enabled";
+
+  const isDriverEnabledInTab = (): boolean => {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      try {
+        return window.sessionStorage.getItem(DRIVER_ENABLED_STORAGE_KEY) === "true";
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const setDriverEnabledInTab = (enabled: boolean): void => {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      try {
+        if (enabled) {
+          window.sessionStorage.setItem(DRIVER_ENABLED_STORAGE_KEY, "true");
+        } else {
+          window.sessionStorage.removeItem(DRIVER_ENABLED_STORAGE_KEY);
+        }
+      } catch {
+        // Ignore storage errors in restricted sandboxes
+      }
+    }
+  };
+
   const start = async () => {
     try {
+      setDriverEnabledInTab(true);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -234,26 +278,41 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         GM_setValue("symphony_bridge_url", bridgeUrl);
       }
 
-      const transport = createTransport(bridgeUrl, token);
-      const checkpointStore = new GmCheckpointStore();
-      const adapter = new ChatGptWebAdapter();
+      const transport = options?.transport ?? createTransport(bridgeUrl, token);
+      const checkpointStore = options?.checkpointStore ?? new GmCheckpointStore();
+      const adapter = options?.adapter ?? new ChatGptWebAdapter();
 
       currentDriver = new DecisionTabDriver({
         transport,
         checkpointStore,
         adapter,
+        ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
         onError: (err: Error) => {
-          if (currentDriver) {
-            currentDriver.stop();
-            currentDriver = null;
+          // Auth failures are fatal: polling would loop on 401/403 until credentials
+          // are fixed by the operator, so stop and surface the error.
+          const isAuthError =
+            err instanceof BridgeHttpError && (err.status === 401 || err.status === 403);
+          if (isAuthError) {
+            setDriverEnabledInTab(false);
+            if (currentDriver) {
+              currentDriver.stop();
+              currentDriver = null;
+            }
+            updateUI(false, `Error: ${err.message}`, true);
+            return;
           }
-          updateUI(false, `Error: ${err.message}`, true);
+          // Recoverable operational error (transient network failure, supersede race,
+          // lease expiry): keep polling. Checkpoint recovery and the bridge's lease /
+          // supersede semantics own reconciliation; stopping here would require a
+          // manual Start for every transient conflict.
+          updateUI(true, `Recovered from error: ${err.message}`);
         },
       });
 
       updateUI(true, "Connecting & polling...");
       // Fire driver start in background
       currentDriver.start().catch((err: unknown) => {
+        setDriverEnabledInTab(false);
         if (currentDriver) {
           currentDriver.stop();
           currentDriver = null;
@@ -262,6 +321,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
         updateUI(false, `Driver stopped on error: ${msg}`, true);
       });
     } catch (err: unknown) {
+      setDriverEnabledInTab(false);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -272,6 +332,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
   };
 
   const stop = () => {
+    setDriverEnabledInTab(false);
     if (currentDriver) {
       currentDriver.stop();
       currentDriver = null;
@@ -287,9 +348,17 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): void {
     }
   });
 
-  if (options?.autoStart) {
+  const shouldAutoStart = options?.autoStart ?? isDriverEnabledInTab();
+  if (shouldAutoStart) {
     void start();
   }
+
+  return {
+    start,
+    stop,
+    isRunning: () => isRunning,
+    getDriver: () => currentDriver,
+  };
 }
 
 // Automatically init when loaded into browser

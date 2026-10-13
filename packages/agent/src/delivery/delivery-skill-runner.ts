@@ -1384,7 +1384,7 @@ export async function runDeliverySkill(
         title: issueTitle,
         body: issueBody,
       },
-      plan: null,
+      plan: options.plan ?? null,
       pullRequest: {
         repository: context.repo.toLowerCase(),
         prNumber: prNumber!,
@@ -1498,6 +1498,10 @@ export async function runDeliverySkill(
           const approvalVerify = await options.reviewGate.verifyReviewApproval({
             ...reviewTarget,
             sessionId: resolvedSessionId,
+            requirements: {
+              title: issueTitle,
+              body: issueBody,
+            },
           });
           if (!approvalVerify.approved) {
             return haltDispatch(
@@ -1754,12 +1758,44 @@ export async function runDeliverySkill(
     return haltDispatch("unmergeable", `PR #${prNumber} mergeable state is '${preMergePr.mergeable}', expected 'MERGEABLE'.`);
   }
 
-  // 6. Pre-merge verification of review approval
+  // 6. Pre-merge verification of review approval. The current Issue facts are
+  // required for drift verification: an unreadable or malformed Issue must block
+  // the merge rather than silently reuse a stale approval.
+  const preMergeIv = await runner.gh(
+    ["issue", "view", String(context.issueNumber), "--repo", context.repo, "--json", "title,body"],
+    options.cwd,
+  );
+  if (preMergeIv.exitCode !== 0) {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Failed to fetch Issue view for #${context.issueNumber} before merge: ${preMergeIv.stderr || "exit code " + preMergeIv.exitCode}`,
+    );
+  }
+  let latestTitle = "";
+  let latestBody = "";
+  try {
+    const p = JSON.parse(preMergeIv.stdout || "{}");
+    latestTitle = p.title ?? "";
+    latestBody = p.body ?? "";
+  } catch (err) {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Failed to parse Issue view JSON for #${context.issueNumber} before merge: ${String(err)}`,
+    );
+  }
+  if (latestTitle === "") {
+    return haltDispatch(
+      "manual_intervention_required",
+      `Issue #${context.issueNumber} returned an empty title before merge; cannot verify requirements drift.`,
+    );
+  }
+
   const preMergeApproval = await options.reviewGate.verifyReviewApproval({
     repository: context.repo.toLowerCase(),
     prNumber: prNumber,
     headSha: currentHeadSha ?? "",
     sessionId: resolvedSessionId,
+    requirements: { title: latestTitle, body: latestBody },
   });
   if (!preMergeApproval.approved) {
     return haltDispatch(

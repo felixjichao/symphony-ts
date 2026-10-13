@@ -158,6 +158,11 @@ export interface OrchestratorAuthorityOptions {
    * 异常被隔离，不破坏 authority 状态权威。
    */
   readonly onCleanupDiagnostic?: ((diagnostic: RetryDiagnostic) => void) | undefined;
+  /**
+   * 外部 dispatch 准入过滤钩子（用于 Decision Plane Planning Gate 校验等）。
+   * 派发普通任务或 retry 前同步校验；返回 false 则拒绝派发。
+   */
+  readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
 }
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
@@ -223,6 +228,7 @@ export class OrchestratorAuthority {
   private readonly stallTimeoutMs: () => number;
   private readonly cleanupPort: RetryWorkspaceCleanup | undefined;
   private readonly cleanupDiagnostic: ((diagnostic: RetryDiagnostic) => void) | undefined;
+  private readonly canDispatch: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
 
   private readonly active = new Map<string, ActiveWorkerRecord>();
   /**
@@ -289,6 +295,7 @@ export class OrchestratorAuthority {
     this.stallTimeoutMs = options.stallTimeoutMs ?? (() => 0);
     this.cleanupPort = options.cleanupWorkspace ?? options.retry?.cleanupWorkspace;
     this.cleanupDiagnostic = options.onCleanupDiagnostic ?? options.retry?.onDiagnostic;
+    this.canDispatch = options.canDispatch;
   }
 
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
@@ -418,8 +425,11 @@ export class OrchestratorAuthority {
     ) {
       return { kind: "skipped", issueId: issue.id, attemptToken: null };
     }
-    // 2. 完整 eligibility（含 state / label / slot）。
-    if (!isDispatchEligible(issue, this.state, this.policy)) {
+    // 2. 完整 eligibility（含 state / label / slot 与外部 planning gate 校验）。
+    if (
+      !isDispatchEligible(issue, this.state, this.policy) ||
+      (this.canDispatch !== undefined && !this.canDispatch(issue, { isRetry: false }))
+    ) {
       return { kind: "not_eligible", issueId: issue.id, attemptToken: null };
     }
 
@@ -1140,8 +1150,11 @@ export class OrchestratorAuthority {
       return;
     }
 
-    if (!isRetryDispatchAllowed(issue, this.state, this.policy, issueId)) {
-      // 7. inactive / unroutable / 缺字段 → 释放 claim，不 dispatch、不 cleanup。
+    if (
+      !isRetryDispatchAllowed(issue, this.state, this.policy, issueId) ||
+      (this.canDispatch !== undefined && !this.canDispatch(issue, { isRetry: true }))
+    ) {
+      // 7. inactive / unroutable / 缺字段 / planning 未通过 → 释放 claim，不 dispatch、不 cleanup。
       this.releaseRetry(issueId);
       return;
     }

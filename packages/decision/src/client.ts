@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import type {
   DecisionSession,
   DecisionTask,
   DecisionReviewTarget,
   DecisionWorkItemRef,
   DecisionContextBundle,
+  PlanningEligibilityResult,
 } from "@symphony/domain";
 import { DecisionStoreError } from "./errors";
 import type {
@@ -21,6 +23,7 @@ import type {
   GetTaskContextResponse,
   PutBindingRequest,
   RebindSessionRequest,
+  BreakBindingRequest,
   StartTaskRequest,
   SubmitFailureRequest,
   SubmitFailureResponse,
@@ -28,19 +31,58 @@ import type {
   SubmitResultResponse,
   VerifyReviewApprovalRequest,
   VerifyReviewApprovalResponse,
+  VerifyPlanEligibilityRequest,
+  VerifyPlanEligibilityResponse,
+  MarkPlanPublishedRequest,
+  MarkPlanPublishedResponse,
+  GetLatestPlanResponse,
+  DecisionPlanRecord,
 } from "./types";
+
+/**
+ * Transport for synchronous bridge lookups. The default implementation shells
+ * out to curl (a bridge runs in a separate process). It is injectable so the
+ * no-cache behavior can be exercised without blocking an in-process server.
+ */
+export type DecisionBridgeSyncTransport = (
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+) => unknown;
 
 export interface DecisionBridgeClientOptions {
   readonly authToken?: string | undefined;
+  readonly syncTransport?: DecisionBridgeSyncTransport | undefined;
 }
 
 export class DecisionBridgeClient {
   readonly baseUrl: string;
   readonly authToken: string | undefined;
+  private readonly syncTransport: DecisionBridgeSyncTransport | undefined;
 
   constructor(baseUrl: string, options: DecisionBridgeClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.authToken = options.authToken;
+    this.syncTransport = options.syncTransport;
+  }
+
+  private syncRequest(method: "GET" | "POST", path: string, body: unknown): unknown {
+    if (this.syncTransport) {
+      return this.syncTransport(method, path, body);
+    }
+    const url = `${this.baseUrl}${path}`;
+    const args = ["-s", "-X", method, url];
+    if (body !== undefined) {
+      args.push("-H", "Content-Type: application/json");
+    }
+    if (this.authToken) {
+      args.push("-H", `Authorization: Bearer ${this.authToken}`);
+    }
+    if (body !== undefined) {
+      args.push("-d", JSON.stringify(body));
+    }
+    const out = execFileSync("curl", args, { encoding: "utf8", timeout: 3000 });
+    return JSON.parse(out) as unknown;
   }
 
   private async request<T>(
@@ -219,9 +261,96 @@ export class DecisionBridgeClient {
   async verifyReviewApproval(
     sessionId: string,
     target: DecisionReviewTarget,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
   ): Promise<VerifyReviewApprovalResponse> {
-    const payload: VerifyReviewApprovalRequest = { sessionId, target };
+    const payload: VerifyReviewApprovalRequest = {
+      sessionId,
+      target,
+      ...(requirements !== undefined ? { requirements } : {}),
+    };
     return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload);
+  }
+
+  async verifyPlanEligibility(
+    sessionId: string,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
+  ): Promise<VerifyPlanEligibilityResponse> {
+    const payload: VerifyPlanEligibilityRequest = { sessionId, requirements };
+    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
+  }
+
+  // Synchronous lookups are used by the orchestrator's dispatch gate, which must
+  // observe the current authoritative planning state. They intentionally do not
+  // cache: the plan revision, publish status, and verdict can change between two
+  // dispatches for otherwise identical requirements, so any cached result would
+  // grant stale authorization (or permanently reject a finished plan). A bridge
+  // failure fails closed.
+  verifyPlanEligibilitySync(
+    sessionId: string,
+    requirements?: {
+      readonly title: string;
+      readonly body: string;
+      readonly clarifications?: readonly string[] | undefined;
+    },
+  ): PlanningEligibilityResult {
+    try {
+      const parsed = this.syncRequest("POST", "/v1/plans/verify", {
+        sessionId,
+        requirements,
+      }) as VerifyPlanEligibilityResponse;
+      if (parsed && parsed.eligibility) {
+        return parsed.eligibility;
+      }
+    } catch {
+      // Fail closed on bridge failure.
+    }
+    return {
+      eligible: false,
+      sessionId,
+      reason: "Planning eligibility check pending or unavailable synchronously",
+    };
+  }
+
+  async markPlanPublished(
+    taskId: string,
+    params: MarkPlanPublishedRequest = {},
+  ): Promise<MarkPlanPublishedResponse> {
+    return await this.request<MarkPlanPublishedResponse>(
+      "POST",
+      `/v1/plans/${encodeURIComponent(taskId)}/publish`,
+      params,
+    );
+  }
+
+  async getLatestPlan(sessionId: string): Promise<GetLatestPlanResponse> {
+    return await this.request<GetLatestPlanResponse>(
+      "GET",
+      `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
+    );
+  }
+
+  getLatestPlanSync(sessionId: string): DecisionPlanRecord | null {
+    try {
+      const parsed = this.syncRequest(
+        "GET",
+        `/v1/plans/${encodeURIComponent(sessionId)}/latest`,
+        undefined,
+      ) as GetLatestPlanResponse;
+      if (parsed) {
+        return parsed.plan;
+      }
+    } catch {
+      // Fail closed on bridge failure.
+    }
+    return null;
   }
 
   async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {
@@ -245,10 +374,11 @@ export class DecisionBridgeClient {
     );
   }
 
-  async breakBinding(sessionId: string): Promise<{ session: DecisionSession }> {
+  async breakBinding(sessionId: string, params?: BreakBindingRequest): Promise<{ session: DecisionSession }> {
     return await this.request<{ session: DecisionSession }>(
       "POST",
-      `/v1/sessions/${encodeURIComponent(sessionId)}/break-binding`
+      `/v1/sessions/${encodeURIComponent(sessionId)}/break-binding`,
+      params
     );
   }
 

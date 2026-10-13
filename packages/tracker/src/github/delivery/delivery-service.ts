@@ -591,11 +591,44 @@ export class GitHubDeliveryService {
         },
       );
     }
+    // Read the current Issue facts from GitHub. The plan/approval drift check is
+    // only meaningful against the authoritative requirements, so a read failure
+    // must block the merge rather than fall open.
+    let requirements: { title: string; body: string };
+    try {
+      const issueRes = await this.runner.exec([
+        "issue",
+        "view",
+        String(context.issueNumber),
+        "--repo",
+        context.repo,
+        "--json",
+        "title,body",
+      ]);
+      if (issueRes.exitCode !== 0) {
+        throw new Error(issueRes.stderr || `gh issue view exited ${issueRes.exitCode}`);
+      }
+      const parsed = JSON.parse(issueRes.stdout || "{}") as { title?: unknown; body?: unknown };
+      if (typeof parsed.title !== "string") {
+        throw new Error(`Issue #${context.issueNumber} response is missing a string title`);
+      }
+      requirements = {
+        title: parsed.title,
+        body: typeof parsed.body === "string" ? parsed.body : "",
+      };
+    } catch (err) {
+      throw new DeliveryError(
+        `Cannot auto-merge PR #${pr.number}: failed to read current Issue #${context.issueNumber} requirements: ${err instanceof Error ? err.message : String(err)}`,
+        { code: "requirements_unavailable" },
+      );
+    }
+
     const reviewResult = await options.reviewGate.verifyReviewApproval({
       repository: context.repo,
       prNumber: pr.number,
       headSha: targetHeadSha,
       sessionId: expectedSessionId,
+      requirements,
     });
 
     if (!reviewResult.approved) {
