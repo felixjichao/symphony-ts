@@ -38,6 +38,9 @@ export interface DriverCheckpoint {
     readonly expectedGeneration: number;
     readonly operationKey?: string | undefined;
   } | undefined;
+  readonly navigationStartedAtMs?: number | undefined;
+  readonly navigationDeadlineMs?: number | undefined;
+  readonly navigationAttempts?: number | undefined;
 }
 
 export interface CheckpointStore {

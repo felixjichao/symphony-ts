@@ -30,3 +30,5 @@ export type {
   SubmissionReceipt,
   DecisionTaskFailure,
 } from "../types";
+
+export { DecisionConflictError } from "../errors";

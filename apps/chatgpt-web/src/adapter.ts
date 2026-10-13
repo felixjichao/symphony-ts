@@ -26,6 +26,7 @@ import {
   extractCodeBlocksFromTurn,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
+  extractFormalConversationIdFromUrl,
   buildConversationUrl,
   detectAuthRequired,
   detectConversationNotFound,
@@ -185,7 +186,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const win = this.winSupplier();
     let convId: string | null = null;
     if (win && win.location) {
-      convId = extractConversationIdFromUrl(win.location.href);
+      convId = extractFormalConversationIdFromUrl(win.location.href);
     }
 
     if (!convId) {
@@ -323,7 +324,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const recordCreatedConversationRef = () => {
       const currentWin = this.winSupplier();
       const convId = currentWin?.location
-        ? extractConversationIdFromUrl(currentWin.location.href)
+        ? extractFormalConversationIdFromUrl(currentWin.location.href)
         : null;
       if (recordedConvId === null) {
         // A cancelled attempt never takes its creation reference from a route observed after

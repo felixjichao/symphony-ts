@@ -8,6 +8,9 @@ import {
   findLatestAssistantTurn,
   extractCodeBlocksFromTurn,
   extractConversationIdFromUrl,
+  extractFormalConversationIdFromUrl,
+  isTemporaryConversationRoute,
+  isFormalConversationReference,
   buildConversationUrl,
   waitForStreamingCompletion,
   detectAuthRequired,
@@ -355,7 +358,33 @@ describe("DOM Probes and URL utilities", () => {
     expect(isConversationAssociatedWithBootstrap("https://chatgpt.com/", "recovery-conv")).toBe(false);
     // A different conversation is never accepted, whatever its content
     expect(isConversationAssociatedWithBootstrap(url, "other-conv")).toBe(false);
+    // Temporary routes are never accepted as valid bootstrap association
+    expect(isConversationAssociatedWithBootstrap("https://chatgpt.com/c/local-chatgpt", "local-chatgpt")).toBe(false);
+    expect(isConversationAssociatedWithBootstrap(url, "local-chatgpt")).toBe(false);
     // Only the exact recorded conversation route is associated
     expect(isConversationAssociatedWithBootstrap(url, "recovery-conv")).toBe(true);
+  });
+
+  it("identifies temporary and formal conversation routes", () => {
+    expect(isTemporaryConversationRoute("local-chatgpt")).toBe(true);
+    expect(isTemporaryConversationRoute("LOCAL-CHATGPT")).toBe(true);
+    expect(isTemporaryConversationRoute("local-12345")).toBe(true);
+    expect(isTemporaryConversationRoute("temporary")).toBe(true);
+    expect(isTemporaryConversationRoute("temp-conv")).toBe(true);
+
+    expect(isTemporaryConversationRoute("67890-abcd-ef01")).toBe(false);
+    expect(isTemporaryConversationRoute("conv-123")).toBe(false);
+    expect(isTemporaryConversationRoute("")).toBe(false);
+    expect(isTemporaryConversationRoute(null)).toBe(false);
+    expect(isTemporaryConversationRoute(undefined)).toBe(false);
+
+    expect(isFormalConversationReference("67890-abcd-ef01")).toBe(true);
+    expect(isFormalConversationReference("local-chatgpt")).toBe(false);
+    expect(isFormalConversationReference("")).toBe(false);
+    expect(isFormalConversationReference(null)).toBe(false);
+
+    expect(extractFormalConversationIdFromUrl("https://chatgpt.com/c/local-chatgpt")).toBeNull();
+    expect(extractFormalConversationIdFromUrl("https://chatgpt.com/c/67890-abcd-ef01")).toBe("67890-abcd-ef01");
+    expect(extractFormalConversationIdFromUrl("https://chatgpt.com/")).toBeNull();
   });
 });
