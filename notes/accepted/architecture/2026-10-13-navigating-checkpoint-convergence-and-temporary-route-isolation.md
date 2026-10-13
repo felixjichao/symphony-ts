@@ -20,7 +20,7 @@ During real-browser dogfooding of ChatGPT Web automation (`apps/chatgpt-web`, SP
 2. **Client Temporary Route Isolation**:
    - Added `isTemporaryConversationRoute(convId)` in `probes.ts` recognizing `local-chatgpt`, `local-*`, `temporary`, and `temp-*`.
    - Added `extractFormalConversationIdFromUrl` and updated `isConversationAssociatedWithBootstrap` to ignore temporary routes.
-   - In `adapter.ts`: `recordCreatedConversationRef` ignores temporary routes only prior to latching the formal conversation reference. Once latched, any route departure (whether to a temporary route or a different conversation UUID) triggers immutable association protection with non-retryable `human_required`.
+   - In `adapter.ts`: `recordCreatedConversationRef` ignores temporary routes only prior to latching the formal conversation reference. Once latched, any route departure (whether to a temporary route, another conversation UUID, or a route without conversation ID such as homepage `/`) triggers immutable association protection with non-retryable `human_required`.
    - If bootstrap streaming completes without obtaining an authoritative formal conversation reference (e.g. tab remains on a temporary route), it fails closed with non-retryable `human_required` (`retryable: false`), preventing duplicate bootstrap prompt submissions.
 3. **Browser-Safe Decision Error Export**:
    - Exported `DecisionConflictError` from `@symphony/decision/adapter` so `apps/chatgpt-web` maintains zero Node built-in dependencies in browser bundles.

@@ -342,13 +342,14 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         return;
       }
       // Once the formal reference has been latched, any deviation away from it
-      // (whether departing to a temporary route or another conversation route)
+      // (whether departing to a temporary route, another conversation route, or
+      // a route without conversation ID such as homepage /)
       // must trigger immutable association protection.
       const rawConvId = extractConversationIdFromUrl(currentWin.location.href);
-      if (rawConvId !== null && rawConvId !== recordedConvId) {
+      if (rawConvId !== recordedConvId) {
         throw new DecisionAdapterError({
           code: "human_required",
-          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${rawConvId}" while the bootstrap response was pending; refusing to re-target this attempt`,
+          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${rawConvId ?? "root"}" while the bootstrap response was pending; refusing to re-target this attempt`,
           suggestedAction: "human_intervention",
           retryable: false,
         });
