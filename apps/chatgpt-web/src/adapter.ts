@@ -416,10 +416,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       });
     }
 
+    const targetConvId = binding.externalSessionRef;
     const win = this.winSupplier();
     if (win && win.location && binding.resumeUri) {
       const currentUrl = win.location.href;
-      const targetConvId = binding.externalSessionRef;
       const currentConvId = extractConversationIdFromUrl(currentUrl);
 
       if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
@@ -450,9 +450,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         }
         if (Date.now() - startWaitRoute > this.timeoutMs) {
           throw new DecisionAdapterError({
-            code: "execution_failed",
+            code: "binding_broken",
             message: `Timeout waiting for ChatGPT route navigation to conversation "${targetConvId}"`,
-            suggestedAction: "retry",
+            suggestedAction: "rebind",
+            observedGeneration: binding.generation,
           });
         }
         await new Promise((r) => setTimeout(r, this.checkIntervalMs));
@@ -476,6 +477,14 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         throw new DecisionAdapterError({
           code: "binding_broken",
           message: `ChatGPT conversation "${binding.externalSessionRef}" not found or deleted`,
+          suggestedAction: "rebind",
+          observedGeneration: binding.generation,
+        });
+      }
+      if (win && win.location && extractConversationIdFromUrl(win.location.href) !== targetConvId) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: `ChatGPT navigated away from conversation "${targetConvId}" to "${win.location.href}"`,
           suggestedAction: "rebind",
           observedGeneration: binding.generation,
         });
