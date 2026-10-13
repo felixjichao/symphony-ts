@@ -103,6 +103,34 @@ export function countAssistantTurns(doc: Document = document): number {
   return getAllAssistantTurns(doc).length;
 }
 
+export function isTemporaryConversationRoute(
+  conversationId: string | null | undefined
+): boolean {
+  if (!conversationId) return false;
+  const normalized = conversationId.trim().toLowerCase();
+  return (
+    normalized === "local-chatgpt" ||
+    normalized.startsWith("local-") ||
+    normalized === "temporary" ||
+    normalized.startsWith("temp-")
+  );
+}
+
+export function isFormalConversationReference(
+  conversationId: string | null | undefined
+): boolean {
+  if (!conversationId) return false;
+  return !isTemporaryConversationRoute(conversationId);
+}
+
+export function extractFormalConversationIdFromUrl(urlStr: string): string | null {
+  const id = extractConversationIdFromUrl(urlStr);
+  if (!id || isTemporaryConversationRoute(id)) {
+    return null;
+  }
+  return id;
+}
+
 /**
  * Verifies that the conversation currently loaded in the tab is the exact conversation
  * recorded for this bootstrap attempt. Only a durable, attempt-specific conversation
@@ -114,8 +142,8 @@ export function isConversationAssociatedWithBootstrap(
   currentUrl: string | null,
   recordedConvId: string | null
 ): boolean {
-  if (!recordedConvId) return false;
-  const convId = currentUrl ? extractConversationIdFromUrl(currentUrl) : null;
+  if (!recordedConvId || isTemporaryConversationRoute(recordedConvId)) return false;
+  const convId = currentUrl ? extractFormalConversationIdFromUrl(currentUrl) : null;
   return convId !== null && convId === recordedConvId;
 }
 

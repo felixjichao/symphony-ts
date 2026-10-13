@@ -26,6 +26,7 @@ import {
   extractCodeBlocksFromTurn,
   waitForStreamingCompletion,
   extractConversationIdFromUrl,
+  extractFormalConversationIdFromUrl,
   buildConversationUrl,
   detectAuthRequired,
   detectConversationNotFound,
@@ -185,14 +186,15 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const win = this.winSupplier();
     let convId: string | null = null;
     if (win && win.location) {
-      convId = extractConversationIdFromUrl(win.location.href);
+      convId = extractFormalConversationIdFromUrl(win.location.href);
     }
 
     if (!convId) {
       throw new DecisionAdapterError({
-        code: "execution_failed",
+        code: "human_required",
         message: "Failed to obtain authoritative conversation reference from ChatGPT Web after session creation",
-        suggestedAction: "retry",
+        suggestedAction: "human_intervention",
+        retryable: false,
       });
     }
 
@@ -322,9 +324,9 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     let recordedConvId: string | null = null;
     const recordCreatedConversationRef = () => {
       const currentWin = this.winSupplier();
-      const convId = currentWin?.location
-        ? extractConversationIdFromUrl(currentWin.location.href)
-        : null;
+      if (!currentWin || !currentWin.location) {
+        return;
+      }
       if (recordedConvId === null) {
         // A cancelled attempt never takes its creation reference from a route observed after
         // the interruption: that route may be an unrelated conversation (user navigation,
@@ -332,17 +334,24 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
         if (options.signal?.aborted) {
           return;
         }
-        if (convId) {
-          recordedConvId = convId;
-          this.stepListener?.("bootstrap_waiting", { targetConvId: convId });
+        const formalConvId = extractFormalConversationIdFromUrl(currentWin.location.href);
+        if (formalConvId) {
+          recordedConvId = formalConvId;
+          this.stepListener?.("bootstrap_waiting", { targetConvId: formalConvId });
         }
         return;
       }
-      if (convId !== null && convId !== recordedConvId) {
+      // Once the formal reference has been latched, any deviation away from it
+      // (whether departing to a temporary route, another conversation route, or
+      // a route without conversation ID such as homepage /)
+      // must trigger immutable association protection.
+      const rawConvId = extractConversationIdFromUrl(currentWin.location.href);
+      if (rawConvId !== recordedConvId) {
         throw new DecisionAdapterError({
           code: "human_required",
-          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${convId}" while the bootstrap response was pending; refusing to re-target this attempt`,
+          message: `ChatGPT Web left the conversation this attempt created ("${recordedConvId}") for "${rawConvId ?? "root"}" while the bootstrap response was pending; refusing to re-target this attempt`,
           suggestedAction: "human_intervention",
+          retryable: false,
         });
       }
     };

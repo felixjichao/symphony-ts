@@ -49,6 +49,14 @@ export class MockElement {
     this.children.push(child);
   }
 
+  removeChild(child: MockElement): void {
+    const idx = this.children.indexOf(child);
+    if (idx !== -1) {
+      this.children.splice(idx, 1);
+      child.parentElement = null;
+    }
+  }
+
   addEventListener(type: string, listener: (evt: { type: string }) => void): void {
     const list = this.eventListeners.get(type) ?? [];
     list.push(listener);
