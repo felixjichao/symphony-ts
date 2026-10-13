@@ -37,6 +37,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
+| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；后续 source reader / projector 落点 | domain |
 | `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务、执行器适配层 | domain |
 | `apps/chatgpt-web` | —（Decision 执行器） | Decision 扩展 | ChatGPT Web 执行器适配器与 Tampermonkey 浏览器决策驱动器 | domain, decision |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
@@ -51,6 +52,8 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 依赖图只画 covering relations（省略可由传递推出的边以控制密度）：箭头指向被依赖方，`apps/cli` 位于顶端、`@symphony/domain` 位于底端并汇聚全部包。tracker 不依赖 orchestrator、agent 不拥有 scheduler / retry、observability 只消费只读 snapshot 都能由图形结构直接读出；devDependency 测试边（tracker → config、workspace → config、orchestrator → observability）不计入生产依赖，因此不出现在图中。英文版见 [package-dependencies（English）](diagrams/package-dependencies.svg)。
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
+
+`operations` 是 **Observation Plane / 只读投影层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，后续 source reader / projector 在 `@symphony/operations` 实现，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
 
 ## 历史：M0 协议栈 scaffold 已删除
 

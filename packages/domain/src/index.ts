@@ -104,3 +104,7 @@ export {
 // Decision Plane extension: pure protocol contracts, independent of Symphony §7.
 export * from "./decision-entry";
 
+// Operational Read Model extension: read-only normalized facts and projection contracts
+// (NEST-113 / GitHub #109). Never a second workflow state machine.
+export * from "./operations";
+

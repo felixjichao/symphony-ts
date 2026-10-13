@@ -255,3 +255,19 @@ Real browser smoke: [NEST-105 process and sanitized receipts](evidence/nest105/R
 Real recovered Review delivery integration: [NEST-103 exact-SHA CI/review/repair/merge/cleanup evidence](evidence/nest103/README.md). Requires the recorded runtime fixes and PR #105 browser fixes; does not claim an uninterrupted run or a green default root gate.
 
 Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/chatgpt-web`, `npm test -w @symphony/agent`, `npm test -w @symphony/tracker`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`.
+
+## Operational Read Model contracts (NEST-113 / #109)
+
+Provider-neutral extension adjacent to §13 (Observation Plane), not an additional official SPEC Core requirement. This slice defines read-only facts and projection contracts only: no live GitHub/Decision/runtime read, derivation, anomaly detection, query service, history store or transport ships here. [Boundary note](../notes/accepted/architecture/2026-10-11-operational-read-model-contracts.md).
+
+| Capability | Evidence |
+|---|---|
+| WorkKey identity rooted in a GitHub Issue with canonical root validation | `packages/domain/src/operations.test.ts`: WorkKey identity (GitHub Issue root) |
+| Fresh / stale / unavailable / unknown freshness with observation-time semantics | same file: Source freshness discriminant (fresh / stale / unavailable / unknown) |
+| Normalized GitHub / runtime / Decision / executor facts with provenance; absence vs failed read | same file: Normalized facts provenance and absence |
+| Exact PR HEAD SHA and stale-SHA review projection that never approves the current HEAD | same file: Exact HEAD SHA and review projections |
+| Derived-only phase / waiting / attention / health and phase-attention orthogonality | same file: Derived display enums |
+| `WorkProjection` / `OperationalSnapshot` with partial source failure and empty-vs-unknown snapshots | same file: Operational snapshot |
+| Package boundary is synchronous, domain-only, with no I/O or timer capability | `packages/operations/src/boundaries.test.ts` |
+
+Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`.
