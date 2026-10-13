@@ -877,8 +877,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       );
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
         renewedExpiry = hbRes.expiresAtMs;
+        const currentStored = this.checkpointStore.get() ?? cp;
         this.checkpointStore.set({
-          ...cp,
+          ...currentStored,
           leaseExpiresAtMs: renewedExpiry,
           savedAtMs: Date.now(),
         });
@@ -954,8 +955,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
 
         const nextAttempts = attempts + 1;
+        const currentStored = this.checkpointStore.get() ?? cp;
         this.checkpointStore.set({
-          ...cp,
+          ...currentStored,
+          leaseExpiresAtMs: renewedExpiry,
           navigationAttempts: nextAttempts,
           navigationStartedAtMs: startedAt,
           navigationDeadlineMs: deadline,
@@ -980,10 +983,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Do NOT demote navigating checkpoint to "claimed" solely on URL match, which
       // would erase the accumulated navigation attempt budget and deadlines before
       // the adapter confirms route stability and composer readiness.
-      this.checkpointStore.set({
-        ...cp,
-        savedAtMs: Date.now(),
-      });
     }
 
     if (cp.step === "bootstrap_submitting") {

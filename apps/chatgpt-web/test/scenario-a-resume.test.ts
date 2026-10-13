@@ -1,13 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
-import { ChatGptWebAdapter } from "../src/adapter";
-import { DecisionTabDriver } from "../src/driver";
-import { MemoryCheckpointStore } from "../src/checkpoint";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DurableDecisionStore, DecisionService, DecisionBridge } from "@symphony/decision";
 import {
   type DecisionSession,
   type DecisionTask,
   type DecisionContextBundle,
   type BridgeTransport,
+  githubDecisionRoot,
 } from "@symphony/domain/decision";
+import { ChatGptWebAdapter } from "../src/adapter";
+import { DecisionTabDriver } from "../src/driver";
+import { MemoryCheckpointStore } from "../src/checkpoint";
+import { FetchBridgeTransport } from "../src/transport";
 import { MockDocument, MockElement, MockWindow } from "./mock-dom";
 
 const sampleTask: DecisionTask = {
@@ -110,6 +116,10 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
     const targetUri = `https://chatgpt.com/c/${targetConvId}`;
     const cpStore = new MemoryCheckpointStore();
 
+    const navStartedAt = Date.now() - 5000;
+    const navDeadline = Date.now() + 55000;
+    const renewedLeaseExpiry = Date.now() + 120_000;
+
     cpStore.set({
       schemaVersion: 1,
       tabId: "tab-scenario-a",
@@ -126,8 +136,8 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
       targetUri,
       targetConvId,
       navigationAttempts: 2,
-      navigationStartedAtMs: Date.now() - 5000,
-      navigationDeadlineMs: Date.now() + 55000,
+      navigationStartedAtMs: navStartedAt,
+      navigationDeadlineMs: navDeadline,
     });
 
     const mockWin = new MockWindow();
@@ -145,6 +155,7 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
 
     let rebindCalled = false;
     let reboundGeneration = 0;
+    let observedCheckpointDuringExecution: unknown = null;
 
     const mockTransport: BridgeTransport = {
       baseUrl: "http://127.0.0.1:4545",
@@ -173,9 +184,11 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
           } as unknown as T;
         }
         if (method === "POST" && path.includes("/heartbeat")) {
-          return { expiresAtMs: Date.now() + 60_000, ttlMs: 120_000 } as unknown as T;
+          return { expiresAtMs: renewedLeaseExpiry, ttlMs: 120_000 } as unknown as T;
         }
         if (method === "GET" && path.includes("/context")) {
+          // Execution boundary reached: snapshot checkpoint state before rebind/supersession
+          observedCheckpointDuringExecution = cpStore.get();
           return { context: sampleContext } as unknown as T;
         }
         if (method === "POST" && path.includes("/break-binding")) {
@@ -238,9 +251,135 @@ describe("Dogfood Scenario A: resume recovery with redirect to root", () => {
 
     const outcome = await driver.resumeCheckpointIfAvailable();
 
-    // Must NOT submit execution_failed / retryable: true at generation 1!
+    // 1. Verify checkpoint state preserved at execution boundary (not wiped/reverted)
+    expect(observedCheckpointDuringExecution).toMatchObject({
+      step: "navigating",
+      navigationAttempts: 2,
+      navigationStartedAtMs: navStartedAt,
+      navigationDeadlineMs: navDeadline,
+      leaseExpiresAtMs: renewedLeaseExpiry,
+      targetUri,
+      targetConvId,
+    });
+
+    // 2. Must NOT submit execution_failed / retryable: true at generation 1!
     // Must trigger session rebind rollover (superseded outcome)!
     expect(rebindCalled).toBe(true);
     expect(outcome?.status).toBe("superseded");
+
+    // 3. Checkpoint store cleaned up upon successful rollover
+    expect(cpStore.get()).toBeNull();
+  });
+
+  it("updateCheckpointStep preserves navigation attempts, deadline, and target across step transitions", () => {
+    const cpStore = new MemoryCheckpointStore();
+    const navStartedAt = Date.now() - 3000;
+    const navDeadline = Date.now() + 57000;
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "tab-test",
+      taskId: sampleTask.id,
+      sessionId: sampleSession.id,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 1,
+      step: "navigating",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      targetUri: "https://chatgpt.com/c/dead-conv-id",
+      targetConvId: "dead-conv-id",
+      navigationAttempts: 2,
+      navigationStartedAtMs: navStartedAt,
+      navigationDeadlineMs: navDeadline,
+    });
+
+    const driver = new DecisionTabDriver({
+      adapter: new ChatGptWebAdapter({ doc: new MockDocument() as unknown as Document, win: new MockWindow() as unknown as Window }),
+      checkpointStore: cpStore,
+      transport: { baseUrl: "", authToken: "", request: vi.fn() },
+    });
+
+    // Update with same target preserves attempts and deadline
+    driver.updateCheckpointStep("navigating", {
+      targetUri: "https://chatgpt.com/c/dead-conv-id",
+      targetConvId: "dead-conv-id",
+    });
+
+    const cp = cpStore.get();
+    expect(cp?.navigationAttempts).toBe(2);
+    expect(cp?.navigationStartedAtMs).toBe(navStartedAt);
+    expect(cp?.navigationDeadlineMs).toBe(navDeadline);
+  });
+
+  it("preserves the authoritative heartbeat expiry when a navigating checkpoint reaches its target", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pr126-checkpoint-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    await store.open();
+    const service = new DecisionService(store);
+    const bridge = new DecisionBridge(service, { port: 0 });
+    await bridge.start();
+    try {
+      const root = githubDecisionRoot("owner", "repo", 126);
+      let session = await service.createSession(root);
+      session = await service.putBinding(session.id, {
+        adapter: "chatgpt-web",
+        externalSessionRef: "target",
+        resumeUri: "https://chatgpt.com/c/target",
+      });
+      const task = await service.createPlanTask(session.id);
+      await service.putTaskContext(task.id, {
+        strategy: "connector",
+        workItem: root,
+        repository: "owner/repo",
+        prNumber: null,
+        headSha: null,
+      });
+      const claim = await service.claimTask(task.id, { owner: "tab", ttlMs: 60_000 });
+      const cp = new MemoryCheckpointStore();
+      cp.set({
+        schemaVersion: 1,
+        tabId: cp.tabId,
+        taskId: task.id,
+        sessionId: session.id,
+        leaseOwner: claim.lease.owner,
+        leaseToken: claim.lease.token,
+        leaseGeneration: claim.lease.generation,
+        leaseExpiresAtMs: claim.lease.expiresAtMs,
+        bindingGeneration: 1,
+        step: "navigating",
+        attemptId: "attempt",
+        savedAtMs: Date.now(),
+        targetUri: "https://chatgpt.com/c/target",
+        targetConvId: "target",
+        navigationAttempts: 2,
+        navigationStartedAtMs: Date.now() - 1000,
+        navigationDeadlineMs: Date.now() + 60_000,
+      });
+      const win = new MockWindow();
+      win.location.href = "https://chatgpt.com/c/target";
+      const adapter = new ChatGptWebAdapter({
+        win: win as unknown as Window,
+        doc: new MockDocument() as unknown as Document,
+      });
+      const driver = new DecisionTabDriver({
+        adapter,
+        checkpointStore: cp,
+        transport: new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` }),
+      });
+      // Inspect the persisted checkpoint at the execution boundary; emulate interruption
+      // without adding adapter/coordinator writes that could hide the regression.
+      vi.spyOn(driver, "executeClaimedTask").mockRejectedValue(new Error("page interrupted"));
+      await expect(driver.resumeCheckpointIfAvailable()).rejects.toThrow("page interrupted");
+      const authoritativeExpiry = service.getTask(task.id)?.lease?.expiresAtMs;
+      expect(authoritativeExpiry).toBeGreaterThan(claim.lease.expiresAtMs);
+      expect(cp.get()?.leaseExpiresAtMs).toBe(authoritativeExpiry);
+    } finally {
+      await bridge.stop();
+      await store.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
