@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Deterministic work and system projectors](accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md) — 确定性展示推导层契约：纯函数推导 work phase、waiting reason、attention 与 system health、多源 review 安全与 exact HEAD 比较、正交维度与 cross-count summary、数组换序不变性（NEST-115 / #111）。
 - [Navigating checkpoint convergence and temporary route isolation](accepted/architecture/2026-10-13-navigating-checkpoint-convergence-and-temporary-route-isolation.md) — 导航 checkpoint 跨页面失败收敛与临时路由隔离契约：持久化累计重试与 deadline 收敛、不可恢复会话自动 rebind（N -> N+1）、客户端临时路由隔离与正式 UUID 捕获、immutable association 与 fail-closed 防护（NEST-120 / #122）。
 - [Operational source readers](accepted/architecture/2026-10-13-operational-source-readers.md) — 只读来源 ports、partial collection、freshness、GitHub 原子 HEAD/CI 和 Decision committed-state 白名单视图（NEST-114 / #110）。
 

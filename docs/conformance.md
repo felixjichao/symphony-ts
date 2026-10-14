@@ -290,3 +290,21 @@ health/phase/waiting/attention derivation or HTTP/Dashboard is introduced.
 Validation: affected domain/operations/tracker/decision/observability workspace suites,
 root `npm run typecheck` and `npm run gate`. Live provider/executor integration remains
 unverified; no new inventory/heartbeat infrastructure is provided.
+
+## Deterministic work and system projectors (NEST-115 / #111)
+
+Pure, deterministic projection layer adjacent to §13. Converts normalized facts into consumer-facing work and system projections (`WorkProjection`, `OperationalSnapshot`) without I/O, timers, or source writes. [Projector note](../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md).
+
+| Capability | Evidence |
+|---|---|
+| Pure `deriveWorkPhase` with precedence rules (completed, repair, coding, landing, review, CI, ready, planning, unknown) | `packages/operations/src/projectors.test.ts`: deriveWorkPhase precedence rules |
+| Safe `deriveReviewProjection` with exact HEAD verification and stale-approval protection | same suite: deriveReviewProjection & exact HEAD approval safety |
+| Orthogonal `deriveWaitingReason` covering plan, executor, CI, review, retry, clarification, and human waiting | same suite: deriveWaitingReason coverage |
+| Orthogonal `deriveAttention` distinguishing normal, waiting, degraded, needs_human, and failed | same suite: deriveAttention and orthogonality |
+| Pure `projectWork` assembling full work projection with partial facts and explainability evidence | same suite: projectWork end-to-end integration |
+| System `deriveSystemHealth` (healthy, degraded, unavailable, unknown) and `deriveSnapshotSummary` cross-counts | same suite: deriveSystemHealth and projectOperationalSnapshot |
+| Purity, immutability (deep freeze), and deterministic array shuffle invariance | same suite: Purity, immutability & deterministic array order |
+| Zero I/O, domain-only dependencies, and absence of mutation APIs (`setWorkPhase`, `setWaitingReason`, etc.) | `packages/operations/src/boundaries.test.ts` |
+
+Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) and query transport remain unverified / unimplemented.
+
