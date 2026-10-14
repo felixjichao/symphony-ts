@@ -337,7 +337,8 @@ export function deriveReviewProjection(context: WorkDerivationContext | ProjectW
     // Superseded, cancelled, or failed tasks cannot authorize approval
     approval = "not_approved";
   } else if (task.status === "running" || task.status === "claimed" || task.status === "pending") {
-    approval = "pending";
+    // Only fresh Decision facts can assert current pending review approval
+    approval = decisionFreshness.status === "fresh" ? "pending" : "unknown";
   } else if (task.status === "completed") {
     // Canonical review approval requires task.status === "completed" and matching result
     if (
@@ -632,10 +633,10 @@ export function deriveWaitingReason(context: WorkDerivationContext | ProjectWork
   }
 
   // 6. waiting_for_review
-  if (isGitHubFresh && pr && pr.state === "open" && !pr.isDraft) {
+  if (isGitHubFresh && isDecisionFresh && pr && pr.state === "open" && !pr.isDraft) {
     if (githubFacts?.ci?.status === "success") {
       const reviewProj = deriveReviewProjection(ctx);
-      if (reviewProj?.approval === "pending" || (isDecisionFresh && latestReviewTask?.status === "running")) {
+      if (reviewProj?.approval === "pending" || latestReviewTask?.status === "running") {
         return {
           reason: "waiting_for_review",
           since: latestReviewTask?.createdAtMs ?? null,

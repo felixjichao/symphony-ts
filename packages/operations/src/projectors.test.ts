@@ -973,5 +973,55 @@ describe("Reviewer feedback regression tests (Blockers 1-4)", () => {
     expect(snap1.anomalies[0]!.workKey).toEqual({ provider: "github", key: "owner/repo#1" });
     expect(snap1.anomalies[1]!.workKey).toEqual({ provider: "github", key: "owner/repo#2" });
   });
+
+  it("Blocker 2 extension: stale Decision with pending/claimed/running review task derives approval=unknown, waiting=null, attention=degraded, and summary.waiting=0", () => {
+    const gh = createGitHubFact({
+      pullRequest: { number: 42, state: "open", url: "url", headSha: SHA_A, isDraft: false },
+      ci: { status: "success", headSha: SHA_A },
+    });
+
+    const statuses = ["pending", "claimed", "running"] as const;
+    for (const status of statuses) {
+      const decStale: OperationSourceResult<DecisionWorkFacts> = {
+        source: "decision",
+        instance: "store:local",
+        freshness: { status: "stale", observedAt: NOW - 60000, lastAttemptAt: NOW },
+        facts: {
+          workKey: WORK_KEY,
+          session: null,
+          tasks: [
+            { taskId: "t1", revision: 1, kind: "review", status, target: { repository: "owner/repo", prNumber: 42, headSha: SHA_A }, createdAtMs: 1, updatedAtMs: 2 },
+          ],
+          results: [],
+          provenance: { source: "decision", instance: "store", observedAt: NOW - 60000 },
+        },
+      };
+
+      // 1. deriveReviewProjection must NOT output approval: pending; it must be unknown
+      const reviewProj = deriveReviewProjection({ workKey: WORK_KEY, github: gh, decision: decStale });
+      expect(reviewProj?.approval).toBe("unknown");
+      expect(reviewProj?.task?.status).toBe(status);
+
+      // 2. deriveWaitingReason must NOT output waiting_for_review; it must be null
+      const waiting = deriveWaitingReason({ workKey: WORK_KEY, github: gh, decision: decStale });
+      expect(waiting).toBeNull();
+
+      // 3. deriveAttention must be degraded
+      const attention = deriveAttention({ workKey: WORK_KEY, github: gh, decision: decStale });
+      expect(attention).toBe("degraded");
+
+      // 4. projectWork and projectOperationalSnapshot must have summary.waiting === 0
+      const workProj = projectWork({ workKey: WORK_KEY, github: gh, decision: decStale });
+      expect(workProj.waiting).toBeNull();
+      expect(workProj.attention).toBe("degraded");
+      expect(workProj.review?.approval).toBe("unknown");
+
+      const snapshot = projectOperationalSnapshot({
+        generatedAt: NOW,
+        work: [workProj],
+      });
+      expect(snapshot.summary.waiting).toBe(0);
+    }
+  });
 });
 
