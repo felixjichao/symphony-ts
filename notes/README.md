@@ -48,6 +48,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 ## 现有 Notes
 
 - [Navigating checkpoint convergence and temporary route isolation](accepted/architecture/2026-10-13-navigating-checkpoint-convergence-and-temporary-route-isolation.md) — 导航 checkpoint 跨页面失败收敛与临时路由隔离契约：持久化累计重试与 deadline 收敛、不可恢复会话自动 rebind（N -> N+1）、客户端临时路由隔离与正式 UUID 捕获、immutable association 与 fail-closed 防护（NEST-120 / #122）。
+- [Operational source readers](accepted/architecture/2026-10-13-operational-source-readers.md) — 只读来源 ports、partial collection、freshness、GitHub 原子 HEAD/CI 和 Decision committed-state 白名单视图（NEST-114 / #110）。
+
 - [Binding rollover recovery and stale-task fencing](accepted/architecture/2026-10-12-binding-rollover-and-stale-task-fencing.md) — session 换绑与失效会话恢复契约：coordinator 捕获 `resumeSession` 并通过 rebind 恢复、rebind 时将 active claims 释放回 pending 并进行 generation 围栏防护、ChatGPT userscript 基于 sessionStorage 保持跨页面导航/刷新自动恢复（NEST-121 / #122）。
 - [Supersede race recovery](accepted/architecture/2026-10-11-supersede-race-recovery.md) — supersede/cancel 与 driver 执行竞态的恢复契约：终端 superseded outcome、status 复核而非消息匹配、userscript 仅对 401/403 停机（NEST-118 / #116）。
 - [Operational Read Model contracts](accepted/architecture/2026-10-11-operational-read-model-contracts.md) — provider-neutral 只读 facts / 投影契约与 `@symphony/operations` 包边界（NEST-113 / #109）：契约归 `@symphony/domain`（WorkKey 别名复用 `DecisionWorkItemRef`、四类 facts、fresh/stale/unavailable/unknown 判别联合、`WorkProjection` / `OperationalSnapshot`、derived-only phase/waiting/attention/health），facade 包只依赖 domain，源包不得反向 import；本分片不含 reader / projector / anomaly / query / transport。

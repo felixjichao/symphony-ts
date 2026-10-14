@@ -65,6 +65,11 @@ export class DecisionService {
     this.defaultClaimTtlMs = config.defaultClaimTtlMs ?? 120_000;
   }
 
+  /** Read-only operational view from the already-open store. */
+  observeWork(root: DecisionWorkItemRef) {
+    return this.store.observeWork(root);
+  }
+
   getStore(): DurableDecisionStore {
     return this.store;
   }

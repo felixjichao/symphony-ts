@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，父任务 #108 的首个实现分片）。本包**只提供只读事实与投影契约**：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，再由未来 projector 推导 phase / waiting / attention 等展示语义。
+Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，父任务 #108 的首个实现分片）。本包提供只读事实与投影契约，以及四源 reader 和单次 collector：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，再由未来 projector 推导 phase / waiting / attention 等展示语义。
 
-它**不是** Control Plane：不读取实时状态、不推导、不做异常检测、不提供查询服务、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包只做面向 operational consumers 的重导出与后续实现的落点。
+它**不是** Control Plane：只读当前来源、不推导、不做异常检测、不提供查询服务、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出和只读采集。
 
 ## Public API
 
@@ -33,10 +33,26 @@ import {
 
 ## Extension points
 
-后续 source reader 与 projector 在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。Dependency 方向固定为 `operations → domain`。
+source reader 已实现，后续 projector 在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、observability、tracker 是真实入口测试的 devDependencies。
+
+## Readers
+
+四类工厂 `createGitHubReader`、`createRuntimeReader`、`createDecisionReader`、`createExecutorReader` 接收 `ReaderOptions`（instance、clock、maxAgeMs）和只读来源 port；`collectOperationFacts` 等待所有源完成，返回独立 facts/freshness envelope。来源故障为 unavailable，未配置为 unknown，成功空集合与缺失对象分别为 [] / null。旧 snapshot/inventory 保留原 observedAt，阈值边界（age <= maxAgeMs）为 fresh。
+
+```ts
+const readers = {
+  github: createGitHubReader(policy.github, () => delivery.observeWork(context)),
+  runtime: createRuntimeReader(policy.runtime, () => host.snapshot()),
+  decision: createDecisionReader(policy.decision, () => decision.observeWork(workKey)),
+  executor: createExecutorReader(policy.executor, null),
+};
+const facts = await collectOperationFacts(readers);
+```
+
+GitHub `context` 必须是可信 DeliveryContext，已知 PR 可传 `{ prNumber }`；否则完整分页按机器 marker 查关联，不按标题猜测。CI 仅表示 observed rollup，不表示 merge authorization。Runtime 用已有 SnapshotResult，允许按 issueId 注入可信 scope mapping，无法关联的行保留 workKey=null。Decision 必须是宿主已打开的 service，不触发 lease 清理。Executor port 须报告独立 inventory 时间；没有显式 heartbeat/status 时为 null/unknown，不使用 lease 或 Codex 事件冒充。
 
 ## Known limitations
 
-本分片仅定义契约：没有 live 读取、没有推导函数、没有异常检测、没有 query service、没有 transport。freshness 阈值、phase 优先级、health / summary 计算、anomaly 判定与 CLI / Dashboard 接线均属于后续分片。跨包边界决定见 [operations contracts note](../../notes/accepted/architecture/2026-10-11-operational-read-model-contracts.md)。
+没有持久缓存、后台轮询、source timeout wrapper、投影推导、异常检测、query service 或 transport。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md)。
 
-运行 `npm test -w @symphony/operations`（边界守卫）；契约形状测试见 `npm test -w @symphony/domain`。
+运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集与边界），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。

@@ -3,9 +3,9 @@
  * (NEST-113 / GitHub #109, first implementation slice of #108).
  *
  * This package is the public boundary for operational observers (CLI status, JSON API,
- * TUI, Dashboard, alerts). It depends on `@symphony/domain` only and re-exports the
- * read-only fact/projection contracts defined there; source readers and projectors land
- * here later. No HTTP, Dashboard, history store or mutation command is present.
+ * TUI, Dashboard, alerts). It depends on `@symphony/domain` and re-exports the
+ * read-only fact/projection contracts defined there. Source readers use injected read-only
+ * ports; projectors land later. No HTTP, Dashboard, history store or mutation command is present.
  */
 export {
   EXACT_HEAD_SHA_PATTERN,
@@ -74,3 +74,6 @@ export type {
   OperationalSnapshotSummary,
   OperationalSnapshot,
 } from "@symphony/domain";
+
+export * from "./readers";
+export type { OperationSourceResult, OperationFactCollection, DecisionObservation, GitHubObservation } from "@symphony/domain";

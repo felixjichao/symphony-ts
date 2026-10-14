@@ -269,6 +269,24 @@ Provider-neutral extension adjacent to §13 (Observation Plane), not an addition
 | Exact PR HEAD SHA and stale-SHA review projection that never approves the current HEAD | same file: Exact HEAD SHA and review projections |
 | Derived-only phase / waiting / attention / health and phase-attention orthogonality | same file: Derived display enums |
 | `WorkProjection` / `OperationalSnapshot` with partial source failure and empty-vs-unknown snapshots | same file: Operational snapshot |
-| Package boundary is synchronous, domain-only, with no I/O or timer capability | `packages/operations/src/boundaries.test.ts` |
+| Reader implementation uses domain-only production imports, no direct I/O/timer/mutation or reverse source imports | `packages/operations/src/boundaries.test.ts` |
 
 Validation commands: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`.
+
+## Operational source readers (NEST-114 / #110)
+
+Read-only extension adjacent to §13, using existing source authorities. No projector,
+health/phase/waiting/attention derivation or HTTP/Dashboard is introduced.
+
+| Capability | Evidence |
+|---|---|
+| GitHub open/closed/merged PRs, complete marker search, explicit references, exact HEAD/CI | `packages/tracker/src/github/operations-observation.test.ts` |
+| Runtime snapshot reuse, UTC start/session IDs, unlinked and cross-repository records, original stale timestamp | `packages/operations/src/readers.test.ts` |
+| Real Decision tasks/results, historical SHA, expired lease and claim binding generation; unchanged file/state | same suite: real Decision committed state |
+| Successful absence vs unknown/unavailable, partial failure and safe timeout reason | same suite: collects all sources; rejects mismatched CI HEAD |
+| Executor explicit heartbeat/status/binding, unknown defaults, copy isolation | same suite: reported executor heartbeat/binding |
+| No direct mutation, timer/I/O, derived state or reverse imports | `packages/operations/src/boundaries.test.ts` |
+
+Validation: affected domain/operations/tracker/decision/observability workspace suites,
+root `npm run typecheck` and `npm run gate`. Live provider/executor integration remains
+unverified; no new inventory/heartbeat infrastructure is provided.

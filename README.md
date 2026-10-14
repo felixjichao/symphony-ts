@@ -136,3 +136,5 @@ node apps/cli/dist/bin/symphony.js ./WORKFLOW.md
 | [docs/upstream.md](docs/upstream.md) | 两条上游 baseline（Symphony SPEC、Codex app-server 协议） |
 | [AGENTS.md](AGENTS.md) | Agent / 贡献者 standing orders |
 | [notes/](notes/README.md) | 架构 / 选型决策记录（Agent Notes） |
+
+Operational observation consumers can use the [operations readers](packages/operations/README.md) to collect GitHub/runtime/Decision/executor facts with per-source freshness and partial failure. Host wiring and explicit executor inventory are required; projection/query/transport remain future slices.
