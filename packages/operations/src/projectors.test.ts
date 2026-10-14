@@ -19,6 +19,7 @@ import {
   type GitHubWorkFacts,
   type OperationFactCollection,
   type OperationSourceResult,
+  type OperationalAnomaly,
   type RuntimeWorkFacts,
   type SourceStatus,
   type WorkProjection,
@@ -400,7 +401,7 @@ describe("deriveWaitingReason coverage", () => {
     ]);
     const waiting = deriveWaitingReason({ workKey: WORK_KEY, github: createGitHubFact(), runtime });
     expect(waiting?.reason).toBe("retry_backoff");
-    expect(waiting?.since).toBe(100);
+    expect(waiting?.since).toBeNull();
   });
 
   it("derives waiting_for_executor on pending plan or review tasks", () => {
@@ -419,6 +420,7 @@ describe("deriveWaitingReason coverage", () => {
     });
     const waiting = deriveWaitingReason({ workKey: WORK_KEY, github: gh });
     expect(waiting?.reason).toBe("waiting_for_ci");
+    expect(waiting?.since).toBeNull();
   });
 
   it("derives waiting_for_review when CI is success and review task is running", () => {
@@ -819,6 +821,157 @@ describe("projector function aliases", () => {
     expect(deriveWorkProjection).toBe(projectWork);
     expect(deriveExecutorProjection).toBe(projectExecutor);
     expect(deriveOperationalSnapshot).toBe(projectOperationalSnapshot);
+  });
+});
+
+describe("Reviewer feedback regression tests (Blockers 1-4)", () => {
+  it("Blocker 1: superseded review task with approve result does not yield approved_current_head and does not allow landing", () => {
+    const gh = createGitHubFact({
+      pullRequest: { number: 42, state: "open", url: "url", headSha: SHA_A, isDraft: false },
+      ci: { status: "success", headSha: SHA_A },
+    });
+    // Task is superseded, but an approve result exists for SHA_A
+    const dec = createDecisionFact({
+      tasks: [
+        { taskId: "t1", revision: 1, kind: "review", status: "superseded", target: { repository: "owner/repo", prNumber: 42, headSha: SHA_A }, createdAtMs: 1, updatedAtMs: 2 },
+      ],
+      results: [
+        { taskId: "t1", revision: 1, createdAtMs: 2, outcome: { kind: "review", verdict: "approve", target: { repository: "owner/repo", prNumber: 42, headSha: SHA_A } } },
+      ],
+    });
+
+    const reviewProj = deriveReviewProjection({ workKey: WORK_KEY, github: gh, decision: dec });
+    expect(reviewProj).not.toBeNull();
+    // Must be not_approved, NOT approved_current_head!
+    expect(reviewProj?.approval).toBe("not_approved");
+    expect(reviewProj?.task?.status).toBe("superseded");
+    expect(reviewProj?.result?.outcome.kind).toBe("review");
+
+    // Phase must NOT be landing
+    const phase = deriveWorkPhase({ workKey: WORK_KEY, github: gh, decision: dec });
+    expect(phase).not.toBe("landing");
+  });
+
+  it("Blocker 2a: stale runtime streaming_turn does not yield coding phase", () => {
+    const gh = createGitHubFact({
+      pullRequest: null,
+      issue: { state: "open", url: "issue-url" },
+    });
+    const runtimeStale: OperationSourceResult<readonly RuntimeWorkFacts[]> = {
+      source: "runtime",
+      instance: "orchestrator:local",
+      freshness: { status: "stale", observedAt: NOW - 60000, lastAttemptAt: NOW },
+      facts: [
+        {
+          workKey: WORK_KEY,
+          issueId: "issue-1",
+          attempt: { issueId: "issue-1", issueIdentifier: "109", attempt: 1, status: "streaming_turn", workspacePath: "/ws", startedAtMs: NOW - 60000 },
+          retry: null,
+          provenance: { source: "runtime", instance: "inst", observedAt: NOW - 60000 },
+        },
+      ],
+    };
+
+    const phase = deriveWorkPhase({ workKey: WORK_KEY, github: gh, runtime: runtimeStale });
+    // Must NOT return coding!
+    expect(phase).not.toBe("coding");
+    expect(phase).toBe("planning");
+
+    const attention = deriveAttention({ workKey: WORK_KEY, github: gh, runtime: runtimeStale });
+    expect(attention).toBe("degraded");
+  });
+
+  it("Blocker 2b: stale Decision needs_human result does not yield waiting=needs_human and does not bypass degraded attention", () => {
+    const gh = createGitHubFact({
+      pullRequest: null,
+      issue: { state: "open", url: "issue-url" },
+    });
+    const decStale: OperationSourceResult<DecisionWorkFacts> = {
+      source: "decision",
+      instance: "store:local",
+      freshness: { status: "stale", observedAt: NOW - 60000, lastAttemptAt: NOW },
+      facts: {
+        workKey: WORK_KEY,
+        session: null,
+        tasks: [
+          { taskId: "t1", revision: 1, kind: "plan", status: "completed", createdAtMs: 1, updatedAtMs: 2 },
+        ],
+        results: [
+          { taskId: "t1", revision: 1, createdAtMs: 2, outcome: { kind: "plan", verdict: "needs_human" } },
+        ],
+        provenance: { source: "decision", instance: "store", observedAt: NOW - 60000 },
+      },
+    };
+
+    const waiting = deriveWaitingReason({ workKey: WORK_KEY, github: gh, decision: decStale });
+    // Stale facts cannot assert waiting=needs_human!
+    expect(waiting?.reason).not.toBe("needs_human");
+
+    const attention = deriveAttention({ workKey: WORK_KEY, github: gh, decision: decStale });
+    // Must be degraded, NOT needs_human!
+    expect(attention).toBe("degraded");
+  });
+
+  it("Blocker 3: old PR task does not override current PR task or pollute waiting/review", () => {
+    const gh = createGitHubFact({
+      pullRequest: { number: 42, state: "open", url: "url", headSha: SHA_B, isDraft: false },
+      ci: { status: "pending", headSha: SHA_B },
+    });
+    // Store has old PR #41 with revision 5 (superseded with changes_requested)
+    // and current PR #42 with revision 1 (pending)
+    const dec = createDecisionFact({
+      tasks: [
+        { taskId: "t-old", revision: 5, kind: "review", status: "superseded", target: { repository: "owner/repo", prNumber: 41, headSha: SHA_A }, createdAtMs: 1, updatedAtMs: 2 },
+        { taskId: "t-cur", revision: 1, kind: "review", status: "pending", target: { repository: "owner/repo", prNumber: 42, headSha: SHA_B }, createdAtMs: 10, updatedAtMs: 10 },
+      ],
+      results: [
+        { taskId: "t-old", revision: 5, createdAtMs: 2, outcome: { kind: "review", verdict: "changes_requested", target: { repository: "owner/repo", prNumber: 41, headSha: SHA_A } } },
+      ],
+    });
+
+    const reviewProj = deriveReviewProjection({ workKey: WORK_KEY, github: gh, decision: dec });
+    expect(reviewProj?.task?.taskId).toBe("t-cur");
+    expect(reviewProj?.approval).toBe("pending");
+
+    const waiting = deriveWaitingReason({ workKey: WORK_KEY, github: gh, decision: dec });
+    // For pending review task, waiting_for_executor is preserved!
+    expect(waiting?.reason).toBe("waiting_for_executor");
+
+    const phase = deriveWorkPhase({ workKey: WORK_KEY, github: gh, decision: dec });
+    // Must NOT be polluted by old PR's changes_requested into repair!
+    expect(phase).not.toBe("repair");
+  });
+
+  it("Blocker 4: anomaly sorting is shuffle invariant when sharing identical code and detectedAt", () => {
+    const anomaly1: OperationalAnomaly = {
+      code: "head_mismatch",
+      severity: "warning",
+      workKey: { provider: "github", key: "owner/repo#1" },
+      message: "PR head does not match decision target",
+      detectedAt: 1000,
+    };
+    const anomaly2: OperationalAnomaly = {
+      code: "head_mismatch",
+      severity: "warning",
+      workKey: { provider: "github", key: "owner/repo#2" },
+      message: "PR head does not match decision target",
+      detectedAt: 1000,
+    };
+
+    const snap1 = projectOperationalSnapshot({
+      generatedAt: 2000,
+      work: [],
+      anomalies: [anomaly1, anomaly2],
+    });
+    const snap2 = projectOperationalSnapshot({
+      generatedAt: 2000,
+      work: [],
+      anomalies: [anomaly2, anomaly1],
+    });
+
+    expect(snap1.anomalies).toEqual(snap2.anomalies);
+    expect(snap1.anomalies[0]!.workKey).toEqual({ provider: "github", key: "owner/repo#1" });
+    expect(snap1.anomalies[1]!.workKey).toEqual({ provider: "github", key: "owner/repo#2" });
   });
 });
 

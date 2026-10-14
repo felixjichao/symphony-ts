@@ -195,43 +195,84 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
   const rawTasks = decisionFacts?.tasks ? [...decisionFacts.tasks] : [];
   const rawResults = decisionFacts?.results ? [...decisionFacts.results] : [];
 
-  const tasks = rawTasks.sort((a, b) => {
+  const expectedRepo = extractTargetRepo(workKey).toLowerCase();
+  const currentPrNumber =
+    githubFacts?.pullRequest !== undefined
+      ? githubFacts.pullRequest !== null
+        ? githubFacts.pullRequest.number
+        : null
+      : undefined;
+
+  function taskStatusPriority(status: DecisionTaskFacts["status"]): number {
+    switch (status) {
+      case "running":
+      case "claimed":
+      case "pending":
+        return 3;
+      case "completed":
+        return 2;
+      case "failed":
+      case "cancelled":
+      case "superseded":
+      default:
+        return 1;
+    }
+  }
+
+  // Plan tasks
+  const planTasks = rawTasks.filter(
+    (t): t is DecisionTaskFacts & { readonly kind: "plan" } => t.kind === "plan",
+  );
+  const sortedPlanTasks = planTasks.sort((a, b) => {
+    const aPrio = taskStatusPriority(a.status);
+    const bPrio = taskStatusPriority(b.status);
+    if (bPrio !== aPrio) return bPrio - aPrio;
     if (b.revision !== a.revision) return b.revision - a.revision;
     if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
     return b.taskId.localeCompare(a.taskId);
   });
+  const latestPlanTask = sortedPlanTasks[0] ?? null;
 
-  const results = rawResults.sort((a, b) => {
-    if (b.revision !== a.revision) return b.revision - a.revision;
-    if (b.createdAtMs !== a.createdAtMs) return b.createdAtMs - a.createdAtMs;
-    return b.taskId.localeCompare(a.taskId);
-  });
-
-  // Latest plan task
-  const latestPlanTask = tasks.find((t) => t.kind === "plan") ?? null;
   const latestPlanResult = latestPlanTask
-    ? (results.find(
+    ? (rawResults.find(
         (r) =>
           r.taskId === latestPlanTask.taskId &&
           r.revision === latestPlanTask.revision &&
           r.outcome.kind === "plan",
       ) ?? null)
-    : (results.find((r) => r.outcome.kind === "plan") ?? null);
+    : null;
 
-  // Latest review task
-  const reviewTasks = tasks.filter(
-    (t): t is DecisionTaskFacts & { readonly kind: "review" } => t.kind === "review",
+  // Review tasks: strictly filtered by current repository and PR (if known)
+  const reviewTasks = rawTasks.filter(
+    (t): t is DecisionTaskFacts & { readonly kind: "review" } => {
+      if (t.kind !== "review") return false;
+      if (t.target.repository.toLowerCase() !== expectedRepo) return false;
+      if (currentPrNumber !== undefined) {
+        if (currentPrNumber === null) return false;
+        if (t.target.prNumber !== currentPrNumber) return false;
+      }
+      return true;
+    },
   );
-  const latestReviewTask = reviewTasks[0] ?? null;
+
+  const sortedReviewTasks = reviewTasks.sort((a, b) => {
+    const aPrio = taskStatusPriority(a.status);
+    const bPrio = taskStatusPriority(b.status);
+    if (bPrio !== aPrio) return bPrio - aPrio;
+    if (b.revision !== a.revision) return b.revision - a.revision;
+    if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
+    return b.taskId.localeCompare(a.taskId);
+  });
+  const latestReviewTask = sortedReviewTasks[0] ?? null;
 
   const latestReviewResult = latestReviewTask
-    ? (results.find(
+    ? (rawResults.find(
         (r) =>
           r.taskId === latestReviewTask.taskId &&
           r.revision === latestReviewTask.revision &&
           r.outcome.kind === "review",
       ) ?? null)
-    : (results.find((r) => r.outcome.kind === "review") ?? null);
+    : null;
 
   return {
     workKey,
@@ -269,6 +310,7 @@ export function deriveReviewProjection(context: WorkDerivationContext | ProjectW
   const {
     workKey,
     githubFacts,
+    githubFreshness,
     decisionFreshness,
     latestReviewTask,
     latestReviewResult,
@@ -289,37 +331,61 @@ export function deriveReviewProjection(context: WorkDerivationContext | ProjectW
 
   if (decisionFreshness.status === "unavailable" || decisionFreshness.status === "unknown") {
     approval = "unknown";
-  } else if (task === null && result === null) {
+  } else if (task === null) {
     approval = "not_approved";
-  } else if (task !== null && (task.status === "running" || task.status === "pending") && result === null) {
+  } else if (task.status === "superseded" || task.status === "cancelled" || task.status === "failed") {
+    // Superseded, cancelled, or failed tasks cannot authorize approval
+    approval = "not_approved";
+  } else if (task.status === "running" || task.status === "claimed" || task.status === "pending") {
     approval = "pending";
-  } else if (result !== null && result.outcome.kind === "review") {
-    const verdict = result.outcome.verdict;
-    if (verdict === "changes_requested") {
-      approval = "changes_requested";
-    } else if (verdict === "needs_human") {
-      approval = "not_approved";
-    } else if (verdict === "approve") {
-      const target = result.outcome.target;
-      const expectedRepo = extractTargetRepo(workKey).toLowerCase();
-      const targetRepo = target.repository.toLowerCase();
-      const prNumberMatch =
-        githubFacts?.pullRequest ? target.prNumber === githubFacts.pullRequest.number : true;
-      const shaMatch = currentHeadSha !== null && target.headSha === currentHeadSha;
-      const reposMatch = targetRepo === expectedRepo;
+  } else if (task.status === "completed") {
+    // Canonical review approval requires task.status === "completed" and matching result
+    if (
+      result !== null &&
+      result.outcome.kind === "review" &&
+      result.taskId === task.taskId &&
+      result.revision === task.revision
+    ) {
+      const verdict = result.outcome.verdict;
+      if (verdict === "needs_human") {
+        approval = "not_approved";
+      } else if (verdict === "changes_requested") {
+        approval = decisionFreshness.status === "fresh" ? "changes_requested" : "not_approved";
+      } else if (verdict === "approve") {
+        const expectedRepo = extractTargetRepo(workKey).toLowerCase();
+        const taskTargetRepo = task.target.repository.toLowerCase();
+        const resultTarget = result.outcome.target;
+        const resultTargetRepo = resultTarget.repository.toLowerCase();
 
-      // Approval against current HEAD requires matching repo, prNumber, exact HEAD SHA, and fresh sources
-      const sourcesFresh =
-        ctx.githubFreshness.status === "fresh" && ctx.decisionFreshness.status === "fresh";
+        const targetConsistent =
+          taskTargetRepo === resultTargetRepo &&
+          task.target.prNumber === resultTarget.prNumber &&
+          task.target.headSha.toLowerCase() === resultTarget.headSha.toLowerCase();
 
-      if (reposMatch && prNumberMatch && shaMatch && sourcesFresh) {
-        approval = "approved_current_head";
-      } else {
-        approval = "approved_stale_head";
+        const reposMatch = taskTargetRepo === expectedRepo;
+        const prNumberMatch =
+          githubFacts?.pullRequest ? task.target.prNumber === githubFacts.pullRequest.number : true;
+
+        if (targetConsistent && reposMatch && prNumberMatch) {
+          const shaMatch =
+            currentHeadSha !== null &&
+            isExactHeadSha(currentHeadSha) &&
+            task.target.headSha.toLowerCase() === currentHeadSha.toLowerCase();
+          const sourcesFresh =
+            githubFreshness.status === "fresh" && decisionFreshness.status === "fresh";
+
+          if (shaMatch && sourcesFresh) {
+            approval = "approved_current_head";
+          } else {
+            approval = "approved_stale_head";
+          }
+        } else {
+          approval = "not_approved";
+        }
       }
+    } else {
+      approval = "not_approved";
     }
-  } else if (task !== null && (task.status === "failed" || task.status === "superseded" || task.status === "cancelled")) {
-    approval = "not_approved";
   }
 
   return {
@@ -357,6 +423,8 @@ export function deriveWorkPhase(context: WorkDerivationContext | ProjectWorkInpu
   const {
     githubFreshness,
     githubFacts,
+    runtimeFreshness,
+    decisionFreshness,
     runtimeRow,
     latestPlanTask,
     latestPlanResult,
@@ -379,14 +447,17 @@ export function deriveWorkPhase(context: WorkDerivationContext | ProjectWorkInpu
     return "unknown";
   }
 
+  const isRuntimeFresh = runtimeFreshness.status === "fresh";
+  const isDecisionFresh = decisionFreshness.status === "fresh";
+
   const reviewProj = deriveReviewProjection(ctx);
   const reviewApproval = reviewProj?.approval ?? "not_approved";
 
-  const isRuntimeRunning = isRunAttemptActive(runtimeRow?.attempt?.status);
+  const isRuntimeRunning = isRuntimeFresh && isRunAttemptActive(runtimeRow?.attempt?.status);
   const pr = githubFacts.pullRequest;
   const ci = githubFacts.ci;
 
-  // 3 & 4. Active runtime execution
+  // 3 & 4. Active runtime execution (asserted only when runtime facts are fresh)
   if (isRuntimeRunning) {
     const hasPriorFailure =
       ci?.status === "failure" ||
@@ -405,14 +476,14 @@ export function deriveWorkPhase(context: WorkDerivationContext | ProjectWorkInpu
     ci.status === "success" &&
     ci.headSha === pr.headSha &&
     reviewApproval === "approved_current_head" &&
-    ctx.decisionFreshness.status === "fresh"
+    isDecisionFresh
   ) {
     return "landing";
   }
 
   // 6. Review
   if (pr && pr.state === "open" && !pr.isDraft) {
-    if (latestReviewTask && (latestReviewTask.status === "running" || latestReviewTask.status === "pending")) {
+    if (isDecisionFresh && latestReviewTask && (latestReviewTask.status === "running" || latestReviewTask.status === "pending")) {
       return "review";
     }
     if (ci?.status === "success") {
@@ -425,7 +496,7 @@ export function deriveWorkPhase(context: WorkDerivationContext | ProjectWorkInpu
   // 7. CI
   if (pr && pr.state === "open" && !pr.isDraft) {
     if (ci?.status === "pending" || ci === null) {
-      if (!latestReviewTask || latestReviewTask.status !== "running") {
+      if (!isDecisionFresh || !latestReviewTask || latestReviewTask.status !== "running") {
         return "ci";
       }
     }
@@ -438,23 +509,28 @@ export function deriveWorkPhase(context: WorkDerivationContext | ProjectWorkInpu
     }
   }
 
-  // 9. Coding (pre-PR or draft)
-  if (runtimeRow && (runtimeRow.attempt !== null || runtimeRow.retry !== null)) {
+  // 9. Coding (pre-PR or draft with fresh runtime attempt/retry)
+  if (isRuntimeFresh && runtimeRow && (runtimeRow.attempt !== null || runtimeRow.retry !== null)) {
     return "coding";
   }
 
-  // 10. Ready
-  if (latestPlanResult?.outcome.kind === "plan" && latestPlanResult.outcome.verdict === "ready") {
+  // 10. Ready (requires fresh decision and completed plan task with ready verdict)
+  if (
+    isDecisionFresh &&
+    latestPlanTask?.status === "completed" &&
+    latestPlanResult?.outcome.kind === "plan" &&
+    latestPlanResult.outcome.verdict === "ready"
+  ) {
     if (!pr) {
       return "ready";
     }
   }
 
   // 11. Planning
-  if (latestPlanTask) {
+  if (isDecisionFresh && latestPlanTask && (latestPlanTask.status === "running" || latestPlanTask.status === "pending")) {
     return "planning";
   }
-  if (ctx.decisionFacts?.session?.status === "active") {
+  if (isDecisionFresh && ctx.decisionFacts?.session?.status === "active") {
     return "planning";
   }
   if (githubFacts.issue.state === "open" && !pr) {
@@ -485,6 +561,9 @@ export function deriveWaitingReason(context: WorkDerivationContext | ProjectWork
   }
 
   const {
+    githubFreshness,
+    runtimeFreshness,
+    decisionFreshness,
     githubFacts,
     runtimeRow,
     latestPlanTask,
@@ -493,58 +572,80 @@ export function deriveWaitingReason(context: WorkDerivationContext | ProjectWork
     latestReviewResult,
   } = ctx;
 
-  // 1. needs_human
-  if (latestPlanResult?.outcome.kind === "plan" && latestPlanResult.outcome.verdict === "needs_human") {
-    return { reason: "needs_human", since: latestPlanResult.createdAtMs };
-  }
-  if (latestReviewResult?.outcome.kind === "review" && latestReviewResult.outcome.verdict === "needs_human") {
-    return { reason: "needs_human", since: latestReviewResult.createdAtMs };
+  const isGitHubFresh = githubFreshness.status === "fresh";
+  const isRuntimeFresh = runtimeFreshness.status === "fresh";
+  const isDecisionFresh = decisionFreshness.status === "fresh";
+
+  // 1. needs_human (only from fresh Decision facts where task is completed)
+  if (isDecisionFresh) {
+    if (
+      latestPlanTask?.status === "completed" &&
+      latestPlanResult?.outcome.kind === "plan" &&
+      latestPlanResult.outcome.verdict === "needs_human"
+    ) {
+      return { reason: "needs_human", since: latestPlanResult.createdAtMs };
+    }
+    if (
+      latestReviewTask?.status === "completed" &&
+      latestReviewResult?.outcome.kind === "review" &&
+      latestReviewResult.outcome.verdict === "needs_human"
+    ) {
+      return { reason: "needs_human", since: latestReviewResult.createdAtMs };
+    }
   }
 
-  // 2. needs_clarification
-  if (latestPlanResult?.outcome.kind === "plan" && latestPlanResult.outcome.verdict === "needs_clarification") {
-    return { reason: "needs_clarification", since: latestPlanResult.createdAtMs };
+  // 2. needs_clarification (only from fresh Decision facts where task is completed)
+  if (isDecisionFresh) {
+    if (
+      latestPlanTask?.status === "completed" &&
+      latestPlanResult?.outcome.kind === "plan" &&
+      latestPlanResult.outcome.verdict === "needs_clarification"
+    ) {
+      return { reason: "needs_clarification", since: latestPlanResult.createdAtMs };
+    }
   }
 
-  // 3. retry_backoff
-  if (runtimeRow?.retry && runtimeRow.retry.retryInMs > 0) {
-    return { reason: "retry_backoff", since: runtimeRow.attempt?.startedAtMs ?? null };
+  // 3. retry_backoff (only from fresh runtime facts; attempt.startedAtMs does not prove retry start, so since is null)
+  if (isRuntimeFresh && runtimeRow?.retry && runtimeRow.retry.retryInMs > 0) {
+    return { reason: "retry_backoff", since: null };
   }
 
-  // 4. waiting_for_executor (pending tasks only)
-  if (latestPlanTask && latestPlanTask.status === "pending") {
-    return { reason: "waiting_for_executor", since: latestPlanTask.createdAtMs };
-  }
-  if (latestReviewTask && latestReviewTask.status === "pending") {
-    return { reason: "waiting_for_executor", since: latestReviewTask.createdAtMs };
-  }
-  if (phase === "ready") {
-    return { reason: "waiting_for_executor", since: latestPlanResult?.createdAtMs ?? null };
+  // 4. waiting_for_executor (pending tasks only, from fresh decision)
+  if (isDecisionFresh) {
+    if (latestPlanTask && latestPlanTask.status === "pending") {
+      return { reason: "waiting_for_executor", since: latestPlanTask.createdAtMs };
+    }
+    if (latestReviewTask && latestReviewTask.status === "pending") {
+      return { reason: "waiting_for_executor", since: latestReviewTask.createdAtMs };
+    }
+    if (phase === "ready") {
+      return { reason: "waiting_for_executor", since: latestPlanResult?.createdAtMs ?? null };
+    }
   }
 
-  // 5. waiting_for_ci
+  // 5. waiting_for_ci (only from fresh GitHub facts; observedAt does not prove CI start, so since is null)
   const pr = githubFacts?.pullRequest;
-  if (pr && pr.state === "open" && !pr.isDraft) {
+  if (isGitHubFresh && pr && pr.state === "open" && !pr.isDraft) {
     if (githubFacts?.ci?.status === "pending" || githubFacts?.ci === null) {
-      return { reason: "waiting_for_ci", since: githubFacts?.provenance.observedAt ?? null };
+      return { reason: "waiting_for_ci", since: null };
     }
   }
 
   // 6. waiting_for_review
-  if (pr && pr.state === "open" && !pr.isDraft) {
+  if (isGitHubFresh && pr && pr.state === "open" && !pr.isDraft) {
     if (githubFacts?.ci?.status === "success") {
       const reviewProj = deriveReviewProjection(ctx);
-      if (reviewProj?.approval === "pending" || latestReviewTask?.status === "running") {
+      if (reviewProj?.approval === "pending" || (isDecisionFresh && latestReviewTask?.status === "running")) {
         return {
           reason: "waiting_for_review",
-          since: latestReviewTask?.createdAtMs ?? githubFacts?.provenance.observedAt ?? null,
+          since: latestReviewTask?.createdAtMs ?? null,
         };
       }
     }
   }
 
   // 7. waiting_for_plan
-  if (phase === "planning") {
+  if (isDecisionFresh && phase === "planning") {
     if (latestPlanTask && latestPlanTask.status === "running") {
       return { reason: "waiting_for_plan", since: latestPlanTask.createdAtMs };
     }
@@ -589,19 +690,31 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
   const reviewProj = deriveReviewProjection(ctx);
   const reviewApproval = reviewProj?.approval ?? "not_approved";
 
-  // 1. needs_human
-  if (
-    latestPlanResult?.outcome.kind === "plan" &&
-    (latestPlanResult.outcome.verdict === "needs_human" || latestPlanResult.outcome.verdict === "needs_clarification")
-  ) {
-    return "needs_human";
-  }
-  if (latestReviewResult?.outcome.kind === "review" && latestReviewResult.outcome.verdict === "needs_human") {
-    return "needs_human";
+  const isDecisionFresh = decisionFreshness.status === "fresh";
+  const isRuntimeFresh = runtimeFreshness.status === "fresh";
+  const isGitHubFresh = githubFreshness.status === "fresh";
+
+  // 1. needs_human (only from fresh Decision facts where task is completed)
+  if (isDecisionFresh) {
+    if (
+      latestPlanTask?.status === "completed" &&
+      latestPlanResult?.outcome.kind === "plan" &&
+      (latestPlanResult.outcome.verdict === "needs_human" || latestPlanResult.outcome.verdict === "needs_clarification")
+    ) {
+      return "needs_human";
+    }
+    if (
+      latestReviewTask?.status === "completed" &&
+      latestReviewResult?.outcome.kind === "review" &&
+      latestReviewResult.outcome.verdict === "needs_human"
+    ) {
+      return "needs_human";
+    }
   }
 
-  // 2. failed (terminal, unrecovered)
+  // 2. failed (terminal, unrecovered, only from fresh facts)
   if (
+    isRuntimeFresh &&
     runtimeRow?.attempt?.status !== undefined &&
     (runtimeRow.attempt.status === "failed" ||
       runtimeRow.attempt.status === "timed_out" ||
@@ -611,11 +724,13 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
   ) {
     return "failed";
   }
-  if (latestPlanTask?.status === "failed" && latestPlanResult === null) {
-    return "failed";
-  }
-  if (latestReviewTask?.status === "failed" && latestReviewResult === null) {
-    return "failed";
+  if (isDecisionFresh) {
+    if (latestPlanTask?.status === "failed" && latestPlanResult === null) {
+      return "failed";
+    }
+    if (latestReviewTask?.status === "failed" && latestReviewResult === null) {
+      return "failed";
+    }
   }
 
   // 3. degraded (source health or observational inconsistencies)
@@ -635,7 +750,7 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
     return "degraded";
   }
 
-  if (githubFacts?.ci?.status === "failure" && phase !== "repair") {
+  if (isGitHubFresh && githubFacts?.ci?.status === "failure" && phase !== "repair") {
     return "degraded";
   }
 
@@ -968,9 +1083,15 @@ export function projectOperationalSnapshot(input: ProjectSnapshotInput): Operati
   const sources = [...(input.sources ?? [])].sort((a, b) =>
     `${a.source}:${a.instance}`.localeCompare(`${b.source}:${b.instance}`),
   );
-  const anomalies = [...(input.anomalies ?? [])].sort(
-    (a, b) => a.code.localeCompare(b.code) || a.detectedAt - b.detectedAt,
-  );
+  const anomalies = [...(input.anomalies ?? [])].sort((a, b) => {
+    if (a.code !== b.code) return a.code.localeCompare(b.code);
+    if (a.detectedAt !== b.detectedAt) return a.detectedAt - b.detectedAt;
+    const aKey = a.workKey ? formatWorkKey(a.workKey) : "";
+    const bKey = b.workKey ? formatWorkKey(b.workKey) : "";
+    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    if (a.severity !== b.severity) return a.severity.localeCompare(b.severity);
+    return a.message.localeCompare(b.message);
+  });
 
   const summary = deriveSnapshotSummary(work);
   const health = deriveSystemHealth({ sources, work });

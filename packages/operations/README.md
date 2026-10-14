@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，父任务 #108 的首个实现分片）。本包提供只读事实与投影契约，以及四源 reader 和单次 collector：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，再由未来 projector 推导 phase / waiting / attention 等展示语义。
+Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，以及 NEST-114 reader、NEST-115 确定性 projector，对应父任务 #108 观察面）。本包提供只读事实与投影契约、四源 reader 与单次 collector，以及纯函数确定性 projector：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，并纯函数推导 phase / waiting / attention / snapshot 等展示语义。
 
-它**不是** Control Plane：只读当前来源、不推导、不做异常检测、不提供查询服务、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出和只读采集。
+它**不是** Control Plane：纯只读推导、零 I/O、无全局时钟或变异 API、不做跨源异常检测（保留给 NEST-116）、不提供查询服务（保留给 NEST-117）、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集与纯读投影。
 
 ## Public API
 
