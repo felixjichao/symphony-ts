@@ -95,6 +95,75 @@ describe("ChatGptWebAdapter", () => {
     expect((created.handle as { conversationId?: string })?.conversationId).toBe("new-conv-uuid-1234");
   });
 
+  it("creates a rollover session when the previous conversation denial toast remains during bootstrap", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = "https://chatgpt.com/c/dead-conv-id";
+
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    const sendBtn = new MockElement("button", { "data-testid": "send-button" });
+    const staleDenial = new MockElement("div", { role: "alert" });
+    staleDenial.textContent = "你无权访问此对话。请确认已登录正确的账户。";
+    doc.body.appendChild(composer);
+    doc.body.appendChild(sendBtn);
+    doc.body.appendChild(staleDenial);
+
+    sendBtn.addEventListener("click", () => {
+      win.location.href = "https://chatgpt.com/c/new-rollover-conv-id";
+      const turn = new MockElement("article", { "data-testid": "conversation-turn-2" });
+      const msg = new MockElement("div", { "data-message-author-role": "assistant" });
+      msg.textContent = "I am ready to review plans and PRs.";
+      turn.appendChild(msg);
+      doc.body.appendChild(turn);
+    });
+
+    const brokenSession: DecisionSession = {
+      ...baseSession,
+      status: "broken-binding",
+      bindingGeneration: 1,
+    };
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      stabilizationMs: 10,
+      timeoutMs: 500,
+    });
+
+    const created = await adapter.createSession(brokenSession);
+
+    expect(created.binding.externalSessionRef).toBe("new-rollover-conv-id");
+    expect(created.binding.generation).toBe(2);
+  });
+
+  it("still rejects a new conversation denial signal that appears during bootstrap", async () => {
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    const sendBtn = new MockElement("button", { "data-testid": "send-button" });
+    doc.body.appendChild(composer);
+    doc.body.appendChild(sendBtn);
+
+    sendBtn.addEventListener("click", () => {
+      win.location.href = "https://chatgpt.com/c/new-rollover-conv-id";
+      const denial = new MockElement("div", { role: "alert" });
+      denial.textContent = "You do not have access to this conversation";
+      doc.body.appendChild(denial);
+    });
+
+    const adapter = new ChatGptWebAdapter({
+      doc: doc as unknown as Document,
+      win: win as unknown as Window,
+      checkIntervalMs: 5,
+      timeoutMs: 500,
+    });
+
+    await expect(adapter.createSession(baseSession)).rejects.toMatchObject({
+      code: "binding_broken",
+      suggestedAction: "rebind",
+    });
+  });
+
   it("waits for an asynchronously rendered send button after composer input", async () => {
     const doc = new MockDocument();
     const win = new MockWindow();
