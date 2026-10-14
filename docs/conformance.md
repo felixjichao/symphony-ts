@@ -251,7 +251,7 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | 6-path end-to-end planning workflow: ready dispatch, clarification loop, needs_human block, ChatGPT binding reuse, rollover reconstruction, requirement change review invalidation | `packages/decision/src/planning-workflow.test.ts`: Decision Planning Workflow — 6 Required Dogfood Paths |
 
 Real browser smoke: [NEST-105 process and sanitized receipts](evidence/nest105/README.md). This is adapter evidence, not the delivery review gate end-to-end acceptance.
-Scenario A dead route and permission-denial divergence recovery is verified via unit and regression fixtures in `apps/chatgpt-web/test/scenario-a-resume.test.ts`; live browser dogfood acceptance on ChatGPT Web with operator login session remains pending under NEST-120.
+Scenario A dead route and permission-denial divergence recovery is verified via unit and regression fixtures in `apps/chatgpt-web/test/scenario-a-resume.test.ts`; live browser dogfood acceptance on ChatGPT Web with operator login session passed under NEST-120 / GitHub #120 on 2026-10-14 (PR #128, `main` = `afb29ab`): the inaccessible conversation was detected, the binding rolled over generation 1 → 2, the stale claim/lease was fenced, and the original task was reclaimed under generation 2 and completed with no manual re-Start or refresh.
 
 Real recovered Review delivery integration: [NEST-103 exact-SHA CI/review/repair/merge/cleanup evidence](evidence/nest103/README.md). Requires the recorded runtime fixes and PR #105 browser fixes; does not claim an uninterrupted run or a green default root gate.
 
