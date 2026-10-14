@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USERSCRIPT_BANNER = `// ==UserScript==
 // @name         Symphony Decision Driver (ChatGPT Web)
 // @namespace    https://github.com/felixjichao/symphony-ts
-// @version      0.1.0
+// @version      0.1.1
 // @description  Tampermonkey driver for Symphony Decision execution via ChatGPT Web
 // @author       Symphony Contributors
 // @match        https://chatgpt.com/*

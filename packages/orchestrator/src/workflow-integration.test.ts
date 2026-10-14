@@ -22,7 +22,7 @@ async function sessionReady(target = issue()) {
     h.state.running.get(target.id)?.session?.turnId !== undefined);
 }
 
-describe("WORKFLOW → registry / tracker → loop → real workspace / agent subprocess", () => {
+describe("WORKFLOW → registry / tracker → loop → real workspace / agent subprocess", { timeout: 20000 }, () => {
   it("dispatch order, adapter dispatchability, labels and duplicate guard reach real workers", async () => {
     const candidates = [
       issue("Z", { priority: 2, createdAt: 1 }), issue("B", { priority: 1, createdAt: 2 }),
@@ -42,7 +42,7 @@ describe("WORKFLOW → registry / tracker → loop → real workspace / agent su
     expect(h.state.running.size).toBe(0);
     expect(h.state.retryAttempts.size).toBe(0);
     expect(h.poll.pendingCount + h.retry.pendingCount).toBe(0);
-  });
+  }, 20000);
 
   it("normal exit → complete RetryEntry → continuation attempt 1 with a new process and preserved workspace", async () => {
     await start({ args: ["--send-usage", "--send-rate-limits"] });

@@ -30,6 +30,7 @@ import {
   buildConversationUrl,
   detectAuthRequired,
   detectConversationNotFound,
+  snapshotConversationNotFoundSignals,
   isConversationAssociatedWithBootstrap,
 } from "./probes";
 import {
@@ -178,9 +179,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     baselineTurn?: HTMLElement | null | undefined;
     signal?: AbortSignal | undefined;
     onPoll?: (() => void) | undefined;
+    ignoredConversationNotFoundSignals?: ReadonlySet<string> | undefined;
   }): Promise<string> {
     const doc = this.docSupplier();
-    if (detectConversationNotFound(doc)) {
+    if (detectConversationNotFound(doc, options.ignoredConversationNotFoundSignals)) {
       throw new DecisionAdapterError({
         code: "binding_broken",
         message: "Conversation not found during bootstrap response wait",
@@ -204,9 +206,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
       onPoll: options.onPoll,
+      ignoredConversationNotFoundSignals: options.ignoredConversationNotFoundSignals,
     });
 
-    if (detectConversationNotFound(doc)) {
+    if (detectConversationNotFound(doc, options.ignoredConversationNotFoundSignals)) {
       throw new DecisionAdapterError({
         code: "binding_broken",
         message: "Conversation not found after bootstrap response wait",
@@ -288,6 +291,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     session: DecisionSession,
     options: { signal?: AbortSignal | undefined } = {}
   ): Promise<DecisionSessionCreationResult> {
+    // A page-level denial toast belongs to the previous conversation and may remain visible
+    // while ChatGPT opens a fresh conversation. Ignore only matching signals present before
+    // this creation attempt; new errors during bootstrap remain fatal.
+    const ignoredConversationNotFoundSignals = snapshotConversationNotFoundSignals(this.docSupplier());
     const win = this.winSupplier();
     const origin = (win?.location as { origin?: string })?.origin || this.origin;
     const newChatUrl = new URL("/", origin).href;
@@ -399,6 +406,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       baselineTurn,
       signal: options.signal,
       onPoll: recordCreatedConversationRef,
+      ignoredConversationNotFoundSignals,
     });
 
     // The reply must have been read from the conversation this attempt created.

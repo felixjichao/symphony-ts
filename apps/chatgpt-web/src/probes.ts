@@ -217,6 +217,7 @@ export interface WaitForCompletionOptions {
   readonly stabilizationMs?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
+  readonly ignoredConversationNotFoundSignals?: ReadonlySet<string> | undefined;
   /**
    * Invoked once per poll iteration, including when the signal is already aborted. A
    * callback may throw to fail the wait immediately (e.g. a fail-closed check).
@@ -251,7 +252,7 @@ export async function waitForStreamingCompletion(
       throw new Error(`Timeout waiting for ChatGPT response after ${timeoutMs}ms`);
     }
 
-    if (detectConversationNotFound(doc)) {
+    if (detectConversationNotFound(doc, options.ignoredConversationNotFoundSignals)) {
       throw new DecisionAdapterError({
         code: "binding_broken",
         message: "Conversation not found while waiting for ChatGPT response",
@@ -453,6 +454,10 @@ export function textMatchesNotFoundPattern(text: string): boolean {
   return false;
 }
 
+function normalizeNotFoundSignal(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function isMessageContainerElement(el: Element): boolean {
   if (!el) return false;
   const tagName = el.tagName ? el.tagName.toLowerCase() : "";
@@ -520,8 +525,9 @@ export function getTextExcludingMessages(node: Node | Element): string {
   return node.textContent || "";
 }
 
-export function detectConversationNotFound(doc: Document = document): boolean {
-  if (!doc) return false;
+export function snapshotConversationNotFoundSignals(doc: Document = document): ReadonlySet<string> {
+  const signals = new Set<string>();
+  if (!doc) return signals;
 
   // 1. Explicit authentic error UI elements / testids outside chat messages always indicate conversation failure,
   // even if the page shell retains a disabled/dangling composer element!
@@ -534,7 +540,7 @@ export function detectConversationNotFound(doc: Document = document): boolean {
     const candidates = doc.querySelectorAll ? Array.from(doc.querySelectorAll(selector)) : [];
     for (const el of candidates) {
       if (!isInsideMessageContainer(el)) {
-        return true;
+        signals.add(`selector:${selector}:${normalizeNotFoundSignal(getTextExcludingMessages(el))}`);
       }
     }
   }
@@ -564,26 +570,43 @@ export function detectConversationNotFound(doc: Document = document): boolean {
       }
       const text = getTextExcludingMessages(el);
       if (textMatchesNotFoundPattern(text)) {
-        return true;
+        signals.add(`text:${selector}:${normalizeNotFoundSignal(text)}`);
       }
     }
   }
 
-  // 3. If composer element is present without authentic error UI outside messages, it is a healthy interactive conversation
+  // 3. Fallback full-page text matching for minimal error pages (no composer or messages).
+  if (!findComposerElement(doc) && !hasMessageContainers(doc)) {
+    const text = doc.body?.textContent || "";
+    if (textMatchesNotFoundPattern(text)) {
+      signals.add(`body:${normalizeNotFoundSignal(text)}`);
+    }
+  }
+
+  return signals;
+}
+
+export function detectConversationNotFound(
+  doc: Document = document,
+  ignoredSignals: ReadonlySet<string> = new Set()
+): boolean {
+  if (!doc) return false;
+
+  for (const signal of snapshotConversationNotFoundSignals(doc)) {
+    if (!ignoredSignals.has(signal)) {
+      return true;
+    }
+  }
+
+  // If a composer is present without an unrecognized error signal, the page is interactive.
   if (findComposerElement(doc)) {
     return false;
   }
 
-  // 4. Exclude chat message content / containers from general text matching:
-  // Text inside message articles or turn containers is user/assistant prose, not a page error!
+  // Exclude chat message content / containers from general text matching.
   if (hasMessageContainers(doc)) {
     return false;
   }
 
-  // 5. Fallback full-page text matching for minimal error pages (when no composer and no message containers)
-  const text = doc.body?.textContent || "";
-  if (textMatchesNotFoundPattern(text)) {
-    return true;
-  }
   return false;
 }
