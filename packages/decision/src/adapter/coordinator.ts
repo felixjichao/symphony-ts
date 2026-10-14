@@ -397,6 +397,63 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
     };
   };
 
+  const performSessionRebind = async (
+    err: DecisionAdapterError
+  ): Promise<TaskExecutionOutcome | null> => {
+    if (!controller.rebindSession) {
+      return null;
+    }
+    if (controller.breakBinding) {
+      try {
+        await controller.breakBinding(currentSession.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          expectedGeneration: currentSession.bindingGeneration,
+        });
+      } catch {
+        // Ignore CAS / store errors here; rebindSession will enforce authority
+      }
+    }
+    let created: DecisionSessionCreationResult;
+    try {
+      created = await adapter.createSession(currentSession, { signal });
+    } catch (createErr) {
+      return await recordFailure(createErr);
+    }
+    const expectedGen =
+      typeof err.observedGeneration === "number" &&
+      Number.isSafeInteger(err.observedGeneration) &&
+      err.observedGeneration >= 0
+        ? err.observedGeneration
+        : currentSession.bindingGeneration;
+    const opKey = options.operationKeyPrefix
+      ? `${options.operationKeyPrefix}:${currentSession.id}:rebind:${expectedGen + 1}`
+      : undefined;
+    const reboundRes = await controller.rebindSession(currentSession.id, {
+      adapter: created.binding.adapter,
+      externalSessionRef: created.binding.externalSessionRef,
+      resumeUri: created.binding.resumeUri,
+      expectedGeneration: expectedGen,
+      ...(opKey ? { operationKey: opKey } : {}),
+      owner: lease.owner,
+      token: lease.token,
+      generation: lease.generation,
+    });
+    currentSession =
+      reboundRes && typeof reboundRes === "object" && "session" in reboundRes
+        ? (reboundRes as { session: DecisionSession }).session
+        : (reboundRes as DecisionSession);
+
+    return {
+      status: "superseded",
+      session: currentSession,
+      error: new DecisionConflictError(
+        `Task "${task.id}" lease invalidated by session rebind (generation ${currentSession.bindingGeneration})`
+      ),
+    };
+  };
+
   // 1. Inspect and ensure session binding
   let inspection: DecisionBindingInspectionResult;
   try {
@@ -486,55 +543,8 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
         err.suggestedAction === "rebind" &&
         controller.rebindSession
       ) {
-        if (controller.breakBinding) {
-          try {
-            await controller.breakBinding(currentSession.id, {
-              owner: lease.owner,
-              token: lease.token,
-              generation: lease.generation,
-              expectedGeneration: currentSession.bindingGeneration,
-            });
-          } catch {
-            // Ignore CAS / store errors here; rebindSession will enforce authority
-          }
-        }
-        let created: DecisionSessionCreationResult;
-        try {
-          created = await adapter.createSession(currentSession, { signal });
-        } catch (createErr) {
-          return await recordFailure(createErr);
-        }
-        const expectedGen =
-          typeof err.observedGeneration === "number" &&
-          Number.isSafeInteger(err.observedGeneration) &&
-          err.observedGeneration >= 0
-            ? err.observedGeneration
-            : currentSession.bindingGeneration;
-        const opKey = options.operationKeyPrefix
-          ? `${options.operationKeyPrefix}:${currentSession.id}:rebind:${expectedGen + 1}`
-          : undefined;
-        const reboundRes = await controller.rebindSession(currentSession.id, {
-          adapter: created.binding.adapter,
-          externalSessionRef: created.binding.externalSessionRef,
-          resumeUri: created.binding.resumeUri,
-          expectedGeneration: expectedGen,
-          ...(opKey ? { operationKey: opKey } : {}),
-          owner: lease.owner,
-          token: lease.token,
-          generation: lease.generation,
-        });
-        currentSession =
-          reboundRes && typeof reboundRes === "object" && "session" in reboundRes
-            ? (reboundRes as { session: DecisionSession }).session
-            : (reboundRes as DecisionSession);
-
-        return {
-          status: "superseded",
-          session: currentSession,
-          error: new DecisionConflictError(
-            `Task "${task.id}" lease invalidated by session rebind (generation ${currentSession.bindingGeneration})`
-          ),
-        };
+        const rebindOutcome = await performSessionRebind(err);
+        if (rebindOutcome) return rebindOutcome;
       }
       return await recordFailure(err);
     }
@@ -563,6 +573,18 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
       }
     );
   } catch (err) {
+    const isPreSubmitRebind =
+      err instanceof DecisionAdapterError &&
+      err.suggestedAction === "rebind" &&
+      (err.promptSubmitted === false ||
+        (typeof err.details === "object" &&
+          err.details !== null &&
+          (err.details as { promptSubmitted?: unknown }).promptSubmitted === false));
+
+    if (isPreSubmitRebind && controller.rebindSession) {
+      const rebindOutcome = await performSessionRebind(err);
+      if (rebindOutcome) return rebindOutcome;
+    }
     return await recordFailure(err);
   }
 

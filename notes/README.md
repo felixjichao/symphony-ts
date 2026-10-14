@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Navigating checkpoint convergence and temporary route isolation](accepted/architecture/2026-10-13-navigating-checkpoint-convergence-and-temporary-route-isolation.md) — 导航 checkpoint 跨页面失败收敛与临时路由隔离契约：持久化累计重试与 deadline 收敛、不可恢复会话自动 rebind（N -> N+1）、客户端临时路由隔离与正式 UUID 捕获、immutable association 与 fail-closed 防护（NEST-120 / #122）。
 - [Operational source readers](accepted/architecture/2026-10-13-operational-source-readers.md) — 只读来源 ports、partial collection、freshness、GitHub 原子 HEAD/CI 和 Decision committed-state 白名单视图（NEST-114 / #110）。
 
 - [Binding rollover recovery and stale-task fencing](accepted/architecture/2026-10-12-binding-rollover-and-stale-task-fencing.md) — session 换绑与失效会话恢复契约：coordinator 捕获 `resumeSession` 并通过 rebind 恢复、rebind 时将 active claims 释放回 pending 并进行 generation 围栏防护、ChatGPT userscript 基于 sessionStorage 保持跨页面导航/刷新自动恢复（NEST-121 / #122）。

@@ -10,10 +10,12 @@ import {
   type DecisionContextBundle,
   type DecisionResult,
   type DecisionAdapterErrorCode,
+  type DecisionSessionCreationResult,
   DecisionAdapterError,
 } from "@symphony/domain/decision";
 import {
   executeTaskWithAdapter,
+  DecisionConflictError,
   type DecisionTaskController,
   type TaskExecutionOutcome,
   type TaskExecutionSupersededOutcome,
@@ -33,7 +35,8 @@ import {
   findStopButton,
   getAllAssistantTurns,
   buildConversationUrl,
-  extractConversationIdFromUrl,
+  extractFormalConversationIdFromUrl,
+  isTemporaryConversationRoute,
   waitForStreamingCompletion,
   detectConversationNotFound,
   detectAuthRequired,
@@ -65,6 +68,8 @@ export interface DecisionTabDriverOptions {
   readonly heartbeatIntervalMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  readonly navigationTimeoutMs?: number | undefined;
+  readonly maxNavigationAttempts?: number | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 }
 
@@ -76,6 +81,8 @@ export class DecisionTabDriver implements DecisionTaskController {
   readonly heartbeatIntervalMs: number;
   readonly pollIntervalMs: number;
   readonly defaultClaimTtlMs: number;
+  readonly navigationTimeoutMs: number;
+  readonly maxNavigationAttempts: number;
   readonly onError?: ((error: Error) => void) | undefined;
 
   private isRunning = false;
@@ -93,6 +100,8 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 20_000;
     this.pollIntervalMs = options.pollIntervalMs ?? 5_000;
     this.defaultClaimTtlMs = options.defaultClaimTtlMs ?? 120_000;
+    this.navigationTimeoutMs = options.navigationTimeoutMs ?? 180_000;
+    this.maxNavigationAttempts = options.maxNavigationAttempts ?? 3;
     this.onError = options.onError;
 
     if (this.adapter instanceof ChatGptWebAdapter) {
@@ -321,8 +330,20 @@ export class DecisionTabDriver implements DecisionTaskController {
         readonly expectedGeneration: number;
         readonly operationKey?: string | undefined;
       };
+      navigationStartedAtMs?: number;
+      navigationDeadlineMs?: number;
+      navigationAttempts?: number;
     }
   ): void {
+    const isNavigating = step === "navigating";
+    const navStarted =
+      meta?.navigationStartedAtMs ?? (isNavigating ? Date.now() : undefined);
+    const navDeadline =
+      meta?.navigationDeadlineMs ??
+      (isNavigating ? Date.now() + this.navigationTimeoutMs : undefined);
+    const navAttempts =
+      meta?.navigationAttempts ?? (isNavigating ? 1 : undefined);
+
     const cp: DriverCheckpoint = {
       schemaVersion: 1,
       tabId: this.checkpointStore.tabId,
@@ -340,6 +361,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
       ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
       ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+      ...(navStarted !== undefined ? { navigationStartedAtMs: navStarted } : {}),
+      ...(navDeadline !== undefined ? { navigationDeadlineMs: navDeadline } : {}),
+      ...(navAttempts !== undefined ? { navigationAttempts: navAttempts } : {}),
       ...(meta?.rebindState !== undefined
         ? {
             rebindState: meta.rebindState.operationKey
@@ -367,6 +391,9 @@ export class DecisionTabDriver implements DecisionTaskController {
         readonly expectedGeneration: number;
         readonly operationKey?: string | undefined;
       };
+      navigationStartedAtMs?: number;
+      navigationDeadlineMs?: number;
+      navigationAttempts?: number;
     }
   ): void {
     let rebindState = meta?.rebindState;
@@ -379,15 +406,42 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
     const existing = this.checkpointStore.get();
     if (existing) {
+      const isSameTarget =
+        Boolean(meta?.targetUri && existing.targetUri === meta.targetUri) ||
+        Boolean(meta?.targetConvId && existing.targetConvId === meta.targetConvId);
+      const isEnteringNavigating = step === "navigating" && existing.step !== "navigating" && !isSameTarget;
+      const navStarted =
+        meta?.navigationStartedAtMs ??
+        (isEnteringNavigating ? Date.now() : (existing.navigationStartedAtMs ?? (step === "navigating" ? Date.now() : undefined)));
+      const navDeadline =
+        meta?.navigationDeadlineMs ??
+        (isEnteringNavigating
+          ? Date.now() + this.navigationTimeoutMs
+          : (existing.navigationDeadlineMs ?? (step === "navigating" ? Date.now() + this.navigationTimeoutMs : undefined)));
+      const navAttempts =
+        meta?.navigationAttempts ??
+        (isEnteringNavigating
+          ? 1
+          : (isSameTarget && existing.step !== "navigating"
+              ? (existing.navigationAttempts ?? 1) + 1
+              : existing.navigationAttempts));
+
       this.checkpointStore.set({
         ...existing,
         step,
         savedAtMs: Date.now(),
         ...(meta?.candidateResult !== undefined ? { candidateResult: meta.candidateResult } : {}),
         ...(meta?.baselineCount !== undefined ? { baselineCount: meta.baselineCount } : {}),
-        ...(meta?.targetUri !== undefined ? { targetUri: meta.targetUri } : {}),
-        ...(meta?.targetConvId !== undefined ? { targetConvId: meta.targetConvId } : {}),
+        ...(meta?.targetUri !== undefined
+          ? { targetUri: meta.targetUri }
+          : (existing.targetUri !== undefined ? { targetUri: existing.targetUri } : {})),
+        ...(meta?.targetConvId !== undefined
+          ? { targetConvId: meta.targetConvId }
+          : (existing.targetConvId !== undefined ? { targetConvId: existing.targetConvId } : {})),
         ...(rebindState !== undefined ? { rebindState } : {}),
+        ...(navStarted !== undefined ? { navigationStartedAtMs: navStarted } : {}),
+        ...(navDeadline !== undefined ? { navigationDeadlineMs: navDeadline } : {}),
+        ...(navAttempts !== undefined ? { navigationAttempts: navAttempts } : {}),
       });
       return;
     }
@@ -823,8 +877,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       );
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
         renewedExpiry = hbRes.expiresAtMs;
+        const currentStored = this.checkpointStore.get() ?? cp;
         this.checkpointStore.set({
-          ...cp,
+          ...currentStored,
           leaseExpiresAtMs: renewedExpiry,
           savedAtMs: Date.now(),
         });
@@ -864,9 +919,70 @@ export class DecisionTabDriver implements DecisionTaskController {
       const win =
         (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getWindow() : null) ??
         (globalThis as unknown as { window?: Window }).window;
-      if (win && cp.targetUri && win.location && win.location.href !== cp.targetUri) {
-        win.location.assign(cp.targetUri);
+      const doc =
+        (this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() : null) ??
+        (globalThis as unknown as { document?: Document }).document;
+
+      const currentUrl = win?.location?.href ?? "";
+      const currentConvId = currentUrl ? extractFormalConversationIdFromUrl(currentUrl) : null;
+      const isAtTarget =
+        (cp.targetConvId && currentConvId === cp.targetConvId) ||
+        (cp.targetUri && currentUrl === cp.targetUri);
+
+      const isNotFound = doc ? detectConversationNotFound(doc) : false;
+      if (isNotFound) {
+        return await this.rebindUnrecoverableSession(
+          taskRes.task,
+          sessionRes.session,
+          lease,
+          `ChatGPT conversation "${cp.targetConvId ?? cp.targetUri ?? "unknown"}" is unrecoverable (conversation not found)`
+        );
       }
+
+      if (!isAtTarget) {
+        const attempts = cp.navigationAttempts ?? 1;
+        const startedAt = cp.navigationStartedAtMs ?? cp.savedAtMs ?? Date.now();
+        const deadline = cp.navigationDeadlineMs ?? (startedAt + this.navigationTimeoutMs);
+        const isBudgetExhausted = attempts >= this.maxNavigationAttempts || Date.now() >= deadline;
+
+        if (isBudgetExhausted) {
+          return await this.rebindUnrecoverableSession(
+            taskRes.task,
+            sessionRes.session,
+            lease,
+            `ChatGPT conversation "${cp.targetConvId ?? cp.targetUri ?? "unknown"}" is unrecoverable (navigation budget exhausted after ${attempts} attempts)`
+          );
+        }
+
+        const nextAttempts = attempts + 1;
+        const currentStored = this.checkpointStore.get() ?? cp;
+        this.checkpointStore.set({
+          ...currentStored,
+          leaseExpiresAtMs: renewedExpiry,
+          navigationAttempts: nextAttempts,
+          navigationStartedAtMs: startedAt,
+          navigationDeadlineMs: deadline,
+          savedAtMs: Date.now(),
+        });
+
+        if (win && cp.targetUri && win.location && win.location.href !== cp.targetUri) {
+          win.location.assign(cp.targetUri);
+        }
+
+        const afterAssignUrl = win?.location?.href ?? "";
+        const afterAssignConvId = afterAssignUrl ? extractFormalConversationIdFromUrl(afterAssignUrl) : null;
+        const nowAtTarget =
+          (cp.targetConvId && afterAssignConvId === cp.targetConvId) ||
+          (cp.targetUri && afterAssignUrl === cp.targetUri);
+
+        if (!nowAtTarget) {
+          return null;
+        }
+      }
+
+      // Do NOT demote navigating checkpoint to "claimed" solely on URL match, which
+      // would erase the accumulated navigation attempt budget and deadlines before
+      // the adapter confirms route stability and composer readiness.
     }
 
     if (cp.step === "bootstrap_submitting") {
@@ -1185,11 +1301,11 @@ export class DecisionTabDriver implements DecisionTaskController {
           });
         }
 
-        convId = win?.location ? extractConversationIdFromUrl(win.location.href) ?? "" : "";
+        convId = win?.location ? extractFormalConversationIdFromUrl(win.location.href) ?? "" : "";
         if (!convId) {
           throw new DecisionAdapterError({
             code: "execution_failed",
-            message: "Failed to extract conversation ID after bootstrap waiting recovery",
+            message: "Failed to extract authoritative conversation ID after bootstrap waiting recovery",
             suggestedAction: "retry",
           });
         }
@@ -1243,7 +1359,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     // The reply was read while the tab must still show the conversation this attempt
     // created: a route change during the wait must never re-target the binding.
     const recordedConvId = cp.targetConvId ?? cp.rebindState?.newExternalSessionRef ?? null;
-    if (!recordedConvId || convId !== recordedConvId) {
+    if (!recordedConvId || isTemporaryConversationRoute(recordedConvId) || convId !== recordedConvId) {
       const failRes = await this.submitFailure(task.id, {
         owner: lease.owner,
         token: lease.token,
@@ -1312,6 +1428,96 @@ export class DecisionTabDriver implements DecisionTaskController {
           `Task "${task.id}" lease invalidated by session rebind (generation ${updatedSession.bindingGeneration})`
         ),
       };
+    }
+  }
+
+  private async rebindUnrecoverableSession(
+    task: DecisionTask,
+    session: DecisionSession,
+    lease: DecisionLease,
+    reason: string
+  ): Promise<TaskExecutionOutcome> {
+    this.activeTask = task;
+    this.activeSession = session;
+    this.activeLease = lease;
+    this.activeAbortController = new AbortController();
+    const signal = this.activeAbortController.signal;
+
+    this.startHeartbeat(task, lease, () => {
+      this.activeAbortController?.abort();
+    });
+
+    try {
+      try {
+        await this.breakBinding(session.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          expectedGeneration: session.bindingGeneration,
+        });
+      } catch {
+        // CAS/conflict ignored; rebindSession will enforce authority
+      }
+
+      let created: DecisionSessionCreationResult;
+      try {
+        created = await this.adapter.createSession(session, { signal });
+      } catch (createErr: unknown) {
+        const failure = this.classifyRecoveryFailure(createErr, {
+          message: `Failed to create new session during unrecoverable rebind: ${reason}`,
+        });
+        const failRes = await this.submitFailure(task.id, {
+          owner: lease.owner,
+          token: lease.token,
+          generation: lease.generation,
+          error: failure.error,
+          details: failure.details,
+          retryable: failure.retryable,
+        }).catch(() => null);
+
+        this.checkpointStore.delete();
+        if (failRes) {
+          return {
+            status: "failed",
+            failure: failRes.failure,
+            receipt: failRes.receipt,
+            superseded: failRes.superseded,
+            session,
+            error: createErr instanceof Error ? createErr : new Error(String(createErr)),
+          };
+        }
+        throw createErr;
+      }
+
+      const expectedGen = session.bindingGeneration;
+      const opKey = `driver:${this.ownerId}:${session.id}:rebind:${expectedGen + 1}`;
+
+      const reboundSession = await this.rebindSession(session.id, {
+        adapter: created.binding.adapter,
+        externalSessionRef: created.binding.externalSessionRef,
+        resumeUri: created.binding.resumeUri,
+        expectedGeneration: expectedGen,
+        operationKey: opKey,
+        owner: lease.owner,
+        token: lease.token,
+        generation: lease.generation,
+      });
+
+      this.checkpointStore.delete();
+
+      return {
+        status: "superseded",
+        session: reboundSession,
+        error: new DecisionConflictError(
+          `Task "${task.id}" lease invalidated by unrecoverable conversation rebind (${reason}, generation ${reboundSession.bindingGeneration})`
+        ),
+      };
+    } finally {
+      this.stopHeartbeat();
+      this.activeAbortController = null;
+      this.activeTask = null;
+      this.activeSession = null;
+      this.activeLease = null;
     }
   }
 
