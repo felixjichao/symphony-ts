@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，父任务 #108 的首个实现分片）。本包提供只读事实与投影契约，以及四源 reader 和单次 collector：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，再由未来 projector 推导 phase / waiting / attention 等展示语义。
+Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，以及 NEST-114 reader、NEST-115 确定性 projector，对应父任务 #108 观察面）。本包提供只读事实与投影契约、四源 reader 与单次 collector，以及纯函数确定性 projector：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，并纯函数推导 phase / waiting / attention / snapshot 等展示语义。
 
-它**不是** Control Plane：只读当前来源、不推导、不做异常检测、不提供查询服务、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出和只读采集。
+它**不是** Control Plane：纯只读推导、零 I/O、无全局时钟或变异 API、不做跨源异常检测（保留给 NEST-116）、不提供查询服务（保留给 NEST-117）、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集与纯读投影。
 
 ## Public API
 
@@ -33,7 +33,7 @@ import {
 
 ## Extension points
 
-source reader 已实现，后续 projector 在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、observability、tracker 是真实入口测试的 devDependencies。
+source reader 与 deterministic projector 均已在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、observability、tracker 是真实入口测试的 devDependencies。
 
 ## Readers
 
@@ -51,8 +51,29 @@ const facts = await collectOperationFacts(readers);
 
 GitHub `context` 必须是可信 DeliveryContext，已知 PR 可传 `{ prNumber }`；否则完整分页按机器 marker 查关联，不按标题猜测。CI 仅表示 observed rollup，不表示 merge authorization。Runtime 用已有 SnapshotResult，允许按 issueId 注入可信 scope mapping，无法关联的行保留 workKey=null。Decision 必须是宿主已打开的 service，不触发 lease 清理。Executor port 须报告独立 inventory 时间；没有显式 heartbeat/status 时为 null/unknown，不使用 lease 或 Codex 事件冒充。
 
+## Projectors
+
+纯函数推导层（NEST-115 / #111）：无副作用、无 I/O、无全局时钟调用，将归一化 facts 转化为面向消费者的展示投影：
+
+```ts
+import {
+  deriveWorkPhase, deriveWaitingReason, deriveAttention, deriveReviewProjection,
+  projectWork, projectExecutor, deriveSystemHealth, deriveSnapshotSummary,
+  projectOperationalSnapshot,
+} from "@symphony/operations";
+
+const work = projectWork({ collection, workKey });
+const snapshot = projectOperationalSnapshot({ generatedAt, work: [work], sources, executors: [] });
+```
+
+- **Phase 推导**：以 fresh GitHub 终态优先得到 `completed`；活动执行按前置 CI failure / `changes_requested` 识别为 `repair` 或 `coding`；`landing` 严格要求 open PR + exact HEAD CI success + `approved_current_head`；GitHub 故障或 stale 时安全降级为 `unknown`。
+- **Review 安全**：精确比较 HEAD SHA（40 字符小写十六进制）；对历史 SHA 的 approve 保留为 `approved_stale_head`，不推出当前 HEAD 获批。
+- **正交性**：`WorkPhase` 与 `AttentionState` 正交。`completed` 清除 waiting，但来源健康问题独立通过 `degraded` attention 呈现。
+- **System Health & Summary**：Summary 计数器（active, waiting, retrying, needsHuman）为正交交叉统计；系统健康度区分 `healthy`、`degraded`、`unavailable`、`unknown`，无可用来源且有明确失败报告 `unavailable`。
+- **确定性与无写回**：输入数组无论换序与否产生逐字节一致的输出，禁止任何 `setWorkPhase` / `setWaitingReason` 等写回突变。
+
 ## Known limitations
 
-没有持久缓存、后台轮询、source timeout wrapper、投影推导、异常检测、query service 或 transport。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md)。
+没有持久缓存、后台轮询、source timeout wrapper、跨源异常检测（NEST-116）、query service 或 transport。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md) 与 [deterministic projectors note](../../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md)。
 
-运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集与边界），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。
+运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集、推导器与边界），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。

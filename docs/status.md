@@ -49,7 +49,8 @@
 
 - NEST-113 / GitHub #109: provider-neutral readonly facts and projection contracts for the Operational Read Model in `@symphony/domain` (`operations*.ts`) — WorkKey identity, GitHub/runtime/Decision/executor facts with provenance, fresh/stale/unavailable/unknown freshness, `WorkProjection`, `OperationalSnapshot`, derived-only phase/waiting/attention/health, and exact-HEAD review projection — surfaced through the new `@symphony/operations` facade package (domain-only dependency).
 - NEST-114 / GitHub #110: four read-only source readers and one-shot partial collection, explicit source freshness, atomic PR HEAD/observed-CI read, committed Decision observation with expired leases/historical targets, and injected executor inventory (unconfigured by default; no inferred heartbeat).
-- Phase/waiting derivation, anomaly detection, in-process query service, CLI/Dashboard/HTTP and any mutation path remain unimplemented. [Boundary note](../notes/accepted/architecture/2026-10-11-operational-read-model-contracts.md); evidence in [conformance](conformance.md#operational-read-model-contracts-nest-113--109).
+- NEST-115 / GitHub #111: pure, deterministic work and system projectors in `@symphony/operations` — derived-only `WorkPhase`, `WaitingReason`, `AttentionState`, `SystemHealth`, review approval safety with exact HEAD verification, partial facts handling, and snapshot cross-counts.
+- Cross-source anomaly detection (NEST-116), in-process query service, CLI/Dashboard/HTTP and any mutation path remain unimplemented. [Projector note](../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md); evidence in [conformance](conformance.md#deterministic-work-and-system-projectors-nest-115--111).
 
 ## 已完成能力
 

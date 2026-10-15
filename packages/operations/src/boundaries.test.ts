@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import ts from "typescript";
 import { expect, it } from "vitest";
 
-it("operations readers stay read-only with domain imports and no I/O/timer capabilities", () => {
+it("operations readers and projectors stay read-only with domain imports and no I/O/timer/mutation capabilities", () => {
   for (const name of readdirSync(new URL(".", import.meta.url)).filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))) {
     const source = readFileSync(new URL(name, import.meta.url), "utf8");
     const ast = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
@@ -22,7 +22,7 @@ it("operations readers stay read-only with domain imports and no I/O/timer capab
       ts.forEachChild(node, visit);
     };
     visit(ast);
-    expect(source).not.toMatch(/\b(ensurePr|landPr|getNextTask|transaction|claimTask|heartbeatTask|submitResult|setPhase|derivePhase|deriveHealth)\s*\(/);
+    expect(source).not.toMatch(/\b(ensurePr|landPr|getNextTask|transaction|claimTask|heartbeatTask|submitResult|setPhase|setWorkPhase|setWaitingReason|setAttention|setHealth)\s*\(/);
   }
   for (const pkgName of ["tracker", "decision", "orchestrator", "agent", "observability"]) {
     const scan = (directory: URL): void => {
