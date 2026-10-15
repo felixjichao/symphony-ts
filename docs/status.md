@@ -8,10 +8,11 @@
 
 ## 当前 posture
 
-- 开发主线：`main`。当前最新里程碑提交为 `afb29ab`（PR #128，Decision Plane extension 真实浏览器 rollover 验收收口）；GitHub Delivery MVP 的 dogfood 里程碑提交为 `e6f8e25`（PR #88）。
+- 开发主线：`main`。当前最新里程碑提交为 `29840f9`（PR #133，Operational Read Model / Observation Plane query service 与集成验收收口）；GitHub Delivery MVP 的 dogfood 里程碑提交为 `e6f8e25`（PR #88）。
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
+- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
@@ -116,6 +117,7 @@
 | M5 | Orchestrator：状态机、polling / scheduling / reconciliation、retry（§7、§8、§14、§16） | ✅ 已完成 |
 | M6 | Observability + Status Surface + CLI 装配与进程生命周期（§13、§17.7、§18.1） | ✅ 已完成 |
 | GitHub Delivery MVP | issue → Codex → PR → CI → auto merge → close → cleanup 闭环（#78–#83） | ✅ 已完成 |
+| Operational Read Model | provider-neutral facts/readers/projectors/anomalies/in-process query service（#108–#113） | ✅ 已完成 |
 | M7 | 安全 / 运维 hardening（§15）、可选 SSH worker 扩展（Appendix A） | ⏳ 未开始 |
 
 > 逐 SPEC capability 状态仍以 [conformance.md](conformance.md) 为准；本表只记录里程碑级进度，是本项目唯一的里程碑进度表。
