@@ -1483,9 +1483,15 @@ export function projectOperationalSnapshot(input: ProjectSnapshotInput): Operati
   const executors = (input.executors ?? [])
     .map((e) => ("lastHeartbeatAtMs" in e ? projectExecutor(e) : e))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const sources = [...(input.sources ?? [])].sort((a, b) =>
-    `${a.source}:${a.instance}`.localeCompare(`${b.source}:${b.instance}`),
-  );
+  const sources = [...(input.sources ?? [])].sort((a, b) => {
+    const keyA = `${a.source}:${a.instance}`;
+    const keyB = `${b.source}:${b.instance}`;
+    if (keyA !== keyB) return keyA.localeCompare(keyB);
+    const workA = a.workKey ? formatWorkKey(a.workKey) : "";
+    const workB = b.workKey ? formatWorkKey(b.workKey) : "";
+    if (workA !== workB) return workA.localeCompare(workB);
+    return a.freshness.status.localeCompare(b.freshness.status);
+  });
   const anomalies = sortAndDeduplicateAnomalies(input.anomalies ?? []);
 
   const summary = deriveSnapshotSummary(work);

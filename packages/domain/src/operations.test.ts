@@ -325,6 +325,16 @@ describe("Operational snapshot", () => {
     expect(partial.sources.map(source => source.freshness.status)).toEqual(["fresh", "fresh", "unavailable"]);
     expect(partial.health).toBe("degraded");
   });
+
+  it("supports workKey scoping on SourceStatus for multi-work isolation", () => {
+    const statusWithKey: SourceStatus = {
+      source: "github",
+      instance: "github:main",
+      freshness: { status: "fresh", observedAt: 1, lastAttemptAt: 1 },
+      workKey: key,
+    };
+    expect(statusWithKey.workKey).toEqual(key);
+  });
 });
 
 describe("OperationalAnomaly contracts & catalog (NEST-116)", () => {

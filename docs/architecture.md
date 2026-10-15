@@ -37,7 +37,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
 | `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
-| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader / 单次 collector；后续 projector 落点 | domain（Decision / observability / tracker 为测试 devDependencies） |
+| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader、确定性 projector、跨源异常检测与进程内查询服务 | domain（Decision / observability / tracker 为测试 devDependencies） |
 | `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务、执行器适配层 | domain |
 | `apps/chatgpt-web` | —（Decision 执行器） | Decision 扩展 | ChatGPT Web 执行器适配器与 Tampermonkey 浏览器决策驱动器 | domain, decision |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
@@ -53,7 +53,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
 
-`operations` 是 **Observation Plane / 只读投影层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader 与单次 collector 在 `@symphony/operations` 实现，后续 projector 在同一边界落地，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
+`operations` 是 **Observation Plane / 只读投影与查询层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader、确定性 projector、跨源异常检测与进程内查询服务（`createOperationalQueryService`）在 `@symphony/operations` 实现，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
 
 ## 历史：M0 协议栈 scaffold 已删除
 
