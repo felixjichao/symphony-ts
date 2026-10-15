@@ -41,6 +41,11 @@ import {
   type WorkProjectionWorkItem,
   type WorkWaiting,
 } from "@symphony/domain";
+import {
+  detectWorkAnomalies,
+  hasWorkAnomalies,
+  sortAndDeduplicateAnomalies,
+} from "./anomalies";
 
 // ---------------------------------------------------------------------------
 // Run attempt activity helper
@@ -69,20 +74,24 @@ export function isRunAttemptActive(status: RunAttemptStatus | null | undefined):
 
 export interface WorkDerivationContext {
   readonly workKey: WorkKey;
-  readonly collection?: OperationFactCollection;
-  readonly github?: OperationSourceResult<GitHubWorkFacts> | null;
-  readonly runtime?: OperationSourceResult<readonly RuntimeWorkFacts[]> | RuntimeWorkFacts | null;
-  readonly decision?: OperationSourceResult<DecisionWorkFacts> | null;
-  readonly executor?: OperationSourceResult<readonly ExecutorFacts[]> | null;
+  readonly collection?: OperationFactCollection | undefined;
+  readonly github?: OperationSourceResult<GitHubWorkFacts> | null | undefined;
+  readonly runtime?: OperationSourceResult<readonly RuntimeWorkFacts[]> | RuntimeWorkFacts | null | undefined;
+  readonly decision?: OperationSourceResult<DecisionWorkFacts> | null | undefined;
+  readonly executor?: OperationSourceResult<readonly ExecutorFacts[]> | null | undefined;
+  readonly anomalies?: readonly OperationalAnomaly[] | undefined;
+  readonly detectedAt?: UtcTimestampMs | undefined;
 }
 
 export interface ProjectWorkInput {
-  readonly workKey?: WorkKey;
-  readonly collection?: OperationFactCollection;
-  readonly github?: OperationSourceResult<GitHubWorkFacts> | null;
-  readonly runtime?: OperationSourceResult<readonly RuntimeWorkFacts[]> | RuntimeWorkFacts | null;
-  readonly decision?: OperationSourceResult<DecisionWorkFacts> | null;
-  readonly executor?: OperationSourceResult<readonly ExecutorFacts[]> | null;
+  readonly workKey?: WorkKey | undefined;
+  readonly collection?: OperationFactCollection | undefined;
+  readonly github?: OperationSourceResult<GitHubWorkFacts> | null | undefined;
+  readonly runtime?: OperationSourceResult<readonly RuntimeWorkFacts[]> | RuntimeWorkFacts | null | undefined;
+  readonly decision?: OperationSourceResult<DecisionWorkFacts> | null | undefined;
+  readonly executor?: OperationSourceResult<readonly ExecutorFacts[]> | null | undefined;
+  readonly anomalies?: readonly OperationalAnomaly[] | undefined;
+  readonly detectedAt?: UtcTimestampMs | undefined;
 }
 
 interface NormalizedWorkContext {
@@ -97,6 +106,9 @@ interface NormalizedWorkContext {
   readonly latestPlanResult: DecisionResultFacts | null;
   readonly latestReviewTask: (DecisionTaskFacts & { readonly kind: "review" }) | null;
   readonly latestReviewResult: DecisionResultFacts | null;
+  readonly anomalies?: readonly OperationalAnomaly[] | undefined;
+  readonly detectedAt?: UtcTimestampMs | undefined;
+  readonly rawInput: WorkDerivationContext | ProjectWorkInput | NormalizedWorkContext;
 }
 
 const UNKNOWN_FRESHNESS: SourceFreshness = {
@@ -274,6 +286,9 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
       ) ?? null)
     : null;
 
+  const anomalies = "anomalies" in input && Array.isArray(input.anomalies) ? input.anomalies : undefined;
+  const detectedAt = "detectedAt" in input && typeof input.detectedAt === "number" ? input.detectedAt : undefined;
+
   return {
     workKey,
     githubFreshness,
@@ -286,6 +301,9 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
     latestPlanResult,
     latestReviewTask,
     latestReviewResult,
+    anomalies,
+    detectedAt,
+    rawInput: input,
   };
 }
 
@@ -759,6 +777,14 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
     return "degraded";
   }
 
+  // Cross-source anomaly check (NEST-116)
+  if (ctx.anomalies && ctx.anomalies.length > 0) {
+    return "degraded";
+  }
+  if (!ctx.anomalies && hasWorkAnomalies(ctx.rawInput)) {
+    return "degraded";
+  }
+
   // 4. waiting
   if (waiting !== null && phase !== "completed") {
     return "waiting";
@@ -772,93 +798,209 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
 // Single Work Projection
 // ---------------------------------------------------------------------------
 
-function buildEvidence(ctx: NormalizedWorkContext): readonly ProjectionEvidence[] {
+function buildEvidence(
+  ctx: NormalizedWorkContext,
+  phase?: WorkPhase,
+  waiting?: WorkWaiting | null,
+  attention?: AttentionState,
+): readonly ProjectionEvidence[] {
   const evidence: ProjectionEvidence[] = [];
-  const { githubFacts, runtimeRow, decisionFacts, latestPlanTask, latestPlanResult, latestReviewTask, latestReviewResult } = ctx;
+  const {
+    workKey,
+    githubFacts,
+    githubFreshness,
+    runtimeFreshness,
+    runtimeRow,
+    decisionFacts,
+    decisionFreshness,
+    latestPlanTask,
+    latestPlanResult,
+    latestReviewTask,
+    latestReviewResult,
+  } = ctx;
 
   if (githubFacts) {
+    const isCompletedIssue = phase === "completed" && githubFacts.issue.state === "closed";
     evidence.push({
       source: "github",
       code: `issue_${githubFacts.issue.state}`,
       detail: githubFacts.issue.url,
       observedAt: githubFacts.provenance.observedAt,
+      instance: githubFacts.provenance.instance,
+      freshnessStatus: githubFreshness.status,
+      ruleId: isCompletedIssue ? "phase_completed" : undefined,
+      role: githubFreshness.status !== "fresh" ? "discarded_freshness" : isCompletedIssue ? "supporting" : "historical",
+      workKey,
+      field: "issue.state",
+      value: githubFacts.issue.state,
     });
     if (githubFacts.pullRequest) {
+      const isCompletedPr = phase === "completed" && githubFacts.pullRequest.state === "merged";
+      const isLandingPr = phase === "landing";
       evidence.push({
         source: "github",
         code: `pr_${githubFacts.pullRequest.state}`,
         detail: `PR #${githubFacts.pullRequest.number}`,
         observedAt: githubFacts.provenance.observedAt,
+        instance: githubFacts.provenance.instance,
+        freshnessStatus: githubFreshness.status,
+        ruleId: isCompletedPr ? "phase_completed" : isLandingPr ? "phase_landing" : undefined,
+        role: githubFreshness.status !== "fresh" ? "discarded_freshness" : (isCompletedPr || isLandingPr) ? "supporting" : "historical",
+        workKey,
+        headSha: githubFacts.pullRequest.headSha,
+        field: "pullRequest.state",
+        value: githubFacts.pullRequest.state,
       });
     }
     if (githubFacts.ci) {
+      const isLandingCi = phase === "landing";
+      const isWaitingCi = waiting?.reason === "waiting_for_ci";
       evidence.push({
         source: "github",
         code: `ci_${githubFacts.ci.status}`,
         detail: githubFacts.ci.headSha ? `HEAD ${githubFacts.ci.headSha.slice(0, 7)}` : null,
         observedAt: githubFacts.provenance.observedAt,
+        instance: githubFacts.provenance.instance,
+        freshnessStatus: githubFreshness.status,
+        ruleId: isLandingCi ? "phase_landing" : isWaitingCi ? "waiting_waiting_for_ci" : undefined,
+        role: githubFreshness.status !== "fresh" ? "discarded_freshness" : (isLandingCi || isWaitingCi) ? "supporting" : "historical",
+        workKey,
+        headSha: githubFacts.ci.headSha ?? undefined,
+        field: "ci.status",
+        value: githubFacts.ci.status,
       });
     }
   }
 
   if (runtimeRow) {
     if (runtimeRow.attempt) {
+      const isRunning = isRunAttemptActive(runtimeRow.attempt.status);
+      const isCoding = phase === "coding" || phase === "repair";
       evidence.push({
         source: "runtime",
         code: `attempt_${runtimeRow.attempt.status}`,
         detail: `attempt ${runtimeRow.attempt.attempt ?? 1}`,
         observedAt: runtimeRow.attempt.startedAtMs,
+        instance: runtimeRow.provenance.instance,
+        freshnessStatus: runtimeFreshness.status,
+        ruleId: isCoding && isRunning ? (phase === "repair" ? "phase_repair" : "phase_coding") : undefined,
+        role: runtimeFreshness.status !== "fresh" ? "discarded_freshness" : isRunning ? "supporting" : "historical",
+        workKey: runtimeRow.workKey ?? workKey,
+        field: "attempt.status",
+        value: runtimeRow.attempt.status,
       });
     }
     if (runtimeRow.retry) {
+      const isRetry = waiting?.reason === "retry_backoff";
       evidence.push({
         source: "runtime",
         code: "retry_scheduled",
         detail: `retryInMs: ${runtimeRow.retry.retryInMs}`,
         observedAt: runtimeRow.provenance.observedAt,
+        instance: runtimeRow.provenance.instance,
+        freshnessStatus: runtimeFreshness.status,
+        ruleId: isRetry ? "waiting_retry_backoff" : undefined,
+        role: runtimeFreshness.status !== "fresh" ? "discarded_freshness" : isRetry ? "supporting" : "historical",
+        workKey: runtimeRow.workKey ?? workKey,
+        field: "retry.retryInMs",
+        value: runtimeRow.retry.retryInMs,
       });
     }
   }
 
   if (decisionFacts) {
     if (decisionFacts.session) {
+      const isPlanningSession = phase === "planning";
       evidence.push({
         source: "decision",
         code: `session_${decisionFacts.session.status}`,
         detail: decisionFacts.session.adapter,
         observedAt: decisionFacts.session.updatedAtMs,
+        instance: decisionFacts.provenance.instance,
+        freshnessStatus: decisionFreshness.status,
+        ruleId: isPlanningSession ? "phase_planning" : undefined,
+        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isPlanningSession ? "supporting" : "historical",
+        workKey,
+        sessionId: decisionFacts.session.sessionId,
+        field: "session.status",
+        value: decisionFacts.session.status,
       });
     }
     if (latestPlanTask) {
+      const isPlanningTask = phase === "planning" || phase === "ready";
       evidence.push({
         source: "decision",
         code: `plan_task_${latestPlanTask.status}`,
         detail: `rev ${latestPlanTask.revision}`,
         observedAt: latestPlanTask.updatedAtMs,
+        instance: decisionFacts.provenance.instance,
+        freshnessStatus: decisionFreshness.status,
+        ruleId: isPlanningTask ? (phase === "ready" ? "phase_ready" : "phase_planning") : undefined,
+        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isPlanningTask ? "supporting" : "historical",
+        workKey,
+        taskId: latestPlanTask.taskId,
+        revision: latestPlanTask.revision,
+        field: "task.status",
+        value: latestPlanTask.status,
       });
     }
     if (latestPlanResult && latestPlanResult.outcome.kind === "plan") {
+      const isVerdictSupporting = waiting?.reason === "needs_human" || waiting?.reason === "needs_clarification" || phase === "ready";
       evidence.push({
         source: "decision",
         code: `plan_verdict_${latestPlanResult.outcome.verdict}`,
         detail: `rev ${latestPlanResult.revision}`,
         observedAt: latestPlanResult.createdAtMs,
+        instance: decisionFacts.provenance.instance,
+        freshnessStatus: decisionFreshness.status,
+        ruleId: isVerdictSupporting ? (phase === "ready" ? "phase_ready" : `waiting_${waiting?.reason}`) : undefined,
+        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isVerdictSupporting ? "supporting" : "historical",
+        workKey,
+        taskId: latestPlanResult.taskId,
+        revision: latestPlanResult.revision,
+        field: "result.outcome.verdict",
+        value: latestPlanResult.outcome.verdict,
       });
     }
     if (latestReviewTask) {
+      const isReviewing = phase === "review" || waiting?.reason === "waiting_for_review";
       evidence.push({
         source: "decision",
         code: `review_task_${latestReviewTask.status}`,
         detail: `rev ${latestReviewTask.revision}`,
         observedAt: latestReviewTask.updatedAtMs,
+        instance: decisionFacts.provenance.instance,
+        freshnessStatus: decisionFreshness.status,
+        ruleId: isReviewing ? (phase === "review" ? "phase_review" : "waiting_waiting_for_review") : undefined,
+        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isReviewing ? "supporting" : "historical",
+        workKey,
+        taskId: latestReviewTask.taskId,
+        revision: latestReviewTask.revision,
+        target: latestReviewTask.target,
+        headSha: latestReviewTask.target.headSha,
+        field: "task.status",
+        value: latestReviewTask.status,
       });
     }
     if (latestReviewResult && latestReviewResult.outcome.kind === "review") {
+      const isApprovedLanding = phase === "landing";
+      const isNeedsHuman = attention === "needs_human";
       evidence.push({
         source: "decision",
         code: `review_verdict_${latestReviewResult.outcome.verdict}`,
         detail: `rev ${latestReviewResult.revision}`,
         observedAt: latestReviewResult.createdAtMs,
+        instance: decisionFacts.provenance.instance,
+        freshnessStatus: decisionFreshness.status,
+        ruleId: isApprovedLanding ? "phase_landing" : isNeedsHuman ? "attention_needs_human" : undefined,
+        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : (isApprovedLanding || isNeedsHuman) ? "supporting" : "historical",
+        workKey,
+        taskId: latestReviewResult.taskId,
+        revision: latestReviewResult.revision,
+        target: latestReviewResult.outcome.target,
+        headSha: latestReviewResult.outcome.target.headSha,
+        field: "result.outcome.verdict",
+        value: latestReviewResult.outcome.verdict,
       });
     }
   }
@@ -937,7 +1079,7 @@ export function projectWork(input: ProjectWorkInput | WorkDerivationContext | No
     decision: decisionFreshness,
   };
 
-  const evidence = buildEvidence(ctx);
+  const evidence = buildEvidence(ctx, phase, waiting, attention);
 
   return {
     key: workKey,
@@ -954,6 +1096,33 @@ export function projectWork(input: ProjectWorkInput | WorkDerivationContext | No
     evidence,
   };
 }
+
+/** Pure entry point returning both work projection and anomalies for NEST-117 composition. */
+export interface ProjectWorkWithAnomaliesInput extends ProjectWorkInput {
+  readonly detectedAt: UtcTimestampMs;
+}
+
+export interface WorkProjectionWithAnomalies {
+  readonly projection: WorkProjection;
+  readonly anomalies: readonly OperationalAnomaly[];
+}
+
+export function projectWorkWithAnomalies(input: ProjectWorkWithAnomaliesInput): WorkProjectionWithAnomalies {
+  const anomalies = detectWorkAnomalies({
+    ...input,
+    detectedAt: input.detectedAt,
+  });
+  const projection = projectWork({
+    ...input,
+    anomalies,
+  });
+  return {
+    projection,
+    anomalies,
+  };
+}
+
+export const deriveWorkProjectionWithAnomalies = projectWorkWithAnomalies;
 
 /** Alias for projectWork to align with SPEC derivation naming. */
 export const deriveWorkProjection = projectWork;
@@ -1034,10 +1203,11 @@ export function deriveSnapshotSummary(work: readonly WorkProjection[]): Operatio
 export function deriveSystemHealth(input: {
   readonly sources: readonly SourceStatus[];
   readonly work: readonly WorkProjection[];
+  readonly anomalies?: readonly OperationalAnomaly[];
 }): SystemHealth {
-  const { sources, work } = input;
+  const { sources, work, anomalies } = input;
   if (sources.length === 0) {
-    return work.length === 0 ? "healthy" : "unknown";
+    return work.length === 0 && (!anomalies || anomalies.length === 0) ? "healthy" : "unknown";
   }
 
   const allUnknown = sources.every((s) => s.freshness.status === "unknown");
@@ -1055,8 +1225,9 @@ export function deriveSystemHealth(input: {
   const hasWorkIssue = work.some(
     (w) => w.attention === "degraded" || w.attention === "needs_human" || w.attention === "failed",
   );
+  const hasAnomalies = (anomalies?.length ?? 0) > 0;
 
-  if (hasUnavailable || hasStale || hasWorkIssue) {
+  if (hasUnavailable || hasStale || hasWorkIssue || hasAnomalies) {
     return "degraded";
   }
 
@@ -1084,18 +1255,10 @@ export function projectOperationalSnapshot(input: ProjectSnapshotInput): Operati
   const sources = [...(input.sources ?? [])].sort((a, b) =>
     `${a.source}:${a.instance}`.localeCompare(`${b.source}:${b.instance}`),
   );
-  const anomalies = [...(input.anomalies ?? [])].sort((a, b) => {
-    if (a.code !== b.code) return a.code.localeCompare(b.code);
-    if (a.detectedAt !== b.detectedAt) return a.detectedAt - b.detectedAt;
-    const aKey = a.workKey ? formatWorkKey(a.workKey) : "";
-    const bKey = b.workKey ? formatWorkKey(b.workKey) : "";
-    if (aKey !== bKey) return aKey.localeCompare(bKey);
-    if (a.severity !== b.severity) return a.severity.localeCompare(b.severity);
-    return a.message.localeCompare(b.message);
-  });
+  const anomalies = sortAndDeduplicateAnomalies(input.anomalies ?? []);
 
   const summary = deriveSnapshotSummary(work);
-  const health = deriveSystemHealth({ sources, work });
+  const health = deriveSystemHealth({ sources, work, anomalies });
 
   return {
     schemaVersion: OPERATIONAL_SNAPSHOT_SCHEMA_VERSION,

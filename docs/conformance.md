@@ -306,5 +306,25 @@ Pure, deterministic projection layer adjacent to §13. Converts normalized facts
 | Purity, immutability (deep freeze), and deterministic array shuffle invariance | same suite: Purity, immutability & deterministic array order |
 | Zero I/O, domain-only dependencies, and absence of mutation APIs (`setWorkPhase`, `setWaitingReason`, etc.) | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) and query transport remain unverified / unimplemented.
+Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) has moved to the next section; query transport remains unverified / unimplemented.
+
+## Cross-source anomaly detection and projection explanations (NEST-116 / #112)
+
+Pure, deterministic cross-source anomaly detection and structured projection evidence breadcrumbs adjacent to §13. Detects domain-level inconsistencies across GitHub, runtime, Decision Plane, and executor observations without source writes, timers, or I/O. [Anomaly note](../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md).
+
+| Capability | Evidence |
+|---|---|
+| Domain contracts for 8 canonical anomalies, severity classification, catalog and structured `ProjectionEvidence` | `packages/domain/src/operations.test.ts`: Operational anomaly catalog and structured evidence contracts |
+| Review target/approval/result HEAD mismatch detection with exact SHA verification | `packages/operations/src/anomalies.test.ts`: review anomalies |
+| Runtime execution on terminal work (closed/merged PR) detection | same suite: execution_on_terminal_work |
+| Decision active task without session, on completed session, or orphaned result detection | same suite: decision session and task anomalies |
+| Conflicting active review tasks detection | same suite: conflicting_active_review_tasks |
+| Multi-work collection aggregation, workKey scoping, and isolation across distinct work items | same suite: multi-work collection aggregation and workKey scoping |
+| Safe behavior on stale or unavailable inputs (no false-positive anomalies) | same suite: safe behavior on stale or unavailable sources |
+| Deterministic sorting, tie-breaking, and evidence array shuffle invariance | same suite: deterministic sorting, tie-breaking, and shuffle invariance |
+| Attention degradation to `degraded` and system health degradation when anomalies exist | same suite: integration with deriveAttention and deriveSystemHealth |
+| Zero I/O, domain-only imports, and absence of mutation APIs | `packages/operations/src/boundaries.test.ts` |
+
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) and query transport remain unverified / unimplemented.
+
 
