@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Operational query service and integration acceptance](accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md) — 进程内只读查询服务契约：公共查询接口（`getOperationalSnapshot`、`listWork`、`getWork`、`listExecutors`）、一轮有界装配、部分失败与多 work 隔离、显式 WorkKey 作用域边界、确定性排序与无后台轮询/持久缓存（NEST-117 / #113，闭环父任务 #108）。
 - [Cross-source anomaly detection and projection explanations](accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md) — 跨源异常检测与投影解释契约：8 类跨源领域异常（GitHub、runtime、Decision、executor）、结构化投影证据（`ProjectionEvidence` breadcrumbs）、attention/system health 降级联动、stale/unavailable 安全守卫与数组/证据换序不变性（NEST-116 / #112）。
 - [Deterministic work and system projectors](accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md) — 确定性展示推导层契约：纯函数推导 work phase、waiting reason、attention 与 system health、多源 review 安全与 exact HEAD 比较、正交维度与 cross-count summary、数组换序不变性（NEST-115 / #111）。
 - [Navigating checkpoint convergence and temporary route isolation](accepted/architecture/2026-10-13-navigating-checkpoint-convergence-and-temporary-route-isolation.md) — 导航 checkpoint 跨页面失败收敛与临时路由隔离契约：持久化累计重试与 deadline 收敛、不可恢复会话自动 rebind（N -> N+1）、客户端临时路由隔离与正式 UUID 捕获、immutable association 与 fail-closed 防护（NEST-120 / #122）。

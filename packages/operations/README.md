@@ -4,7 +4,7 @@
 
 Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，NEST-114 reader、NEST-115 确定性 projector，以及 NEST-116 跨源异常检测与投影解释，对应父任务 #108 观察面）。本包提供只读事实与投影契约、四源 reader 与单次 collector、纯函数确定性 projector，以及跨源异常检测：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，并纯函数推导 phase / waiting / attention / snapshot 等展示语义与 8 类领域异常。
 
-它**不是** Control Plane：纯只读推导、零 I/O、无全局时钟或变异 API、不提供查询服务（保留给 NEST-117）、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集、纯读投影与异常检测。
+它**不是** Control Plane：纯只读推导、零状态变异 API、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。本包提供稳定的进程内运行态查询服务 `createOperationalQueryService` 作为 Observation Plane 单一读表面，供后续 CLI、Dashboard 等消费者读取统一快照。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集、纯读投影、异常检测与查询服务组合。
 
 ## Public API
 
@@ -102,8 +102,43 @@ const work = projectWorkWithAnomalies({ collection, workKey, detectedAt });
 - **安全守卫**：缺失、stale 或 unavailable 的源安全略过，绝不产生误报领域异常。
 - **联动降级**：存在异常时，`deriveAttention` 降级为 `degraded`（保留 `needs_human` / `failed` 优先级）；`deriveSystemHealth` 不得为 `healthy`。
 
+## Query Service
+
+进程内只读查询服务（NEST-117 / #113，父任务 #108 闭环交付）：将只读 source readers、确定性 projectors、跨源异常检测与 freshness 处理组装为统一的观测出口，供未来 CLI status、JSON API、Dashboard 和告警系统直接消费：
+
+```ts
+import {
+  createOperationalQueryService,
+  type OperationalQueryService,
+} from "@symphony/operations";
+
+const queryService: OperationalQueryService = createOperationalQueryService({
+  clock: () => Date.now(),
+  workKeys: [githubWorkKey("owner", "repo", 1)],
+  getGitHubReader: (workKey) => githubReaders.get(formatWorkKey(workKey)),
+  getDecisionReader: (workKey) => decisionReaders.get(formatWorkKey(workKey)),
+  runtimeReader,
+  executorReader,
+});
+
+// 系统级只读快照（含 health, summary, work, executors, sources, anomalies）
+const snapshot = await queryService.getOperationalSnapshot();
+
+// 统一投影规则驱动的列表与单个查询
+const workList = await queryService.listWork();
+const singleWork = await queryService.getWork("owner/repo#1"); // or githubWorkKey(...)
+
+// 执行器观测状态（不与宿主/机器耦合）
+const executors = await queryService.listExecutors();
+```
+
+- **统一装配与确定性**：`getOperationalSnapshot()`、`listWork()`、`getWork(workKey)`、`listExecutors()` 均由同一有界装配流程驱动。每次查询为独立一轮并发读取，全局源（runtime、executor）每轮仅采集一次，按 workKey 读取 GitHub 与 Decision；无后台轮询、无持久缓存、无调度器或写回路径。
+- **作用域与标识语义**：由宿主显式注入 canonical `workKeys`（或动态 provider 函数）；非法的 key 校验报错（`TypeError`），有效但不在范围内的 key 在 `getWork` 中返回 `null`。无法关联的 runtime 记录不制造 work 身份。
+- **部分失败容忍**：单个 work 的来源失败仅使该 work 的 `attention` 降级为 `degraded`，并不使整个查询崩溃或隐藏该 work 项；系统健康度真实反映局部失败；所有来源均不可用时系统健康度呈现 `unavailable`。
+- **执行器解耦**：`listExecutors()` 暴露执行器状态与所绑定的 `currentWorkKey`，不将任务或 work 身份绑定到机器、host 或会话 handle 上。
+
 ## Known limitations
 
-没有持久缓存、后台轮询、source timeout wrapper、query service（NEST-117）或 transport。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md)、[deterministic projectors note](../../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md) 与 [anomaly detection note](../../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md)。
+没有持久缓存、后台轮询、source timeout wrapper 或网络 transport（HTTP/SSE/WebSocket）。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。Web Dashboard、TUI、历史事件分析与变异命令（cancel/retry/force-merge）属于未来独立演进，不在本观察面范围内。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md)、[deterministic projectors note](../../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md)、[anomaly detection note](../../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md) 与 [operational query service note](../../notes/accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md)。
 
-运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集、推导器、异常检测与边界），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。
+运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集、推导器、异常检测、边界与查询服务集成），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。

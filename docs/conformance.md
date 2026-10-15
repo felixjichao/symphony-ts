@@ -325,6 +325,26 @@ Pure, deterministic cross-source anomaly detection and structured projection evi
 | Attention degradation to `degraded` and system health degradation when anomalies exist | same suite: integration with deriveAttention and deriveSystemHealth |
 | Zero I/O, domain-only imports, and absence of mutation APIs | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) and query transport remain unverified / unimplemented.
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) has moved to the next section; query transport remains unverified / unimplemented.
+
+## Operational query service and integration acceptance (NEST-117 / #113)
+
+Stable in-process Operational Query Service and full multi-source integration acceptance closing parent epic GitHub #108. Composes source readers, deterministic projectors, anomaly detection, and freshness handling into a single read surface for future CLI, JSON API, Dashboard, and alerting consumers. [Query service note](../notes/accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md).
+
+| Capability | Evidence |
+|---|---|
+| Stable in-process query API (`getOperationalSnapshot`, `listWork`, `getWork`, `listExecutors`) | `packages/operations/src/query.test.ts`: OperationalQueryService API contracts |
+| `getOperationalSnapshot` returning health, summary, work, executors, sources, and anomalies | same suite: scenario 1–9 and API contracts |
+| `listWork` and `getWork` backed by the same projection rules and canonical scope | same suite: OperationalQueryService API contracts |
+| `listExecutors` exposing executor state without coupling work identity to hosts/machines | same suite: listExecutors projection |
+| Partial source failure tolerance returning degraded output rather than failing query | same suite: scenario 7 and multi-work isolation |
+| End-to-end integration covering normal execution, waiting for CI, waiting for review, retry, needs-human, stale source, source unavailable, review SHA mismatch, and terminal work | same suite: scenario 1–9 |
+| Query determinism, stable sorting, and input order invariance | same suite: query results are deterministic and order-invariant |
+| Safe error and scope handling (valid unknown key returns null, invalid key throws TypeError) | same suite: getWork return values and error handling |
+| Consumer mutation isolation on returned snapshot and projections | same suite: ensures mutation isolation on returned objects |
+| Real Decision store and readers end-to-end integration | same suite: integrates end-to-end with real DurableDecisionStore and DecisionService |
+| Observation Plane boundary (read-only, no scheduler, no mutation, domain-only imports) | `packages/operations/src/boundaries.test.ts` |
+
+Validation: `npm test -w @symphony/operations`, `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Transports (HTTP/SSE/WebSocket) and Web Dashboard remain out of scope for #108 acceptance.
 
 

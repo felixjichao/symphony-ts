@@ -108,6 +108,7 @@ export interface SourceStatus {
   readonly source: OperationSourceKind;
   readonly instance: string;
   readonly freshness: SourceFreshness;
+  readonly workKey?: WorkKey | null | undefined;
 }
 
 // ---------------------------------------------------------------------------

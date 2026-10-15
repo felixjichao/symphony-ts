@@ -85,5 +85,6 @@ export type {
 export * from "./readers";
 export * from "./projectors";
 export * from "./anomalies";
+export * from "./query";
 export type { OperationSourceResult, OperationFactCollection, DecisionObservation, GitHubObservation } from "@symphony/domain";
 
