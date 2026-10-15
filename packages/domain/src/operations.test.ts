@@ -12,7 +12,10 @@ import { describe, expect, it } from "vitest";
 import {
   ATTENTION_STATES,
   EXACT_HEAD_SHA_PATTERN,
+  OPERATIONAL_ANOMALY_CATALOG,
+  OPERATIONAL_ANOMALY_CODES,
   OPERATIONAL_SNAPSHOT_SCHEMA_VERSION,
+  PROJECTION_EVIDENCE_ROLES,
   SYSTEM_HEALTH_STATES,
   WAITING_REASONS,
   WORK_PHASES,
@@ -26,7 +29,9 @@ import {
   type ExecutorFacts,
   type FactProvenance,
   type GitHubWorkFacts,
+  type OperationalAnomaly,
   type OperationalSnapshot,
+  type ProjectionEvidence,
   type ReviewProjection,
   type RuntimeWorkFacts,
   type SourceFreshness,
@@ -321,3 +326,69 @@ describe("Operational snapshot", () => {
     expect(partial.health).toBe("degraded");
   });
 });
+
+describe("OperationalAnomaly contracts & catalog (NEST-116)", () => {
+  it("defines 8 stable, machine-readable anomaly codes and catalog definitions", () => {
+    expect(OPERATIONAL_ANOMALY_CODES).toHaveLength(8);
+    expect(OPERATIONAL_ANOMALY_CATALOG).toHaveLength(8);
+
+    const codes = OPERATIONAL_ANOMALY_CATALOG.map(item => item.code);
+    expect(codes).toEqual(OPERATIONAL_ANOMALY_CODES);
+
+    for (const def of OPERATIONAL_ANOMALY_CATALOG) {
+      expect(["warning", "error"]).toContain(def.severity);
+      expect(def.description.length).toBeGreaterThan(10);
+    }
+
+    const warningCodes = OPERATIONAL_ANOMALY_CATALOG.filter(d => d.severity === "warning").map(d => d.code);
+    const errorCodes = OPERATIONAL_ANOMALY_CATALOG.filter(d => d.severity === "error").map(d => d.code);
+
+    expect(warningCodes).toContain("review_target_head_mismatch");
+    expect(warningCodes).toContain("execution_on_terminal_work");
+    expect(errorCodes).toContain("review_approval_head_mismatch");
+    expect(errorCodes).toContain("review_result_target_mismatch");
+    expect(errorCodes).toContain("decision_active_task_without_session");
+    expect(errorCodes).toContain("decision_active_task_on_completed_session");
+    expect(errorCodes).toContain("decision_result_without_task");
+    expect(errorCodes).toContain("conflicting_active_review_tasks");
+  });
+
+  it("supports structured evidence with source provenance and explanation roles", () => {
+    expect(PROJECTION_EVIDENCE_ROLES).toEqual(["supporting", "superseding", "discarded_freshness", "historical"]);
+
+    const evidenceItem: ProjectionEvidence = {
+      source: "decision",
+      code: "review_task_target",
+      detail: "rev 1 target",
+      observedAt: 1_700_000_000_000,
+      instance: "decision:sqlite",
+      freshnessStatus: "fresh",
+      ruleId: "review_target_head_mismatch",
+      role: "supporting",
+      workKey: key,
+      taskId: "task-1",
+      revision: 1,
+      target: { repository: "owner/repo", prNumber: 42, headSha: HEAD_A },
+      headSha: HEAD_A,
+      field: "task.target.headSha",
+      value: HEAD_A,
+      entityTimestampMs: 1_699_999_999_000,
+    };
+
+    const anomaly: OperationalAnomaly = {
+      code: "review_target_head_mismatch",
+      severity: "warning",
+      workKey: key,
+      message: "Target mismatch",
+      detectedAt: 1_700_000_000_100,
+      evidence: [evidenceItem],
+    };
+
+    expect(anomaly.code).toBe("review_target_head_mismatch");
+    expect(anomaly.severity).toBe("warning");
+    expect(anomaly.evidence?.[0]?.role).toBe("supporting");
+    expect(anomaly.evidence?.[0]?.headSha).toBe(HEAD_A);
+    expect(anomaly.evidence?.[0]?.entityTimestampMs).toBe(1_699_999_999_000);
+  });
+});
+

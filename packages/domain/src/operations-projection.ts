@@ -21,6 +21,7 @@ import type {
   GitHubPullRequestStateFacts,
   OperationSourceKind,
   SourceFreshness,
+  SourceFreshnessStatus,
   SourceStatus,
   WorkKey,
 } from "./operations-facts";
@@ -163,6 +164,19 @@ export interface WorkFreshness {
   readonly decision: SourceFreshness;
 }
 
+export type ProjectionEvidenceRole =
+  | "supporting"
+  | "superseding"
+  | "discarded_freshness"
+  | "historical";
+
+export const PROJECTION_EVIDENCE_ROLES = [
+  "supporting",
+  "superseding",
+  "discarded_freshness",
+  "historical",
+] as const satisfies readonly ProjectionEvidenceRole[];
+
 /** A single explainability breadcrumb supporting a future `explainProjection(workKey)`. */
 export interface ProjectionEvidence {
   readonly source: OperationSourceKind;
@@ -170,6 +184,23 @@ export interface ProjectionEvidence {
   readonly code: string;
   readonly detail: string | null;
   readonly observedAt: UtcTimestampMs | null;
+
+  // Structured provenance/explanation fields (NEST-116):
+  readonly instance?: string | undefined;
+  readonly freshnessStatus?: SourceFreshnessStatus | undefined;
+  readonly ruleId?: string | undefined;
+  readonly role?: ProjectionEvidenceRole | undefined;
+  readonly workKey?: WorkKey | undefined;
+  readonly sessionId?: string | undefined;
+  readonly taskId?: string | undefined;
+  readonly resultId?: string | undefined;
+  readonly revision?: number | undefined;
+  readonly target?: DecisionReviewTarget | undefined;
+  readonly headSha?: string | undefined;
+  readonly field?: string | undefined;
+  readonly value?: string | number | boolean | null | undefined;
+  /** Timestamp of the underlying entity event (e.g. startedAtMs, updatedAtMs, createdAtMs), distinct from source observedAt. */
+  readonly entityTimestampMs?: UtcTimestampMs | undefined;
 }
 
 /** Consumer-facing read-only projection of one work item. */
@@ -208,13 +239,90 @@ export interface ExecutorProjection {
   readonly currentWork: WorkKey | null;
 }
 
-/** A detected cross-source inconsistency; detection itself is out of NEST-113 scope. */
+/**
+ * Canonical anomaly codes detecting impossible or suspicious combinations across GitHub,
+ * runtime, Decision Plane, and executor facts (NEST-116 / GitHub #112).
+ */
+export type OperationalAnomalyCode =
+  | "review_target_head_mismatch"
+  | "review_approval_head_mismatch"
+  | "review_result_target_mismatch"
+  | "execution_on_terminal_work"
+  | "decision_active_task_without_session"
+  | "decision_active_task_on_completed_session"
+  | "decision_result_without_task"
+  | "conflicting_active_review_tasks";
+
+export const OPERATIONAL_ANOMALY_CODES = [
+  "review_target_head_mismatch",
+  "review_approval_head_mismatch",
+  "review_result_target_mismatch",
+  "execution_on_terminal_work",
+  "decision_active_task_without_session",
+  "decision_active_task_on_completed_session",
+  "decision_result_without_task",
+  "conflicting_active_review_tasks",
+] as const satisfies readonly OperationalAnomalyCode[];
+
+export type OperationalAnomalySeverity = "warning" | "error";
+
+export interface OperationalAnomalyDefinition {
+  readonly code: OperationalAnomalyCode;
+  readonly severity: OperationalAnomalySeverity;
+  readonly description: string;
+}
+
+export const OPERATIONAL_ANOMALY_CATALOG: readonly OperationalAnomalyDefinition[] = [
+  {
+    code: "review_target_head_mismatch",
+    severity: "warning",
+    description: "Active review task targets a SHA different from the fresh GitHub PR HEAD",
+  },
+  {
+    code: "review_approval_head_mismatch",
+    severity: "error",
+    description: "Current effective completed review approval targets an older SHA than the fresh GitHub PR HEAD",
+  },
+  {
+    code: "review_result_target_mismatch",
+    severity: "error",
+    description: "Review result target does not match its corresponding task target",
+  },
+  {
+    code: "execution_on_terminal_work",
+    severity: "warning",
+    description: "Active runtime execution attempt observed on closed issue or merged PR",
+  },
+  {
+    code: "decision_active_task_without_session",
+    severity: "error",
+    description: "Active Decision tasks exist but session observation is null",
+  },
+  {
+    code: "decision_active_task_on_completed_session",
+    severity: "error",
+    description: "Active Decision tasks exist while session is completed",
+  },
+  {
+    code: "decision_result_without_task",
+    severity: "error",
+    description: "Decision result exists without a matching task for the same taskId and revision",
+  },
+  {
+    code: "conflicting_active_review_tasks",
+    severity: "error",
+    description: "Multiple active review tasks exist concurrently for the same work item, repository, and pull request",
+  },
+] as const satisfies readonly OperationalAnomalyDefinition[];
+
+/** A detected cross-source inconsistency or domain anomaly (NEST-116 / GitHub #112). */
 export interface OperationalAnomaly {
-  readonly code: string;
-  readonly severity: "warning" | "error";
+  readonly code: OperationalAnomalyCode | string;
+  readonly severity: OperationalAnomalySeverity;
   readonly workKey: WorkKey | null;
   readonly message: string;
   readonly detectedAt: UtcTimestampMs;
+  readonly evidence?: readonly ProjectionEvidence[] | undefined;
 }
 
 export interface OperationalSnapshotSummary {

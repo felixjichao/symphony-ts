@@ -10,7 +10,10 @@
 export {
   EXACT_HEAD_SHA_PATTERN,
   ATTENTION_STATES,
+  OPERATIONAL_ANOMALY_CATALOG,
+  OPERATIONAL_ANOMALY_CODES,
   OPERATIONAL_SNAPSHOT_SCHEMA_VERSION,
+  PROJECTION_EVIDENCE_ROLES,
   SYSTEM_HEALTH_STATES,
   WAITING_REASONS,
   WORK_PHASES,
@@ -68,14 +71,19 @@ export type {
   ReviewProjection,
   WorkFreshness,
   ProjectionEvidence,
+  ProjectionEvidenceRole,
   WorkProjection,
   ExecutorProjection,
   OperationalAnomaly,
+  OperationalAnomalyCode,
+  OperationalAnomalySeverity,
+  OperationalAnomalyDefinition,
   OperationalSnapshotSummary,
   OperationalSnapshot,
 } from "@symphony/domain";
 
 export * from "./readers";
 export * from "./projectors";
+export * from "./anomalies";
 export type { OperationSourceResult, OperationFactCollection, DecisionObservation, GitHubObservation } from "@symphony/domain";
 
