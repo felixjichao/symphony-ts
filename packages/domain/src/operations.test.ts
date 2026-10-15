@@ -372,6 +372,7 @@ describe("OperationalAnomaly contracts & catalog (NEST-116)", () => {
       headSha: HEAD_A,
       field: "task.target.headSha",
       value: HEAD_A,
+      entityTimestampMs: 1_699_999_999_000,
     };
 
     const anomaly: OperationalAnomaly = {
@@ -387,6 +388,7 @@ describe("OperationalAnomaly contracts & catalog (NEST-116)", () => {
     expect(anomaly.severity).toBe("warning");
     expect(anomaly.evidence?.[0]?.role).toBe("supporting");
     expect(anomaly.evidence?.[0]?.headSha).toBe(HEAD_A);
+    expect(anomaly.evidence?.[0]?.entityTimestampMs).toBe(1_699_999_999_000);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   projectExecutor,
   projectOperationalSnapshot,
   projectWork,
+  projectWorkWithAnomalies,
   type DecisionTaskFacts,
   type DecisionWorkFacts,
   type ExecutorFacts,
@@ -1022,6 +1023,140 @@ describe("Reviewer feedback regression tests (Blockers 1-4)", () => {
       });
       expect(snapshot.summary.waiting).toBe(0);
     }
+  });
+
+  it("Blocker 1 regression: orphan decision result degrades attention and enters projection evidence with rule and fact", () => {
+    // 1. Fresh GitHub issue=open, no PR; runtime=[]; Decision session=active, tasks=[]
+    const gh = createGitHubFact({
+      issue: { state: "open", url: "https://github.com/owner/repo/issues/109" },
+      pullRequest: null,
+    });
+    const rt: OperationSourceResult<readonly RuntimeWorkFacts[]> = {
+      source: "runtime",
+      instance: "orchestrator:local",
+      freshness: { status: "fresh", observedAt: NOW, lastAttemptAt: NOW },
+      facts: [],
+    };
+    const decClean = createDecisionFact({
+      session: { sessionId: "s-1", status: "active", adapter: "codex", updatedAtMs: 2, bindingGeneration: 1 },
+      tasks: [],
+      results: [],
+    });
+
+    const cleanProj = projectWork({
+      workKey: WORK_KEY,
+      github: gh,
+      runtime: rt,
+      decision: decClean,
+    });
+    expect(cleanProj.phase).toBe("planning");
+    expect(cleanProj.attention).toBe("waiting");
+    expect(cleanProj.waiting?.reason).toBe("waiting_for_plan");
+    const cleanEvidenceDepth = cleanProj.evidence.length;
+
+    // 2. Add orphan plan result pointing to missing task
+    const decWithOrphanResult = createDecisionFact({
+      session: { sessionId: "s-1", status: "active", adapter: "codex", updatedAtMs: 2, bindingGeneration: 1 },
+      tasks: [],
+      results: [
+        {
+          taskId: "missing-task-1",
+          revision: 1,
+          createdAtMs: NOW,
+          outcome: { kind: "plan", verdict: "ready" },
+        },
+      ],
+    });
+
+    // 3. Test projectWork: attention degrades to degraded, evidence depth increases, and contains rule & fact
+    const degradedProj = projectWork({
+      workKey: WORK_KEY,
+      github: gh,
+      runtime: rt,
+      decision: decWithOrphanResult,
+    });
+    expect(degradedProj.phase).toBe("planning");
+    expect(degradedProj.attention).toBe("degraded");
+    expect(degradedProj.evidence.length).toBeGreaterThan(cleanEvidenceDepth);
+
+    const orphanEvidence = degradedProj.evidence.find(
+      (e) => e.ruleId === "decision_result_without_task",
+    );
+    expect(orphanEvidence).toBeDefined();
+    expect(orphanEvidence?.source).toBe("decision");
+    expect(orphanEvidence?.code).toBe("result_orphan");
+    expect(orphanEvidence?.role).toBe("supporting");
+    expect(orphanEvidence?.taskId).toBe("missing-task-1");
+    expect(orphanEvidence?.field).toBe("result.taskId");
+    expect(orphanEvidence?.value).toBe("missing-task-1");
+    expect(orphanEvidence?.observedAt).toBe(NOW);
+
+    // 4. Test projectWorkWithAnomalies: produces matching projection evidence and returns the anomaly
+    const composed = projectWorkWithAnomalies({
+      workKey: WORK_KEY,
+      github: gh,
+      runtime: rt,
+      decision: decWithOrphanResult,
+      detectedAt: NOW,
+    });
+    expect(composed.projection.attention).toBe("degraded");
+    expect(composed.projection.evidence.length).toBe(degradedProj.evidence.length);
+    expect(composed.anomalies.some((a) => a.code === "decision_result_without_task")).toBe(true);
+
+    const composedOrphanEvidence = composed.projection.evidence.find(
+      (e) => e.ruleId === "decision_result_without_task",
+    );
+    expect(composedOrphanEvidence).toEqual(orphanEvidence);
+  });
+
+  it("marks supporting attention rules in projection evidence for stale source, approval mismatch, and CI failure", () => {
+    // Stale GitHub degraded explanation
+    const ghStale: OperationSourceResult<GitHubWorkFacts> = {
+      source: "github",
+      instance: "gh:1",
+      freshness: { status: "stale", observedAt: NOW - 60000, lastAttemptAt: NOW },
+      facts: {
+        workKey: WORK_KEY,
+        issue: { state: "open", url: "url" },
+        pullRequest: null,
+        ci: null,
+        provenance: { source: "github", instance: "gh:1", observedAt: NOW - 60000 },
+      },
+    };
+    const projStale = projectWork({ workKey: WORK_KEY, github: ghStale });
+    expect(projStale.attention).toBe("degraded");
+    const staleEvidence = projStale.evidence.find((e) => e.ruleId === "attention_degraded_source_stale");
+    expect(staleEvidence).toBeDefined();
+    expect(staleEvidence?.role).toBe("supporting");
+
+    // CI failure degraded explanation (when phase is not repair, e.g. closed PR with failing CI)
+    const ghCiFail = createGitHubFact({
+      pullRequest: { number: 42, state: "closed", url: "url", headSha: SHA_A, isDraft: false },
+      ci: { status: "failure", headSha: SHA_A },
+    });
+    const projCiFail = projectWork({ workKey: WORK_KEY, github: ghCiFail });
+    expect(projCiFail.attention).toBe("degraded");
+    const ciEvidence = projCiFail.evidence.find((e) => e.ruleId === "attention_degraded_ci_failure");
+    expect(ciEvidence).toBeDefined();
+    expect(ciEvidence?.role).toBe("supporting");
+
+    // Approved stale HEAD degraded explanation
+    const ghHeadB = createGitHubFact({
+      pullRequest: { number: 42, state: "open", url: "url", headSha: SHA_B, isDraft: false },
+    });
+    const decApproveShaA = createDecisionFact({
+      tasks: [
+        { taskId: "t1", revision: 1, kind: "review", status: "completed", target: { repository: "owner/repo", prNumber: 42, headSha: SHA_A }, createdAtMs: 1, updatedAtMs: 2 },
+      ],
+      results: [
+        { taskId: "t1", revision: 1, createdAtMs: 3, outcome: { kind: "review", verdict: "approve", target: { repository: "owner/repo", prNumber: 42, headSha: SHA_A } } },
+      ],
+    });
+    const projApprovedStale = projectWork({ workKey: WORK_KEY, github: ghHeadB, decision: decApproveShaA });
+    expect(projApprovedStale.attention).toBe("degraded");
+    const staleApprovalEvidence = projApprovedStale.evidence.find((e) => e.ruleId === "attention_degraded_approved_stale_head");
+    expect(staleApprovalEvidence).toBeDefined();
+    expect(staleApprovalEvidence?.role).toBe("supporting");
   });
 });
 

@@ -84,16 +84,16 @@ import {
   projectWorkWithAnomalies,
 } from "@symphony/operations";
 
-const workAnomalies = detectWorkAnomalies({ collection, workKey });
-const allAnomalies = detectCollectionAnomalies(collection);
-const work = projectWorkWithAnomalies({ collection, workKey });
+const workAnomalies = detectWorkAnomalies({ collection, workKey, detectedAt });
+const allAnomalies = detectCollectionAnomalies({ collection, detectedAt });
+const work = projectWorkWithAnomalies({ collection, workKey, detectedAt });
 ```
 
 - **8 类领域异常**：
   1. `review_target_head_mismatch` (`warning`)：Review 任务 target SHA 与 GitHub PR 当前 HEAD 不一致。
   2. `review_approval_head_mismatch` (`error`)：Decision 批准的 commit 与当前 PR HEAD 不一致。
   3. `review_result_target_mismatch` (`error`)：Decision 结果 commit 与任务声明的 target 不一致。
-  4. `execution_on_terminal_work` (`warning`)：PR 已 closed / merged，但 runtime 仍处于 running / claimed。
+  4. `execution_on_terminal_work` (`warning`)：Issue 已 closed 或 PR 已 merged，但 runtime 仍处于 running / claimed。
   5. `decision_active_task_without_session` (`error`)：活动任务关联的 session 不存在。
   6. `decision_active_task_on_completed_session` (`error`)：活动任务所属 session 已处于 completed 终态。
   7. `decision_result_without_task` (`error`)：Decision 结果对应的 task 不存在。

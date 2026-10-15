@@ -199,6 +199,8 @@ export interface ProjectionEvidence {
   readonly headSha?: string | undefined;
   readonly field?: string | undefined;
   readonly value?: string | number | boolean | null | undefined;
+  /** Timestamp of the underlying entity event (e.g. startedAtMs, updatedAtMs, createdAtMs), distinct from source observedAt. */
+  readonly entityTimestampMs?: UtcTimestampMs | undefined;
 }
 
 /** Consumer-facing read-only projection of one work item. */

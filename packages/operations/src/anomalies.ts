@@ -196,7 +196,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
               instance: decisionFacts.provenance.instance,
               code: "review_task_target",
               detail: `task ${task.taskId} target ${task.target.headSha.slice(0, 7)}`,
-              observedAt: task.updatedAtMs,
+              observedAt: decisionFacts.provenance.observedAt,
+              entityTimestampMs: task.updatedAtMs,
               freshnessStatus: "fresh",
               ruleId: "review_target_head_mismatch",
               role: "supporting",
@@ -282,7 +283,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
               instance: decisionFacts.provenance.instance,
               code: "review_task_target",
               detail: `task ${latestCompletedTask.taskId} target ${latestCompletedTask.target.headSha.slice(0, 7)}`,
-              observedAt: latestCompletedTask.updatedAtMs,
+              observedAt: decisionFacts.provenance.observedAt,
+              entityTimestampMs: latestCompletedTask.updatedAtMs,
               freshnessStatus: "fresh",
               ruleId: "review_approval_head_mismatch",
               role: "supporting",
@@ -299,7 +301,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
               instance: decisionFacts.provenance.instance,
               code: "review_verdict_approve",
               detail: `result approval target ${matchingResult.outcome.target.headSha.slice(0, 7)}`,
-              observedAt: matchingResult.createdAtMs,
+              observedAt: decisionFacts.provenance.observedAt,
+              entityTimestampMs: matchingResult.createdAtMs,
               freshnessStatus: "fresh",
               ruleId: "review_approval_head_mismatch",
               role: "supporting",
@@ -353,7 +356,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
                 instance: decisionFacts.provenance.instance,
                 code: "review_task_target",
                 detail: `task target ${taskTarget.repository}#${taskTarget.prNumber}@${taskTarget.headSha.slice(0, 7)}`,
-                observedAt: task.updatedAtMs,
+                observedAt: decisionFacts.provenance.observedAt,
+                entityTimestampMs: task.updatedAtMs,
                 freshnessStatus: "fresh",
                 ruleId: "review_result_target_mismatch",
                 role: "supporting",
@@ -370,7 +374,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
                 instance: decisionFacts.provenance.instance,
                 code: "review_result_target",
                 detail: `result target ${resultTarget.repository}#${resultTarget.prNumber}@${resultTarget.headSha.slice(0, 7)}`,
-                observedAt: result.createdAtMs,
+                observedAt: decisionFacts.provenance.observedAt,
+                entityTimestampMs: result.createdAtMs,
                 freshnessStatus: "fresh",
                 ruleId: "review_result_target_mismatch",
                 role: "supporting",
@@ -416,37 +421,69 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
 
       for (const row of activeAttempts) {
         if (row.attempt) {
-          const terminalReason =
-            githubFacts.issue.state === "closed" ? "issue closed" : "PR merged";
+          const terminalEvidence: ProjectionEvidence[] = [];
 
-          const evidence: ProjectionEvidence[] = [
-            {
+          if (githubFacts.pullRequest?.state === "merged") {
+            terminalEvidence.push({
               source: "github",
               instance: githubFacts.provenance.instance,
-              code: `issue_${githubFacts.issue.state}`,
-              detail: `issue state ${githubFacts.issue.state}`,
+              code: "pr_merged",
+              detail: `PR #${githubFacts.pullRequest.number} is merged`,
+              observedAt: githubFacts.provenance.observedAt,
+              freshnessStatus: "fresh",
+              ruleId: "execution_on_terminal_work",
+              role: "supporting",
+              workKey,
+              target: {
+                repository: extractTargetRepo(workKey),
+                prNumber: githubFacts.pullRequest.number,
+                headSha: githubFacts.pullRequest.headSha,
+              },
+              headSha: githubFacts.pullRequest.headSha,
+              field: "pullRequest.state",
+              value: "merged",
+            });
+          }
+
+          if (githubFacts.issue.state === "closed") {
+            terminalEvidence.push({
+              source: "github",
+              instance: githubFacts.provenance.instance,
+              code: "issue_closed",
+              detail: "issue state is closed",
               observedAt: githubFacts.provenance.observedAt,
               freshnessStatus: "fresh",
               ruleId: "execution_on_terminal_work",
               role: "supporting",
               workKey,
               field: "issue.state",
-              value: githubFacts.issue.state,
-            },
-            {
-              source: "runtime",
-              instance: row.provenance.instance,
-              code: `attempt_${row.attempt.status}`,
-              detail: `attempt ${row.attempt.attempt ?? 1} status ${row.attempt.status}`,
-              observedAt: row.attempt.startedAtMs,
-              freshnessStatus: "fresh",
-              ruleId: "execution_on_terminal_work",
-              role: "supporting",
-              workKey,
-              field: "attempt.status",
-              value: row.attempt.status,
-            },
-          ];
+              value: "closed",
+            });
+          }
+
+          const runtimeEvidence: ProjectionEvidence = {
+            source: "runtime",
+            instance: row.provenance.instance,
+            code: `attempt_${row.attempt.status}`,
+            detail: `attempt ${row.attempt.attempt ?? 1} status ${row.attempt.status}`,
+            observedAt: row.provenance.observedAt,
+            entityTimestampMs: row.attempt.startedAtMs,
+            freshnessStatus: "fresh",
+            ruleId: "execution_on_terminal_work",
+            role: "supporting",
+            workKey,
+            field: "attempt.status",
+            value: row.attempt.status,
+          };
+
+          const isPrMerged = githubFacts.pullRequest?.state === "merged";
+          const isIssueClosed = githubFacts.issue.state === "closed";
+          const terminalReason =
+            isIssueClosed && isPrMerged
+              ? "issue closed and PR merged"
+              : isIssueClosed
+                ? "issue closed"
+                : "PR merged";
 
           anomalies.push({
             code: "execution_on_terminal_work",
@@ -454,7 +491,7 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
             workKey,
             message: `Active runtime attempt ${row.attempt.attempt ?? 1} (${row.attempt.status}) observed on terminal GitHub work (${terminalReason})`,
             detectedAt,
-            evidence,
+            evidence: [...terminalEvidence, runtimeEvidence],
           });
         }
       }
@@ -487,7 +524,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
           instance: decisionFacts.provenance.instance,
           code: `task_${t.status}`,
           detail: `task ${t.taskId} status ${t.status}`,
-          observedAt: t.updatedAtMs,
+          observedAt: decisionFacts.provenance.observedAt,
+          entityTimestampMs: t.updatedAtMs,
           freshnessStatus: "fresh" as const,
           ruleId: "decision_active_task_without_session",
           role: "supporting" as const,
@@ -527,7 +565,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
           instance: decisionFacts.provenance.instance,
           code: "session_completed",
           detail: `session ${decisionFacts.session.sessionId} completed`,
-          observedAt: decisionFacts.session.updatedAtMs,
+          observedAt: decisionFacts.provenance.observedAt,
+          entityTimestampMs: decisionFacts.session.updatedAtMs,
           freshnessStatus: "fresh",
           ruleId: "decision_active_task_on_completed_session",
           role: "supporting",
@@ -541,7 +580,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
           instance: decisionFacts.provenance.instance,
           code: `task_${t.status}`,
           detail: `task ${t.taskId} status ${t.status}`,
-          observedAt: t.updatedAtMs,
+          observedAt: decisionFacts.provenance.observedAt,
+          entityTimestampMs: t.updatedAtMs,
           freshnessStatus: "fresh" as const,
           ruleId: "decision_active_task_on_completed_session",
           role: "supporting" as const,
@@ -580,7 +620,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
             instance: decisionFacts.provenance.instance,
             code: "result_orphan",
             detail: `result for taskId ${result.taskId} rev ${result.revision} has no task`,
-            observedAt: result.createdAtMs,
+            observedAt: decisionFacts.provenance.observedAt,
+            entityTimestampMs: result.createdAtMs,
             freshnessStatus: "fresh",
             ruleId: "decision_result_without_task",
             role: "supporting",
@@ -639,7 +680,8 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
           instance: decisionFacts.provenance.instance,
           code: `active_review_task_${t.status}`,
           detail: `task ${t.taskId} (rev ${t.revision}) targeting SHA ${t.target.headSha.slice(0, 7)}`,
-          observedAt: t.updatedAtMs,
+          observedAt: decisionFacts.provenance.observedAt,
+          entityTimestampMs: t.updatedAtMs,
           freshnessStatus: "fresh" as const,
           ruleId: "conflicting_active_review_tasks",
           role: "supporting" as const,

@@ -43,7 +43,6 @@ import {
 } from "@symphony/domain";
 import {
   detectWorkAnomalies,
-  hasWorkAnomalies,
   sortAndDeduplicateAnomalies,
 } from "./anomalies";
 
@@ -149,7 +148,13 @@ function resolveWorkKey(input: ProjectWorkInput | WorkDerivationContext): WorkKe
 
 function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | NormalizedWorkContext): NormalizedWorkContext {
   if (isNormalizedWorkContext(input)) {
-    return input;
+    if (input.anomalies !== undefined) {
+      return input;
+    }
+    return {
+      ...input,
+      anomalies: detectWorkAnomalies(input.rawInput),
+    };
   }
 
   const workKey = resolveWorkKey(input);
@@ -286,7 +291,10 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
       ) ?? null)
     : null;
 
-  const anomalies = "anomalies" in input && Array.isArray(input.anomalies) ? input.anomalies : undefined;
+  const anomalies =
+    "anomalies" in input && Array.isArray(input.anomalies)
+      ? input.anomalies
+      : detectWorkAnomalies(input);
   const detectedAt = "detectedAt" in input && typeof input.detectedAt === "number" ? input.detectedAt : undefined;
 
   return {
@@ -781,9 +789,6 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
   if (ctx.anomalies && ctx.anomalies.length > 0) {
     return "degraded";
   }
-  if (!ctx.anomalies && hasWorkAnomalies(ctx.rawInput)) {
-    return "degraded";
-  }
 
   // 4. waiting
   if (waiting !== null && phase !== "completed") {
@@ -797,6 +802,39 @@ export function deriveAttention(context: WorkDerivationContext | ProjectWorkInpu
 // ---------------------------------------------------------------------------
 // Single Work Projection
 // ---------------------------------------------------------------------------
+
+function sortAndDeduplicateEvidence(
+  evidence: readonly ProjectionEvidence[],
+): readonly ProjectionEvidence[] {
+  const map = new Map<string, ProjectionEvidence>();
+
+  for (const item of evidence) {
+    const key = `${item.source}:${item.code}:${item.ruleId ?? ""}:${item.taskId ?? ""}:${item.resultId ?? ""}:${item.field ?? ""}:${item.headSha ?? ""}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, item);
+    } else if (existing.role !== "supporting" && item.role === "supporting") {
+      map.set(key, item);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.source !== b.source) return a.source.localeCompare(b.source);
+    if (a.code !== b.code) return a.code.localeCompare(b.code);
+    const aRule = a.ruleId ?? "";
+    const bRule = b.ruleId ?? "";
+    if (aRule !== bRule) return aRule.localeCompare(bRule);
+    const aTask = a.taskId ?? "";
+    const bTask = b.taskId ?? "";
+    if (aTask !== bTask) return aTask.localeCompare(bTask);
+    const aSha = a.headSha ?? "";
+    const bSha = b.headSha ?? "";
+    if (aSha !== bSha) return aSha.localeCompare(bSha);
+    const aDetail = a.detail ?? "";
+    const bDetail = b.detail ?? "";
+    return aDetail.localeCompare(bDetail);
+  });
+}
 
 function buildEvidence(
   ctx: NormalizedWorkContext,
@@ -817,10 +855,18 @@ function buildEvidence(
     latestPlanResult,
     latestReviewTask,
     latestReviewResult,
+    anomalies,
   } = ctx;
+
+  const reviewProj = deriveReviewProjection(ctx);
+  const reviewApproval = reviewProj?.approval ?? "not_approved";
 
   if (githubFacts) {
     const isCompletedIssue = phase === "completed" && githubFacts.issue.state === "closed";
+    const isGitHubStaleOrUnavailable =
+      githubFreshness.status === "stale" || githubFreshness.status === "unavailable";
+    const isAttentionGitHubDegraded = attention === "degraded" && isGitHubStaleOrUnavailable;
+
     evidence.push({
       source: "github",
       code: `issue_${githubFacts.issue.state}`,
@@ -828,12 +874,23 @@ function buildEvidence(
       observedAt: githubFacts.provenance.observedAt,
       instance: githubFacts.provenance.instance,
       freshnessStatus: githubFreshness.status,
-      ruleId: isCompletedIssue ? "phase_completed" : undefined,
-      role: githubFreshness.status !== "fresh" ? "discarded_freshness" : isCompletedIssue ? "supporting" : "historical",
+      ruleId: isCompletedIssue
+        ? "phase_completed"
+        : isAttentionGitHubDegraded
+          ? `attention_degraded_source_${githubFreshness.status}`
+          : undefined,
+      role: isAttentionGitHubDegraded
+        ? "supporting"
+        : githubFreshness.status !== "fresh"
+          ? "discarded_freshness"
+          : isCompletedIssue
+            ? "supporting"
+            : "historical",
       workKey,
       field: "issue.state",
       value: githubFacts.issue.state,
     });
+
     if (githubFacts.pullRequest) {
       const isCompletedPr = phase === "completed" && githubFacts.pullRequest.state === "merged";
       const isLandingPr = phase === "landing";
@@ -844,17 +901,35 @@ function buildEvidence(
         observedAt: githubFacts.provenance.observedAt,
         instance: githubFacts.provenance.instance,
         freshnessStatus: githubFreshness.status,
-        ruleId: isCompletedPr ? "phase_completed" : isLandingPr ? "phase_landing" : undefined,
-        role: githubFreshness.status !== "fresh" ? "discarded_freshness" : (isCompletedPr || isLandingPr) ? "supporting" : "historical",
+        ruleId: isCompletedPr
+          ? "phase_completed"
+          : isLandingPr
+            ? "phase_landing"
+            : undefined,
+        role:
+          githubFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isCompletedPr || isLandingPr
+              ? "supporting"
+              : "historical",
         workKey,
+        target: {
+          repository: extractTargetRepo(workKey),
+          prNumber: githubFacts.pullRequest.number,
+          headSha: githubFacts.pullRequest.headSha,
+        },
         headSha: githubFacts.pullRequest.headSha,
         field: "pullRequest.state",
         value: githubFacts.pullRequest.state,
       });
     }
+
     if (githubFacts.ci) {
       const isLandingCi = phase === "landing";
       const isWaitingCi = waiting?.reason === "waiting_for_ci";
+      const isCiAttentionDegraded =
+        attention === "degraded" && githubFacts.ci.status === "failure" && phase !== "repair";
+
       evidence.push({
         source: "github",
         code: `ci_${githubFacts.ci.status}`,
@@ -862,8 +937,19 @@ function buildEvidence(
         observedAt: githubFacts.provenance.observedAt,
         instance: githubFacts.provenance.instance,
         freshnessStatus: githubFreshness.status,
-        ruleId: isLandingCi ? "phase_landing" : isWaitingCi ? "waiting_waiting_for_ci" : undefined,
-        role: githubFreshness.status !== "fresh" ? "discarded_freshness" : (isLandingCi || isWaitingCi) ? "supporting" : "historical",
+        ruleId: isLandingCi
+          ? "phase_landing"
+          : isWaitingCi
+            ? "waiting_waiting_for_ci"
+            : isCiAttentionDegraded
+              ? "attention_degraded_ci_failure"
+              : undefined,
+        role:
+          githubFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isLandingCi || isWaitingCi || isCiAttentionDegraded
+              ? "supporting"
+              : "historical",
         workKey,
         headSha: githubFacts.ci.headSha ?? undefined,
         field: "ci.status",
@@ -876,15 +962,43 @@ function buildEvidence(
     if (runtimeRow.attempt) {
       const isRunning = isRunAttemptActive(runtimeRow.attempt.status);
       const isCoding = phase === "coding" || phase === "repair";
+      const isAttemptAttentionFailed =
+        attention === "failed" &&
+        runtimeFreshness.status === "fresh" &&
+        (runtimeRow.attempt.status === "failed" ||
+          runtimeRow.attempt.status === "timed_out" ||
+          runtimeRow.attempt.status === "stalled" ||
+          runtimeRow.attempt.status === "canceled_by_reconciliation") &&
+        runtimeRow.retry === null;
+      const isRuntimeStaleOrUnavailable =
+        runtimeFreshness.status === "stale" || runtimeFreshness.status === "unavailable";
+      const isAttentionRuntimeDegraded = attention === "degraded" && isRuntimeStaleOrUnavailable;
+
       evidence.push({
         source: "runtime",
         code: `attempt_${runtimeRow.attempt.status}`,
         detail: `attempt ${runtimeRow.attempt.attempt ?? 1}`,
-        observedAt: runtimeRow.attempt.startedAtMs,
+        observedAt: runtimeRow.provenance.observedAt,
+        entityTimestampMs: runtimeRow.attempt.startedAtMs,
         instance: runtimeRow.provenance.instance,
         freshnessStatus: runtimeFreshness.status,
-        ruleId: isCoding && isRunning ? (phase === "repair" ? "phase_repair" : "phase_coding") : undefined,
-        role: runtimeFreshness.status !== "fresh" ? "discarded_freshness" : isRunning ? "supporting" : "historical",
+        ruleId:
+          isCoding && isRunning
+            ? phase === "repair"
+              ? "phase_repair"
+              : "phase_coding"
+            : isAttemptAttentionFailed
+              ? "attention_attempt_failed"
+              : isAttentionRuntimeDegraded
+                ? `attention_degraded_source_${runtimeFreshness.status}`
+                : undefined,
+        role: isAttentionRuntimeDegraded
+          ? "supporting"
+          : runtimeFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isRunning || isAttemptAttentionFailed
+              ? "supporting"
+              : "historical",
         workKey: runtimeRow.workKey ?? workKey,
         field: "attempt.status",
         value: runtimeRow.attempt.status,
@@ -900,7 +1014,12 @@ function buildEvidence(
         instance: runtimeRow.provenance.instance,
         freshnessStatus: runtimeFreshness.status,
         ruleId: isRetry ? "waiting_retry_backoff" : undefined,
-        role: runtimeFreshness.status !== "fresh" ? "discarded_freshness" : isRetry ? "supporting" : "historical",
+        role:
+          runtimeFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isRetry
+              ? "supporting"
+              : "historical",
         workKey: runtimeRow.workKey ?? workKey,
         field: "retry.retryInMs",
         value: runtimeRow.retry.retryInMs,
@@ -909,34 +1028,68 @@ function buildEvidence(
   }
 
   if (decisionFacts) {
+    const isDecisionStaleOrUnavailable =
+      decisionFreshness.status === "stale" || decisionFreshness.status === "unavailable";
+    const isAttentionDecisionDegraded = attention === "degraded" && isDecisionStaleOrUnavailable;
+
     if (decisionFacts.session) {
       const isPlanningSession = phase === "planning";
       evidence.push({
         source: "decision",
         code: `session_${decisionFacts.session.status}`,
         detail: decisionFacts.session.adapter,
-        observedAt: decisionFacts.session.updatedAtMs,
+        observedAt: decisionFacts.provenance.observedAt,
+        entityTimestampMs: decisionFacts.session.updatedAtMs,
         instance: decisionFacts.provenance.instance,
         freshnessStatus: decisionFreshness.status,
-        ruleId: isPlanningSession ? "phase_planning" : undefined,
-        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isPlanningSession ? "supporting" : "historical",
+        ruleId: isPlanningSession
+          ? "phase_planning"
+          : isAttentionDecisionDegraded
+            ? `attention_degraded_source_${decisionFreshness.status}`
+            : undefined,
+        role: isAttentionDecisionDegraded
+          ? "supporting"
+          : decisionFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isPlanningSession
+              ? "supporting"
+              : "historical",
         workKey,
         sessionId: decisionFacts.session.sessionId,
         field: "session.status",
         value: decisionFacts.session.status,
       });
     }
+
     if (latestPlanTask) {
       const isPlanningTask = phase === "planning" || phase === "ready";
+      const isPlanTaskFailed =
+        attention === "failed" &&
+        decisionFreshness.status === "fresh" &&
+        latestPlanTask.status === "failed" &&
+        latestPlanResult === null;
+
       evidence.push({
         source: "decision",
         code: `plan_task_${latestPlanTask.status}`,
         detail: `rev ${latestPlanTask.revision}`,
-        observedAt: latestPlanTask.updatedAtMs,
+        observedAt: decisionFacts.provenance.observedAt,
+        entityTimestampMs: latestPlanTask.updatedAtMs,
         instance: decisionFacts.provenance.instance,
         freshnessStatus: decisionFreshness.status,
-        ruleId: isPlanningTask ? (phase === "ready" ? "phase_ready" : "phase_planning") : undefined,
-        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isPlanningTask ? "supporting" : "historical",
+        ruleId: isPlanningTask
+          ? phase === "ready"
+            ? "phase_ready"
+            : "phase_planning"
+          : isPlanTaskFailed
+            ? "attention_plan_task_failed"
+            : undefined,
+        role:
+          decisionFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isPlanningTask || isPlanTaskFailed
+              ? "supporting"
+              : "historical",
         workKey,
         taskId: latestPlanTask.taskId,
         revision: latestPlanTask.revision,
@@ -944,17 +1097,42 @@ function buildEvidence(
         value: latestPlanTask.status,
       });
     }
+
     if (latestPlanResult && latestPlanResult.outcome.kind === "plan") {
-      const isVerdictSupporting = waiting?.reason === "needs_human" || waiting?.reason === "needs_clarification" || phase === "ready";
+      const isVerdictNeedsHuman =
+        attention === "needs_human" &&
+        decisionFreshness.status === "fresh" &&
+        (latestPlanResult.outcome.verdict === "needs_human" ||
+          latestPlanResult.outcome.verdict === "needs_clarification");
+      const isVerdictSupporting =
+        waiting?.reason === "needs_human" ||
+        waiting?.reason === "needs_clarification" ||
+        phase === "ready" ||
+        isVerdictNeedsHuman;
+
       evidence.push({
         source: "decision",
         code: `plan_verdict_${latestPlanResult.outcome.verdict}`,
         detail: `rev ${latestPlanResult.revision}`,
-        observedAt: latestPlanResult.createdAtMs,
+        observedAt: decisionFacts.provenance.observedAt,
+        entityTimestampMs: latestPlanResult.createdAtMs,
         instance: decisionFacts.provenance.instance,
         freshnessStatus: decisionFreshness.status,
-        ruleId: isVerdictSupporting ? (phase === "ready" ? "phase_ready" : `waiting_${waiting?.reason}`) : undefined,
-        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isVerdictSupporting ? "supporting" : "historical",
+        ruleId: isVerdictNeedsHuman
+          ? latestPlanResult.outcome.verdict === "needs_clarification"
+            ? "attention_needs_clarification"
+            : "attention_needs_human"
+          : isVerdictSupporting
+            ? phase === "ready"
+              ? "phase_ready"
+              : `waiting_${waiting?.reason}`
+            : undefined,
+        role:
+          decisionFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isVerdictSupporting
+              ? "supporting"
+              : "historical",
         workKey,
         taskId: latestPlanResult.taskId,
         revision: latestPlanResult.revision,
@@ -962,17 +1140,36 @@ function buildEvidence(
         value: latestPlanResult.outcome.verdict,
       });
     }
+
     if (latestReviewTask) {
       const isReviewing = phase === "review" || waiting?.reason === "waiting_for_review";
+      const isReviewTaskFailed =
+        attention === "failed" &&
+        decisionFreshness.status === "fresh" &&
+        latestReviewTask.status === "failed" &&
+        latestReviewResult === null;
+
       evidence.push({
         source: "decision",
         code: `review_task_${latestReviewTask.status}`,
         detail: `rev ${latestReviewTask.revision}`,
-        observedAt: latestReviewTask.updatedAtMs,
+        observedAt: decisionFacts.provenance.observedAt,
+        entityTimestampMs: latestReviewTask.updatedAtMs,
         instance: decisionFacts.provenance.instance,
         freshnessStatus: decisionFreshness.status,
-        ruleId: isReviewing ? (phase === "review" ? "phase_review" : "waiting_waiting_for_review") : undefined,
-        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : isReviewing ? "supporting" : "historical",
+        ruleId: isReviewing
+          ? phase === "review"
+            ? "phase_review"
+            : "waiting_waiting_for_review"
+          : isReviewTaskFailed
+            ? "attention_review_task_failed"
+            : undefined,
+        role:
+          decisionFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isReviewing || isReviewTaskFailed
+              ? "supporting"
+              : "historical",
         workKey,
         taskId: latestReviewTask.taskId,
         revision: latestReviewTask.revision,
@@ -982,18 +1179,41 @@ function buildEvidence(
         value: latestReviewTask.status,
       });
     }
+
     if (latestReviewResult && latestReviewResult.outcome.kind === "review") {
       const isApprovedLanding = phase === "landing";
-      const isNeedsHuman = attention === "needs_human";
+      const isNeedsHuman =
+        attention === "needs_human" &&
+        decisionFreshness.status === "fresh" &&
+        latestReviewResult.outcome.verdict === "needs_human";
+      const isApprovedStaleHead =
+        attention === "degraded" && reviewApproval === "approved_stale_head";
+      const isChangesRequested =
+        attention === "degraded" && reviewApproval === "changes_requested" && phase !== "repair";
+
       evidence.push({
         source: "decision",
         code: `review_verdict_${latestReviewResult.outcome.verdict}`,
         detail: `rev ${latestReviewResult.revision}`,
-        observedAt: latestReviewResult.createdAtMs,
+        observedAt: decisionFacts.provenance.observedAt,
+        entityTimestampMs: latestReviewResult.createdAtMs,
         instance: decisionFacts.provenance.instance,
         freshnessStatus: decisionFreshness.status,
-        ruleId: isApprovedLanding ? "phase_landing" : isNeedsHuman ? "attention_needs_human" : undefined,
-        role: decisionFreshness.status !== "fresh" ? "discarded_freshness" : (isApprovedLanding || isNeedsHuman) ? "supporting" : "historical",
+        ruleId: isApprovedLanding
+          ? "phase_landing"
+          : isNeedsHuman
+            ? "attention_needs_human"
+            : isApprovedStaleHead
+              ? "attention_degraded_approved_stale_head"
+              : isChangesRequested
+                ? "attention_degraded_changes_requested"
+                : undefined,
+        role:
+          decisionFreshness.status !== "fresh"
+            ? "discarded_freshness"
+            : isApprovedLanding || isNeedsHuman || isApprovedStaleHead || isChangesRequested
+              ? "supporting"
+              : "historical",
         workKey,
         taskId: latestReviewResult.taskId,
         revision: latestReviewResult.revision,
@@ -1005,7 +1225,18 @@ function buildEvidence(
     }
   }
 
-  return evidence;
+  // Include cross-source anomaly evidence (NEST-116)
+  if (anomalies && anomalies.length > 0) {
+    for (const anomaly of anomalies) {
+      if (anomaly.evidence && anomaly.evidence.length > 0) {
+        for (const ev of anomaly.evidence) {
+          evidence.push(ev);
+        }
+      }
+    }
+  }
+
+  return sortAndDeduplicateEvidence(evidence);
 }
 
 /**

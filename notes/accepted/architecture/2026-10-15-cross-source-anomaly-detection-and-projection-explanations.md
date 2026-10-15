@@ -14,7 +14,7 @@ Implement pure, deterministic anomaly detection and structured evidence breadcru
   1. `review_target_head_mismatch` (`warning`): Review task target SHA differs from observed GitHub PR HEAD SHA.
   2. `review_approval_head_mismatch` (`error`): Decision review approved a commit SHA that differs from the observed GitHub PR HEAD SHA.
   3. `review_result_target_mismatch` (`error`): Decision review result commit SHA differs from its own task review target SHA.
-  4. `execution_on_terminal_work` (`warning`): Orchestrator runtime attempt is actively running or claimed while GitHub PR is already terminal (`closed` or `merged`).
+  4. `execution_on_terminal_work` (`warning`): Orchestrator runtime attempt is actively running or claimed while GitHub work is already terminal (`issue.state === 'closed'` or `pullRequest.state === 'merged'`).
   5. `decision_active_task_without_session` (`error`): Active Decision task references a session ID that is absent from observed Decision facts.
   6. `decision_active_task_on_completed_session` (`error`): Active Decision task belongs to a Decision session marked as `completed`.
   7. `decision_result_without_task` (`error`): Decision result references a task ID that is absent from observed Decision tasks.
@@ -28,7 +28,7 @@ Implement pure, deterministic anomaly detection and structured evidence breadcru
 - **Source WorkKey Scoping in Multi-Work Collections**:
   - In `detectCollectionAnomalies`, collection-level facts (`githubFacts`, `decisionFacts`) are filtered by work item identity (`workKey`) to prevent cross-issue leakage or false positives across distinct work items.
 - **Structured Projection Evidence Breadcrumbs**:
-  - `ProjectionEvidence` in `@symphony/domain` is extended with structured fields: `role` (`supporting`, `historical`, `discarded_freshness`), `workKey`, `taskId`, `revision`, `target`, `headSha`, `field`, and `value`.
+  - `ProjectionEvidence` in `@symphony/domain` is extended with structured fields: `role` (`supporting`, `historical`, `discarded_freshness`), `workKey`, `taskId`, `revision`, `target`, `headSha`, `field`, `value`, and `entityTimestampMs` (distinguishing entity event timestamps from source observation freshness).
   - Projectors and anomaly detectors populate structured breadcrumbs so explanations can trace root causes back to source instances and fields without guessing.
 - **Attention and System Health Wiring**:
   - `deriveAttention` incorporates detected anomalies: any work item with active anomalies degrades to `degraded` attention unless already in higher priority states (`needs_human` or `failed`).

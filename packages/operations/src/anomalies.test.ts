@@ -339,6 +339,51 @@ describe("Operational Anomaly Detection (NEST-116)", () => {
       const terminalAnomaly = anomalies.find((a) => a.code === "execution_on_terminal_work");
       expect(terminalAnomaly).toBeDefined();
       expect(terminalAnomaly?.message).toContain("(PR merged)");
+      expect(terminalAnomaly?.evidence).toHaveLength(2);
+      const evidence = terminalAnomaly?.evidence ?? [];
+
+      const prEvidence = evidence.find((e) => e.code === "pr_merged");
+      expect(prEvidence).toBeDefined();
+      expect(prEvidence?.field).toBe("pullRequest.state");
+      expect(prEvidence?.value).toBe("merged");
+      expect(prEvidence?.target).toEqual({ repository: "owner/repo", prNumber: 42, headSha: SHA_A });
+      expect(prEvidence?.headSha).toBe(SHA_A);
+      expect(prEvidence?.ruleId).toBe("execution_on_terminal_work");
+      expect(prEvidence?.role).toBe("supporting");
+
+      const runtimeEvidence = evidence.find((e) => e.source === "runtime");
+      expect(runtimeEvidence).toBeDefined();
+      expect(runtimeEvidence?.field).toBe("attempt.status");
+      expect(runtimeEvidence?.value).toBe("launching_agent_process");
+      expect(runtimeEvidence?.observedAt).toBe(NOW);
+      expect(runtimeEvidence?.entityTimestampMs).toBe(NOW);
+    });
+
+    it("detects active execution attempt when both issue is closed and PR is merged", () => {
+      const collection: OperationFactCollection = {
+        ...createCleanCollection(),
+        github: createGitHubFact({
+          issue: { state: "closed", url: "https://github.com/owner/repo/issues/109" },
+          pullRequest: { number: 42, state: "merged", url: "https://github.com/owner/repo/pull/42", headSha: SHA_A, isDraft: false },
+        }),
+        runtime: createRuntimeFact([
+          {
+            workKey: WORK_KEY,
+            issueId: "issue-109",
+            attempt: { issueId: "issue-109", issueIdentifier: "109", attempt: 3, status: "streaming_turn", workspacePath: "/ws/109", startedAtMs: NOW },
+            retry: null,
+            provenance: { source: "runtime", instance: "orchestrator:local", observedAt: NOW },
+          },
+        ]),
+      };
+      const anomalies = detectWorkAnomalies({ collection, workKey: WORK_KEY, detectedAt: DETECTED_AT });
+      const terminalAnomaly = anomalies.find((a) => a.code === "execution_on_terminal_work");
+      expect(terminalAnomaly).toBeDefined();
+      expect(terminalAnomaly?.message).toContain("(issue closed and PR merged)");
+      expect(terminalAnomaly?.evidence).toHaveLength(3);
+      const evidence = terminalAnomaly?.evidence ?? [];
+      expect(evidence.some((e) => e.code === "pr_merged")).toBe(true);
+      expect(evidence.some((e) => e.code === "issue_closed")).toBe(true);
     });
 
     it("does not report anomaly when PR is closed unmerged while issue remains open", () => {
