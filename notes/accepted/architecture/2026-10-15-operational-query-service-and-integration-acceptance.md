@@ -30,6 +30,12 @@ Implement `OperationalQueryService` and `createOperationalQueryService` in `@sym
 - **Domain Contract Compatibility**:
   - Extend `SourceStatus` in `@symphony/domain` with optional `workKey?: WorkKey | null` so system snapshots retain per-work source provenance when multiple work items share a source instance name.
   - Tie-break source status sorting in `projectOperationalSnapshot` by `workKey` and `freshness.status` to ensure strict deterministic ordering regardless of asynchronous read completion.
+- **Strict Identity Verification & Cross-Work Isolation**:
+  - When per-work readers return source envelopes or facts, both the query service and underlying projectors strictly verify that `facts.workKey` and `envelope.workKey` match the requested `WorkKey`.
+  - Mismatched reader facts (such as when a fallback single-item reader is reused across a multi-work scope) are strictly isolated and degraded to `unavailable` with reason `work_key_mismatch` rather than relabeling or leaking into other work items.
+- **Consumer Mutation Isolation**:
+  - Query return values (`OperationalSnapshot`, `WorkProjection`, `ExecutorProjection`) and internal source reader inputs are deeply cloned at the query boundaries using `deepClone` (`structuredClone`).
+  - Consumers mutating nested properties on returned projections (e.g., `work.freshness.github`, `review.taskTarget`, `evidence`, `executors`) cannot corrupt reader state or bleed into subsequent query rounds.
 
 ## Alternatives considered
 

@@ -121,20 +121,38 @@ export function detectWorkAnomalies(input: DetectWorkAnomaliesInput): readonly O
 
   // Resolve sources
   const githubSource = input.github ?? input.collection?.github ?? null;
-  const githubFreshness = githubSource?.freshness ?? UNKNOWN_FRESHNESS;
+  const rawGithubFreshness = githubSource?.freshness ?? UNKNOWN_FRESHNESS;
   const rawGithubFacts = githubSource?.facts ?? null;
-  const githubFacts =
-    rawGithubFacts && formatWorkKey(rawGithubFacts.workKey) === formattedTargetKey
-      ? rawGithubFacts
-      : null;
+  const githubMismatch = Boolean(
+    (rawGithubFacts && formatWorkKey(rawGithubFacts.workKey) !== formattedTargetKey) ||
+    (githubSource?.workKey && formatWorkKey(githubSource.workKey) !== formattedTargetKey),
+  );
+  const githubFacts = githubMismatch ? null : rawGithubFacts;
+  const githubFreshness: SourceFreshness = githubMismatch
+    ? {
+        status: "unavailable",
+        observedAt: null,
+        lastAttemptAt: rawGithubFreshness.lastAttemptAt ?? detectedAt,
+        reason: "work_key_mismatch",
+      }
+    : rawGithubFreshness;
 
   const decisionSource = input.decision ?? input.collection?.decision ?? null;
-  const decisionFreshness = decisionSource?.freshness ?? UNKNOWN_FRESHNESS;
+  const rawDecisionFreshness = decisionSource?.freshness ?? UNKNOWN_FRESHNESS;
   const rawDecisionFacts = decisionSource?.facts ?? null;
-  const decisionFacts =
-    rawDecisionFacts && formatWorkKey(rawDecisionFacts.workKey) === formattedTargetKey
-      ? rawDecisionFacts
-      : null;
+  const decisionMismatch = Boolean(
+    (rawDecisionFacts && formatWorkKey(rawDecisionFacts.workKey) !== formattedTargetKey) ||
+    (decisionSource?.workKey && formatWorkKey(decisionSource.workKey) !== formattedTargetKey),
+  );
+  const decisionFacts = decisionMismatch ? null : rawDecisionFacts;
+  const decisionFreshness: SourceFreshness = decisionMismatch
+    ? {
+        status: "unavailable",
+        observedAt: null,
+        lastAttemptAt: rawDecisionFreshness.lastAttemptAt ?? detectedAt,
+        reason: "work_key_mismatch",
+      }
+    : rawDecisionFreshness;
 
   const runtimeInput = input.runtime ?? input.collection?.runtime ?? null;
   let runtimeFreshness: SourceFreshness = UNKNOWN_FRESHNESS;

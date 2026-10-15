@@ -844,4 +844,174 @@ describe("Real Decision service & readers end-to-end integration", () => {
       await store.close();
     }
   });
+
+  describe("Review regressions and mutation/identity isolation", () => {
+    const a = githubWorkKey("owner", "repo", 1);
+    const b = githubWorkKey("owner", "repo", 2);
+
+    it("does not project A facts as B through the supported fallback reader", async () => {
+      const reader = createGitHubReader({ instance: "gh", clock: () => 100, maxAgeMs: 50 }, async () => ({
+        workKey: a,
+        issue: { state: "closed", url: "https://github.com/owner/repo/issues/1" },
+        pullRequest: null,
+        ci: null,
+      }));
+      const service = createOperationalQueryService({ workKeys: [a, b], githubReader: reader, clock: () => 100 });
+      const workB = await service.getWork(b);
+      expect(workB?.phase).not.toBe("completed");
+      expect(workB?.workItem.url).not.toBe("https://github.com/owner/repo/issues/1");
+      expect(workB?.freshness.github.status).toBe("unavailable");
+
+      const workA = await service.getWork(a);
+      expect(workA?.phase).toBe("completed");
+      expect(workA?.workItem.url).toBe("https://github.com/owner/repo/issues/1");
+      expect(workA?.freshness.github.status).toBe("fresh");
+    });
+
+    it("consumer cannot corrupt reused source freshness", async () => {
+      const result = {
+        source: "github" as const,
+        instance: "gh",
+        facts: null,
+        freshness: { status: "unavailable" as const, observedAt: null, lastAttemptAt: 100, reason: "offline" },
+      };
+      const reader: SourceReader<GitHubWorkFacts> = {
+        async read() {
+          return result;
+        },
+      };
+      const service = createOperationalQueryService({ workKeys: [a], githubReader: reader, clock: () => 100 });
+      const first = await service.getOperationalSnapshot();
+      Object.assign(first.work[0]!.freshness.github, { status: "fresh" });
+      const second = await service.getOperationalSnapshot();
+      expect(second.work[0]!.freshness.github.status).toBe("unavailable");
+    });
+
+    it("isolates decision plane facts across different work keys and does not leak tasks/verdicts", async () => {
+      const reader = createDecisionReader({ instance: "dec", clock: () => 100, maxAgeMs: 50 }, () => ({
+        workKey: a,
+        session: { sessionId: "s1", status: "active", bindingGeneration: 1, adapter: "codex", updatedAtMs: 100 },
+        tasks: [
+          {
+            taskId: "t1",
+            revision: 1,
+            kind: "review",
+            status: "completed",
+            target: { repository: "owner/repo", prNumber: 1, headSha: SHA_A },
+            createdAtMs: 100,
+            updatedAtMs: 100,
+          },
+        ],
+        results: [
+          {
+            taskId: "t1",
+            revision: 1,
+            createdAtMs: 100,
+            outcome: {
+              kind: "review",
+              verdict: "approve",
+              target: { repository: "owner/repo", prNumber: 1, headSha: SHA_A },
+            },
+          },
+        ],
+      }));
+
+      const service = createOperationalQueryService({ workKeys: [a, b], decisionReader: reader, clock: () => 100 });
+      const workB = await service.getWork(b);
+      expect(workB?.review?.task).toBeNull();
+      expect(workB?.review?.result).toBeNull();
+      expect(workB?.review?.taskTarget).toBeNull();
+      expect(workB?.review?.approval).toBe("unknown");
+      expect(workB?.freshness.decision.status).toBe("unavailable");
+
+      const workA = await service.getWork(a);
+      expect(workA?.review?.taskTarget?.prNumber).toBe(1);
+      expect(workA?.review?.result?.outcome.kind).toBe("review");
+      expect(workA?.freshness.decision.status).toBe("fresh");
+    });
+
+    it("deep-clones all nested objects across review targets, evidence, executors, and anomalies", async () => {
+      const ghReader = createGitHubReader({ instance: "gh", clock: () => 100, maxAgeMs: 50 }, async () => ({
+        workKey: a,
+        issue: { state: "open", url: "https://github.com/owner/repo/issues/1" },
+        pullRequest: { number: 1, state: "open", url: "https://github.com/owner/repo/pull/1", headSha: SHA_A, isDraft: false },
+        ci: null,
+      }));
+      const decReader = createDecisionReader({ instance: "dec", clock: () => 100, maxAgeMs: 50 }, () => ({
+        workKey: a,
+        session: null,
+        tasks: [
+          {
+            taskId: "t1",
+            revision: 1,
+            kind: "review",
+            status: "running",
+            target: { repository: "owner/repo", prNumber: 1, headSha: SHA_B },
+            createdAtMs: 100,
+            updatedAtMs: 100,
+          },
+        ],
+        results: [],
+      }));
+
+      const service = createOperationalQueryService({
+        workKeys: [a],
+        githubReader: ghReader,
+        decisionReader: decReader,
+        clock: () => 100,
+      });
+
+      const first = await service.getOperationalSnapshot();
+      expect(first.work[0]?.review?.taskTarget?.headSha).toBe(SHA_B);
+      expect(first.anomalies.length).toBeGreaterThan(0);
+
+      // Mutate nested properties in first snapshot
+      (first.work[0]!.review!.taskTarget as { headSha: string }).headSha = "corrupted_sha";
+      if (first.work[0]!.evidence.length > 0) {
+        (first.work[0]!.evidence[0] as { role: string }).role = "corrupted_role";
+      }
+      (first.anomalies[0] as { code: string }).code = "corrupted_code" as never;
+
+      // Second query should return uncorrupted state
+      const second = await service.getOperationalSnapshot();
+      expect(second.work[0]?.review?.taskTarget?.headSha).toBe(SHA_B);
+      expect(second.work[0]?.evidence[0]?.role).not.toBe("corrupted_role");
+      expect(second.anomalies[0]?.code).not.toBe("corrupted_code");
+    });
+
+    it("handles envelope workKey mismatch by isolating and degrading rather than relabeling", async () => {
+      const mismatchedEnvelopeReader: SourceReader<GitHubWorkFacts> = {
+        async read() {
+          return {
+            source: "github",
+            instance: "gh",
+            facts: {
+              workKey: a,
+              issue: { state: "closed", url: "https://github.com/owner/repo/issues/1" },
+              pullRequest: null,
+              ci: null,
+              provenance: { source: "github", instance: "gh", observedAt: 100 },
+            },
+            freshness: { status: "fresh", observedAt: 100, lastAttemptAt: 100 },
+            workKey: a,
+          };
+        },
+      };
+
+      const service = createOperationalQueryService({
+        workKeys: [b],
+        githubReader: mismatchedEnvelopeReader,
+        clock: () => 100,
+      });
+
+      const workB = await service.getWork(b);
+      expect(workB?.phase).not.toBe("completed");
+      expect(workB?.freshness.github.status).toBe("unavailable");
+      expect((workB?.freshness.github as { reason?: string }).reason).toBe("work_key_mismatch");
+
+      const snapshot = await service.getOperationalSnapshot();
+      const bSource = snapshot.sources.find((s) => s.source === "github" && s.workKey?.key === "owner/repo#2");
+      expect(bSource?.freshness.status).toBe("unavailable");
+    });
+  });
 });

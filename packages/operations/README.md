@@ -4,7 +4,7 @@
 
 Operational Read Model / Observation Plane 的公共边界（NEST-113 / GitHub #109，NEST-114 reader、NEST-115 确定性 projector，以及 NEST-116 跨源异常检测与投影解释，对应父任务 #108 观察面）。本包提供只读事实与投影契约、四源 reader 与单次 collector、纯函数确定性 projector，以及跨源异常检测：把 GitHub、orchestrator runtime、Decision Plane、executor 观测归一化为 provider-neutral facts，并纯函数推导 phase / waiting / attention / snapshot 等展示语义与 8 类领域异常。
 
-它**不是** Control Plane：纯只读推导、零 I/O、无全局时钟或变异 API、不提供查询服务（保留给 NEST-117）、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集、纯读投影与异常检测。
+它**不是** Control Plane：纯只读推导、零状态变异 API、不暴露 HTTP / Dashboard / SSE / WebSocket，也不提供任何写回 GitHub / Decision Store / orchestrator 的路径。本包提供稳定的进程内运行态查询服务 `createOperationalQueryService` 作为 Observation Plane 单一读表面，供后续 CLI、Dashboard 等消费者读取统一快照。领域契约的唯一权威是 `@symphony/domain`；本包提供面向 operational consumers 的重导出、只读采集、纯读投影、异常检测与查询服务组合。
 
 ## Public API
 

@@ -159,16 +159,43 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
 
   const workKey = resolveWorkKey(input);
   const formattedTargetKey = formatWorkKey(workKey);
+  const fallbackTime = "detectedAt" in input && typeof input.detectedAt === "number" ? input.detectedAt : 0;
 
   // GitHub source
   const githubSource = input.github ?? input.collection?.github ?? null;
-  const githubFreshness = githubSource?.freshness ?? UNKNOWN_FRESHNESS;
-  const githubFacts = githubSource?.facts ?? null;
+  const rawGithubFreshness = githubSource?.freshness ?? UNKNOWN_FRESHNESS;
+  const rawGithubFacts = githubSource?.facts ?? null;
+  const githubMismatch = Boolean(
+    (rawGithubFacts && formatWorkKey(rawGithubFacts.workKey) !== formattedTargetKey) ||
+    (githubSource?.workKey && formatWorkKey(githubSource.workKey) !== formattedTargetKey),
+  );
+  const githubFacts = githubMismatch ? null : rawGithubFacts;
+  const githubFreshness: SourceFreshness = githubMismatch
+    ? {
+        status: "unavailable",
+        observedAt: null,
+        lastAttemptAt: rawGithubFreshness.lastAttemptAt ?? fallbackTime,
+        reason: "work_key_mismatch",
+      }
+    : rawGithubFreshness;
 
   // Decision source
   const decisionSource = input.decision ?? input.collection?.decision ?? null;
-  const decisionFreshness = decisionSource?.freshness ?? UNKNOWN_FRESHNESS;
-  const decisionFacts = decisionSource?.facts ?? null;
+  const rawDecisionFreshness = decisionSource?.freshness ?? UNKNOWN_FRESHNESS;
+  const rawDecisionFacts = decisionSource?.facts ?? null;
+  const decisionMismatch = Boolean(
+    (rawDecisionFacts && formatWorkKey(rawDecisionFacts.workKey) !== formattedTargetKey) ||
+    (decisionSource?.workKey && formatWorkKey(decisionSource.workKey) !== formattedTargetKey),
+  );
+  const decisionFacts = decisionMismatch ? null : rawDecisionFacts;
+  const decisionFreshness: SourceFreshness = decisionMismatch
+    ? {
+        status: "unavailable",
+        observedAt: null,
+        lastAttemptAt: rawDecisionFreshness.lastAttemptAt ?? fallbackTime,
+        reason: "work_key_mismatch",
+      }
+    : rawDecisionFreshness;
 
   // Runtime source
   const runtimeInput = input.runtime ?? input.collection?.runtime ?? null;
@@ -199,12 +226,14 @@ function normalizeWorkContext(input: WorkDerivationContext | ProjectWorkInput | 
         runtimeRow = sorted[0] ?? null;
       }
     } else if ("provenance" in runtimeInput && "issueId" in runtimeInput) {
-      runtimeFreshness = {
-        status: "fresh",
-        observedAt: runtimeInput.provenance.observedAt,
-        lastAttemptAt: runtimeInput.provenance.observedAt,
-      };
-      runtimeRow = runtimeInput;
+      if (!runtimeInput.workKey || formatWorkKey(runtimeInput.workKey) === formattedTargetKey) {
+        runtimeFreshness = {
+          status: "fresh",
+          observedAt: runtimeInput.provenance.observedAt,
+          lastAttemptAt: runtimeInput.provenance.observedAt,
+        };
+        runtimeRow = runtimeInput;
+      }
     }
   }
 

@@ -178,16 +178,25 @@ function resolveDecisionReader(
   return options.decisionReader ?? null;
 }
 
+function deepClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
 /**
- * Safely executes a source reader, returning an unavailable result if execution throws.
- * Preserves unconfigured unknown semantics when reader is absent.
+ * Safely executes a global source reader (runtime or executor), returning an unavailable
+ * result if execution throws, and deep-cloning facts/freshness to prevent consumer mutation pollution.
  */
-async function executeReader<T>(
+async function executeGlobalReader<T>(
   source: OperationSourceKind,
   defaultInstance: string,
   reader: SourceReader<T> | null | undefined,
   now: UtcTimestampMs,
-  workKey?: WorkKey | null,
 ): Promise<OperationSourceResult<T>> {
   if (!reader) {
     return {
@@ -199,18 +208,16 @@ async function executeReader<T>(
         lastAttemptAt: null,
         reason: "source_not_configured",
       },
-      ...(workKey ? { workKey } : {}),
     };
   }
   try {
-    const result = await reader.read();
-    if (workKey && !result.workKey) {
-      return {
-        ...result,
-        workKey,
-      };
-    }
-    return result;
+    const raw = await reader.read();
+    return {
+      source: raw.source ?? source,
+      instance: raw.instance ?? defaultInstance,
+      facts: raw.facts !== null && raw.facts !== undefined ? deepClone(raw.facts) : null,
+      freshness: deepClone(raw.freshness),
+    };
   } catch (error) {
     return {
       source,
@@ -222,7 +229,99 @@ async function executeReader<T>(
         lastAttemptAt: now,
         reason: error instanceof Error ? error.message : "source_read_failed",
       },
-      ...(workKey ? { workKey } : {}),
+    };
+  }
+}
+
+/**
+ * Safely executes a per-workKey source reader (github or decision).
+ * Strictly verifies identity against expectedWorkKey on both envelope and facts.
+ * Mismatched facts are isolated and degraded to unavailable (never relabeled).
+ * Deep-clones facts and freshness to prevent consumer mutation leakage into reader caches.
+ */
+async function executeWorkReader<T extends { readonly workKey?: WorkKey }>(
+  source: OperationSourceKind,
+  defaultInstance: string,
+  reader: SourceReader<T> | null | undefined,
+  now: UtcTimestampMs,
+  expectedWorkKey: WorkKey,
+): Promise<OperationSourceResult<T>> {
+  const formattedExpected = formatWorkKey(expectedWorkKey);
+
+  if (!reader) {
+    return {
+      source,
+      instance: defaultInstance,
+      facts: null,
+      freshness: {
+        status: "unknown",
+        lastAttemptAt: null,
+        reason: "source_not_configured",
+      },
+      workKey: expectedWorkKey,
+    };
+  }
+
+  try {
+    const raw = await reader.read();
+
+    // Check envelope workKey identity
+    if (raw.workKey && formatWorkKey(raw.workKey) !== formattedExpected) {
+      return {
+        source: raw.source ?? source,
+        instance: raw.instance ?? defaultInstance,
+        facts: null,
+        freshness: {
+          status: "unavailable",
+          observedAt: null,
+          lastAttemptAt: now,
+          reason: "work_key_mismatch",
+        },
+        workKey: expectedWorkKey,
+      };
+    }
+
+    // Check facts workKey identity
+    if (
+      raw.facts &&
+      typeof raw.facts === "object" &&
+      "workKey" in raw.facts &&
+      raw.facts.workKey &&
+      formatWorkKey(raw.facts.workKey) !== formattedExpected
+    ) {
+      return {
+        source: raw.source ?? source,
+        instance: raw.instance ?? defaultInstance,
+        facts: null,
+        freshness: {
+          status: "unavailable",
+          observedAt: null,
+          lastAttemptAt: now,
+          reason: "work_key_mismatch",
+        },
+        workKey: expectedWorkKey,
+      };
+    }
+
+    return {
+      source: raw.source ?? source,
+      instance: raw.instance ?? defaultInstance,
+      facts: raw.facts !== null && raw.facts !== undefined ? deepClone(raw.facts) : null,
+      freshness: deepClone(raw.freshness),
+      workKey: expectedWorkKey,
+    };
+  } catch (error) {
+    return {
+      source,
+      instance: defaultInstance,
+      facts: null,
+      freshness: {
+        status: "unavailable",
+        observedAt: null,
+        lastAttemptAt: now,
+        reason: error instanceof Error ? error.message : "source_read_failed",
+      },
+      workKey: expectedWorkKey,
     };
   }
 }
@@ -238,13 +337,13 @@ async function assembleOperationalSnapshot(
   const keys = await resolveWorkKeys(options.workKeys);
 
   // 1. Read global sources once per query turn
-  const runtimePromise = executeReader(
+  const runtimePromise = executeGlobalReader(
     "runtime",
     "runtime",
     options.runtimeReader,
     now,
   );
-  const executorPromise = executeReader(
+  const executorPromise = executeGlobalReader(
     "executor",
     "executor",
     options.executorReader,
@@ -256,8 +355,8 @@ async function assembleOperationalSnapshot(
     const ghReader = resolveGitHubReader(key, options);
     const decReader = resolveDecisionReader(key, options);
     const [githubResult, decisionResult] = await Promise.all([
-      executeReader("github", "github", ghReader, now, key),
-      executeReader("decision", "decision", decReader, now, key),
+      executeWorkReader("github", "github", ghReader, now, key),
+      executeWorkReader("decision", "decision", decReader, now, key),
     ]);
     return { key, githubResult, decisionResult };
   });
@@ -276,12 +375,12 @@ async function assembleOperationalSnapshot(
   sources.push({
     source: runtimeResult.source,
     instance: runtimeResult.instance,
-    freshness: runtimeResult.freshness,
+    freshness: deepClone(runtimeResult.freshness),
   });
   sources.push({
     source: executorResult.source,
     instance: executorResult.instance,
-    freshness: executorResult.freshness,
+    freshness: deepClone(executorResult.freshness),
   });
 
   // Project each work item and collect per-work source statuses and anomalies
@@ -301,26 +400,28 @@ async function assembleOperationalSnapshot(
     sources.push({
       source: githubResult.source,
       instance: githubResult.instance,
-      freshness: githubResult.freshness,
+      freshness: deepClone(githubResult.freshness),
       workKey: key,
     });
     sources.push({
       source: decisionResult.source,
       instance: decisionResult.instance,
-      freshness: decisionResult.freshness,
+      freshness: deepClone(decisionResult.freshness),
       workKey: key,
     });
   }
 
   const sortedAnomalies = sortAndDeduplicateAnomalies(allAnomalies);
 
-  return projectOperationalSnapshot({
+  const snapshot = projectOperationalSnapshot({
     generatedAt: now,
     work: workProjections,
     executors: executorResult.facts ?? [],
     sources,
     anomalies: sortedAnomalies,
   });
+
+  return deepClone(snapshot);
 }
 
 /**
@@ -335,24 +436,26 @@ export function createOperationalQueryService(
 
   return {
     async getOperationalSnapshot(): Promise<OperationalSnapshot> {
-      return assembleOperationalSnapshot(options);
+      const snapshot = await assembleOperationalSnapshot(options);
+      return deepClone(snapshot);
     },
 
     async listWork(): Promise<readonly WorkProjection[]> {
       const snapshot = await assembleOperationalSnapshot(options);
-      return snapshot.work;
+      return deepClone(snapshot.work);
     },
 
     async getWork(workKey: WorkKey | string): Promise<WorkProjection | null> {
       const target = normalizeWorkKey(workKey);
       const formatted = formatWorkKey(target);
       const snapshot = await assembleOperationalSnapshot(options);
-      return snapshot.work.find((w) => formatWorkKey(w.key) === formatted) ?? null;
+      const found = snapshot.work.find((w) => formatWorkKey(w.key) === formatted) ?? null;
+      return found ? deepClone(found) : null;
     },
 
     async listExecutors(): Promise<readonly ExecutorProjection[]> {
       const snapshot = await assembleOperationalSnapshot(options);
-      return snapshot.executors;
+      return deepClone(snapshot.executors);
     },
   };
 }
