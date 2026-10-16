@@ -131,6 +131,21 @@ it("rejects bind failures without querying or interrupting an existing transport
   expect((await fetch(`${base}/api/operations/snapshot`)).status).toBe(200);
 });
 
+it("isolates repeated server errors after startup and continues serving snapshots", async () => {
+  const service = realService();
+  const getOperationalSnapshot = vi.spyOn(service, "getOperationalSnapshot");
+  const base = await start(service);
+  const server = servers[0]!;
+  for (let index = 0; index < 2; index++) {
+    expect(() => server.emit("error", new Error("runtime transport failure"))).not.toThrow();
+  }
+  expect(getOperationalSnapshot).not.toHaveBeenCalled();
+  const response = await fetch(`${base}/api/operations/snapshot`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(await realService().getOperationalSnapshot());
+  expect(getOperationalSnapshot).toHaveBeenCalledTimes(1);
+});
+
 it("sanitizes serialization errors before sending snapshot headers or a partial body", async () => {
   const snapshot = await realService().getOperationalSnapshot();
   const getOperationalSnapshot = vi.fn(async () => ({

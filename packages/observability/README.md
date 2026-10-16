@@ -67,6 +67,6 @@ server.close();
 
 仅 `GET /api/operations/snapshot` 调用一次查询服务，直接返回完整 `OperationalSnapshot`，不重映射、不推导状态。`Content-Type: application/json; charset=utf-8`、`Cache-Control: no-store`。degraded/partial 快照仍为 200；fresh/stale/unknown/unavailable、WorkKey、review task/result target 和 exact HEAD approval、evidence/anomalies 原样保留。
 
-查询或序列化异常为 500 `{"error":"operational_snapshot_failed"}`，不暴露异常详情、不伪造 snapshot；未知路径为 404 `not_found`；目标路径其他方法为 405 `method_not_allowed` + `Allow: GET`，不调用查询。启动 bind 失败拒绝启动 Promise，由调用方处理；HTTP 失败不调用 scheduler、Decision 或 workflow control。无写路由、持久缓存、后台轮询、重试、SSE/WebSocket。
+查询或序列化异常为 500 `{"error":"operational_snapshot_failed"}`，不暴露异常详情、不伪造 snapshot；未知路径为 404 `not_found`；目标路径其他方法为 405 `method_not_allowed` + `Allow: GET`，不调用查询。启动 bind 失败拒绝启动 Promise，由调用方处理；持续保留非致命 server `error` 监听器，隔离启动后的 transport 错误；HTTP 失败不调用 scheduler、Decision 或 workflow control。无写路由、持久缓存、后台轮询、重试、SSE/WebSocket。
 
 运行 `npm test -w @symphony/observability -- src/operations-http.test.ts src/operations-http-boundaries.test.ts` 验证真实 loopback 请求、真实 operations partial-failure 链路与静态能力边界。跨包决定见 [HTTP transport Note](../../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。

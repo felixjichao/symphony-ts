@@ -37,6 +37,9 @@ export async function startOperationsHttpServer(
       }
     })();
   });
+  server.on("error", () => {
+    // Runtime transport failures are observational and must not terminate the host (§13.7).
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => {

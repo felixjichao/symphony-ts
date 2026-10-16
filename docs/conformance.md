@@ -362,6 +362,7 @@ Thin Observation Plane transport，完整快照直接委托 `@symphony/operation
 | Actual query service, partial failure, four freshness variants, multiple isolated WorkKeys | `operations-http.test.ts`: real query boundary with read-only SourceReaders |
 | Current PR HEAD, task/result targets, approved_stale_head, anomalies and evidence survive | `operations-http.test.ts`: real query boundary exact-HEAD assertions |
 | Sanitized query rejection, recovery, no workflow control; no write routes | `operations-http.test.ts`: failure and unsupported methods/unknown routes |
+| Bind failure rejects startup; repeated post-listen server errors remain non-fatal | `operations-http.test.ts`: bind conflict and runtime error isolation with subsequent successful GET |
 | Only operations + Node HTTP capabilities; independent synchronous domain-only projector | `operations-http-boundaries.test.ts`, `snapshot-boundaries.test.ts`; `packages/operations/src/boundaries.test.ts` prohibits source reverse imports |
 
 Sandbox validation passed: `npm test -w @symphony/operations` (113 tests), `npm test -w @symphony/observability` (21 tests), `npm run typecheck`, `npm run docs:check`, and `npm run lint -- --quiet`. Full `npm run gate` remains pending in the operator-owned host hook. Production lifecycle (#140), Dashboard (#138–#139), history, streaming and commands remain outside this transport slice.
