@@ -309,6 +309,14 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     },
   });
 
+  it.each([0, -1, 1.5, NaN, Infinity, 2_147_483_648])("rejects invalid validation timeout %s before invoking subprocesses", async validationTimeoutMs => {
+    const runner = new MockDeliveryRunner();
+    await expect(runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, validationTimeoutMs })).rejects.toThrow("validationTimeoutMs");
+    expect(runner.execCalls).toHaveLength(0);
+    expect(runner.gitCalls).toHaveLength(0);
+    expect(runner.ghCalls).toHaveLength(0);
+  });
+
   const setupPreMutationSuccess = (runner: MockDeliveryRunner, headBranch = "symphony/GH-80", repo = "felixjichao/symphony-ts") => {
     // 1. git branch --show-current
     runner.gitResponses.push({ stdout: `${headBranch}\n`, stderr: "", exitCode: 0 });
@@ -404,6 +412,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     // 验证真实执行了 validationCommand
     expect(runner.execCalls).toHaveLength(1);
     expect(runner.execCalls[0]?.command).toBe("npm test");
+    expect(runner.execCalls[0]?.timeoutMs).toBe(600_000);
 
     // 验证调用了 git commit 和 git push
     const gitCommitCall = runner.gitCalls.find((c) => c.args[0] === "commit");
@@ -723,12 +732,16 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       ...getBaseOptions(cwd),
       runner,
       repairCommand: "npm run ci:fix",
+      validationTimeoutMs: 240_000,
       maxWaitSeconds: 300,
     });
 
     expect(result.status).toBe("completed");
     expect(result.spentRepairs).toBe(1);
     expect(result.mergeSha).toBe("mergedsha-repair-cmd");
+    const validations = runner.execCalls.filter(c => c.command === "npm test");
+    expect(validations).toHaveLength(2);
+    expect(validations.every(c => c.timeoutMs === 240_000)).toBe(true);
     // 修复入口确实被执行，且不是凭空成功：修复后产生了新的 SHA 并再次 push。
     expect(runner.execCalls.map((c) => c.command)).toContain("npm run ci:fix");
     expect(runner.execCalls.find(c => c.command === "npm run ci:fix")?.timeoutMs).toBeGreaterThan(60_000);
@@ -1837,6 +1850,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
         reviewGate,
+        validationTimeoutMs: 420_000,
         maxWaitSeconds: mode === "resumed-command" ? 500 : 300,
         ...(mode === "resumed-command" ? {
           resume: true,
@@ -1854,6 +1868,9 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
 
       expect(result.status).toBe("completed");
       expect(result.headSha).toBe(shaB);
+      const validations = runner.execCalls.filter(c => c.command === "npm test");
+      expect(validations).toHaveLength(2);
+      expect(validations.every(c => c.timeoutMs === 420_000)).toBe(true);
       if (mode !== "function") {
         const call = runner.execCalls.find(c => c.command === "codex-review-repair");
         receivedFeedback = call?.env?.["SYMPHONY_REVIEW_FINDINGS"] ?? "";

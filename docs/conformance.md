@@ -251,6 +251,7 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | 6-path end-to-end planning workflow: ready dispatch, clarification loop, needs_human block, ChatGPT binding reuse, rollover reconstruction, requirement change review invalidation | `packages/decision/src/planning-workflow.test.ts`: Decision Planning Workflow — 6 Required Dogfood Paths |
 | Decision environment isolation (vitest test setup isolation, fail-fast on `--store`/`--bridge-url` conflict, explicit store precedence over inherited bridge env) | `apps/cli/src/planning-cli.test.ts`, `apps/cli/src/host.test.ts` |
 | Delivery handoff persistence before remote mutations, reconciliation resilience, and `recover-handoff` deduplication | `packages/agent/src/delivery/delivery-skill-runner.test.ts`: NEST-128 test, `apps/cli/src/delivery-skill-cli.test.ts`: recover-handoff action |
+| Project validation has an independent bounded timeout (GitHub delivery extension; SPEC §17/§18 adjacent) | `packages/agent/src/delivery/delivery-skill-runner.test.ts`: initial, CI repair and review repair; `apps/cli/src/delivery-skill-cli.test.ts`: CLI conversion and invalid values |
 | Directional cleanup tool for `#99` plan tasks in store/bridge with session isolation leaving `#137` untouched | `packages/decision/src/cleanup-polluted-tasks.test.ts`, `scripts/cleanup-polluted-tasks.mjs` |
 
 Real browser smoke: [NEST-105 process and sanitized receipts](evidence/nest105/README.md). This is adapter evidence, not the delivery review gate end-to-end acceptance.

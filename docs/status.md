@@ -8,6 +8,8 @@
 
 ## 当前 posture
 
+- GitHub delivery：本地验证新增 `--validation-timeout`（默认 600 秒），覆盖首次及 CI/Review 修复后验证；独立于 CI 等待预算。
+
 - 开发主线：`main`。当前最新里程碑提交为 `29840f9`（PR #133，Operational Read Model / Observation Plane query service 与集成验收收口）；GitHub Delivery MVP 的 dogfood 里程碑提交为 `e6f8e25`（PR #88）。
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。

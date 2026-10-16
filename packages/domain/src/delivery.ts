@@ -532,6 +532,8 @@ export interface DeliverySkillConfig {
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly validationCommand?: string | undefined;
+  /** Project validation timeout in milliseconds (default 600_000), independent of CI wait. */
+  readonly validationTimeoutMs?: number | undefined;
   readonly repairCommand?: string | undefined;
   readonly maxRepairAttempts?: number | undefined;
   readonly maxWaitSeconds?: number | undefined;
