@@ -169,29 +169,41 @@ export async function recoverDeliveryHandoff(
             alreadyPosted = parsedView.comments.some(
               (c: { body?: string }) => typeof c.body === "string" && c.body.includes(handoffId),
             );
-          } else if (headSha) {
-            canUniquelyVerify = true;
-            const shortSha = headSha.slice(0, 10);
-            alreadyPosted = parsedView.comments.some(
-              (c: { body?: string }) =>
-                typeof c.body === "string" && (c.body.includes(shortSha) || c.body.includes(headSha)),
-            );
           } else {
-            // 旧状态无 handoffId 且无 headSha
-            const hasAnyHandoffReport = parsedView.comments.some(
+            // 没有 handoffId 的旧状态：严格筛选真正的交接报告（普通提及 commit 的评论不是交接报告）
+            const handoffReports = parsedView.comments.filter(
               (c: { body?: string }) =>
                 typeof c.body === "string" &&
                 (c.body.includes("## 🚨 Symphony Delivery Handoff Report") ||
-                  c.body.includes("symphony-delivery-handoff")),
+                  c.body.includes("symphony-delivery-handoff") ||
+                  c.body.includes("symphony:handoff-id:")),
             );
-            if (hasAnyHandoffReport) {
-              // 远端已有交接报告，但旧状态无 ID/SHA，无法证明该报告属于本次交接还是历史交接
-              // 按照审阅要求：旧状态不能凭通用 details/标题虚报完成，无法唯一确认时保留待核验
-              canUniquelyVerify = false;
+
+            if (headSha) {
+              const shortSha = headSha.slice(0, 10);
+              const matchingReport = handoffReports.find(
+                (c: { body?: string }) =>
+                  typeof c.body === "string" && (c.body.includes(shortSha) || c.body.includes(headSha)),
+              );
+              if (matchingReport) {
+                // 远端已有同 commit 的交接报告，但旧状态无唯一 handoffId，同一 commit 的多次暂停也不能靠 SHA 唯一识别。
+                // 按照审阅要求：无法确定本次发布事实时保持待核验，不能盲目标记完成。
+                canUniquelyVerify = false;
+              } else {
+                // 远端没有针对当前 commit 的交接报告（仅有旧 commit 的报告或普通非交接评论），确定未曾发布，可以安全分配 ID 补发
+                canUniquelyVerify = true;
+                alreadyPosted = false;
+              }
             } else {
-              // 远端没有任何交接报告，确定未曾发布，可以安全补发
-              canUniquelyVerify = true;
-              alreadyPosted = false;
+              // 既无 handoffId 也无 headSha 的遗留状态
+              if (handoffReports.length > 0) {
+                // 远端已存在交接报告，但无任何身份信息可证明属于本次暂停
+                canUniquelyVerify = false;
+              } else {
+                // 远端没有任何交接报告，确定未曾发布，可以安全补发
+                canUniquelyVerify = true;
+                alreadyPosted = false;
+              }
             }
           }
         }
@@ -271,6 +283,19 @@ export async function recoverDeliveryHandoff(
         ...baseHandoff,
         handoffId: baseHandoff.handoffId ?? generatedHandoffId,
       };
+
+      // 关键核心修复（Blocker 1）：在发起任何远端评论网络请求之前，必须立即将补齐 handoffId 的完整 handoff 持久化落盘！
+      // 即使远端调用出现连接超时或结果不明，磁盘也已记录确定的 handoffId，下一次 recover 能够精准核验与去重。
+      await stateStorage.writeState({
+        ...currentState,
+        handoff: handoffToPost,
+        readyLabelRemoved,
+        commentPosted: false,
+        commentVerifyStatus: "unverified",
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+      });
+
       const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
       try {
         const commentRes = await runner.gh([...commentTargetArgs, "--body", commentBody], cwd);
@@ -280,12 +305,12 @@ export async function recoverDeliveryHandoff(
           log("[delivery-recovery] Successfully posted handoff report comment.");
         } else {
           commentPosted = false;
-          commentVerifyStatus = "failed";
+          commentVerifyStatus = "unverified";
           log(`[delivery-recovery] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
         }
       } catch (err) {
         commentPosted = false;
-        commentVerifyStatus = "failed";
+        commentVerifyStatus = "unverified";
         log(`[delivery-recovery] Warning: Exception posting comment: ${String(err)}`);
       }
     }
@@ -299,7 +324,7 @@ export async function recoverDeliveryHandoff(
     commentPosted,
     commentVerifyStatus,
     pendingCompensation,
-    handoff: currentState.handoff ?? handoffToPost,
+    handoff: handoffToPost ?? currentState.handoff,
     lastUpdated: new Date().toISOString(),
   });
 

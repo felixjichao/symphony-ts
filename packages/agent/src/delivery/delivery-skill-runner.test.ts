@@ -1293,7 +1293,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(writtenSpentRepairs).toBe(1); // 修复发生异常时，预算已经被持久化，重试不会归零
   });
 
-  it("NEST-128: haltDispatch persists paused state and handoff intent BEFORE remote operations, surviving worker termination after label removal", async () => {
+  it("NEST-128: haltDispatch persists paused state and handoff intent BEFORE remote operations, surviving signal abort after label removal", async () => {
     const cwd = createTempCwd();
     const stateFile = path.join(cwd, ".symphony/delivery-state.json");
     const runner = new MockDeliveryRunner();
@@ -1374,7 +1374,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       return { stdout: "", stderr: "", exitCode: 0 };
     });
 
-    // 2. view label (verified removed) succeeds, then Orchestrator aborts the worker via signal before comment is posted
+    // 2. view label (verified removed) succeeds, then cancellation signal is triggered on the runner before comment is posted
     runner.ghResponses.push((args) => {
       expect(args[0]).toBe("issue");
       expect(args[1]).toBe("view");
