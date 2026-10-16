@@ -1291,6 +1291,77 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(writtenSpentRepairs).toBe(1); // 修复发生异常时，预算已经被持久化，重试不会归零
   });
 
+  it("NEST-128: haltDispatch persists paused state and handoff intent BEFORE remote operations, surviving worker termination after label removal", async () => {
+    const cwd = createTempCwd();
+    const runner = new MockDeliveryRunner();
+    setupPreMutationSuccess(runner);
+
+    // PR exists
+    runner.ghResponses.push({
+      stdout: JSON.stringify([
+        {
+          number: 95,
+          url: "https://github.com/felixjichao/symphony-ts/pull/95",
+          headRefOid: "sha-head-initial",
+          state: "OPEN",
+          body: 'Fixes #80\n\n<!-- symphony-delivery-marker: {"schemaVersion":1,"workspaceKey":"GH-80","issueNumber":80,"repo":"felixjichao/symphony-ts","headBranch":"symphony/GH-80","baseBranch":"main"} -->',
+        },
+      ]),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git status
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+    runner.gitResponses.push({ stdout: "sha-head-initial\n", stderr: "", exitCode: 0 }); // rev-parse
+
+    // CI check failure
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "sha-head-initial",
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    // 1. edit label succeeds
+    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    // 2. view label (verified removed) succeeds
+    runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+    // 3. Simulating reconciliation kill / network crash right during pr comment
+    runner.ghResponses.push({ stdout: "", stderr: "Connection aborted by orchestrator reconciliation", exitCode: 1 });
+
+    const writtenStates: PersistedDeliveryState[] = [];
+    const mockStorage = {
+      readState: async () => null,
+      writeState: async (state: PersistedDeliveryState) => {
+        writtenStates.push(JSON.parse(JSON.stringify(state)));
+      },
+    };
+
+    const result = await runDeliverySkill({
+      ...getBaseOptions(cwd),
+      stateStorage: mockStorage,
+      maxRepairAttempts: 0,
+      runner,
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(writtenStates.length).toBeGreaterThanOrEqual(2);
+    const initialHaltState = writtenStates.find((s) => s.isPaused && s.readyLabelRemoved === false);
+    expect(initialHaltState).toBeDefined();
+    expect(initialHaltState?.pauseReason).toBe("ci_failed_max_repairs");
+    expect(initialHaltState?.pendingCompensation).toBe(true);
+    expect(initialHaltState?.handoff).toBeDefined();
+
+    const labelRemovedState = writtenStates.find((s) => s.readyLabelRemoved === true);
+    expect(labelRemovedState).toBeDefined();
+    expect(labelRemovedState?.pendingCompensation).toBe(true);
+    expect(labelRemovedState?.commentPosted).toBe(false);
+  });
+
   describe("NEST-103 独立审查门禁 (Decision Review Gate before auto-merge)", () => {
     const shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

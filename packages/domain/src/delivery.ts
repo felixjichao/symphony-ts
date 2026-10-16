@@ -463,6 +463,11 @@ export interface PersistedDeliveryState {
   readonly isPaused: boolean;
   readonly pauseReason?: string | undefined;
   readonly lastUpdated: string;
+  readonly handoff?: DeliveryHandoff | undefined;
+  readonly readyLabelRemoved?: boolean | undefined;
+  readonly commentPosted?: boolean | undefined;
+  readonly commentVerifyStatus?: "pending" | "posted" | "failed" | "unverified" | undefined;
+  readonly pendingCompensation?: boolean | undefined;
 }
 
 /**

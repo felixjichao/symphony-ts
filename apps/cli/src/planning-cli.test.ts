@@ -12,8 +12,8 @@ describe("planning-cli", () => {
   let stderrBuffer: string[];
   let io: PlanningCliIo;
 
-  const sessionId = "github:felixjichao/symphony-ts#99";
-  const repo = "felixjichao/symphony-ts";
+  const sessionId = "github:test-fixtures/planning-test#99";
+  const repo = "test-fixtures/planning-test";
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "planning-cli-test-"));
@@ -68,7 +68,7 @@ describe("planning-cli", () => {
     const code1 = await runPlanningCli(
       [
         "start",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--title", "Test Title",
         "--body", "Test Body",
@@ -84,7 +84,7 @@ describe("planning-cli", () => {
     const code2 = await runPlanningCli(
       [
         "status",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--store", tmpDir,
       ],
@@ -100,7 +100,7 @@ describe("planning-cli", () => {
     const code3 = await runPlanningCli(
       [
         "clarify",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--clarifications", "Clarification item 1; Clarification item 2",
         "--store", tmpDir,
@@ -115,7 +115,7 @@ describe("planning-cli", () => {
     const code4 = await runPlanningCli(
       [
         "replan",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--title", "Updated Title",
         "--store", tmpDir,
@@ -149,7 +149,7 @@ describe("planning-cli", () => {
     await runPlanningCli(
       [
         "start",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--title", "Clarification Needed Test",
         "--body", "Description",
@@ -204,7 +204,7 @@ describe("planning-cli", () => {
         if (args[0] === "issue" && args[1] === "comment") {
           const bodyIdx = args.indexOf("--body");
           postedBody = bodyIdx >= 0 ? (args[bodyIdx + 1] ?? "") : "";
-          return "https://github.com/felixjichao/symphony-ts/issues/99#issuecomment-98765\n";
+          return `https://github.com/${repo}/issues/99#issuecomment-98765\n`;
         }
         throw new Error(`Unexpected command: ${args.join(" ")}`);
       },
@@ -215,7 +215,7 @@ describe("planning-cli", () => {
     const pubCode = await runPlanningCli(
       [
         "sync",
-        "--repo", "felixjichao/symphony-ts",
+        "--repo", repo,
         "--issue", "99",
         "--publish",
         "--store", tmpDir,
@@ -285,7 +285,7 @@ describe("planning-cli", () => {
         if (args[0] === "issue" && args[1] === "comment") {
           const bodyIdx = args.indexOf("--body");
           postedBody = bodyIdx >= 0 ? (args[bodyIdx + 1] ?? "") : "";
-          return "https://github.com/felixjichao/symphony-ts/issues/99#issuecomment-77777\n";
+          return `https://github.com/${repo}/issues/99#issuecomment-77777\n`;
         }
         throw new Error(`Unexpected command: ${args.join(" ")}`);
       },
@@ -376,4 +376,43 @@ describe("planning-cli", () => {
     expect(code).toBe(0);
     expect(stdoutBuffer.join("")).toContain("Usage: symphony plan");
   });
+
+  it("fails immediately before I/O when both --store and --bridge-url are specified", async () => {
+    const code = await runPlanningCli(
+      [
+        "status",
+        "--repo", repo,
+        "--issue", "99",
+        "--store", tmpDir,
+        "--bridge-url", "http://127.0.0.1:9999",
+      ],
+      io,
+    );
+    expect(code).toBe(1);
+    expect(stderrBuffer.join("")).toContain("conflicting backend options: cannot specify both --store and --bridge-url");
+  });
+
+  it("explicit --store takes precedence over inherited DECISION_BRIDGE_URL", async () => {
+    // Inject a non-existent bridge URL into environment
+    const testIo: PlanningCliIo = {
+      ...io,
+      env: { DECISION_BRIDGE_URL: "http://127.0.0.1:1" },
+    };
+
+    // When --store is provided, it should use the store and NOT attempt to connect to bridge
+    const code = await runPlanningCli(
+      [
+        "start",
+        "--repo", repo,
+        "--issue", "99",
+        "--title", "Test Title",
+        "--body", "Test Body",
+        "--store", tmpDir,
+      ],
+      testIo,
+    );
+    expect(code).toBe(0);
+    expect(stdoutBuffer.join("")).toContain("Planning task");
+  });
 });
+

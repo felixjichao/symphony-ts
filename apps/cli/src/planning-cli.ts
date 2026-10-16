@@ -128,6 +128,7 @@ export interface PlanningCliIo {
   readonly stdout: { write(text: string): unknown };
   readonly stderr: { write(text: string): unknown };
   readonly execGh?: ((args: readonly string[]) => string) | undefined;
+  readonly env?: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined;
 }
 
 export interface ParsedPlanningArgs {
@@ -271,17 +272,39 @@ export async function runPlanningCli(argv: readonly string[], io: PlanningCliIo)
     }
   }
 
+  // Conflict check: --store and --bridge-url cannot both be specified
+  if (args.storeDir !== undefined && args.bridgeUrl !== undefined) {
+    io.stderr.write("symphony plan: error: conflicting backend options: cannot specify both --store and --bridge-url\n");
+    return 1;
+  }
+
+  const env = io.env ?? process.env;
+
   // Create planning gate
   let store: DurableDecisionStore | null = null;
   let gate: DecisionPlanningGate;
 
-  const bridgeUrl = args.bridgeUrl ?? process.env.DECISION_BRIDGE_URL;
-  if (bridgeUrl) {
-    const token = args.bridgeToken ?? process.env.DECISION_BRIDGE_TOKEN;
+  if (args.storeDir !== undefined) {
+    const storeDir = args.storeDir;
+    if (!fs.existsSync(storeDir)) {
+      fs.mkdirSync(storeDir, { recursive: true });
+    }
+    store = new DurableDecisionStore({ storeDir });
+    await store.open();
+    const service = new DecisionService(store);
+    gate = new DecisionPlanningGate(service);
+  } else if (args.bridgeUrl !== undefined) {
+    const bridgeUrl = args.bridgeUrl;
+    const token = args.bridgeToken ?? env.DECISION_BRIDGE_TOKEN;
+    const client = new DecisionBridgeClient(bridgeUrl, { ...(token ? { authToken: token } : {}) });
+    gate = new DecisionPlanningGate(client);
+  } else if (env.DECISION_BRIDGE_URL) {
+    const bridgeUrl = env.DECISION_BRIDGE_URL;
+    const token = args.bridgeToken ?? env.DECISION_BRIDGE_TOKEN;
     const client = new DecisionBridgeClient(bridgeUrl, { ...(token ? { authToken: token } : {}) });
     gate = new DecisionPlanningGate(client);
   } else {
-    const storeDir = args.storeDir ?? process.env.DECISION_STORE_DIR ?? path.join(process.cwd(), ".symphony", "decision");
+    const storeDir = env.DECISION_STORE_DIR ?? path.join(process.cwd(), ".symphony", "decision");
     if (!fs.existsSync(storeDir)) {
       fs.mkdirSync(storeDir, { recursive: true });
     }

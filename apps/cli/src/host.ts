@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runAgentAttempt } from "@symphony/agent";
 import {
+  SymphonyConfigError,
   watchWorkflow,
   type EffectiveWorkflow,
   type WorkflowWatchHandle,
@@ -159,31 +160,49 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   const cwd = options.cwd ?? process.cwd();
   const defaultStoreDir = path.join(cwd, ".symphony", "decision");
-  const bridgeUrl = options.decisionBridgeUrl ?? options.env?.DECISION_BRIDGE_URL ?? process.env.DECISION_BRIDGE_URL;
-  const explicitStoreDir = options.decisionStoreDir ?? options.env?.DECISION_STORE_DIR ?? process.env.DECISION_STORE_DIR;
+
+  if (options.decisionStoreDir !== undefined && options.decisionBridgeUrl !== undefined) {
+    throw new SymphonyConfigError("invalid_config", "Conflicting backend options: cannot specify both decisionStoreDir and decisionBridgeUrl", { path: workflowPath });
+  }
+
+  const explicitStoreDir = options.decisionStoreDir;
+  const explicitBridgeUrl = options.decisionBridgeUrl;
+  const envBridgeUrl = options.env !== undefined ? options.env["DECISION_BRIDGE_URL"] : process.env["DECISION_BRIDGE_URL"];
+  const envStoreDir = options.env !== undefined ? options.env["DECISION_STORE_DIR"] : process.env["DECISION_STORE_DIR"];
+  const envBridgeToken = options.env !== undefined ? options.env["DECISION_BRIDGE_TOKEN"] : process.env["DECISION_BRIDGE_TOKEN"];
+  const envPlanningEnabled = options.env !== undefined ? options.env["SYMPHONY_PLANNING_ENABLED"] : process.env["SYMPHONY_PLANNING_ENABLED"];
+
   const isExplicitlyDisabled =
     options.enablePlanning === false ||
-    options.env?.SYMPHONY_PLANNING_ENABLED === "0" ||
-    options.env?.SYMPHONY_PLANNING_ENABLED === "false" ||
-    process.env.SYMPHONY_PLANNING_ENABLED === "0" ||
-    process.env.SYMPHONY_PLANNING_ENABLED === "false";
+    envPlanningEnabled === "0" ||
+    envPlanningEnabled === "false";
   const isExplicitlyEnabled =
     options.enablePlanning === true ||
-    options.env?.SYMPHONY_PLANNING_ENABLED === "1" ||
-    options.env?.SYMPHONY_PLANNING_ENABLED === "true" ||
-    process.env.SYMPHONY_PLANNING_ENABLED === "1" ||
-    process.env.SYMPHONY_PLANNING_ENABLED === "true";
+    envPlanningEnabled === "1" ||
+    envPlanningEnabled === "true";
 
   let planningGate: DecisionPlanningGate | null = options.planningGate ?? null;
   let ownedStore: DurableDecisionStore | null = null;
 
   if (!planningGate && !isExplicitlyDisabled) {
-    if (bridgeUrl) {
-      const token = options.decisionBridgeToken ?? options.env?.DECISION_BRIDGE_TOKEN ?? process.env.DECISION_BRIDGE_TOKEN;
-      const client = new DecisionBridgeClient(bridgeUrl, { ...(token ? { authToken: token } : {}) });
+    if (explicitStoreDir !== undefined) {
+      if (!fs.existsSync(explicitStoreDir)) {
+        fs.mkdirSync(explicitStoreDir, { recursive: true });
+      }
+      ownedStore = new DurableDecisionStore({ storeDir: explicitStoreDir });
+      await ownedStore.open();
+      const service = new DecisionService(ownedStore);
+      planningGate = new DecisionPlanningGate(service);
+    } else if (explicitBridgeUrl !== undefined) {
+      const token = options.decisionBridgeToken ?? envBridgeToken;
+      const client = new DecisionBridgeClient(explicitBridgeUrl, { ...(token ? { authToken: token } : {}) });
       planningGate = new DecisionPlanningGate(client);
-    } else if (explicitStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
-      const storeDir = explicitStoreDir ?? defaultStoreDir;
+    } else if (envBridgeUrl) {
+      const token = options.decisionBridgeToken ?? envBridgeToken;
+      const client = new DecisionBridgeClient(envBridgeUrl, { ...(token ? { authToken: token } : {}) });
+      planningGate = new DecisionPlanningGate(client);
+    } else if (envStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
+      const storeDir = envStoreDir ?? defaultStoreDir;
       if (!fs.existsSync(storeDir)) {
         fs.mkdirSync(storeDir, { recursive: true });
       }

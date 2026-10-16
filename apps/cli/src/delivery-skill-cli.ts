@@ -86,7 +86,7 @@ function parseSafeNonNegativeInteger(val: string, flagName: string): number {
 }
 
 export function parseDeliverySkillArgs(argv: readonly string[]): {
-  action: "run" | "halt";
+  action: "run" | "halt" | "recover-handoff";
   repo?: string | undefined;
   issueNumber?: number | undefined;
   workspaceKey?: string | undefined;
@@ -107,7 +107,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   reason?: string | undefined;
   details?: string | undefined;
 } {
-  let action: "run" | "halt" = "run";
+  let action: "run" | "halt" | "recover-handoff" = "run";
   let repo: string | undefined;
   let issueNumber: number | undefined;
   let workspaceKey: string | undefined;
@@ -129,8 +129,8 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   let details: string | undefined;
 
   let i = 0;
-  if (argv[0] === "run" || argv[0] === "halt") {
-    action = argv[0];
+  if (argv[0] === "run" || argv[0] === "halt" || argv[0] === "recover-handoff" || argv[0] === "compensate-handoff") {
+    action = argv[0] === "compensate-handoff" ? "recover-handoff" : (argv[0] as "run" | "halt" | "recover-handoff");
     i = 1;
   }
 
@@ -227,10 +227,175 @@ export async function runDeliverySkillCli(
     return 1;
   }
 
+  if (parsed.action === "recover-handoff") {
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    let currentState: PersistedDeliveryState | null = null;
+    try {
+      currentState = stateStorage.readState();
+    } catch (err) {
+      io.stderr.write(`symphony delivery-skill: error reading state: ${String(err)}\n`);
+      return 1;
+    }
+    if (!currentState) {
+      io.stderr.write(`symphony delivery-skill: error: no persisted delivery state found\n`);
+      return 1;
+    }
+    if (!currentState.isPaused) {
+      io.stderr.write(`symphony delivery-skill: delivery state is not paused; no handoff recovery required\n`);
+      return 0;
+    }
+
+    const repo = parsed.repo;
+    const issueNumber = parsed.issueNumber;
+    const reason = (currentState.pauseReason as DeliveryHandoff["reason"]) ?? "manual_intervention_required";
+
+    let readyLabelRemoved = currentState.readyLabelRemoved ?? false;
+    if (!readyLabelRemoved) {
+      try {
+        const editRes = await runner.gh(
+          ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", readyLabel],
+          cwd,
+        );
+        if (editRes.exitCode === 0) {
+          readyLabelRemoved = true;
+        }
+      } catch {
+        readyLabelRemoved = false;
+      }
+    }
+
+    let commentPosted = currentState.commentPosted ?? false;
+    let commentVerifyStatus: "posted" | "failed" | "unverified" | "pending" = currentState.commentVerifyStatus ?? "unverified";
+
+    if (!commentPosted) {
+      let alreadyPosted = false;
+      try {
+        const viewRes = await runner.gh(
+          ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"],
+          cwd,
+        );
+        if (viewRes.exitCode === 0) {
+          const parsedView = JSON.parse(viewRes.stdout || "{}");
+          if (Array.isArray(parsedView.comments)) {
+            alreadyPosted = parsedView.comments.some((c: { body?: string }) =>
+              typeof c.body === "string" && c.body.includes("## 🚨 Symphony Delivery Handoff Report"),
+            );
+          }
+        }
+      } catch {
+        // Continue to post attempt if check fails
+      }
+
+      if (alreadyPosted) {
+        commentPosted = true;
+        commentVerifyStatus = "posted";
+      } else {
+        const handoffToPost: DeliveryHandoff = currentState.handoff ?? {
+          reason,
+          details: currentState.pauseReason ?? "Delivery paused for manual intervention.",
+          repo,
+          issueNumber,
+          headBranch: parsed.headBranch ?? `symphony/GH-${issueNumber}`,
+          prNumber: null,
+          prUrl: null,
+          headSha: null,
+          spentRepairs: currentState.spentRepairs,
+          maxRepairs: parsed.maxRepairs ?? currentState.spentRepairs,
+          spentWaitSeconds: currentState.spentWaitSeconds,
+          maxWaitSeconds: parsed.maxWait ?? currentState.spentWaitSeconds,
+          readyLabel,
+          readyLabelRemoved,
+        };
+        const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
+        try {
+          const commentRes = await runner.gh(
+            ["issue", "comment", String(issueNumber), "--repo", repo, "--body", commentBody],
+            cwd,
+          );
+          if (commentRes.exitCode === 0) {
+            commentPosted = true;
+            commentVerifyStatus = "posted";
+          } else {
+            commentPosted = false;
+            commentVerifyStatus = "failed";
+          }
+        } catch {
+          commentPosted = false;
+          commentVerifyStatus = "failed";
+        }
+      }
+    }
+
+    const pendingCompensation = !(readyLabelRemoved && commentPosted);
+    stateStorage.writeState({
+      ...currentState,
+      readyLabelRemoved,
+      commentPosted,
+      commentVerifyStatus,
+      pendingCompensation,
+      lastUpdated: new Date().toISOString(),
+    });
+
+    if (pendingCompensation) {
+      io.stderr.write("symphony delivery-skill: handoff recovery incomplete\n");
+      return 1;
+    }
+
+    io.stdout.write("symphony delivery-skill: handoff recovery completed successfully\n");
+    return 0;
+  }
+
   if (parsed.action === "halt") {
     // 显式停止派发命令（例如预算耗尽或 operator 触发）
     const reason = (parsed.reason ?? "budget_exhausted") as DeliveryHandoff["reason"];
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
+
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    let existingState: PersistedDeliveryState | null = null;
+    try {
+      existingState = stateStorage.readState();
+    } catch {
+      // ignore
+    }
+
+    const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
+    const spentWaitSeconds = existingState?.spentWaitSeconds ?? (parsed.maxWait ?? 300);
+
+    const handoff: DeliveryHandoff = {
+      reason,
+      details,
+      repo: parsed.repo,
+      issueNumber: parsed.issueNumber,
+      headBranch: parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
+      prNumber: null,
+      prUrl: null,
+      headSha: null,
+      spentRepairs,
+      maxRepairs: parsed.maxRepairs ?? spentRepairs,
+      spentWaitSeconds,
+      maxWaitSeconds: parsed.maxWait ?? spentWaitSeconds,
+      readyLabel,
+      readyLabelRemoved: false,
+      commentPosted: false,
+    };
+
+    // 先持久化 paused 状态和待补偿事实
+    stateStorage.writeState({
+      repo: parsed.repo,
+      issueNumber: parsed.issueNumber,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      spentRepairs,
+      spentWaitSeconds,
+      deadlineTimestampMs: existingState?.deadlineTimestampMs,
+      isPaused: true,
+      pauseReason: reason,
+      handoff,
+      readyLabelRemoved: false,
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+      lastUpdated: new Date().toISOString(),
+    });
 
     let readyLabelRemoved = false;
     let labelCheckError: string | null = null;
@@ -271,25 +436,27 @@ export async function runDeliverySkillCli(
       labelCheckError = `Exception during label removal: ${String(err)}`;
     }
 
-    let commentPosted = false;
-    const handoff: DeliveryHandoff = {
-      reason,
-      details,
+    const handoffAfterLabel = { ...handoff, readyLabelRemoved };
+    stateStorage.writeState({
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
-      headBranch: parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
-      prNumber: null,
-      prUrl: null,
-      headSha: null,
-      spentRepairs: parsed.maxRepairs ?? 3,
-      maxRepairs: parsed.maxRepairs ?? 3,
-      spentWaitSeconds: parsed.maxWait ?? 300,
-      maxWaitSeconds: parsed.maxWait ?? 300,
-      readyLabel,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      spentRepairs,
+      spentWaitSeconds,
+      deadlineTimestampMs: existingState?.deadlineTimestampMs,
+      isPaused: true,
+      pauseReason: reason,
+      handoff: handoffAfterLabel,
       readyLabelRemoved,
-    };
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+      lastUpdated: new Date().toISOString(),
+    });
 
-    let handoffMarkdown = formatDeliveryHandoffMarkdown(handoff);
+    let commentPosted = false;
+    let commentVerifyStatus: "posted" | "failed" | "unverified" = "unverified";
+    let handoffMarkdown = formatDeliveryHandoffMarkdown(handoffAfterLabel);
 
     try {
       const commentRes = await runner.gh(
@@ -298,26 +465,36 @@ export async function runDeliverySkillCli(
       );
       if (commentRes.exitCode === 0) {
         commentPosted = true;
+        commentVerifyStatus = "posted";
       } else {
+        commentVerifyStatus = "failed";
         io.stderr.write(`symphony delivery-skill: warning: failed to post comment: ${commentRes.stderr}\n`);
       }
     } catch (err) {
+      commentVerifyStatus = "failed";
       io.stderr.write(`symphony delivery-skill: warning: failed to post comment: ${String(err)}\n`);
       commentPosted = false;
     }
 
-    handoffMarkdown = formatDeliveryHandoffMarkdown({ ...handoff, commentPosted });
+    const finalHandoff = { ...handoffAfterLabel, commentPosted };
+    handoffMarkdown = formatDeliveryHandoffMarkdown(finalHandoff);
     io.stdout.write(handoffMarkdown + "\n");
 
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    const pendingCompensation = !(readyLabelRemoved && commentPosted);
     stateStorage.writeState({
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
-      workspaceKey: parsed.workspaceKey ?? `GH-${parsed.issueNumber}`,
-      spentRepairs: parsed.maxRepairs ?? 3,
-      spentWaitSeconds: parsed.maxWait ?? 300,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      spentRepairs,
+      spentWaitSeconds,
+      deadlineTimestampMs: existingState?.deadlineTimestampMs,
       isPaused: true,
       pauseReason: reason,
+      handoff: finalHandoff,
+      readyLabelRemoved,
+      commentPosted,
+      commentVerifyStatus,
+      pendingCompensation,
       lastUpdated: new Date().toISOString(),
     });
 
