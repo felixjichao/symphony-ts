@@ -354,6 +354,10 @@ export function parsePrCheckRollup(
 export async function runDeliverySkill(
   options: RunDeliverySkillOptions,
 ): Promise<DeliverySkillResult> {
+  const validationTimeoutMs = options.validationTimeoutMs ?? 600_000;
+  if (!Number.isSafeInteger(validationTimeoutMs) || validationTimeoutMs <= 0 || validationTimeoutMs > 2_147_483_647) {
+    throw new Error("validationTimeoutMs must be a positive integer no greater than 2147483647");
+  }
   const runner = options.runner;
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
@@ -800,7 +804,7 @@ export async function runDeliverySkill(
   log("[delivery-skill] Phase 2: Running project validation...");
   if (options.validationCommand) {
     log(`[delivery-skill] Executing validation command: ${options.validationCommand}`);
-    const valRes = await runner.exec(options.validationCommand, options.cwd);
+    const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
     if (valRes.exitCode !== 0) {
       return haltDispatch(
         "manual_intervention_required",
@@ -1195,7 +1199,7 @@ export async function runDeliverySkill(
         // 修复完成后重新执行项目验证
         if (options.validationCommand) {
           log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
-          const valRes = await runner.exec(options.validationCommand, options.cwd);
+          const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
           if (valRes.exitCode !== 0) {
             return haltDispatch(
               "ci_failed_max_repairs",
@@ -1634,7 +1638,7 @@ export async function runDeliverySkill(
 
           if (options.validationCommand) {
             log(`[delivery-skill] Re-running validation command after review repair: ${options.validationCommand}`);
-            const valRes = await runner.exec(options.validationCommand, options.cwd);
+            const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
             if (valRes.exitCode !== 0) {
               return haltDispatch(
                 "review_changes_requested_max_repairs",

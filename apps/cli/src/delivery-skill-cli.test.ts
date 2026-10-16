@@ -15,7 +15,7 @@ import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli }
 class MockCliRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly ghCalls: Array<{ args: readonly string[]; cwd: string }> = [];
-  readonly execCalls: Array<{ command: string; cwd: string }> = [];
+  readonly execCalls: Array<{ command: string; cwd: string; timeoutMs: number | undefined }> = [];
 
   gitResponses: DeliverySubprocessResult[] = [];
   ghResponses: DeliverySubprocessResult[] = [];
@@ -113,8 +113,8 @@ class MockCliRunner implements DeliveryGitGhRunner {
     return this.ghResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
 
-  async exec(command: string, cwd: string): Promise<DeliverySubprocessResult> {
-    this.execCalls.push({ command, cwd });
+  async exec(command: string, cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult> {
+    this.execCalls.push({ command, cwd, timeoutMs });
     return this.execResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
   }
 }
@@ -141,6 +141,8 @@ describe("delivery-skill CLI", () => {
       "5",
       "--max-wait",
       "120",
+      "--validation-timeout",
+      "600",
       "--ready-label",
       "custom-ready",
       "--opt-in",
@@ -164,6 +166,7 @@ describe("delivery-skill CLI", () => {
     expect(parsed.repairCommand).toBe("npm run fix");
     expect(parsed.maxRepairs).toBe(5);
     expect(parsed.maxWait).toBe(120);
+    expect(parsed.validationTimeoutMs).toBe(600_000);
     expect(parsed.readyLabel).toBe("custom-ready");
     expect(parsed.optInLand).toBe(true);
     expect(parsed.resume).toBe(true);
@@ -193,6 +196,14 @@ describe("delivery-skill CLI", () => {
     const code = await runDeliverySkillCli(["run", "--repo", "owner/repo", "--cwd", tempDir], io);
     expect(code).toBe(1);
     expect(stderr).toContain("missing required");
+  });
+
+  it.each(["0", "-1", "1.5", "NaN", "Infinity", "2147484", "", " "])("rejects invalid validation timeout %j", value => {
+    expect(() => parseDeliverySkillArgs(["run", "--validation-timeout", value])).toThrow("--validation-timeout");
+  });
+
+  it("rejects a missing validation timeout value", () => {
+    expect(() => parseDeliverySkillArgs(["run", "--validation-timeout"])).toThrow("--validation-timeout");
   });
 
   it("executes halt action: removes symphony-ready label and posts handoff comment", async () => {
@@ -408,6 +419,10 @@ describe("delivery-skill CLI", () => {
         "--issue",
         "80",
         "--opt-in",
+        "--validate",
+        "npm test",
+        "--validation-timeout",
+        "240",
         "--cwd",
         tempDir,
       ],
@@ -415,6 +430,8 @@ describe("delivery-skill CLI", () => {
       runner,
       mockReviewGate,
     );
+
+    expect(runner.execCalls.find(c => c.command === "npm test")?.timeoutMs).toBe(240_000);
 
     expect(stderr).toBe("");
     expect(code).toBe(0);
