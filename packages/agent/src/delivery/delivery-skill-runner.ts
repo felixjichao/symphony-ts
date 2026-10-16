@@ -466,6 +466,7 @@ export async function runDeliverySkill(
     // 构造初始交接报告（发给 GitHub 前作为本地基准，远端状态初始为未确认）
     let readyLabelRemoved = false;
     let commentPosted = false;
+    const handoffId = `handoff-${context.repo.replace("/", "-")}-${context.issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const handoffForRemote: DeliveryHandoff = {
       reason,
       details,
@@ -482,6 +483,7 @@ export async function runDeliverySkill(
       readyLabel,
       readyLabelRemoved: false,
       commentPosted: false,
+      handoffId,
     };
 
     // 关键设计决策（先写持久化状态）：在发起任何远端操作之前，必须先将 paused、原因、实际预算/deadline 和待补偿 handoff 落盘。
@@ -539,6 +541,9 @@ export async function runDeliverySkill(
         log(`[delivery-skill] Warning: Label '${readyLabel}' could not be verified as removed (${labelVerifyError ?? "unverified"})`);
       }
     } catch (err) {
+      if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
+        throw err;
+      }
       log(`[delivery-skill] Warning: Exception while removing label '${readyLabel}': ${String(err)}`);
       readyLabelRemoved = false;
     }
@@ -575,6 +580,9 @@ export async function runDeliverySkill(
         log(`[delivery-skill] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
       }
     } catch (err) {
+      if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
+        throw err;
+      }
       log(`[delivery-skill] Warning: Failed to post handoff comment: ${String(err)}`);
       commentPosted = false;
       commentVerifyStatus = "failed";

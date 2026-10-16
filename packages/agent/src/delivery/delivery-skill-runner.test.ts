@@ -13,7 +13,7 @@ import type {
   PersistedDeliveryState,
   UtcTimestampMs,
 } from "@symphony/domain";
-import { runDeliverySkill, type RunDeliverySkillOptions } from "./delivery-skill-runner";
+import { runDeliverySkill, type DeliveryStateStorage, type RunDeliverySkillOptions } from "./delivery-skill-runner";
 import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-runner";
 
 class MockDeliveryRunner implements DeliveryGitGhRunner {
@@ -1293,6 +1293,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
 
   it("NEST-128: haltDispatch persists paused state and handoff intent BEFORE remote operations, surviving worker termination after label removal", async () => {
     const cwd = createTempCwd();
+    const stateFile = path.join(cwd, ".symphony/delivery-state.json");
     const runner = new MockDeliveryRunner();
     setupPreMutationSuccess(runner);
 
@@ -1326,40 +1327,82 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       exitCode: 0,
     });
 
-    // 1. edit label succeeds
-    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    let verifiedStateOnDiskBeforeLabelRemoval = false;
+
+    // 1. edit label: assert that disk state ALREADY exists before executing this remote operation!
+    runner.ghResponses.push((args) => {
+      expect(args[0]).toBe("issue");
+      expect(args[1]).toBe("edit");
+      expect(args.includes("--remove-label")).toBe(true);
+
+      expect(fs.existsSync(stateFile)).toBe(true);
+      const onDisk = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      expect(onDisk.isPaused).toBe(true);
+      expect(onDisk.pauseReason).toBe("ci_failed_max_repairs");
+      expect(onDisk.readyLabelRemoved).toBe(false);
+      expect(onDisk.commentPosted).toBe(false);
+      expect(onDisk.commentVerifyStatus).toBe("pending");
+      expect(onDisk.pendingCompensation).toBe(true);
+      expect(onDisk.handoff).toBeDefined();
+      expect(onDisk.handoff.handoffId).toBeDefined();
+      expect(onDisk.spentWaitSeconds).toBeDefined();
+      expect(onDisk.deadlineTimestampMs).toBeDefined();
+
+      verifiedStateOnDiskBeforeLabelRemoval = true;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+
     // 2. view label (verified removed) succeeds
     runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
-    // 3. Simulating reconciliation kill / network crash right during pr comment
-    runner.ghResponses.push({ stdout: "", stderr: "Connection aborted by orchestrator reconciliation", exitCode: 1 });
 
-    const writtenStates: PersistedDeliveryState[] = [];
-    const mockStorage = {
-      readState: async () => null,
-      writeState: async (state: PersistedDeliveryState) => {
-        writtenStates.push(JSON.parse(JSON.stringify(state)));
+    // 3. Label removal immediately triggers Orchestrator reconciliation, terminating the worker before comment is posted
+    runner.ghResponses.push(() => {
+      throw new Error("worker_finished: canceled_by_reconciliation (unroutable)");
+    });
+
+    const realDiskStorage: DeliveryStateStorage = {
+      readState: () => {
+        try {
+          if (!fs.existsSync(stateFile)) return null;
+          return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      writeState: (state: PersistedDeliveryState) => {
+        fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+        const tmp = `${stateFile}.tmp.${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+        fs.renameSync(tmp, stateFile);
       },
     };
 
-    const result = await runDeliverySkill({
-      ...getBaseOptions(cwd),
-      stateStorage: mockStorage,
-      maxRepairAttempts: 0,
-      runner,
-    });
+    // Worker is terminated by reconciliation
+    await expect(
+      runDeliverySkill({
+        ...getBaseOptions(cwd),
+        stateStorage: realDiskStorage,
+        maxRepairAttempts: 0,
+        runner,
+      }),
+    ).rejects.toThrow("worker_finished: canceled_by_reconciliation");
 
-    expect(result.status).toBe("blocked");
-    expect(writtenStates.length).toBeGreaterThanOrEqual(2);
-    const initialHaltState = writtenStates.find((s) => s.isPaused && s.readyLabelRemoved === false);
-    expect(initialHaltState).toBeDefined();
-    expect(initialHaltState?.pauseReason).toBe("ci_failed_max_repairs");
-    expect(initialHaltState?.pendingCompensation).toBe(true);
-    expect(initialHaltState?.handoff).toBeDefined();
+    expect(verifiedStateOnDiskBeforeLabelRemoval).toBe(true);
 
-    const labelRemovedState = writtenStates.find((s) => s.readyLabelRemoved === true);
-    expect(labelRemovedState).toBeDefined();
-    expect(labelRemovedState?.pendingCompensation).toBe(true);
-    expect(labelRemovedState?.commentPosted).toBe(false);
+    // Verify state on disk survives worker termination intact
+    expect(fs.existsSync(stateFile)).toBe(true);
+    const stateAfterKill = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    expect(stateAfterKill.isPaused).toBe(true);
+    expect(stateAfterKill.pauseReason).toBe("ci_failed_max_repairs");
+    expect(stateAfterKill.readyLabelRemoved).toBe(true);
+    expect(stateAfterKill.commentPosted).toBe(false);
+    expect(stateAfterKill.commentVerifyStatus).toBe("pending");
+    expect(stateAfterKill.pendingCompensation).toBe(true);
+    expect(stateAfterKill.handoff?.handoffId).toBeDefined();
+    expect(stateAfterKill.handoff?.prNumber).toBe(95);
+    expect(stateAfterKill.spentRepairs).toBe(0);
+    expect(stateAfterKill.spentWaitSeconds).toBeDefined();
+    expect(stateAfterKill.deadlineTimestampMs).toBeDefined();
   });
 
   describe("NEST-103 独立审查门禁 (Decision Review Gate before auto-merge)", () => {

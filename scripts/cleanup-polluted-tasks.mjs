@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
+import { DurableDecisionStore, DecisionService, DecisionStoreLockError } from "@symphony/decision";
 
 export function parseArgs(argv) {
   let store = null;
@@ -58,10 +59,10 @@ export async function cleanupPollutedTasks(options, io = console) {
   const cancelledTaskIds = [];
 
   if (store) {
-    const storePath = path.join(path.resolve(store), "store.json");
-    let content;
+    const resolvedStoreDir = path.resolve(store);
+    const storePath = path.join(resolvedStoreDir, "store.json");
     try {
-      content = await fs.readFile(storePath, "utf8");
+      await fs.access(storePath);
     } catch (err) {
       if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
         io.log(`Store file not found at ${storePath}. Nothing to clean up.`);
@@ -70,53 +71,59 @@ export async function cleanupPollutedTasks(options, io = console) {
       throw err;
     }
 
-    const data = JSON.parse(content);
-    const tasks = data.tasks || {};
-    const plans = data.plans || {};
-
-    const targetTasks = Object.values(tasks).filter((t) => {
-      return (
-        t &&
-        t.sessionId === targetSessionId &&
-        t.kind === "plan" &&
-        ["pending", "claimed", "running"].includes(t.status)
-      );
-    });
-
-    io.log(`Found ${targetTasks.length} pending plan task(s) for session "${targetSessionId}" in local store.`);
-
-    if (targetTasks.length === 0) {
-      return { matched: 0, cancelled: 0, taskIds: [] };
+    const storeInstance = new DurableDecisionStore({ storeDir: resolvedStoreDir });
+    try {
+      await storeInstance.open();
+    } catch (err) {
+      if (
+        err instanceof DecisionStoreLockError ||
+        (err && typeof err === "object" && err.name === "DecisionStoreLockError")
+      ) {
+        throw new Error(
+          `Store directory "${resolvedStoreDir}" is currently locked by a running process. Local modification is rejected to prevent data corruption; use --bridge-url instead while the service is active.`
+        );
+      }
+      throw err;
     }
 
-    if (!apply) {
-      io.log("[DRY-RUN] Tasks that would be cancelled:");
+    try {
+      const decisionService = new DecisionService(storeInstance);
+      const allTasks = storeInstance.getTasksForSession(targetSessionId);
+      const targetTasks = allTasks.filter((t) => {
+        return (
+          t &&
+          t.sessionId === targetSessionId &&
+          t.kind === "plan" &&
+          ["pending", "claimed", "running"].includes(t.status)
+        );
+      });
+
+      io.log(`Found ${targetTasks.length} pending plan task(s) for session "${targetSessionId}" in local store.`);
+
+      if (targetTasks.length === 0) {
+        return { matched: 0, cancelled: 0, taskIds: [] };
+      }
+
+      if (!apply) {
+        io.log("[DRY-RUN] Tasks that would be cancelled:");
+        for (const t of targetTasks) {
+          io.log(`  - ${t.id} (status: ${t.status}, kind: ${t.kind}, revision: ${t.revision})`);
+        }
+        io.log("[DRY-RUN] Run with --apply to execute cancellation.");
+        return { matched: targetTasks.length, cancelled: 0, taskIds: targetTasks.map((t) => t.id) };
+      }
+
       for (const t of targetTasks) {
-        io.log(`  - ${t.id} (status: ${t.status}, kind: ${t.kind}, revision: ${t.revision})`);
+        await decisionService.cancelTask(t.id);
+        cancelledTaskIds.push(t.id);
+        io.log(`Cancelled task ${t.id}`);
       }
-      io.log("[DRY-RUN] Run with --apply to execute cancellation.");
-      return { matched: targetTasks.length, cancelled: 0, taskIds: targetTasks.map((t) => t.id) };
+
+      io.log(`Successfully cancelled ${cancelledTaskIds.length} task(s) in local store.`);
+      return { matched: targetTasks.length, cancelled: cancelledTaskIds.length, taskIds: cancelledTaskIds };
+    } finally {
+      await storeInstance.close();
     }
-
-    const now = Date.now();
-    for (const t of targetTasks) {
-      t.status = "cancelled";
-      t.lease = null;
-      t.updatedAtMs = now;
-      if (plans[t.id]) {
-        plans[t.id].status = "superseded";
-        plans[t.id].updatedAtMs = now;
-      }
-      cancelledTaskIds.push(t.id);
-      io.log(`Cancelled task ${t.id}`);
-    }
-
-    const tmpPath = `${storePath}.tmp.${Date.now()}`;
-    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), "utf8");
-    await fs.rename(tmpPath, storePath);
-
-    io.log(`Successfully cancelled ${cancelledTaskIds.length} task(s) in local store.`);
-    return { matched: targetTasks.length, cancelled: cancelledTaskIds.length, taskIds: cancelledTaskIds };
   }
 
   if (bridgeUrl) {

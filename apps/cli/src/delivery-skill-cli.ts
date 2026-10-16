@@ -245,19 +245,37 @@ export async function runDeliverySkillCli(
       return 0;
     }
 
-    const repo = parsed.repo;
-    const issueNumber = parsed.issueNumber;
+    // 1. Identity validation: repo, issueNumber, workspaceKey
+    if (currentState.repo && currentState.repo !== parsed.repo) {
+      io.stderr.write(`symphony delivery-skill: error: repository mismatch (persisted: ${currentState.repo}, argv: ${parsed.repo})\n`);
+      return 1;
+    }
+    if (currentState.issueNumber && currentState.issueNumber !== parsed.issueNumber) {
+      io.stderr.write(`symphony delivery-skill: error: issue number mismatch (persisted: ${currentState.issueNumber}, argv: ${parsed.issueNumber})\n`);
+      return 1;
+    }
+    if (currentState.workspaceKey && parsed.workspaceKey && currentState.workspaceKey !== parsed.workspaceKey) {
+      io.stderr.write(`symphony delivery-skill: error: workspace mismatch (persisted: ${currentState.workspaceKey}, argv: ${parsed.workspaceKey})\n`);
+      return 1;
+    }
+
+    const repo = currentState.repo || parsed.repo;
+    const issueNumber = currentState.issueNumber || parsed.issueNumber;
+    const effectiveReadyLabel = currentState.handoff?.readyLabel ?? (currentState as unknown as { readyLabel?: string }).readyLabel ?? parsed.readyLabel ?? "symphony-ready";
     const reason = (currentState.pauseReason as DeliveryHandoff["reason"]) ?? "manual_intervention_required";
+    const prNumber = currentState.handoff?.prNumber ?? null;
 
     let readyLabelRemoved = currentState.readyLabelRemoved ?? false;
     if (!readyLabelRemoved) {
       try {
         const editRes = await runner.gh(
-          ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", readyLabel],
+          ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel],
           cwd,
         );
         if (editRes.exitCode === 0) {
           readyLabelRemoved = true;
+        } else {
+          readyLabelRemoved = false;
         }
       } catch {
         readyLabelRemoved = false;
@@ -267,23 +285,61 @@ export async function runDeliverySkillCli(
     let commentPosted = currentState.commentPosted ?? false;
     let commentVerifyStatus: "posted" | "failed" | "unverified" | "pending" = currentState.commentVerifyStatus ?? "unverified";
 
+    const handoffId = currentState.handoff?.handoffId;
+    const headSha = currentState.handoff?.headSha;
+    const targetDetails = currentState.handoff?.details;
+
+    const viewTargetArgs = prNumber !== null
+      ? ["pr", "view", String(prNumber), "--repo", repo, "--json", "comments"]
+      : ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"];
+
+    const commentTargetArgs = prNumber !== null
+      ? ["pr", "comment", String(prNumber), "--repo", repo]
+      : ["issue", "comment", String(issueNumber), "--repo", repo];
+
     if (!commentPosted) {
+      let querySuccess = false;
       let alreadyPosted = false;
+
       try {
-        const viewRes = await runner.gh(
-          ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"],
-          cwd,
-        );
+        const viewRes = await runner.gh(viewTargetArgs, cwd);
         if (viewRes.exitCode === 0) {
+          querySuccess = true;
           const parsedView = JSON.parse(viewRes.stdout || "{}");
           if (Array.isArray(parsedView.comments)) {
-            alreadyPosted = parsedView.comments.some((c: { body?: string }) =>
-              typeof c.body === "string" && c.body.includes("## 🚨 Symphony Delivery Handoff Report"),
-            );
+            alreadyPosted = parsedView.comments.some((c: { body?: string }) => {
+              if (typeof c.body !== "string") return false;
+              if (handoffId) {
+                return c.body.includes(handoffId);
+              }
+              if (headSha) {
+                return c.body.includes(headSha);
+              }
+              if (targetDetails) {
+                return c.body.includes(targetDetails);
+              }
+              return c.body.includes("## 🚨 Symphony Delivery Handoff Report");
+            });
           }
+        } else {
+          querySuccess = false;
         }
       } catch {
-        // Continue to post attempt if check fails
+        querySuccess = false;
+      }
+
+      if (!querySuccess) {
+        commentVerifyStatus = "unverified";
+        stateStorage.writeState({
+          ...currentState,
+          readyLabelRemoved,
+          commentPosted: false,
+          commentVerifyStatus: "unverified",
+          pendingCompensation: true,
+          lastUpdated: new Date().toISOString(),
+        });
+        io.stderr.write("symphony delivery-skill: error querying remote comments; status remains unverified\n");
+        return 1;
       }
 
       if (alreadyPosted) {
@@ -296,20 +352,21 @@ export async function runDeliverySkillCli(
           repo,
           issueNumber,
           headBranch: parsed.headBranch ?? `symphony/GH-${issueNumber}`,
-          prNumber: null,
+          prNumber,
           prUrl: null,
           headSha: null,
           spentRepairs: currentState.spentRepairs,
           maxRepairs: parsed.maxRepairs ?? currentState.spentRepairs,
           spentWaitSeconds: currentState.spentWaitSeconds,
           maxWaitSeconds: parsed.maxWait ?? currentState.spentWaitSeconds,
-          readyLabel,
+          readyLabel: effectiveReadyLabel,
           readyLabelRemoved,
+          handoffId,
         };
         const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
         try {
           const commentRes = await runner.gh(
-            ["issue", "comment", String(issueNumber), "--repo", repo, "--body", commentBody],
+            [...commentTargetArgs, "--body", commentBody],
             cwd,
           );
           if (commentRes.exitCode === 0) {
