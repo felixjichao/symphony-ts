@@ -447,10 +447,11 @@ export interface DeliveryHandoff {
   readonly spentRepairs: number;
   readonly maxRepairs: number;
   readonly spentWaitSeconds: number;
-  readonly maxWaitSeconds: number;
+  readonly maxWaitSeconds?: number | undefined;
   readonly readyLabel: string;
   readonly readyLabelRemoved?: boolean | undefined;
   readonly commentPosted?: boolean | undefined;
+  readonly handoffId?: string | undefined;
 }
 
 export interface PersistedDeliveryState {
@@ -463,6 +464,11 @@ export interface PersistedDeliveryState {
   readonly isPaused: boolean;
   readonly pauseReason?: string | undefined;
   readonly lastUpdated: string;
+  readonly handoff?: DeliveryHandoff | undefined;
+  readonly readyLabelRemoved?: boolean | undefined;
+  readonly commentPosted?: boolean | undefined;
+  readonly commentVerifyStatus?: "pending" | "posted" | "failed" | "unverified" | undefined;
+  readonly pendingCompensation?: boolean | undefined;
 }
 
 /**
@@ -480,6 +486,7 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
       ? `#${handoff.prNumber}`
       : "无 (尚未创建)";
   const headDisplay = handoff.headSha ? `\`${handoff.headSha.slice(0, 10)}\`` : "未知";
+  const handoffIdText = handoff.handoffId ? `\n- **Handoff ID**: \`${handoff.handoffId}\`\n<!-- symphony:handoff-id: ${handoff.handoffId} -->` : "";
 
   const labelStatusText =
     handoff.readyLabelRemoved === false
@@ -503,7 +510,7 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
 - **Issue**: #${handoff.issueNumber}
 - **Branch**: \`${handoff.headBranch}\`
 - **PR**: ${prDisplay}
-- **Head SHA**: ${headDisplay}
+- **Head SHA**: ${headDisplay}${handoffIdText}
 
 ### 2. 预算消耗情况
 - **修复重试消耗**: ${handoff.spentRepairs} / ${handoff.maxRepairs} 次上限

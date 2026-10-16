@@ -3,17 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type {
-  DecisionContextBundle,
-  DecisionReviewTarget,
-  DecisionTask,
-  DeliveryReviewApprovalResult,
-  DeliveryReviewGate,
-  DeliveryReviewStatusResult,
-  PersistedDeliveryState,
-  UtcTimestampMs,
+import {
+  formatDeliveryHandoffMarkdown,
+  type DecisionContextBundle,
+  type DecisionReviewTarget,
+  type DecisionTask,
+  type DeliveryReviewApprovalResult,
+  type DeliveryReviewGate,
+  type DeliveryReviewStatusResult,
+  type PersistedDeliveryState,
+  type UtcTimestampMs,
 } from "@symphony/domain";
-import { runDeliverySkill, type RunDeliverySkillOptions } from "./delivery-skill-runner";
+import { runDeliverySkill, type DeliveryStateStorage, type RunDeliverySkillOptions } from "./delivery-skill-runner";
+import { recoverDeliveryHandoff } from "./recover-handoff";
 import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-runner";
 
 class MockDeliveryRunner implements DeliveryGitGhRunner {
@@ -1289,6 +1291,281 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(result.status).toBe("blocked");
     expect(result.spentRepairs).toBe(1);
     expect(writtenSpentRepairs).toBe(1); // 修复发生异常时，预算已经被持久化，重试不会归零
+  });
+
+  it("NEST-128: haltDispatch persists paused state and handoff intent BEFORE remote operations, surviving signal abort after label removal", async () => {
+    const cwd = createTempCwd();
+    const stateFile = path.join(cwd, ".symphony/delivery-state.json");
+    const runner = new MockDeliveryRunner();
+    setupPreMutationSuccess(runner);
+
+    // PR exists
+    runner.ghResponses.push({
+      stdout: JSON.stringify([
+        {
+          number: 95,
+          url: "https://github.com/felixjichao/symphony-ts/pull/95",
+          headRefOid: "sha-head-initial",
+          state: "OPEN",
+          body: 'Fixes #80\n\n<!-- symphony-delivery-marker: {"schemaVersion":1,"workspaceKey":"GH-80","issueNumber":80,"repo":"felixjichao/symphony-ts","headBranch":"symphony/GH-80","baseBranch":"main"} -->',
+        },
+      ]),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 }); // validation
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git status
+    runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // push
+    runner.gitResponses.push({ stdout: "sha-head-initial\n", stderr: "", exitCode: 0 }); // rev-parse
+
+    // Initial budget expended from prior repair / wait cycles
+    const fixedDeadline = testClock + (300 - 45) * 1000;
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify({
+        repo: "felixjichao/symphony-ts",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        deadlineTimestampMs: fixedDeadline,
+        isPaused: false,
+        lastUpdated: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    // CI check failure
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        headRefOid: "sha-head-initial",
+        statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/felixjichao/symphony-ts/actions/runs/12345" }],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    let verifiedStateOnDiskBeforeLabelRemoval = false;
+    const abortController = new AbortController();
+
+    // 1. edit label: assert that disk state ALREADY exists before executing this remote operation!
+    runner.ghResponses.push((args) => {
+      expect(args[0]).toBe("issue");
+      expect(args[1]).toBe("edit");
+      expect(args.includes("--remove-label")).toBe(true);
+
+      expect(fs.existsSync(stateFile)).toBe(true);
+      const onDisk = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      expect(onDisk.isPaused).toBe(true);
+      expect(onDisk.pauseReason).toBe("ci_failed_max_repairs");
+      expect(onDisk.readyLabelRemoved).toBe(false);
+      expect(onDisk.commentPosted).toBe(false);
+      expect(onDisk.commentVerifyStatus).toBe("pending");
+      expect(onDisk.pendingCompensation).toBe(true);
+      expect(onDisk.handoff).toBeDefined();
+      expect(onDisk.handoff.handoffId).toBeDefined();
+      expect(onDisk.spentRepairs).toBe(2);
+      expect(onDisk.spentWaitSeconds).toBe(45);
+      expect(onDisk.deadlineTimestampMs).toBe(fixedDeadline);
+
+      verifiedStateOnDiskBeforeLabelRemoval = true;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+
+    // 2. view label (verified removed) succeeds, then cancellation signal is triggered on the runner before comment is posted
+    runner.ghResponses.push((args) => {
+      expect(args[0]).toBe("issue");
+      expect(args[1]).toBe("view");
+      abortController.abort(new Error("worker_finished: canceled_by_reconciliation (unroutable)"));
+      return { stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 };
+    });
+
+    const realDiskStorage: DeliveryStateStorage = {
+      readState: () => {
+        try {
+          if (!fs.existsSync(stateFile)) return null;
+          return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      writeState: (state: PersistedDeliveryState) => {
+        fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+        const tmp = `${stateFile}.tmp.${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+        fs.renameSync(tmp, stateFile);
+      },
+    };
+
+    // Worker is terminated by cancellation signal
+    await expect(
+      runDeliverySkill({
+        ...getBaseOptions(cwd),
+        stateStorage: realDiskStorage,
+        maxRepairAttempts: 2,
+        maxWaitSeconds: 300,
+        runner,
+        signal: abortController.signal,
+      }),
+    ).rejects.toThrow("worker_finished: canceled_by_reconciliation");
+
+    expect(verifiedStateOnDiskBeforeLabelRemoval).toBe(true);
+
+    // Verify state on disk survives worker termination intact
+    expect(fs.existsSync(stateFile)).toBe(true);
+    const stateAfterKill = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    expect(stateAfterKill.isPaused).toBe(true);
+    expect(stateAfterKill.pauseReason).toBe("ci_failed_max_repairs");
+    expect(stateAfterKill.readyLabelRemoved).toBe(true);
+    expect(stateAfterKill.commentPosted).toBe(false);
+    expect(stateAfterKill.commentVerifyStatus).toBe("pending");
+    expect(stateAfterKill.pendingCompensation).toBe(true);
+    expect(stateAfterKill.handoff?.handoffId).toBeDefined();
+    expect(stateAfterKill.handoff?.prNumber).toBe(95);
+    expect(stateAfterKill.spentRepairs).toBe(2);
+    expect(stateAfterKill.spentWaitSeconds).toBe(45);
+    expect(stateAfterKill.deadlineTimestampMs).toBe(fixedDeadline);
+
+    // Now execute recovery via recoverDeliveryHandoff
+    const recoveryRunner = new MockDeliveryRunner();
+    // Query comments on PR #95 returns empty
+    recoveryRunner.ghResponses.push({ stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 });
+    // Post comment on PR #95 succeeds
+    recoveryRunner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+    const recoveryResult = await recoverDeliveryHandoff({
+      cwd,
+      repo: "felixjichao/symphony-ts",
+      issueNumber: 80,
+      stateStorage: realDiskStorage,
+      runner: recoveryRunner,
+    });
+
+    expect(recoveryResult.success).toBe(true);
+    expect(recoveryResult.readyLabelRemoved).toBe(true);
+    expect(recoveryResult.commentPosted).toBe(true);
+    expect(recoveryResult.pendingCompensation).toBe(false);
+
+    // Verify target was PR #95 with correct handoffId
+    const prCommentCall = recoveryRunner.ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "comment");
+    expect(prCommentCall).toBeDefined();
+    expect(prCommentCall?.args).toContain("95");
+    expect(prCommentCall?.args.some((a) => a.includes(stateAfterKill.handoff.handoffId))).toBe(true);
+
+    // Verify state on disk after recovery preserves all budgets and marks compensation completed
+    const stateAfterRecovery = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    expect(stateAfterRecovery.isPaused).toBe(true);
+    expect(stateAfterRecovery.readyLabelRemoved).toBe(true);
+    expect(stateAfterRecovery.commentPosted).toBe(true);
+    expect(stateAfterRecovery.commentVerifyStatus).toBe("posted");
+    expect(stateAfterRecovery.pendingCompensation).toBe(false);
+    expect(stateAfterRecovery.spentRepairs).toBe(2);
+    expect(stateAfterRecovery.spentWaitSeconds).toBe(45);
+    expect(stateAfterRecovery.deadlineTimestampMs).toBe(fixedDeadline);
+  });
+
+  it("NEST-128: recovery handles crash point where comment was published on GitHub but worker killed before recording", async () => {
+    const cwd = createTempCwd();
+    const stateFile = path.join(cwd, ".symphony/delivery-state.json");
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    const fixedDeadline = 1700000045000;
+    const handoffId = "handoff-felixjichao-symphony-ts-80-test-receipt-crash";
+
+    const realDiskStorage: DeliveryStateStorage = {
+      readState: () => {
+        try {
+          if (!fs.existsSync(stateFile)) return null;
+          return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      writeState: (state: PersistedDeliveryState) => {
+        fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+        const tmp = `${stateFile}.tmp.${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+        fs.renameSync(tmp, stateFile);
+      },
+    };
+
+    // State on disk before worker crash: label removed, but comment receipt not recorded yet
+    const interruptedState: PersistedDeliveryState = {
+      repo: "felixjichao/symphony-ts",
+      issueNumber: 80,
+      workspaceKey: "GH-80",
+      spentRepairs: 2,
+      spentWaitSeconds: 45,
+      deadlineTimestampMs: fixedDeadline,
+      isPaused: true,
+      pauseReason: "ci_failed_max_repairs",
+      readyLabelRemoved: true,
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+      lastUpdated: new Date().toISOString(),
+      handoff: {
+        reason: "ci_failed_max_repairs",
+        details: "CI failed and reached max repair attempts",
+        repo: "felixjichao/symphony-ts",
+        issueNumber: 80,
+        headBranch: "symphony/GH-80",
+        prNumber: 95,
+        prUrl: "https://github.com/felixjichao/symphony-ts/pull/95",
+        headSha: "sha-head-initial",
+        spentRepairs: 2,
+        maxRepairs: 3,
+        spentWaitSeconds: 45,
+        maxWaitSeconds: 300,
+        readyLabel: "symphony-ready",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        handoffId,
+      },
+    };
+    realDiskStorage.writeState(interruptedState);
+
+    // On GitHub: the comment was ACTUALLY posted before worker died!
+    const runner = new MockDeliveryRunner();
+    runner.ghResponses.push({
+      stdout: JSON.stringify({
+        comments: [
+          {
+            body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }),
+          },
+        ],
+      }),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await recoverDeliveryHandoff({
+      cwd,
+      repo: "felixjichao/symphony-ts",
+      issueNumber: 80,
+      stateStorage: realDiskStorage,
+      runner,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.readyLabelRemoved).toBe(true);
+    expect(result.commentPosted).toBe(true);
+    expect(result.commentVerifyStatus).toBe("posted");
+    expect(result.pendingCompensation).toBe(false);
+
+    // Assert NO duplicate comment was posted!
+    const commentCalls = runner.ghCalls.filter((c) => c.args.includes("comment"));
+    expect(commentCalls.length).toBe(0);
+
+    // Assert durable state on disk is updated with receipt and preserved budget
+    const finalState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    expect(finalState.commentPosted).toBe(true);
+    expect(finalState.commentVerifyStatus).toBe("posted");
+    expect(finalState.pendingCompensation).toBe(false);
+    expect(finalState.spentRepairs).toBe(2);
+    expect(finalState.spentWaitSeconds).toBe(45);
+    expect(finalState.deadlineTimestampMs).toBe(fixedDeadline);
   });
 
   describe("NEST-103 独立审查门禁 (Decision Review Gate before auto-merge)", () => {

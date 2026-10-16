@@ -704,5 +704,50 @@ describe("createHost in-process composition", () => {
       await rm(temp, { recursive: true, force: true });
     }
   });
+
+  it("rejects conflicting backend options in createHost (decisionStoreDir + decisionBridgeUrl)", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-conflict-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      await expect(
+        createHost({
+          workflowPath,
+          decisionStoreDir: "/tmp/some-store",
+          decisionBridgeUrl: "http://127.0.0.1:8080",
+        }),
+      ).rejects.toThrowError(SymphonyConfigError);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("explicit decisionStoreDir takes precedence over inherited DECISION_BRIDGE_URL", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-store-precedence-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const storeDir = path.join(temp, ".symphony", "decision");
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      // Pass an invalid bridge URL in options.env; explicit decisionStoreDir should still be used
+      const host = await createHost({
+        workflowPath,
+        trackerProfiles: [fixtureProfile()],
+        decisionStoreDir: storeDir,
+        env: {
+          DECISION_BRIDGE_URL: "http://127.0.0.1:1", // dead port
+        },
+      });
+      expect(host).toBeDefined();
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
 });
 

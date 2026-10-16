@@ -24,6 +24,7 @@ export default defineConfig({
   // so the rebuild cannot delete the artifact mid-execution.
   test: {
     fileParallelism: false,
+    setupFiles: [path.resolve(__dirname, "src/test-setup.ts")],
   },
   plugins: [
     {

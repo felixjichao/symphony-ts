@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**"],
+    ignores: ["**/dist/**", "**/node_modules/**", "scripts/cleanup-polluted-tasks.mjs"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -23,6 +23,7 @@ export default tseslint.config(
       globals: {
         console: "readonly",
         process: "readonly",
+        fetch: "readonly",
       },
     },
   },

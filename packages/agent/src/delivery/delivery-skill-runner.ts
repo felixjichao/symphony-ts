@@ -36,6 +36,7 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly sleepFn?: (seconds: number) => Promise<void>;
   readonly nowFn?: (() => number) | undefined;
   readonly log?: (msg: string) => void;
+  readonly signal?: AbortSignal | undefined;
 }
 
 // SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
@@ -463,8 +464,43 @@ export async function runDeliverySkill(
     log(`[delivery-skill] Blocker/budget reached: ${reason}. Halting dispatch...`);
     const spentWaitSeconds = getElapsedWaitSeconds();
 
-    // 关键动作：从 GitHub Issue 尝试移除 symphony-ready 标签
+    // 构造初始交接报告（发给 GitHub 前作为本地基准，远端状态初始为未确认）
     let readyLabelRemoved = false;
+    let commentPosted = false;
+    const handoffId = `handoff-${context.repo.replace("/", "-")}-${context.issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const handoffForRemote: DeliveryHandoff = {
+      reason,
+      details,
+      repo: context.repo,
+      issueNumber: context.issueNumber,
+      headBranch: context.headBranch,
+      prNumber,
+      prUrl,
+      headSha: currentHeadSha,
+      spentRepairs,
+      maxRepairs,
+      spentWaitSeconds,
+      maxWaitSeconds,
+      readyLabel,
+      readyLabelRemoved: false,
+      commentPosted: false,
+      handoffId,
+    };
+
+    // 关键设计决策（先写持久化状态）：在发起任何远端操作之前，必须先将 paused、原因、实际预算/deadline 和待补偿 handoff 落盘。
+    // 即使随后的标签移除立刻导致 Reconciliation 触发并终止 worker，本地磁盘依然持有完备的事实与 handoff，绝不丢弃收尾状态。
+    await persistCurrentState({
+      isPaused: true,
+      pauseReason: reason,
+      spentWaitSeconds,
+      handoff: handoffForRemote,
+      readyLabelRemoved: false,
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+    });
+
+    // 关键动作：从 GitHub Issue 尝试移除 symphony-ready 标签
     let labelVerifyError: string | null = null;
     try {
       const removeRes = await runner.gh(
@@ -506,30 +542,33 @@ export async function runDeliverySkill(
         log(`[delivery-skill] Warning: Label '${readyLabel}' could not be verified as removed (${labelVerifyError ?? "unverified"})`);
       }
     } catch (err) {
+      if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
+        throw err;
+      }
       log(`[delivery-skill] Warning: Exception while removing label '${readyLabel}': ${String(err)}`);
       readyLabelRemoved = false;
     }
 
-    // 发表交接评论（发给 GitHub 时不带 commentPosted 字段，避免预先输出失败警告）
-    let commentPosted = false;
-    const handoffForRemote: DeliveryHandoff = {
-      reason,
-      details,
-      repo: context.repo,
-      issueNumber: context.issueNumber,
-      headBranch: context.headBranch,
-      prNumber,
-      prUrl,
-      headSha: currentHeadSha,
-      spentRepairs,
-      maxRepairs,
+    // 标签移除结果立即可持久化
+    const handoffAfterLabel: DeliveryHandoff = { ...handoffForRemote, readyLabelRemoved };
+    await persistCurrentState({
+      isPaused: true,
+      pauseReason: reason,
       spentWaitSeconds,
-      maxWaitSeconds,
-      readyLabel,
+      handoff: handoffAfterLabel,
       readyLabelRemoved,
-    };
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+    });
 
-    const commentBody = formatDeliveryHandoffMarkdown(handoffForRemote);
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new Error("worker_finished: canceled_by_reconciliation");
+    }
+
+    // 发表交接评论
+    let commentVerifyStatus: "posted" | "failed" | "unverified" = "unverified";
+    const commentBody = formatDeliveryHandoffMarkdown(handoffAfterLabel);
 
     try {
       const commentTarget = prNumber !== null ? ["pr", "comment", String(prNumber)] : ["issue", "comment", String(context.issueNumber)];
@@ -539,17 +578,37 @@ export async function runDeliverySkill(
       );
       if (commentRes.exitCode === 0) {
         commentPosted = true;
+        commentVerifyStatus = "posted";
+      } else {
+        commentPosted = false;
+        commentVerifyStatus = "failed";
+        log(`[delivery-skill] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
       }
     } catch (err) {
+      if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
+        throw err;
+      }
       log(`[delivery-skill] Warning: Failed to post handoff comment: ${String(err)}`);
       commentPosted = false;
+      commentVerifyStatus = "failed";
     }
 
     // 更新包含真实 commentPosted 的 markdown 供本地返回
-    const handoffMarkdown = formatDeliveryHandoffMarkdown({ ...handoffForRemote, commentPosted });
+    const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted };
+    const handoffMarkdown = formatDeliveryHandoffMarkdown(handoffFinal);
+    const pendingCompensation = !(readyLabelRemoved && commentPosted);
 
-    // 持久化 paused 状态
-    await persistCurrentState({ isPaused: true, pauseReason: reason });
+    // 持久化最终交接状态
+    await persistCurrentState({
+      isPaused: true,
+      pauseReason: reason,
+      spentWaitSeconds,
+      handoff: handoffFinal,
+      readyLabelRemoved,
+      commentPosted,
+      commentVerifyStatus,
+      pendingCompensation,
+    });
 
     return {
       status: "blocked",

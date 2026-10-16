@@ -490,6 +490,699 @@ describe("delivery-skill CLI", () => {
     expect(stderr).toContain("blocked (manual_intervention_required)");
   });
 
+  describe("recover-handoff action", () => {
+    it("fails when delivery state file does not exist", async () => {
+      const tempDir = createTempDir();
+      const runner = new MockCliRunner();
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("no persisted delivery state found");
+    });
+
+    it("does nothing and returns 0 if state is not paused", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 1,
+        spentWaitSeconds: 10,
+        deadlineTimestampMs: 1700000000,
+        isPaused: false,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(0);
+      expect(stderr).toContain("delivery state is not paused");
+      expect(runner.ghCalls.length).toBe(0);
+    });
+
+    it("completes unposted handoff comment and preserves budget and paused state", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 3,
+        spentWaitSeconds: 120,
+        deadlineTimestampMs: 1700000000,
+        isPaused: true,
+        pauseReason: "budget_exhausted",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      // 1. gh issue view --json comments (empty comments)
+      runner.ghResponses.push({ stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 });
+      // 2. gh issue comment
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      let stdout = "";
+      const io = {
+        stdout: { write: (t: string) => { stdout += t; } },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toContain("handoff recovery completed successfully");
+
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeDefined();
+
+      const updated = storage.readState();
+      expect(updated?.commentPosted).toBe(true);
+      expect(updated?.pendingCompensation).toBe(false);
+      expect(updated?.spentRepairs).toBe(3);
+      expect(updated?.spentWaitSeconds).toBe(120);
+      expect(updated?.isPaused).toBe(true);
+    });
+
+    it("deduplicates remote comments and avoids double-posting when comment already exists", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 50,
+        deadlineTimestampMs: 1700000000,
+        isPaused: true,
+        pauseReason: "budget_exhausted",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha: null,
+          reason: "budget_exhausted",
+          details: "Delivery paused for manual intervention.",
+          spentRepairs: 2,
+          maxRepairs: 3,
+          spentWaitSeconds: 50,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+          handoffId: "handoff-owner-repo-80-test-dedup",
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // 1. gh issue view --json comments returns existing handoff report with matching handoffId
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            { body: "Some prior comment" },
+            { body: "## 🚨 Symphony Delivery Handoff Report\n\n<!-- symphony-delivery-handoff: {\"handoffId\":\"handoff-owner-repo-80-test-dedup\"} -->\nDelivery paused for manual intervention." },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      let stdout = "";
+      const io = {
+        stdout: { write: (t: string) => { stdout += t; } },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toContain("handoff recovery completed successfully");
+
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeUndefined(); // Deduplicated!
+
+      const updated = storage.readState();
+      expect(updated?.commentPosted).toBe(true);
+      expect(updated?.pendingCompensation).toBe(false);
+      expect(updated?.spentRepairs).toBe(2);
+      expect(updated?.isPaused).toBe(true);
+    });
+
+    it("leaves legacy state without ID/SHA unverified and pending compensation when remote has existing generic report", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 50,
+        deadlineTimestampMs: 1700000000,
+        isPaused: true,
+        pauseReason: "budget_exhausted",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            { body: "## 🚨 Symphony Delivery Handoff Report\n\nSome old generic report." },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("legacy handoff lacks unique identifier");
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeUndefined();
+
+      const updated = storage.readState();
+      expect(updated?.commentPosted).toBe(false);
+      expect(updated?.commentVerifyStatus).toBe("unverified");
+      expect(updated?.pendingCompensation).toBe(true);
+    });
+
+    it("fails fast before any remote action when argv issue or repo does not match persisted state", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "81", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("issue number mismatch");
+      expect(runner.ghCalls.length).toBe(0); // No remote actions performed!
+    });
+
+    it("queries and comments on PR instead of issue when handoff has prNumber", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: 142,
+          prUrl: "https://github.com/owner/repo/pull/142",
+          headSha: "head123",
+          reason: "manual_intervention_required",
+          details: "test halt",
+          spentRepairs: 2,
+          maxRepairs: 3,
+          spentWaitSeconds: 45,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // pr view --json comments returns empty comments
+      runner.ghResponses.push({ stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 });
+      // pr comment returns success
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      let stdout = "";
+      const io = {
+        stdout: { write: (t: string) => { stdout += t; } },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toContain("handoff recovery completed successfully");
+
+      const viewCall = runner.ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "view");
+      expect(viewCall).toBeDefined();
+      expect(viewCall?.args[2]).toBe("142");
+
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "comment");
+      expect(commentCall).toBeDefined();
+      expect(commentCall?.args[2]).toBe("142");
+    });
+
+    it("does not mistake old reports with different head/details as a match and completes unposted report", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha: "new-head-sha",
+          reason: "manual_intervention_required",
+          details: "current pause",
+          spentRepairs: 2,
+          maxRepairs: 3,
+          spentWaitSeconds: 45,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // issue view returns an old report from a previous commit
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            { body: "## 🚨 Symphony Delivery Handoff Report\n\n- **Head SHA**: `old-head-s`\n**详细信息**：previous halt" },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+      // issue comment succeeds
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(0);
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeDefined(); // Correctly posted for new head!
+    });
+
+    it("keeps status unverified and pendingCompensation true when remote comment query fails", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      // issue view fails with exit 1
+      runner.ghResponses.push({ stdout: "", stderr: "network failure", exitCode: 1 });
+
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("error querying remote comments");
+
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeUndefined(); // Never blindly post when query failed!
+
+      const updated = storage.readState();
+      expect(updated?.commentVerifyStatus).toBe("unverified");
+      expect(updated?.pendingCompensation).toBe(true);
+    });
+
+    it("migrating legacy handoff persists generated ID before remote comment and recovers cleanly after connection lost", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      // Legacy state: has handoff but without handoffId, no headSha
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 45,
+        isPaused: true,
+        pauseReason: "ci_failed_max_repairs",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha: null,
+          reason: "ci_failed_max_repairs",
+          details: "legacy handoff without ID",
+          spentRepairs: 2,
+          maxRepairs: 3,
+          spentWaitSeconds: 45,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+          commentPosted: false,
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // 1. First recover attempt: remote has no comments
+      runner.ghResponses.push({
+        stdout: JSON.stringify({ comments: [] }),
+        stderr: "",
+        exitCode: 0,
+      });
+      // Remote comment post attempt fails with network error / connection lost
+      runner.ghResponses.push({
+        stdout: "",
+        stderr: "network timeout connecting to api.github.com",
+        exitCode: 1,
+      });
+
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+      };
+
+      const code1 = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      // Fails because remote comment post failed
+      expect(code1).toBe(1);
+
+      // Critical assertion (Blocker 1): handoffId was saved to disk BEFORE the remote call!
+      const diskStateAfterFailedPost = storage.readState();
+      expect(diskStateAfterFailedPost).not.toBeNull();
+      const generatedId = diskStateAfterFailedPost?.handoff?.handoffId;
+      expect(generatedId).toBeDefined();
+      expect(typeof generatedId).toBe("string");
+      expect(generatedId).toMatch(/^handoff-owner-repo-80-/);
+      expect(diskStateAfterFailedPost?.commentPosted).toBe(false);
+      expect(diskStateAfterFailedPost?.commentVerifyStatus).toBe("unverified");
+      expect(diskStateAfterFailedPost?.pendingCompensation).toBe(true);
+
+      // 2. Second recover attempt: GitHub actually received the comment (or it's queryable with generatedId)
+      const secondRunner = new MockCliRunner();
+      secondRunner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            {
+              body: `## 🚨 Symphony Delivery Handoff Report\n\n- **Handoff ID**: \`${generatedId}\`\n<!-- symphony:handoff-id:${generatedId} -->`,
+            },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      const code2 = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        secondRunner,
+      );
+
+      // Clean recovery: deduplicated by handoffId without re-posting!
+      expect(code2).toBe(0);
+      const secondCommentCall = secondRunner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(secondCommentCall).toBeUndefined();
+
+      const finalState = storage.readState();
+      expect(finalState?.handoff?.handoffId).toBe(generatedId);
+      expect(finalState?.commentPosted).toBe(true);
+      expect(finalState?.commentVerifyStatus).toBe("posted");
+      expect(finalState?.pendingCompensation).toBe(false);
+    });
+
+    it("does not treat arbitrary commit comments as handoff reports during SHA-based legacy recovery", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      const headSha = "1234567890abcdef1234567890abcdef12345678";
+
+      // Legacy state with headSha but no handoffId
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 1,
+        spentWaitSeconds: 30,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha,
+          reason: "manual_intervention_required",
+          details: "Please test this commit",
+          spentRepairs: 1,
+          maxRepairs: 3,
+          spentWaitSeconds: 30,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+          commentPosted: false,
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // Remote only has a regular discussion comment mentioning the short SHA, NOT a handoff report
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            { body: "Please test commit 1234567890 before merging." },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+      // Comment post succeeds
+      runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      // Must succeed and actually post the handoff report, not mistakenly skip it
+      expect(code).toBe(0);
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeDefined();
+
+      const updated = storage.readState();
+      expect(updated?.commentPosted).toBe(true);
+      expect(updated?.commentVerifyStatus).toBe("posted");
+      expect(updated?.pendingCompensation).toBe(false);
+      expect(updated?.handoff?.handoffId).toBeDefined();
+    });
+
+    it("keeps legacy state with matching SHA report unverified rather than falsely declaring success or duplicate posting", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      const headSha = "abcdef1234567890abcdef1234567890abcdef12";
+
+      // Legacy state with headSha but no handoffId
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 1,
+        spentWaitSeconds: 30,
+        isPaused: true,
+        pauseReason: "manual_intervention_required",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha,
+          reason: "manual_intervention_required",
+          details: "halt details",
+          spentRepairs: 1,
+          maxRepairs: 3,
+          spentWaitSeconds: 30,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+          commentPosted: false,
+        },
+      });
+
+      const runner = new MockCliRunner();
+      // Remote already contains a genuine handoff report with this short SHA, but legacy state has no unique handoffId
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            {
+              body: `## 🚨 Symphony Delivery Handoff Report\n\n- **Head SHA**: \`abcdef1234\`\n<!-- symphony-delivery-handoff -->`,
+            },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      // Ambiguous legacy report without handoffId cannot be verified as belonging to this halt; exit 1, do not post duplicate
+      expect(code).toBe(1);
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeUndefined();
+
+      const updated = storage.readState();
+      expect(updated?.commentVerifyStatus).toBe("unverified");
+      expect(updated?.pendingCompensation).toBe(true);
+    });
+  });
+
   describe("FileDeliveryStateStorage", () => {
     it("writes atomically and reads state correctly", () => {
       const tempDir = createTempDir();
