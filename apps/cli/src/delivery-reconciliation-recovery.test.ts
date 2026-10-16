@@ -1,20 +1,24 @@
 /**
  * NEST-128: 联合回归验证
- * 链路：可控标签移除 → 真实 Orchestrator reconciliation → Worker 进程停止 → 重读磁盘状态 → 正式 recover-handoff 恢复入口。
+ * 链路：被停止的 Worker 实际执行 runDeliverySkill 交付实现 → fake Git/gh 在受控动作处触发真实 Orchestrator reconciliation
+ *       → Worker 终止 → 重读 Worker 自身生成的真实磁盘状态 → 正式 recover-handoff 恢复入口。
  * 覆盖两个关键取消点：
- * 1. 未发评论（worker 终止前尚未发布评论）
- * 2. 评论成功但尚未落盘（评论已被 GitHub 接收，但 worker 在本地落盘前被终止）
+ * 1. 移除标签后、尚未发评论（worker 在标签确认移除后被 reconciliation 终止）
+ * 2. 远端接收评论后、尚未记录回执（评论已被 GitHub 接收，但 worker 在本地写入回执前被终止）
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runAgentAttempt, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
+import {
+  runDeliverySkill,
+  type AgentAttemptOptions,
+  type AgentAttemptResult,
+  type DeliveryGitGhRunner,
+  type DeliverySubprocessResult,
+} from "@symphony/agent";
 import type {
-  AgentConfig,
-  HooksConfig,
   Issue,
   PollingConfig,
   ServiceConfig,
@@ -26,69 +30,139 @@ import {
   type AgentAttemptRunner,
   type AttemptContext,
   type DispatchPolicy,
+  type ReconciliationResult,
 } from "@symphony/orchestrator";
 import { createWorkspaceManager, type WorkspaceManager } from "@symphony/workspace";
 
-import { runDeliverySkillCli } from "./delivery-skill-cli";
+import { FileDeliveryStateStorage, runDeliverySkillCli } from "./delivery-skill-cli";
 
-const APP_SERVER_FIXTURE = fileURLToPath(
-  new URL("../../../packages/agent/test-fixtures/app-server.mjs", import.meta.url),
-);
-
-function fixtureCommand(extraArgs: readonly string[] = []): string {
-  return [process.execPath, APP_SERVER_FIXTURE, ...extraArgs]
-    .map((part) => JSON.stringify(part))
-    .join(" ");
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fs.lstat(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000, intervalMs = 20): Promise<void> {
   const start = Date.now();
-  while (!(await predicate())) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error("waitFor timed out");
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
 }
 
-class MockRecoveryGhRunner implements DeliveryGitGhRunner {
+class FakeDeliveryGhRunner implements DeliveryGitGhRunner {
   readonly ghCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly execCalls: Array<{ command: string; cwd: string }> = [];
 
-  ghResponses: DeliverySubprocessResult[] = [];
+  readonly publishedPrComments: Array<{ body: string }> = [];
+
+  // 屏障钩子：delivery-skill 确认移除标签时触发真实 reconciliation
+  onLabelRemovalVerified?: () => Promise<void> | void;
+
+  // 屏障钩子：GitHub 远端成功接收交接评论时触发真实 reconciliation / 进程崩溃
+  onPrCommentReceived?: (body: string) => Promise<void> | void;
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
+    if (args[0] === "branch" && args[1] === "--show-current") {
+      return { stdout: "symphony/GH-80\n", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "remote" && args[1] === "get-url") {
+      return { stdout: "https://github.com/owner/repo.git\n", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "status") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "push") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "rev-parse" && args[1] === "HEAD") {
+      return { stdout: "sha-head-initial\n", stderr: "", exitCode: 0 };
+    }
     return { stdout: "", stderr: "", exitCode: 0 };
   }
 
   async exec(command: string, cwd: string): Promise<DeliverySubprocessResult> {
     this.execCalls.push({ command, cwd });
-    return { stdout: "", stderr: "", exitCode: 0 };
+    return { stdout: "ok", stderr: "", exitCode: 0 };
   }
 
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
-    return this.ghResponses.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
+
+    // 1. Issue view for pre-mutation inspection
+    if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body") || a.includes("title"))) {
+      return {
+        stdout: JSON.stringify({ state: "OPEN", title: "issue 80", body: "body 80", labels: [{ name: "symphony-ready" }] }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+
+    // 2. PR list: 存在已开启的目标 PR #95
+    if (args[0] === "pr" && args[1] === "list") {
+      return {
+        stdout: JSON.stringify([
+          {
+            number: 95,
+            url: "https://github.com/owner/repo/pull/95",
+            title: "feat: delivery for #80",
+            state: "OPEN",
+            headRefOid: "sha-head-initial",
+            body: 'Fixes #80\n\n<!-- symphony-delivery-marker: {"schemaVersion":1,"workspaceKey":"GH-80","issueNumber":80,"repo":"owner/repo","headBranch":"symphony/GH-80","baseBranch":"main"} -->',
+          },
+        ]),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+
+    // 3. PR view: 模拟 CI 检查失败，触发 delivery 修复/暂停分支
+    if (args[0] === "pr" && args[1] === "view" && args.some((a) => a.includes("statusCheckRollup"))) {
+      return {
+        stdout: JSON.stringify({
+          headRefOid: "sha-head-initial",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          statusCheckRollup: [
+            { __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+
+    // 4. Issue edit --remove-label symphony-ready: 移除标签成功
+    if (args[0] === "issue" && args[1] === "edit" && args.includes("--remove-label")) {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    // 5. Issue view --json labels: 标签移除验证屏障
+    if (args[0] === "issue" && args[1] === "view" && args.includes("labels")) {
+      if (this.onLabelRemovalVerified) {
+        await this.onLabelRemovalVerified();
+      }
+      return { stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 };
+    }
+
+    // 6. PR comment: 发布交接报告评论
+    if (args[0] === "pr" && args[1] === "comment") {
+      const bodyIdx = args.indexOf("--body");
+      const body = bodyIdx !== -1 && args[bodyIdx + 1] ? args[bodyIdx + 1]! : "";
+      this.publishedPrComments.push({ body });
+      if (this.onPrCommentReceived) {
+        await this.onPrCommentReceived(body);
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    // 7. PR view comments: recover-handoff 查询远端评论
+    if (args[0] === "pr" && args[1] === "view" && args.includes("comments")) {
+      return {
+        stdout: JSON.stringify({ comments: this.publishedPrComments }),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+
+    return { stdout: "", stderr: "", exitCode: 0 };
   }
 }
 
@@ -102,9 +176,9 @@ const POLICY: DispatchPolicy = {
 describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合回归", () => {
   let tempDir: string;
   let workspaceRoot: string;
-  let config: ServiceConfig;
   let manager: WorkspaceManager;
   let currentIssue: Issue;
+  let currentWorkerRunner: AgentAttemptRunner;
 
   function makeAuthority(): OrchestratorAuthority {
     const workflow: WorkflowDefinition = {
@@ -112,37 +186,60 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
       promptTemplate: "Handle {{ issue.identifier }}",
     };
     const workflowPath = path.join(tempDir, "WORKFLOW.md");
-    const records: Array<{ startup: string }> = [];
 
-    const runner: AgentAttemptRunner = (attemptOptions) => runAgentAttempt(attemptOptions);
-
-    const createAttemptOptions = (context: AttemptContext) => {
-      const index = records.length;
-      const record = { startup: path.join(tempDir, `startup-${index}.txt`) };
-      records.push(record);
-      const attemptConfig: ServiceConfig = {
-        ...config,
-        codex: {
-          ...config.codex,
-          // 延迟完成以保证子进程在 reconcile 触发时处于运行状态
-          command: fixtureCommand(["--record-startup", record.startup, "--delay-completed-ms", "60000"]),
-        },
-      };
-      return {
-        issue: context.issue,
-        attempt: context.attempt,
-        workflow,
-        workflowPath,
-        getConfig: () => attemptConfig,
-        signal: context.signal,
-        onPhase: context.onPhase,
-        onEvent: context.onEvent,
-        continuationDecider: context.continuationDecider,
-      };
+    const runner: AgentAttemptRunner = async (attemptOptions) => {
+      return await currentWorkerRunner(attemptOptions);
     };
 
+    const polling: PollingConfig = { intervalMs: 10_000 };
+    const config: ServiceConfig = {
+      tracker: {
+        kind: "memory",
+        provider: {},
+        requiredLabels: ["symphony-ready"],
+        activeStates: null,
+        terminalStates: null,
+      },
+      polling,
+      workspace: { root: workspaceRoot },
+      hooks: {
+        afterCreate: null,
+        beforeRun: null,
+        afterRun: null,
+        beforeRemove: null,
+        timeoutMs: 5_000,
+      },
+      agent: {
+        maxConcurrentAgents: 10,
+        maxTurns: 1,
+        maxRetryBackoffMs: 300_000,
+        maxConcurrentAgentsByState: {},
+      },
+      codex: {
+        command: "node",
+        approvalPolicy: "never",
+        threadSandbox: null,
+        turnSandboxPolicy: null,
+        readTimeoutMs: 5_000,
+        turnTimeoutMs: 60_000,
+        stallTimeoutMs: 10_000,
+      },
+    };
+
+    const createAttemptOptions = (context: AttemptContext) => ({
+      issue: context.issue,
+      attempt: context.attempt,
+      workflow,
+      workflowPath,
+      getConfig: () => config,
+      signal: context.signal,
+      onPhase: context.onPhase,
+      onEvent: context.onEvent,
+      continuationDecider: context.continuationDecider,
+    });
+
     const state = createOrchestratorRuntimeState({ pollIntervalMs: 10_000, maxConcurrentAgents: 10 });
-    const authority = new OrchestratorAuthority({
+    return new OrchestratorAuthority({
       state,
       policy: POLICY,
       runner,
@@ -156,7 +253,6 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
       cleanupWorkspace: { removeWorkspace: (identifier) => manager.removeWorkspace(identifier) },
       onCleanupDiagnostic: () => {},
     });
-    return authority;
   }
 
   beforeEach(async () => {
@@ -165,42 +261,6 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
     await fs.mkdir(workspaceRoot, { recursive: true });
     manager = createWorkspaceManager({ workspace: { root: workspaceRoot } });
 
-    const hooks: HooksConfig = {
-      afterCreate: null,
-      beforeRun: null,
-      afterRun: null,
-      beforeRemove: null,
-      timeoutMs: 5_000,
-    };
-    const agent: AgentConfig = {
-      maxConcurrentAgents: 10,
-      maxTurns: 1,
-      maxRetryBackoffMs: 300_000,
-      maxConcurrentAgentsByState: {},
-    };
-    const polling: PollingConfig = { intervalMs: 10_000 };
-    config = {
-      tracker: {
-        kind: "memory",
-        provider: {},
-        requiredLabels: ["symphony-ready"],
-        activeStates: null,
-        terminalStates: null,
-      },
-      polling,
-      workspace: { root: workspaceRoot },
-      hooks,
-      agent,
-      codex: {
-        command: fixtureCommand(),
-        approvalPolicy: "never",
-        threadSandbox: null,
-        turnSandboxPolicy: null,
-        readTimeoutMs: 5_000,
-        turnTimeoutMs: 60_000,
-        stallTimeoutMs: 10_000,
-      },
-    };
     currentIssue = {
       id: "issue-80",
       nativeRef: null,
@@ -224,202 +284,206 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("取消点 1（未发评论）：标签移除 → 真实 reconciliation 停止 worker 子进程 → 保留磁盘预算与 deadline → recover-handoff 正式入口补齐评论与终态", async () => {
+  it("取消点 1（移除标签后、尚未发评论）：Worker 执行真实 delivery 写入 → 标签移除触发真实 reconciliation → 重读 Worker 落盘状态并由正式入口恢复", async () => {
     const authority = makeAuthority();
-
-    // 1. 启动任务并派发，触发真实 worker 子进程启动
-    authority.dispatchIssue(currentIssue);
-    const startupFile = path.join(tempDir, "startup-0.txt");
-    await waitFor(() => pathExists(startupFile));
-    const pid = Number.parseInt((await fs.readFile(startupFile, "utf8")).trim(), 10);
-    expect(Number.isInteger(pid) && pid > 0).toBe(true);
-    expect(isAlive(pid)).toBe(true);
-
     const workspacePath = manager.resolveWorkspacePath(currentIssue.identifier);
-    expect(await pathExists(workspacePath)).toBe(true);
+    await fs.mkdir(workspacePath, { recursive: true });
 
-    // 2. 模拟 worker 在暂停时将 delivery 状态写入磁盘（已消耗预算：repairs=2, wait=45s, 固定 deadline）
-    const fixedDeadline = 1700000045000;
-    const handoffId = "handoff-felixjichao-symphony-ts-80-joint-cancel-pt1";
+    // 1. 父测试仅准备初始非零预算（绝不预写任何 paused / handoff 终态！）
+    const nowMs = 1700000000000;
+    const fixedDeadline = nowMs + (300 - 45) * 1000;
     const stateFile = path.join(workspacePath, ".symphony", "delivery-state.json");
-    await fs.mkdir(path.dirname(stateFile), { recursive: true });
-    await fs.writeFile(
-      stateFile,
-      JSON.stringify(
-        {
-          repo: "felixjichao/symphony-ts",
-          issueNumber: 80,
-          workspaceKey: "GH-80",
-          spentRepairs: 2,
-          spentWaitSeconds: 45,
-          deadlineTimestampMs: fixedDeadline,
-          isPaused: true,
-          pauseReason: "ci_failed_max_repairs",
-          readyLabelRemoved: true,
-          commentPosted: false,
-          commentVerifyStatus: "pending",
-          pendingCompensation: true,
-          lastUpdated: new Date().toISOString(),
-          handoff: {
-            handoffId,
-            reason: "ci_failed_max_repairs",
-            details: "CI failed and reached max repair attempts",
-            readyLabelRemoved: true,
-            commentPosted: false,
-            prNumber: 95,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+    const storage = new FileDeliveryStateStorage(stateFile);
+    storage.writeState({
+      repo: "owner/repo",
+      issueNumber: 80,
+      workspaceKey: "GH-80",
+      spentRepairs: 2, // 已消耗 2 次修复预算，达到 maxRepairAttempts=2 上限
+      spentWaitSeconds: 45,
+      deadlineTimestampMs: fixedDeadline,
+      isPaused: false, // 尚未暂停
+      lastUpdated: new Date(nowMs).toISOString(),
+    });
 
-    // 3. 可控标签移除：tracker 上移除 symphony-ready 标签
-    currentIssue = { ...currentIssue, labels: [] };
+    const fakeDeliveryRunner = new FakeDeliveryGhRunner();
+    let reconPromise: Promise<ReconciliationResult> | null = null;
 
-    // 4. 触发真实 Orchestrator reconciliation
-    const reconResult = await authority.reconcileRunningIssues();
+    // 屏障设置：delivery-skill 移除标签后，在校验标签成功时触发真实 Orchestrator reconciliation
+    fakeDeliveryRunner.onLabelRemovalVerified = () => {
+      // 真实 tracker 上 symphony-ready 标签被移除
+      currentIssue = { ...currentIssue, labels: [] };
+      // 触发真实 Orchestrator active reconciliation（同步将 worker.signal 置为 abort）
+      reconPromise = authority.reconcileRunningIssues();
+    };
 
-    // 验证 Orchestrator 判定为 stop 且 non-active，不删除 workspace
+    // 2. Worker 实际执行正式 runDeliverySkill 实现
+    currentWorkerRunner = (async (attemptOptions: AgentAttemptOptions) => {
+      await runDeliverySkill({
+        cwd: workspacePath,
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        headBranch: "symphony/GH-80",
+        baseBranch: "main",
+        maxRepairAttempts: 2,
+        maxWaitSeconds: 300,
+        requiredChecks: ["gate"],
+        nowFn: () => nowMs,
+        stateStorage: storage,
+        signal: attemptOptions.signal,
+        runner: fakeDeliveryRunner,
+        log: () => {},
+      });
+      return undefined as unknown as AgentAttemptResult;
+    }) as unknown as AgentAttemptRunner;
+
+    // 3. 派发 Issue，启动 Worker 执行 delivery
+    const dispatchResult = authority.dispatchIssue(currentIssue);
+    expect(dispatchResult.kind).toBe("dispatched");
+
+    // 4. 等待真实 reconciliation 停止 Worker 并收敛
+    await waitFor(() => reconPromise !== null);
+    const reconResult = await reconPromise!;
     expect(reconResult.stoppedIssueIds).toEqual([currentIssue.id]);
-    expect(reconResult.cleanedIssueIds).toEqual([]);
+    expect(reconResult.cleanedIssueIds).toEqual([]); // non-active stop 保留工作区
+    expect(authority.activeWorkerCount).toBe(0);
 
-    // 验证真实 worker 子进程已退出终止！
-    await waitFor(() => !isAlive(pid));
-    expect(isAlive(pid)).toBe(false);
+    // 5. 验证磁盘上的状态完全是由 runDeliverySkill 自身生成并持久化的！
+    const diskStateAfterKill = storage.readState();
+    expect(diskStateAfterKill).not.toBeNull();
+    expect(diskStateAfterKill?.isPaused).toBe(true);
+    expect(diskStateAfterKill?.pauseReason).toBe("ci_failed_max_repairs");
+    expect(diskStateAfterKill?.readyLabelRemoved).toBe(true);
+    expect(diskStateAfterKill?.commentPosted).toBe(false); // 尚未发评论
+    expect(diskStateAfterKill?.commentVerifyStatus).toBe("pending");
+    expect(diskStateAfterKill?.pendingCompensation).toBe(true);
+    expect(diskStateAfterKill?.spentRepairs).toBe(2); // 保持非零预算
+    expect(diskStateAfterKill?.spentWaitSeconds).toBe(45);
+    expect(diskStateAfterKill?.deadlineTimestampMs).toBe(fixedDeadline); // deadline 保持不变
+    expect(diskStateAfterKill?.handoff?.handoffId).toBeDefined();
+    expect(diskStateAfterKill?.handoff?.handoffId).toMatch(/^handoff-owner-repo-80-/);
+    expect(diskStateAfterKill?.handoff?.prNumber).toBe(95);
 
-    // 5. 重读磁盘：验证 workspace 与 delivery state 完好无损，且非零预算与 deadline 保持不变
-    expect(await pathExists(workspacePath)).toBe(true);
-    const diskStateAfterKill = JSON.parse(await fs.readFile(stateFile, "utf8"));
-    expect(diskStateAfterKill.spentRepairs).toBe(2);
-    expect(diskStateAfterKill.spentWaitSeconds).toBe(45);
-    expect(diskStateAfterKill.deadlineTimestampMs).toBe(fixedDeadline);
-    expect(diskStateAfterKill.isPaused).toBe(true);
-    expect(diskStateAfterKill.readyLabelRemoved).toBe(true);
-    expect(diskStateAfterKill.commentPosted).toBe(false);
-    expect(diskStateAfterKill.pendingCompensation).toBe(true);
-    expect(diskStateAfterKill.handoff?.handoffId).toBe(handoffId);
+    // 验证远端尚未发布评论
+    expect(fakeDeliveryRunner.publishedPrComments.length).toBe(0);
 
     // 6. 调用正式恢复入口 runDeliverySkillCli(['recover-handoff', ...])
-    const recoveryRunner = new MockRecoveryGhRunner();
-    // PR #95 评论查询返回空（尚未发布评论）
-    recoveryRunner.ghResponses.push({
-      stdout: JSON.stringify({ comments: [] }),
-      stderr: "",
-      exitCode: 0,
-    });
-    // PR 评论发布成功
-    recoveryRunner.ghResponses.push({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    });
-
+    const recoveryRunner = new FakeDeliveryGhRunner();
     const io = {
       stdout: { write: () => {} },
       stderr: { write: () => {} },
     };
 
     const exitCode = await runDeliverySkillCli(
-      ["recover-handoff", "--repo", "felixjichao/symphony-ts", "--issue", "80", "--cwd", workspacePath],
+      ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", workspacePath],
       io,
       recoveryRunner,
     );
 
     expect(exitCode).toBe(0);
 
-    // 验证正式恢复向 PR #95 发布了包含 handoffId 的交接报告
-    const commentCall = recoveryRunner.ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "comment");
-    expect(commentCall).toBeDefined();
-    expect(commentCall?.args).toContain("95");
-    expect(commentCall?.args.some((a) => a.includes(handoffId))).toBe(true);
+    // 验证正式恢复向 PR #95 发布了交接报告，且包含 Worker 自身生成的 handoffId
+    expect(recoveryRunner.publishedPrComments.length).toBe(1);
+    expect(recoveryRunner.publishedPrComments[0]?.body).toContain(diskStateAfterKill!.handoff!.handoffId);
 
-    // 验证恢复完成后磁盘状态：预算与 deadline 不变，commentPosted 与 pendingCompensation 闭环
-    const finalDiskState = JSON.parse(await fs.readFile(stateFile, "utf8"));
-    expect(finalDiskState.spentRepairs).toBe(2);
-    expect(finalDiskState.spentWaitSeconds).toBe(45);
-    expect(finalDiskState.deadlineTimestampMs).toBe(fixedDeadline);
-    expect(finalDiskState.isPaused).toBe(true);
-    expect(finalDiskState.readyLabelRemoved).toBe(true);
-    expect(finalDiskState.commentPosted).toBe(true);
-    expect(finalDiskState.commentVerifyStatus).toBe("posted");
-    expect(finalDiskState.pendingCompensation).toBe(false);
-    expect(finalDiskState.handoff?.handoffId).toBe(handoffId);
+    // 验证最终磁盘状态：预算与 deadline 不变，commentPosted 与 pendingCompensation 闭环
+    const finalDiskState = storage.readState();
+    expect(finalDiskState?.spentRepairs).toBe(2);
+    expect(finalDiskState?.spentWaitSeconds).toBe(45);
+    expect(finalDiskState?.deadlineTimestampMs).toBe(fixedDeadline);
+    expect(finalDiskState?.isPaused).toBe(true);
+    expect(finalDiskState?.readyLabelRemoved).toBe(true);
+    expect(finalDiskState?.commentPosted).toBe(true);
+    expect(finalDiskState?.commentVerifyStatus).toBe("posted");
+    expect(finalDiskState?.pendingCompensation).toBe(false);
+    expect(finalDiskState?.handoff?.handoffId).toBe(diskStateAfterKill!.handoff!.handoffId);
   }, 30_000);
 
-  it("取消点 2（评论成功但尚未落盘）：标签移除 → 真实 reconciliation 停止 worker 子进程 → 正式 recover-handoff 识别远端报告精准去重不重复发布", async () => {
+  it("取消点 2（远端接收评论后、尚未记录回执）：Worker 执行真实 delivery 写入 → 评论发布后触发真实 reconciliation → 正式入口识别远端报告精准去重", async () => {
     const authority = makeAuthority();
-
-    // 1. 启动任务并派发
-    authority.dispatchIssue(currentIssue);
-    const startupFile = path.join(tempDir, "startup-0.txt");
-    await waitFor(() => pathExists(startupFile));
-    const pid = Number.parseInt((await fs.readFile(startupFile, "utf8")).trim(), 10);
-    expect(isAlive(pid)).toBe(true);
-
     const workspacePath = manager.resolveWorkspacePath(currentIssue.identifier);
+    await fs.mkdir(workspacePath, { recursive: true });
 
-    // 2. 模拟 worker 崩溃时点：评论已成功被 GitHub 接收，但本地尚未写入 commentPosted: true 的回执
-    const fixedDeadline = 1700000045000;
-    const handoffId = "handoff-felixjichao-symphony-ts-80-joint-cancel-pt2";
+    // 1. 父测试仅准备初始非零预算（绝不预写任何 paused / handoff 终态！）
+    const nowMs = 1700000000000;
+    const fixedDeadline = nowMs + (300 - 45) * 1000;
     const stateFile = path.join(workspacePath, ".symphony", "delivery-state.json");
-    await fs.mkdir(path.dirname(stateFile), { recursive: true });
-    await fs.writeFile(
-      stateFile,
-      JSON.stringify(
-        {
-          repo: "felixjichao/symphony-ts",
-          issueNumber: 80,
-          workspaceKey: "GH-80",
-          spentRepairs: 2,
-          spentWaitSeconds: 45,
-          deadlineTimestampMs: fixedDeadline,
-          isPaused: true,
-          pauseReason: "ci_failed_max_repairs",
-          readyLabelRemoved: true,
-          commentPosted: false, // 本地回执未更新
-          commentVerifyStatus: "pending",
-          pendingCompensation: true,
-          lastUpdated: new Date().toISOString(),
-          handoff: {
-            handoffId,
-            reason: "ci_failed_max_repairs",
-            details: "CI failed and reached max repair attempts",
-            readyLabelRemoved: true,
-            commentPosted: false,
-            prNumber: 95,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    // 3. 可控标签移除
-    currentIssue = { ...currentIssue, labels: [] };
-
-    // 4. 触发真实 reconciliation
-    const reconResult = await authority.reconcileRunningIssues();
-    expect(reconResult.stoppedIssueIds).toEqual([currentIssue.id]);
-    await waitFor(() => !isAlive(pid));
-    expect(isAlive(pid)).toBe(false);
-
-    // 5. 调用正式恢复入口 runDeliverySkillCli(['recover-handoff', ...])
-    const recoveryRunner = new MockRecoveryGhRunner();
-    // GitHub 远端已有该 handoffId 的报告
-    recoveryRunner.ghResponses.push({
-      stdout: JSON.stringify({
-        comments: [
-          {
-            body: `## 🚨 Symphony Delivery Handoff Report\n\n- **Handoff ID**: \`${handoffId}\`\n<!-- symphony:handoff-id:${handoffId} -->\n- **原因**：CI 连续失败`,
-          },
-        ],
-      }),
-      stderr: "",
-      exitCode: 0,
+    const storage = new FileDeliveryStateStorage(stateFile);
+    storage.writeState({
+      repo: "owner/repo",
+      issueNumber: 80,
+      workspaceKey: "GH-80",
+      spentRepairs: 2,
+      spentWaitSeconds: 45,
+      deadlineTimestampMs: fixedDeadline,
+      isPaused: false,
+      lastUpdated: new Date(nowMs).toISOString(),
     });
+
+    const fakeDeliveryRunner = new FakeDeliveryGhRunner();
+    let reconPromise: Promise<ReconciliationResult> | null = null;
+
+    // 屏障设置：交接评论已被 GitHub 远端接收（记录在 publishedPrComments 中），
+    // 此时模拟真实 reconciliation 触发并终止 worker（在写回本地持久化回执之前）
+    fakeDeliveryRunner.onPrCommentReceived = () => {
+      // tracker 移除标签并触发真实 reconciliation
+      currentIssue = { ...currentIssue, labels: [] };
+      reconPromise = authority.reconcileRunningIssues();
+      // 抛出 reconciliation 异常模拟本地写回前进程被终止
+      throw new Error("worker_finished: canceled_by_reconciliation");
+    };
+
+    // 2. Worker 实际执行正式 runDeliverySkill 实现
+    currentWorkerRunner = (async (attemptOptions: AgentAttemptOptions) => {
+      await runDeliverySkill({
+        cwd: workspacePath,
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        headBranch: "symphony/GH-80",
+        baseBranch: "main",
+        maxRepairAttempts: 2,
+        maxWaitSeconds: 300,
+        requiredChecks: ["gate"],
+        nowFn: () => nowMs,
+        stateStorage: storage,
+        signal: attemptOptions.signal,
+        runner: fakeDeliveryRunner,
+        log: () => {},
+      });
+      return undefined as unknown as AgentAttemptResult;
+    }) as unknown as AgentAttemptRunner;
+
+    // 3. 派发 Issue
+    const dispatchResult = authority.dispatchIssue(currentIssue);
+    expect(dispatchResult.kind).toBe("dispatched");
+
+    // 4. 等待真实 reconciliation 停止 Worker
+    await waitFor(() => reconPromise !== null);
+    const reconResult = await reconPromise!;
+    expect(reconResult.stoppedIssueIds).toEqual([currentIssue.id]);
+    expect(authority.activeWorkerCount).toBe(0);
+
+    // 5. 验证磁盘上的状态：标签已移除，但评论回执尚未落盘（commentPosted 为 false）
+    const diskStateAfterKill = storage.readState();
+    expect(diskStateAfterKill).not.toBeNull();
+    expect(diskStateAfterKill?.isPaused).toBe(true);
+    expect(diskStateAfterKill?.readyLabelRemoved).toBe(true);
+    expect(diskStateAfterKill?.commentPosted).toBe(false); // 本地回执尚未记录
+    expect(diskStateAfterKill?.commentVerifyStatus).toBe("pending");
+    expect(diskStateAfterKill?.pendingCompensation).toBe(true);
+    expect(diskStateAfterKill?.spentRepairs).toBe(2);
+    expect(diskStateAfterKill?.deadlineTimestampMs).toBe(fixedDeadline);
+    expect(diskStateAfterKill?.handoff?.handoffId).toBeDefined();
+
+    // 验证远端 GitHub 确实已经接收到了该 handoffId 的评论
+    expect(fakeDeliveryRunner.publishedPrComments.length).toBe(1);
+    expect(fakeDeliveryRunner.publishedPrComments[0]?.body).toContain(diskStateAfterKill!.handoff!.handoffId);
+
+    // 6. 调用正式恢复入口 runDeliverySkillCli(['recover-handoff', ...])
+    const recoveryRunner = new FakeDeliveryGhRunner();
+    // 将远端已接收的评论提供给 recoveryRunner
+    recoveryRunner.publishedPrComments.push(...fakeDeliveryRunner.publishedPrComments);
 
     const io = {
       stdout: { write: () => {} },
@@ -427,27 +491,27 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
     };
 
     const exitCode = await runDeliverySkillCli(
-      ["recover-handoff", "--repo", "felixjichao/symphony-ts", "--issue", "80", "--cwd", workspacePath],
+      ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", workspacePath],
       io,
       recoveryRunner,
     );
 
     expect(exitCode).toBe(0);
 
-    // 关键验证：精准识别已发布，绝不发起新的评论请求（去重生效）
-    const commentCall = recoveryRunner.ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "comment");
-    expect(commentCall).toBeUndefined();
+    // 关键验证：精准去重生效，绝不发起新的评论请求！
+    const commentCalls = recoveryRunner.ghCalls.filter((c) => c.args[0] === "pr" && c.args[1] === "comment");
+    expect(commentCalls.length).toBe(0);
 
-    // 验证磁盘状态被更新为完成闭环，且预算与 deadline 保持不变
-    const finalDiskState = JSON.parse(await fs.readFile(stateFile, "utf8"));
-    expect(finalDiskState.spentRepairs).toBe(2);
-    expect(finalDiskState.spentWaitSeconds).toBe(45);
-    expect(finalDiskState.deadlineTimestampMs).toBe(fixedDeadline);
-    expect(finalDiskState.isPaused).toBe(true);
-    expect(finalDiskState.readyLabelRemoved).toBe(true);
-    expect(finalDiskState.commentPosted).toBe(true);
-    expect(finalDiskState.commentVerifyStatus).toBe("posted");
-    expect(finalDiskState.pendingCompensation).toBe(false);
-    expect(finalDiskState.handoff?.handoffId).toBe(handoffId);
+    // 验证最终磁盘状态完成闭环
+    const finalDiskState = storage.readState();
+    expect(finalDiskState?.spentRepairs).toBe(2);
+    expect(finalDiskState?.spentWaitSeconds).toBe(45);
+    expect(finalDiskState?.deadlineTimestampMs).toBe(fixedDeadline);
+    expect(finalDiskState?.isPaused).toBe(true);
+    expect(finalDiskState?.readyLabelRemoved).toBe(true);
+    expect(finalDiskState?.commentPosted).toBe(true);
+    expect(finalDiskState?.commentVerifyStatus).toBe("posted");
+    expect(finalDiskState?.pendingCompensation).toBe(false);
+    expect(finalDiskState?.handoff?.handoffId).toBe(diskStateAfterKill!.handoff!.handoffId);
   }, 30_000);
 });
