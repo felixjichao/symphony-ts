@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  recoverDeliveryHandoff,
   runDeliverySkill,
   type DeliveryGitGhRunner,
   type DeliveryStateStorage,
@@ -229,172 +230,27 @@ export async function runDeliverySkillCli(
 
   if (parsed.action === "recover-handoff") {
     const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
-    let currentState: PersistedDeliveryState | null = null;
-    try {
-      currentState = stateStorage.readState();
-    } catch (err) {
-      io.stderr.write(`symphony delivery-skill: error reading state: ${String(err)}\n`);
-      return 1;
-    }
-    if (!currentState) {
-      io.stderr.write(`symphony delivery-skill: error: no persisted delivery state found\n`);
-      return 1;
-    }
-    if (!currentState.isPaused) {
-      io.stderr.write(`symphony delivery-skill: delivery state is not paused; no handoff recovery required\n`);
+    const result = await recoverDeliveryHandoff({
+      cwd,
+      repo: parsed.repo,
+      issueNumber: parsed.issueNumber,
+      workspaceKey: parsed.workspaceKey,
+      readyLabel: parsed.readyLabel,
+      headBranch: parsed.headBranch,
+      maxRepairs: parsed.maxRepairs,
+      maxWait: parsed.maxWait,
+      stateStorage,
+      runner,
+      log: (msg) => io.stdout.write(`${msg}\n`),
+    });
+
+    if (result.message) {
+      io.stderr.write(`symphony delivery-skill: ${result.message}\n`);
       return 0;
     }
 
-    // 1. Identity validation: repo, issueNumber, workspaceKey
-    if (currentState.repo && currentState.repo !== parsed.repo) {
-      io.stderr.write(`symphony delivery-skill: error: repository mismatch (persisted: ${currentState.repo}, argv: ${parsed.repo})\n`);
-      return 1;
-    }
-    if (currentState.issueNumber && currentState.issueNumber !== parsed.issueNumber) {
-      io.stderr.write(`symphony delivery-skill: error: issue number mismatch (persisted: ${currentState.issueNumber}, argv: ${parsed.issueNumber})\n`);
-      return 1;
-    }
-    if (currentState.workspaceKey && parsed.workspaceKey && currentState.workspaceKey !== parsed.workspaceKey) {
-      io.stderr.write(`symphony delivery-skill: error: workspace mismatch (persisted: ${currentState.workspaceKey}, argv: ${parsed.workspaceKey})\n`);
-      return 1;
-    }
-
-    const repo = currentState.repo || parsed.repo;
-    const issueNumber = currentState.issueNumber || parsed.issueNumber;
-    const effectiveReadyLabel = currentState.handoff?.readyLabel ?? (currentState as unknown as { readyLabel?: string }).readyLabel ?? parsed.readyLabel ?? "symphony-ready";
-    const reason = (currentState.pauseReason as DeliveryHandoff["reason"]) ?? "manual_intervention_required";
-    const prNumber = currentState.handoff?.prNumber ?? null;
-
-    let readyLabelRemoved = currentState.readyLabelRemoved ?? false;
-    if (!readyLabelRemoved) {
-      try {
-        const editRes = await runner.gh(
-          ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel],
-          cwd,
-        );
-        if (editRes.exitCode === 0) {
-          readyLabelRemoved = true;
-        } else {
-          readyLabelRemoved = false;
-        }
-      } catch {
-        readyLabelRemoved = false;
-      }
-    }
-
-    let commentPosted = currentState.commentPosted ?? false;
-    let commentVerifyStatus: "posted" | "failed" | "unverified" | "pending" = currentState.commentVerifyStatus ?? "unverified";
-
-    const handoffId = currentState.handoff?.handoffId;
-    const headSha = currentState.handoff?.headSha;
-    const targetDetails = currentState.handoff?.details;
-
-    const viewTargetArgs = prNumber !== null
-      ? ["pr", "view", String(prNumber), "--repo", repo, "--json", "comments"]
-      : ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"];
-
-    const commentTargetArgs = prNumber !== null
-      ? ["pr", "comment", String(prNumber), "--repo", repo]
-      : ["issue", "comment", String(issueNumber), "--repo", repo];
-
-    if (!commentPosted) {
-      let querySuccess = false;
-      let alreadyPosted = false;
-
-      try {
-        const viewRes = await runner.gh(viewTargetArgs, cwd);
-        if (viewRes.exitCode === 0) {
-          querySuccess = true;
-          const parsedView = JSON.parse(viewRes.stdout || "{}");
-          if (Array.isArray(parsedView.comments)) {
-            alreadyPosted = parsedView.comments.some((c: { body?: string }) => {
-              if (typeof c.body !== "string") return false;
-              if (handoffId) {
-                return c.body.includes(handoffId);
-              }
-              if (headSha) {
-                return c.body.includes(headSha);
-              }
-              if (targetDetails) {
-                return c.body.includes(targetDetails);
-              }
-              return c.body.includes("## 🚨 Symphony Delivery Handoff Report");
-            });
-          }
-        } else {
-          querySuccess = false;
-        }
-      } catch {
-        querySuccess = false;
-      }
-
-      if (!querySuccess) {
-        commentVerifyStatus = "unverified";
-        stateStorage.writeState({
-          ...currentState,
-          readyLabelRemoved,
-          commentPosted: false,
-          commentVerifyStatus: "unverified",
-          pendingCompensation: true,
-          lastUpdated: new Date().toISOString(),
-        });
-        io.stderr.write("symphony delivery-skill: error querying remote comments; status remains unverified\n");
-        return 1;
-      }
-
-      if (alreadyPosted) {
-        commentPosted = true;
-        commentVerifyStatus = "posted";
-      } else {
-        const handoffToPost: DeliveryHandoff = currentState.handoff ?? {
-          reason,
-          details: currentState.pauseReason ?? "Delivery paused for manual intervention.",
-          repo,
-          issueNumber,
-          headBranch: parsed.headBranch ?? `symphony/GH-${issueNumber}`,
-          prNumber,
-          prUrl: null,
-          headSha: null,
-          spentRepairs: currentState.spentRepairs,
-          maxRepairs: parsed.maxRepairs ?? currentState.spentRepairs,
-          spentWaitSeconds: currentState.spentWaitSeconds,
-          maxWaitSeconds: parsed.maxWait ?? currentState.spentWaitSeconds,
-          readyLabel: effectiveReadyLabel,
-          readyLabelRemoved,
-          handoffId,
-        };
-        const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
-        try {
-          const commentRes = await runner.gh(
-            [...commentTargetArgs, "--body", commentBody],
-            cwd,
-          );
-          if (commentRes.exitCode === 0) {
-            commentPosted = true;
-            commentVerifyStatus = "posted";
-          } else {
-            commentPosted = false;
-            commentVerifyStatus = "failed";
-          }
-        } catch {
-          commentPosted = false;
-          commentVerifyStatus = "failed";
-        }
-      }
-    }
-
-    const pendingCompensation = !(readyLabelRemoved && commentPosted);
-    stateStorage.writeState({
-      ...currentState,
-      readyLabelRemoved,
-      commentPosted,
-      commentVerifyStatus,
-      pendingCompensation,
-      lastUpdated: new Date().toISOString(),
-    });
-
-    if (pendingCompensation) {
-      io.stderr.write("symphony delivery-skill: handoff recovery incomplete\n");
+    if (!result.success) {
+      io.stderr.write(`symphony delivery-skill: ${result.error ?? "handoff recovery incomplete"}\n`);
       return 1;
     }
 
@@ -417,6 +273,7 @@ export async function runDeliverySkillCli(
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
     const spentWaitSeconds = existingState?.spentWaitSeconds ?? (parsed.maxWait ?? 300);
+    const handoffId = `handoff-${parsed.repo.replace("/", "-")}-${parsed.issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const handoff: DeliveryHandoff = {
       reason,
@@ -434,6 +291,7 @@ export async function runDeliverySkillCli(
       readyLabel,
       readyLabelRemoved: false,
       commentPosted: false,
+      handoffId,
     };
 
     // 先持久化 paused 状态和待补偿事实

@@ -36,6 +36,7 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly sleepFn?: (seconds: number) => Promise<void>;
   readonly nowFn?: (() => number) | undefined;
   readonly log?: (msg: string) => void;
+  readonly signal?: AbortSignal | undefined;
 }
 
 // SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
@@ -560,6 +561,10 @@ export async function runDeliverySkill(
       commentVerifyStatus: "pending",
       pendingCompensation: true,
     });
+
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new Error("worker_finished: canceled_by_reconciliation");
+    }
 
     // 发表交接评论
     let commentVerifyStatus: "posted" | "failed" | "unverified" = "unverified";

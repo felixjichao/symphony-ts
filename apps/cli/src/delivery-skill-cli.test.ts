@@ -611,15 +611,32 @@ describe("delivery-skill CLI", () => {
         commentPosted: false,
         pendingCompensation: true,
         lastUpdated: new Date().toISOString(),
+        handoff: {
+          repo: "owner/repo",
+          issueNumber: 80,
+          headBranch: "symphony/GH-80",
+          prNumber: null,
+          prUrl: null,
+          headSha: null,
+          reason: "budget_exhausted",
+          details: "Delivery paused for manual intervention.",
+          spentRepairs: 2,
+          maxRepairs: 3,
+          spentWaitSeconds: 50,
+          maxWaitSeconds: 300,
+          readyLabel: "symphony-ready",
+          readyLabelRemoved: true,
+          handoffId: "handoff-owner-repo-80-test-dedup",
+        },
       });
 
       const runner = new MockCliRunner();
-      // 1. gh issue view --json comments returns existing handoff report
+      // 1. gh issue view --json comments returns existing handoff report with matching handoffId
       runner.ghResponses.push({
         stdout: JSON.stringify({
           comments: [
             { body: "Some prior comment" },
-            { body: "## 🚨 Symphony Delivery Handoff Report\n\nDelivery paused for manual intervention." },
+            { body: "## 🚨 Symphony Delivery Handoff Report\n\n<!-- symphony-delivery-handoff: {\"handoffId\":\"handoff-owner-repo-80-test-dedup\"} -->\nDelivery paused for manual intervention." },
           ],
         }),
         stderr: "",
@@ -649,6 +666,59 @@ describe("delivery-skill CLI", () => {
       expect(updated?.pendingCompensation).toBe(false);
       expect(updated?.spentRepairs).toBe(2);
       expect(updated?.isPaused).toBe(true);
+    });
+
+    it("leaves legacy state without ID/SHA unverified and pending compensation when remote has existing generic report", async () => {
+      const tempDir = createTempDir();
+      const stateFile = path.join(tempDir, ".symphony", "delivery-state.json");
+      const storage = new FileDeliveryStateStorage(stateFile);
+      storage.writeState({
+        repo: "owner/repo",
+        issueNumber: 80,
+        workspaceKey: "GH-80",
+        spentRepairs: 2,
+        spentWaitSeconds: 50,
+        deadlineTimestampMs: 1700000000,
+        isPaused: true,
+        pauseReason: "budget_exhausted",
+        readyLabelRemoved: true,
+        commentPosted: false,
+        pendingCompensation: true,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      const runner = new MockCliRunner();
+      runner.ghResponses.push({
+        stdout: JSON.stringify({
+          comments: [
+            { body: "## 🚨 Symphony Delivery Handoff Report\n\nSome old generic report." },
+          ],
+        }),
+        stderr: "",
+        exitCode: 0,
+      });
+
+      let stderr = "";
+      const io = {
+        stdout: { write: () => {} },
+        stderr: { write: (t: string) => { stderr += t; } },
+      };
+
+      const code = await runDeliverySkillCli(
+        ["recover-handoff", "--repo", "owner/repo", "--issue", "80", "--cwd", tempDir],
+        io,
+        runner,
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("legacy handoff lacks unique identifier");
+      const commentCall = runner.ghCalls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+      expect(commentCall).toBeUndefined();
+
+      const updated = storage.readState();
+      expect(updated?.commentPosted).toBe(false);
+      expect(updated?.commentVerifyStatus).toBe("unverified");
+      expect(updated?.pendingCompensation).toBe(true);
     });
 
     it("fails fast before any remote action when argv issue or repo does not match persisted state", async () => {
