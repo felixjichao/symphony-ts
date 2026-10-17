@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runDeliverySkill, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
+import { runDeliverySkill, recoverDeliveryHandoff, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
 import {
   formatPrBody,
   type DecisionReviewTarget,
@@ -1272,3 +1272,78 @@ it("restores the pending deadline from a real state file after interrupted waiti
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("Blocker 5: concurrent recoverDeliveryHandoff calls serialize via FileDeliveryStateStorage lock and post only one comment", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-"));
+  try {
+    const stateFile = path.join(dir, "delivery.json");
+    const stateStorage = new FileDeliveryStateStorage(stateFile);
+    stateStorage.writeState({
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      spentRepairs: 0,
+      spentWaitSeconds: 0,
+      isPaused: true,
+      pendingCompensation: true,
+      readyLabelRemoved: true,
+      commentPosted: false,
+      lastUpdated: "v1",
+      handoff: {
+        handoffId: "h1",
+        reason: "manual_intervention_required",
+        details: "manual",
+        repo: "acme/repo",
+        issueNumber: 1,
+        headBranch: "symphony/GH-1",
+        prNumber: 2,
+        prUrl: null,
+        headSha: "head",
+        spentRepairs: 0,
+        maxRepairs: 3,
+        spentWaitSeconds: 0,
+        maxWaitSeconds: 300,
+        readyLabel: "ready",
+        readyLabelRemoved: true,
+      },
+    });
+
+    let queries = 0;
+    let posts = 0;
+    const runner: DeliveryGitGhRunner = {
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      git: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      gh: async (args) => {
+        if (args[1] === "view") {
+          queries++;
+          return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: "" };
+        }
+        if (args[1] === "comment") {
+          posts++;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    const options = {
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      stateStorage,
+      runner,
+      expectedHandoffId: "h1",
+      expectedLastUpdated: "v1",
+    };
+
+    const results = await Promise.all([
+      recoverDeliveryHandoff(options),
+      recoverDeliveryHandoff(options),
+    ]);
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(posts).toBe(1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+

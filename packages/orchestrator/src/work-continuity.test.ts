@@ -95,7 +95,12 @@ describe("deriveWorkContinuity", () => {
     expect(analysis.recoveryProposal).toEqual({
       kind: "orchestrator_stop_stalled",
       authority: "orchestrator",
-      issueId: "GH-1",
+      issueId: "1",
+      fence: {
+        expectedAttemptToken: "tok-1",
+        expectedGeneration: 1,
+        expectedEpoch: 1,
+      },
     });
   });
 
@@ -129,7 +134,7 @@ describe("deriveWorkContinuity", () => {
     expect(analysis.recoveryProposal).toEqual({
       kind: "orchestrator_dispatch",
       authority: "orchestrator",
-      issueId: "GH-1",
+      issueId: "1",
     });
   });
 
@@ -188,7 +193,7 @@ describe("deriveWorkContinuity", () => {
     expect(analysis.recoveryProposal).toEqual({
       kind: "decision_dispatch_plan",
       authority: "decision",
-      sessionId: "github-acme-repo-1",
+      sessionId: "github:acme/repo#1",
     });
   });
 
@@ -341,7 +346,7 @@ describe("deriveWorkContinuity", () => {
     expect(analysis.recoveryProposal).toEqual({
       kind: "decision_dispatch_review",
       authority: "decision",
-      sessionId: "github-acme-repo-1",
+      sessionId: "github:acme/repo#1",
       target: {
         repository: "acme/repo",
         prNumber: 42,
@@ -384,7 +389,7 @@ describe("deriveWorkContinuity", () => {
 
     const analysis = deriveWorkContinuity(facts, now);
     expect(analysis.stage).toBe("merge");
-    expect(analysis.condition).toBe("making_progress");
+    expect(analysis.condition).toBe("stranded");
     expect(analysis.recoveryProposal).toBeUndefined();
   });
 
@@ -606,7 +611,7 @@ describe("WorkContinuityCoordinator", () => {
 
     expect(result.reconciledCount).toBe(1);
     expect(result.recoveredCount).toBe(1);
-    expect(dispatchMock).toHaveBeenCalledWith("GH-10");
+    expect(dispatchMock).toHaveBeenCalledWith("10");
     // Facts reader called: 1 (initial) + 1 (pre-action) + 1 (post-action) = 3 times
     expect(factsReader).toHaveBeenCalledTimes(3);
     expect(result.items[0]?.recoveryExecuted).toBe(true);
@@ -766,5 +771,160 @@ describe("WorkContinuityCoordinator", () => {
     const result = await coordinator.reconcile();
     // After processing key1, stop() was triggered, key2 should not be processed
     expect(result.reconciledCount).toBe(1);
+  });
+
+  describe("Review Blockers Regression (NEST-131)", () => {
+    const workKey = { provider: "github", key: "acme/repo#1" } as const;
+    const github = { issue: { state: "open" as const }, pullRequest: null, ci: null };
+    const ready = { latestPlanTask: { taskId: "p", revision: 1, status: "completed" as const, verdict: "ready" as const } };
+    const pr = { number: 2, state: "open" as const, headSha: "new-head", isDraft: false };
+
+    it("Blocker 2: missing planning recovery is unsupported and NOT counted as recovered", async () => {
+      const c = new WorkContinuityCoordinator({
+        factsReader: async () => ({ workKey, github }),
+        activeWorkKeysSource: async () => [workKey],
+        authorities: {},
+      });
+      const result = await c.reconcile();
+      expect(result.recoveredCount).toBe(0);
+      const item = result.items[0];
+      expect(item).toBeDefined();
+      expect((item?.recoveryOutcome as { unsupported?: boolean } | undefined)?.unsupported).toBe(true);
+      expect(item?.recoveryExecuted).toBe(false);
+      expect(item?.analysis?.condition).toBe("stranded");
+    });
+
+    it("Blocker 3: unavailable Decision source yields observation_unavailable and emits no mutation", () => {
+      const a = deriveWorkContinuity(
+        { workKey, github, sourceFreshness: { github: "fresh", decision: "unavailable" } },
+        100,
+      );
+      expect(a.condition).toBe("observation_unavailable");
+      expect(a.recoveryProposal).toBeFalsy();
+    });
+
+    it("Blocker 7: CI repair respects active worker or scheduled retry without duplicating repair", () => {
+      const runningAnalysis = deriveWorkContinuity(
+        { workKey, github: { ...github, pullRequest: pr, ci: { status: "failure", headSha: "new-head" } }, orchestrator: { isRunning: true, isStalled: false } },
+        100,
+      );
+      expect(runningAnalysis.condition).toBe("making_progress");
+      expect(runningAnalysis.recoveryProposal).toBeFalsy();
+
+      const retryAnalysis = deriveWorkContinuity(
+        { workKey, github: { ...github, pullRequest: pr, ci: { status: "failure", headSha: "new-head" } }, orchestrator: { isRunning: false, isStalled: false, retryScheduled: { attempt: 1, retryInMs: 10000, error: null } } },
+        100,
+      );
+      expect(retryAnalysis.condition).toBe("retry_scheduled");
+      expect(retryAnalysis.recoveryProposal).toBeFalsy();
+    });
+
+    it("Blocker 6: pending task without executor and ownerless merge are reported as stranded with unknown progress", () => {
+      const pending = deriveWorkContinuity(
+        { workKey, github, decision: { latestPlanTask: { taskId: "p", revision: 1, status: "pending" as const } } },
+        100,
+      );
+      expect(pending.condition).toBe("stranded");
+      expect(pending.currentOwner).toBeNull();
+      expect(pending.liveness.lastProgressAt).toBe("unknown");
+
+      const merge = deriveWorkContinuity(
+        {
+          workKey,
+          github: { ...github, pullRequest: pr, ci: { status: "success" as const } },
+          decision: {
+            latestReviewTask: {
+              taskId: "r",
+              revision: 1,
+              status: "completed" as const,
+              target: { repository: "acme/repo", prNumber: 2, headSha: "new-head" },
+              verdict: "approve" as const,
+            },
+          },
+        },
+        100,
+      );
+      expect(merge.condition).toBe("stranded");
+      expect(merge.currentOwner).toBeNull();
+      expect(merge.liveness.lastProgressAt).toBe("unknown");
+    });
+
+    it("Blocker 8: stop during awaited observation does NOT delegate recovery", async () => {
+      const dispatch = vi.fn(async () => true);
+      let c: WorkContinuityCoordinator;
+      c = new WorkContinuityCoordinator({
+        factsReader: async () => {
+          c.stop();
+          return { workKey, github, decision: ready };
+        },
+        activeWorkKeysSource: async () => [workKey],
+        authorities: { orchestrator: { dispatch, stopStalled: async () => true } },
+      });
+      await c.reconcile();
+      expect(c.isStopping).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("Blocker 4: stop delegation passes fenced attemptToken, generation, and epoch", async () => {
+      const stopStalled = vi.fn(async () => true);
+      const c = new WorkContinuityCoordinator({
+        factsReader: async () => ({
+          workKey,
+          github,
+          decision: ready,
+          orchestrator: {
+            isRunning: true,
+            isStalled: true,
+            lifecycleGeneration: 3,
+            attemptToken: "token-3",
+            reconciliationEpoch: 2,
+          },
+        }),
+        activeWorkKeysSource: async () => [workKey],
+        authorities: { orchestrator: { dispatch: async () => true, stopStalled } },
+      });
+      await c.reconcile();
+      expect(stopStalled).toHaveBeenCalledWith("1", {
+        expectedAttemptToken: "token-3",
+        expectedGeneration: 3,
+        expectedEpoch: 2,
+      });
+    });
+
+    it("Blocker 9: failed planning task does not fall through to coding dispatch", () => {
+      const a = deriveWorkContinuity(
+        { workKey, github, decision: { latestPlanTask: { taskId: "p", revision: 1, status: "failed" as const } } },
+        100,
+        { planningEnabled: true },
+      );
+      expect(a.stage).toBe("planning");
+      expect(a.recoveryProposal?.kind).toBe("decision_dispatch_plan");
+    });
+
+    it("Blocker 10: canonical identity uses provider-neutral opaque issue ID and canonical session id", () => {
+      const a = deriveWorkContinuity(
+        { workKey: { provider: "github", key: "acme/repo#42" }, github, decision: undefined },
+        100,
+        { planningEnabled: true },
+      );
+      expect(a.recoveryProposal?.kind).toBe("decision_dispatch_plan");
+      if (a.recoveryProposal?.kind === "decision_dispatch_plan") {
+        expect(a.recoveryProposal.sessionId).toBe("github:acme/repo#42");
+      }
+
+      const b = deriveWorkContinuity(
+        {
+          workKey: { provider: "github", key: "acme/repo#42" },
+          github: { issue: { id: "42", state: "open" }, pullRequest: null, ci: null },
+          decision: { latestPlanTask: { taskId: "p", revision: 1, status: "completed", verdict: "ready" } },
+        },
+        100,
+        { planningEnabled: true },
+      );
+      expect(b.recoveryProposal?.kind).toBe("orchestrator_dispatch");
+      if (b.recoveryProposal?.kind === "orchestrator_dispatch") {
+        expect(b.recoveryProposal.issueId).toBe("42");
+      }
+    });
   });
 });

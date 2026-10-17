@@ -22,8 +22,10 @@ import {
 } from "@symphony/domain";
 
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
+import type { DeliveryLock } from "./recover-handoff";
 
 export interface DeliveryStateStorage {
+  readonly lock?: DeliveryLock | undefined;
   readState(): Promise<PersistedDeliveryState | null> | PersistedDeliveryState | null;
   writeState(state: PersistedDeliveryState): Promise<void> | void;
 }
@@ -438,6 +440,8 @@ export async function runDeliverySkill(
 
   const persistCurrentState = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
     if (!stateStorage) return;
+    const lock = stateStorage.lock;
+    if (lock) await lock.acquire();
     try {
       await stateStorage.writeState({
         repo: context.repo,
@@ -453,6 +457,8 @@ export async function runDeliverySkill(
     } catch (err) {
       log(`[delivery-skill] Error persisting delivery state: ${String(err)}`);
       throw err;
+    } finally {
+      if (lock) await lock.release();
     }
   };
 

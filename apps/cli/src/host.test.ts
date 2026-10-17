@@ -749,5 +749,31 @@ describe("createHost in-process composition", () => {
       await rm(temp, { recursive: true, force: true });
     }
   });
+
+  it("assembles default WorkContinuityCoordinator and discovers active work during tick without running worker", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-work-continuity-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const issues = [makeIssue("1", "open")];
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        trackerProfiles: [fixtureProfile([], issues)],
+      });
+      expect(host.workContinuityCoordinator).toBeDefined();
+      expect(host.authority.activeWorkerCount).toBe(0);
+
+      const res = await host.workContinuityCoordinator.reconcile();
+      expect(res).toBeDefined();
+      expect(res.reconciledCount).toBeGreaterThanOrEqual(0);
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
 });
+
 

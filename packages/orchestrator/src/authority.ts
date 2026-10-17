@@ -368,7 +368,7 @@ export class OrchestratorAuthority {
     const record = this.active.get(issueId);
     if (!record) return "unknown";
     const sessionTs = record.entry.session?.lastCodexTimestamp ?? null;
-    return sessionTs ?? record.telemetry.pendingLastTimestamp ?? record.entry.attempt.startedAt;
+    return sessionTs ?? "unknown";
   }
 
   /** 所有当前 running 的 issue id。 */
@@ -507,6 +507,42 @@ export class OrchestratorAuthority {
       return;
     }
     await record.worker.stop(reason);
+  }
+
+  /**
+   * 带 fencing 核验地停止某 stalled issue 的 worker。
+   * 核验 attemptToken、lifecycleGeneration 与 reconciliationEpoch；任一不匹配则拒绝停止。
+   */
+  public async stopStalledWorker(
+    issueId: string,
+    fence?: {
+      readonly expectedAttemptToken?: string | undefined;
+      readonly expectedGeneration?: number | undefined;
+      readonly expectedEpoch?: number | undefined;
+    },
+  ): Promise<{ stopped: boolean; reason?: string }> {
+    const record = this.active.get(issueId);
+    if (record === undefined) {
+      return { stopped: false, reason: "not_running" };
+    }
+    if (fence?.expectedAttemptToken !== undefined && record.token !== fence.expectedAttemptToken) {
+      return { stopped: false, reason: "fence_mismatch_attempt_token" };
+    }
+    if (
+      fence?.expectedGeneration !== undefined &&
+      (this.lifecycleGeneration.get(issueId) ?? 0) !== fence.expectedGeneration
+    ) {
+      return { stopped: false, reason: "fence_mismatch_lifecycle_generation" };
+    }
+    if (
+      fence?.expectedEpoch !== undefined &&
+      (this.reconcileEpoch.get(issueId) ?? 0) !== fence.expectedEpoch
+    ) {
+      return { stopped: false, reason: "fence_mismatch_reconciliation_epoch" };
+    }
+
+    await record.worker.stop({ kind: "stall" });
+    return { stopped: true };
   }
 
   /** 等待所有活跃 worker（含 stop 后的收尾）真正结束。 */

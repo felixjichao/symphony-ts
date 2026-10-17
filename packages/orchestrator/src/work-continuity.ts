@@ -13,6 +13,7 @@
  */
 
 import {
+  decisionSessionId,
   validateContinuityDescriptor,
   type BlockedReasonDetails,
   type ExecutionContinuityDescriptor,
@@ -66,10 +67,18 @@ export function isSameRecoveryProposal(a: RecoveryProposal, b: RecoveryProposal)
       );
     }
     case "orchestrator_dispatch":
-    case "orchestrator_retry":
-    case "orchestrator_stop_stalled": {
+    case "orchestrator_retry": {
       const bProp = b as typeof a;
       return a.issueId === bProp.issueId;
+    }
+    case "orchestrator_stop_stalled": {
+      const bProp = b as typeof a;
+      return (
+        a.issueId === bProp.issueId &&
+        a.fence?.expectedAttemptToken === bProp.fence?.expectedAttemptToken &&
+        a.fence?.expectedGeneration === bProp.fence?.expectedGeneration &&
+        a.fence?.expectedEpoch === bProp.fence?.expectedEpoch
+      );
     }
     case "delivery_compensate": {
       const bProp = b as typeof a;
@@ -99,7 +108,7 @@ export function deriveWorkContinuity(
   const planningEnabled = options?.planningEnabled ?? true;
 
   // 1. Fail-safe on observation failure
-  if (facts.sourceFreshness?.github === "unavailable") {
+  if (facts.sourceFreshness?.github === "unavailable" || (!facts.delivery?.isPaused && !facts.github?.issue)) {
     const liveness: LivenessMetadata = {
       startedAt: now,
       lastProgressAt: "unknown",
@@ -108,7 +117,7 @@ export function deriveWorkContinuity(
     const fence: SafeOwnershipFence = { hasLeaseToken: false };
     const expectedAction: ExpectedNextAction = {
       action: "await_external",
-      description: "GitHub / tracker source unavailable; waiting for source recovery",
+      description: "GitHub / tracker source unavailable or missing issue; waiting for source recovery",
       authority: {
         kind: "external",
         system: "tracker",
@@ -143,7 +152,56 @@ export function deriveWorkContinuity(
       liveness,
       fence,
       descriptor,
-      sourceFreshness: { github: "unavailable" },
+      sourceFreshness: facts.sourceFreshness ?? { github: "unavailable" },
+    };
+  }
+
+  // Also check if Decision source is unavailable (Blocker 3: cannot assume missing tasks)
+  if (facts.sourceFreshness?.decision === "unavailable") {
+    const liveness: LivenessMetadata = {
+      startedAt: now,
+      lastProgressAt: "unknown",
+      lastObservedAt: now,
+    };
+    const fence: SafeOwnershipFence = { hasLeaseToken: false };
+    const expectedAction: ExpectedNextAction = {
+      action: "await_external",
+      description: "Decision source unavailable; waiting for source recovery",
+      authority: {
+        kind: "external",
+        system: "decision",
+        condition: "source_available",
+      },
+      requiredEvidence: ["source_available"],
+    };
+    const descriptor: ExecutionContinuityDescriptor = {
+      workKey,
+      scope: "work",
+      state: "blocked",
+      expectedAction,
+      liveness,
+      fence,
+      blockedDetails: {
+        reason: "source_unavailable",
+        waitingOn: {
+          kind: "external",
+          system: "decision",
+          condition: "source_available",
+        },
+        unblockCondition: "Decision returns healthy responses",
+        blockedAt: now,
+      },
+    };
+    return {
+      workKey,
+      stage: facts.github?.pullRequest ? "review" : "planning",
+      condition: "observation_unavailable",
+      expectedAction,
+      currentOwner: null,
+      liveness,
+      fence,
+      descriptor,
+      sourceFreshness: facts.sourceFreshness,
     };
   }
 
@@ -263,9 +321,11 @@ export function deriveWorkContinuity(
   // Extract repo and issue id
   const parts = workKey.key.split("#");
   const repository = parts[0] ?? "";
-  const rawIssueNum = parts[1] ? Number(parts[1]) : 0;
-  const issueId = rawIssueNum > 0 ? `GH-${rawIssueNum}` : workKey.key;
-  const sessionId = `${workKey.provider}-${repository.replace("/", "-")}-${rawIssueNum}`;
+  const issueId =
+    facts.github?.issue && "id" in facts.github.issue && typeof (facts.github.issue as { id?: string }).id === "string"
+      ? (facts.github.issue as { id?: string }).id!
+      : (parts[1] ?? workKey.key);
+  const sessionId = decisionSessionId({ provider: workKey.provider, key: workKey.key });
 
   // 4. PR lifecycle stages: CI wait, review, repair, merge
   if (facts.github?.pullRequest && facts.github.pullRequest.state === "open") {
@@ -335,9 +395,129 @@ export function deriveWorkContinuity(
 
     // 4.2 CI Failed -> Needs Repair
     if (facts.github.ci?.status === "failure") {
+      // Check if repair worker is already running or retry scheduled (Blocker 7)
+      if (facts.orchestrator?.isRunning) {
+        const isStalled = facts.orchestrator.isStalled;
+        const liveness: LivenessMetadata = {
+          startedAt: now,
+          lastProgressAt: facts.orchestrator.lastProgressAt ?? "unknown",
+          lastObservedAt: now,
+          attempt: facts.orchestrator.attempt ?? 1,
+        };
+        const fence: SafeOwnershipFence = {
+          hasLeaseToken: false,
+          expectedHeadSha: pr.headSha,
+          retryToken: facts.orchestrator.attemptToken,
+          lifecycleGeneration: facts.orchestrator.lifecycleGeneration,
+          reconciliationEpoch: facts.orchestrator.reconciliationEpoch,
+        };
+
+        if (isStalled) {
+          const expectedAction: ExpectedNextAction = {
+            action: "reclaim",
+            description: `Stop stalled repair worker for PR #${pr.number}`,
+            authority: { kind: "internal", authority: "orchestrator" },
+          };
+          const descriptor: ExecutionContinuityDescriptor = {
+            workKey,
+            scope: "attempt",
+            state: "running",
+            expectedAction,
+            liveness,
+            fence,
+          };
+          const recoveryProposal: RecoveryProposal = {
+            kind: "orchestrator_stop_stalled",
+            authority: "orchestrator",
+            issueId,
+            fence: {
+              expectedAttemptToken: facts.orchestrator.attemptToken,
+              expectedGeneration: facts.orchestrator.lifecycleGeneration,
+              expectedEpoch: facts.orchestrator.reconciliationEpoch,
+            },
+          };
+          return {
+            workKey,
+            stage: "repair",
+            condition: "stranded",
+            strandedReason: "repair_worker_stalled",
+            expectedAction,
+            currentOwner: { kind: "internal", authority: "orchestrator" },
+            liveness,
+            fence,
+            recoveryProposal,
+            descriptor,
+          };
+        }
+
+        const expectedAction: ExpectedNextAction = {
+          action: "none",
+          description: "Repair agent active in workspace resolving CI failure",
+          authority: { kind: "internal", authority: "orchestrator", executor: "codex-agent" },
+          target: reviewTarget,
+        };
+        const descriptor: ExecutionContinuityDescriptor = {
+          workKey,
+          scope: "attempt",
+          state: "running",
+          expectedAction,
+          liveness,
+          fence,
+        };
+        return {
+          workKey,
+          stage: "repair",
+          condition: "making_progress",
+          expectedAction,
+          currentOwner: { kind: "internal", authority: "orchestrator", executor: "codex-agent" },
+          liveness,
+          fence,
+          descriptor,
+        };
+      }
+
+      if (facts.orchestrator?.retryScheduled) {
+        const retry = facts.orchestrator.retryScheduled;
+        const liveness: LivenessMetadata = {
+          startedAt: now,
+          lastProgressAt: "unknown",
+          lastObservedAt: now,
+          attempt: retry.attempt,
+        };
+        const fence: SafeOwnershipFence = {
+          hasLeaseToken: false,
+          expectedHeadSha: pr.headSha,
+        };
+        const expectedAction: ExpectedNextAction = {
+          action: "retry",
+          description: `Repair retry scheduled in orchestrator queue (in ${retry.retryInMs}ms)`,
+          authority: { kind: "internal", authority: "orchestrator" },
+          target: reviewTarget,
+        };
+        const descriptor: ExecutionContinuityDescriptor = {
+          workKey,
+          scope: "attempt",
+          state: "retry_queued",
+          expectedAction,
+          liveness,
+          fence,
+        };
+        return {
+          workKey,
+          stage: "repair",
+          condition: "retry_scheduled",
+          expectedAction,
+          currentOwner: { kind: "internal", authority: "orchestrator" },
+          liveness,
+          fence,
+          descriptor,
+        };
+      }
+
+      // No active repair worker and no scheduled retry -> Stranded!
       const liveness: LivenessMetadata = {
         startedAt: now,
-        lastProgressAt: now,
+        lastProgressAt: "unknown",
         lastObservedAt: now,
       };
       const fence: SafeOwnershipFence = {
@@ -386,9 +566,48 @@ export function deriveWorkContinuity(
       if (isMatchingHead && revTask) {
         // If approved -> Merge stage
         if (revTask.verdict === "approve") {
+          const isMergeExecuting = facts.orchestrator?.isRunning;
+          if (isMergeExecuting) {
+            const liveness: LivenessMetadata = {
+              startedAt: now,
+              lastProgressAt: facts.orchestrator?.lastProgressAt ?? "unknown",
+              lastObservedAt: now,
+            };
+            const fence: SafeOwnershipFence = {
+              hasLeaseToken: false,
+              expectedHeadSha: pr.headSha,
+            };
+            const expectedAction: ExpectedNextAction = {
+              action: "none",
+              description: `Executing squash-merge and verifying merged state for PR #${pr.number}`,
+              authority: { kind: "internal", authority: "delivery" },
+              target: reviewTarget,
+              requiredEvidence: ["exact_head_approved", "ci_all_green", "mergeable"],
+            };
+            const descriptor: ExecutionContinuityDescriptor = {
+              workKey,
+              scope: "work",
+              state: "running",
+              expectedAction,
+              liveness,
+              fence,
+            };
+            return {
+              workKey,
+              stage: "merge",
+              condition: "making_progress",
+              expectedAction,
+              currentOwner: { kind: "internal", authority: "delivery" },
+              liveness,
+              fence,
+              descriptor,
+            };
+          }
+
+          // No active executor for merge -> Stranded (Blocker 6)
           const liveness: LivenessMetadata = {
             startedAt: now,
-            lastProgressAt: now,
+            lastProgressAt: "unknown",
             lastObservedAt: now,
           };
           const fence: SafeOwnershipFence = {
@@ -396,8 +615,8 @@ export function deriveWorkContinuity(
             expectedHeadSha: pr.headSha,
           };
           const expectedAction: ExpectedNextAction = {
-            action: "none",
-            description: `Executing squash-merge and verifying merged state for PR #${pr.number}`,
+            action: "dispatch",
+            description: `Awaiting delivery worker to execute squash-merge for PR #${pr.number}`,
             authority: { kind: "internal", authority: "delivery" },
             target: reviewTarget,
             requiredEvidence: ["exact_head_approved", "ci_all_green", "mergeable"],
@@ -413,9 +632,10 @@ export function deriveWorkContinuity(
           return {
             workKey,
             stage: "merge",
-            condition: "making_progress",
+            condition: "stranded",
+            strandedReason: "approved_pr_missing_merge_executor",
             expectedAction,
-            currentOwner: { kind: "internal", authority: "delivery" },
+            currentOwner: null,
             liveness,
             fence,
             descriptor,
@@ -661,7 +881,7 @@ export function deriveWorkContinuity(
           };
         }
 
-        // Review task is pending
+        // Review task is pending (Blocker 6)
         if (revTask.status === "pending") {
           const liveness: LivenessMetadata = {
             startedAt: now,
@@ -687,14 +907,22 @@ export function deriveWorkContinuity(
             liveness,
             fence,
           };
+          const recoveryProposal: RecoveryProposal = {
+            kind: "decision_dispatch_review",
+            authority: "decision",
+            target: reviewTarget,
+            sessionId,
+          };
           return {
             workKey,
             stage: "review",
-            condition: "making_progress",
+            condition: "stranded",
+            strandedReason: "review_task_pending_claim",
             expectedAction,
-            currentOwner: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+            currentOwner: null,
             liveness,
             fence,
+            recoveryProposal,
             descriptor,
           };
         }
@@ -782,6 +1010,47 @@ export function deriveWorkContinuity(
         strandedReason: "plan_task_missing",
         expectedAction,
         currentOwner: { kind: "internal", authority: "decision" },
+        liveness,
+        fence,
+        recoveryProposal,
+        descriptor,
+      };
+    }
+
+    // Planning task failed (Blocker 9: must NOT enter coding stage)
+    if (planTask.status === "failed") {
+      const liveness: LivenessMetadata = {
+        startedAt: now,
+        lastProgressAt: "unknown",
+        lastObservedAt: now,
+      };
+      const fence: SafeOwnershipFence = { hasLeaseToken: false };
+      const expectedAction: ExpectedNextAction = {
+        action: "retry",
+        description: `Re-dispatch planning task for issue ${issueId} after failure`,
+        authority: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+        taskRef: { taskId: planTask.taskId, revision: planTask.revision },
+      };
+      const descriptor: ExecutionContinuityDescriptor = {
+        workKey,
+        scope: "task",
+        state: "running",
+        expectedAction,
+        liveness,
+        fence,
+      };
+      const recoveryProposal: RecoveryProposal = {
+        kind: "decision_dispatch_plan",
+        authority: "decision",
+        sessionId,
+      };
+      return {
+        workKey,
+        stage: "planning",
+        condition: "stranded",
+        strandedReason: "plan_task_failed",
+        expectedAction,
+        currentOwner: null,
         liveness,
         fence,
         recoveryProposal,
@@ -917,6 +1186,7 @@ export function deriveWorkContinuity(
       };
     }
 
+    // Planning task pending (Blocker 6: no owner, stranded)
     if (planTask.status === "pending") {
       const liveness: LivenessMetadata = {
         startedAt: now,
@@ -938,14 +1208,61 @@ export function deriveWorkContinuity(
         liveness,
         fence,
       };
+      const recoveryProposal: RecoveryProposal = {
+        kind: "decision_dispatch_plan",
+        authority: "decision",
+        sessionId,
+      };
       return {
         workKey,
         stage: "planning",
-        condition: "making_progress",
+        condition: "stranded",
+        strandedReason: "plan_task_pending_claim",
         expectedAction,
-        currentOwner: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+        currentOwner: null,
         liveness,
         fence,
+        recoveryProposal,
+        descriptor,
+      };
+    }
+
+    // If completed but verdict is NOT ready (Blocker 9)
+    if (planTask.status === "completed" && planTask.verdict !== "ready") {
+      const liveness: LivenessMetadata = {
+        startedAt: now,
+        lastProgressAt: "unknown",
+        lastObservedAt: now,
+      };
+      const fence: SafeOwnershipFence = { hasLeaseToken: false };
+      const expectedAction: ExpectedNextAction = {
+        action: "dispatch",
+        description: `Planning completed with verdict ${planTask.verdict}; plan is not ready`,
+        authority: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+      };
+      const descriptor: ExecutionContinuityDescriptor = {
+        workKey,
+        scope: "task",
+        state: "running",
+        expectedAction,
+        liveness,
+        fence,
+      };
+      const recoveryProposal: RecoveryProposal = {
+        kind: "decision_dispatch_plan",
+        authority: "decision",
+        sessionId,
+      };
+      return {
+        workKey,
+        stage: "planning",
+        condition: "stranded",
+        strandedReason: "plan_task_not_ready",
+        expectedAction,
+        currentOwner: null,
+        liveness,
+        fence,
+        recoveryProposal,
         descriptor,
       };
     }
@@ -956,7 +1273,7 @@ export function deriveWorkContinuity(
     const isStalled = facts.orchestrator.isStalled;
     const liveness: LivenessMetadata = {
       startedAt: now,
-      lastProgressAt: facts.orchestrator.lastProgressAt ?? now,
+      lastProgressAt: facts.orchestrator.lastProgressAt ?? "unknown",
       lastObservedAt: now,
       attempt: facts.orchestrator.attempt ?? 1,
     };
@@ -985,6 +1302,11 @@ export function deriveWorkContinuity(
         kind: "orchestrator_stop_stalled",
         authority: "orchestrator",
         issueId,
+        fence: {
+          expectedAttemptToken: facts.orchestrator.attemptToken,
+          expectedGeneration: facts.orchestrator.lifecycleGeneration,
+          expectedEpoch: facts.orchestrator.reconciliationEpoch,
+        },
       };
       return {
         workKey,
@@ -1107,9 +1429,25 @@ export function deriveWorkContinuity(
 export interface RecoveryAuthorities {
   readonly orchestrator?: {
     dispatch(issueId: string): Promise<boolean> | boolean;
-    stopStalled(issueId: string): Promise<void>;
+    stopStalled(
+      issueId: string,
+      fence?: {
+        readonly expectedAttemptToken?: string | undefined;
+        readonly expectedGeneration?: number | undefined;
+        readonly expectedEpoch?: number | undefined;
+      },
+    ): Promise<void | boolean | { stopped: boolean; reason?: string }>;
   } | undefined;
   readonly decision?: {
+    dispatchPlan?(params: {
+      readonly sessionId: string;
+      readonly workKey: WorkKey;
+    }): Promise<{ executed: boolean; error?: string }>;
+    dispatchReview?(params: {
+      readonly sessionId: string;
+      readonly workKey: WorkKey;
+      readonly target: { readonly repository: string; readonly prNumber: number; readonly headSha: string };
+    }): Promise<{ executed: boolean; error?: string }>;
     releaseExpiredClaim(params: {
       taskId: string;
       expectedRevision?: number | undefined;
@@ -1155,6 +1493,7 @@ export interface WorkContinuityCoordinatorOptions {
 export class WorkContinuityCoordinator {
   private stopping = false;
   private readonly clock: () => UtcTimestampMs;
+  private inFlightReconcile: Promise<WorkContinuityReconciliationResult> | null = null;
 
   constructor(private readonly options: WorkContinuityCoordinatorOptions) {
     this.clock = options.clock ?? (() => Date.now());
@@ -1168,11 +1507,31 @@ export class WorkContinuityCoordinator {
     this.stopping = true;
   }
 
+  public async waitForIdle(): Promise<void> {
+    if (this.inFlightReconcile) {
+      try {
+        await this.inFlightReconcile;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   /**
    * Performs one cycle of work continuity reconciliation:
    * observe authoritative facts -> derive -> if stranded: re-observe -> delegate recovery -> re-observe post-action.
    */
-  public async reconcile(workKeys?: readonly WorkKey[]): Promise<WorkContinuityReconciliationResult> {
+  public reconcile(workKeys?: readonly WorkKey[]): Promise<WorkContinuityReconciliationResult> {
+    const p = this.doReconcile(workKeys);
+    this.inFlightReconcile = p;
+    return p.finally(() => {
+      if (this.inFlightReconcile === p) {
+        this.inFlightReconcile = null;
+      }
+    });
+  }
+
+  private async doReconcile(workKeys?: readonly WorkKey[]): Promise<WorkContinuityReconciliationResult> {
     if (this.stopping) {
       return { reconciledCount: 0, recoveredCount: 0, items: [] };
     }
@@ -1201,17 +1560,37 @@ export class WorkContinuityCoordinator {
         const analysis = deriveWorkContinuity(facts, this.clock(), this.options.deriveOptions);
 
         // Validate generated descriptor adheres to invariants
-        const validation = validateContinuityDescriptor(analysis.descriptor);
-        if (!validation.valid) {
-          this.options.log?.(
-            `[work-continuity] Invariant ${validation.invariant} violation for ${key.key}: ${validation.reason}`,
-          );
+        if (analysis.descriptor) {
+          const validation = validateContinuityDescriptor(analysis.descriptor);
+          if (!validation.valid) {
+            this.options.log?.(
+              `[work-continuity] Invariant ${validation.invariant} violation for ${key.key}: ${validation.reason}`,
+            );
+          }
         }
 
         // Step C: If stranded and recovery proposed, execute bounded delegation
         if (analysis.condition === "stranded" && analysis.recoveryProposal) {
+          if (this.stopping) {
+            items.push({
+              workKey: key,
+              analysis,
+              recoveryExecuted: false,
+            });
+            break;
+          }
+
           // Re-observe right before action to eliminate race conditions
           const preActionFacts = await this.options.factsReader(key);
+          if (this.stopping) {
+            items.push({
+              workKey: key,
+              analysis,
+              recoveryExecuted: false,
+            });
+            break;
+          }
+
           const preActionAnalysis = deriveWorkContinuity(preActionFacts, this.clock(), this.options.deriveOptions);
 
           if (
@@ -1219,26 +1598,63 @@ export class WorkContinuityCoordinator {
             preActionAnalysis.recoveryProposal &&
             isSameRecoveryProposal(analysis.recoveryProposal, preActionAnalysis.recoveryProposal)
           ) {
+            if (this.stopping) {
+              items.push({
+                workKey: key,
+                analysis: preActionAnalysis,
+                recoveryExecuted: false,
+              });
+              break;
+            }
             this.options.log?.(
               `[work-continuity] Delegating recovery '${analysis.recoveryProposal.kind}' for ${key.key}`,
             );
             const outcome = await this.delegateRecovery(key, preActionAnalysis.recoveryProposal);
+            if (this.stopping) {
+              const executed = outcome.executed === true;
+              items.push({
+                workKey: key,
+                analysis: preActionAnalysis,
+                recoveryExecuted: executed,
+                recoveryOutcome: outcome,
+              });
+              if (executed) {
+                recoveredCount++;
+              }
+              break;
+            }
 
             // Re-observe post-action
             const postActionFacts = await this.options.factsReader(key);
+            if (this.stopping) {
+              const executed = outcome.executed === true;
+              items.push({
+                workKey: key,
+                analysis: preActionAnalysis,
+                recoveryExecuted: executed,
+                recoveryOutcome: outcome,
+              });
+              if (executed) {
+                recoveredCount++;
+              }
+              break;
+            }
             const postActionAnalysis = deriveWorkContinuity(
               postActionFacts,
               this.clock(),
               this.options.deriveOptions,
             );
 
+            const executed = outcome.executed === true;
             items.push({
               workKey: key,
               analysis: postActionAnalysis,
-              recoveryExecuted: true,
+              recoveryExecuted: executed,
               recoveryOutcome: outcome,
             });
-            recoveredCount++;
+            if (executed) {
+              recoveredCount++;
+            }
             continue;
           } else {
             this.options.log?.(
@@ -1269,59 +1685,91 @@ export class WorkContinuityCoordinator {
     };
   }
 
-  private async delegateRecovery(workKey: WorkKey, proposal: RecoveryProposal): Promise<unknown> {
+  private async delegateRecovery(
+    workKey: WorkKey,
+    proposal: RecoveryProposal,
+  ): Promise<{ executed: boolean; unsupported?: boolean; [key: string]: unknown }> {
     const { authorities } = this.options;
     switch (proposal.kind) {
       case "decision_release_expired_claim": {
-        if (!authorities.decision) {
-          throw new Error("Decision authority adapter not configured for release_expired_claim");
+        if (!authorities.decision?.releaseExpiredClaim) {
+          return { executed: false, unsupported: true, message: "Decision authority adapter not configured for release_expired_claim" };
         }
-        return await authorities.decision.releaseExpiredClaim({
+        const res = await authorities.decision.releaseExpiredClaim({
           taskId: proposal.taskId,
           expectedRevision: proposal.revision,
           expectedClaimGeneration: proposal.claimGeneration,
           expectedBindingGeneration: proposal.bindingGeneration,
         });
+        return { executed: Boolean(res.released), ...res };
+      }
+
+      case "decision_dispatch_plan": {
+        if (!authorities.decision?.dispatchPlan) {
+          return { executed: false, unsupported: true, message: "Decision authority adapter not configured for dispatch_plan" };
+        }
+        const res = await authorities.decision.dispatchPlan({
+          sessionId: proposal.sessionId,
+          workKey,
+        });
+        return { ...res, executed: Boolean(res.executed) };
+      }
+
+      case "decision_dispatch_review": {
+        if (!authorities.decision?.dispatchReview) {
+          return { executed: false, unsupported: true, message: "Decision authority adapter not configured for dispatch_review" };
+        }
+        const res = await authorities.decision.dispatchReview({
+          sessionId: proposal.sessionId,
+          workKey,
+          target: proposal.target,
+        });
+        return { ...res, executed: Boolean(res.executed) };
       }
 
       case "orchestrator_stop_stalled": {
-        if (!authorities.orchestrator) {
-          throw new Error("Orchestrator authority adapter not configured for stop_stalled");
+        if (!authorities.orchestrator?.stopStalled) {
+          return { executed: false, unsupported: true, message: "Orchestrator authority adapter not configured for stop_stalled" };
         }
-        await authorities.orchestrator.stopStalled(proposal.issueId);
-        return { stopped: true };
+        const res = await authorities.orchestrator.stopStalled(proposal.issueId, proposal.fence);
+        if (res && typeof res === "object" && "stopped" in res) {
+          return { executed: Boolean(res.stopped), ...res };
+        }
+        return { executed: true, stopped: true };
       }
 
       case "orchestrator_dispatch": {
-        if (!authorities.orchestrator) {
-          throw new Error("Orchestrator authority adapter not configured for dispatch");
+        if (!authorities.orchestrator?.dispatch) {
+          return { executed: false, unsupported: true, message: "Orchestrator authority adapter not configured for dispatch" };
         }
-        return await authorities.orchestrator.dispatch(proposal.issueId);
+        const dispatched = await authorities.orchestrator.dispatch(proposal.issueId);
+        return { executed: Boolean(dispatched), dispatched: Boolean(dispatched) };
       }
 
       case "delivery_compensate": {
-        if (!authorities.delivery) {
-          throw new Error("Delivery authority adapter not configured for compensate");
+        if (!authorities.delivery?.compensateHandoff) {
+          return { executed: false, unsupported: true, message: "Delivery authority adapter not configured for compensate" };
         }
-        return await authorities.delivery.compensateHandoff({
+        const res = await authorities.delivery.compensateHandoff({
           workKey,
           expectedHandoffId: proposal.handoffId,
         });
+        return { executed: Boolean(res.success), ...res };
       }
 
       case "delivery_resume_repair": {
         if (!authorities.delivery?.resumeRepair) {
-          // If no resumeRepair method, treat as diagnostic
-          return { supported: false, message: "Delivery resume repair delegated" };
+          return { executed: false, unsupported: true, message: "Delivery authority adapter not configured for resume_repair" };
         }
-        return await authorities.delivery.resumeRepair({
+        const res = await authorities.delivery.resumeRepair({
           workKey,
           target: proposal.target,
         });
+        return { executed: Boolean(res.success), ...res };
       }
 
       default:
-        return { unsupported: true, proposal };
+        return { executed: false, unsupported: true, proposal };
     }
   }
 }

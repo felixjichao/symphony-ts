@@ -1,10 +1,14 @@
 import {
+  decisionSessionId,
   parseDecisionSessionRootFromId,
   formatPlanCommentMarkdown,
   parsePlanCommentMarker,
   type DecisionContextBundle,
+  type DecisionReviewTarget,
   type DecisionTask,
   type PlanningEligibilityResult,
+  type WorkItemFacts,
+  type WorkKey,
 } from "@symphony/domain";
 import { DecisionBridgeClient } from "./client.js";
 import { DecisionService } from "./service.js";
@@ -36,6 +40,137 @@ export class DecisionPlanningGate {
     } else {
       this.service = clientOrService;
     }
+  }
+
+  get clientInstance(): DecisionBridgeClient | null {
+    return this.client;
+  }
+
+  get serviceInstance(): DecisionService | null {
+    return this.service;
+  }
+
+  async observeWork(workKey: WorkKey): Promise<NonNullable<WorkItemFacts["decision"]>> {
+    if (this.service) {
+      const obs = this.service.observeWork(workKey);
+      const planTasks = obs.tasks.filter((t) => t.kind === "plan");
+      planTasks.sort((a, b) => b.revision - a.revision);
+      const latestPlan = planTasks[0];
+      let planVerdict: "ready" | "needs_clarification" | "needs_human" | undefined = undefined;
+      if (latestPlan) {
+        const res = obs.results.find((r) => r.taskId === latestPlan.taskId && r.outcome.kind === "plan");
+        if (res && res.outcome.kind === "plan") {
+          planVerdict = res.outcome.verdict;
+        }
+      }
+
+      const reviewTasks = obs.tasks.filter((t) => t.kind === "review");
+      reviewTasks.sort((a, b) => b.revision - a.revision);
+      const latestReview = reviewTasks[0];
+      let reviewVerdict: "approve" | "changes_requested" | "needs_human" | undefined = undefined;
+      if (latestReview) {
+        const res = obs.results.find((r) => r.taskId === latestReview.taskId && r.outcome.kind === "review");
+        if (res && res.outcome.kind === "review") {
+          reviewVerdict = res.outcome.verdict;
+        }
+      }
+
+      return {
+        sessionStatus: obs.session?.status,
+        bindingGeneration: obs.session?.bindingGeneration,
+        latestPlanTask: latestPlan
+          ? {
+              taskId: latestPlan.taskId,
+              revision: latestPlan.revision,
+              status: latestPlan.status,
+              claimGeneration: latestPlan.claimGeneration,
+              verdict: planVerdict,
+              lease: latestPlan.lease,
+            }
+          : null,
+        latestReviewTask:
+          latestReview && latestReview.target
+            ? {
+                taskId: latestReview.taskId,
+                revision: latestReview.revision,
+                status: latestReview.status,
+                target: latestReview.target,
+                claimGeneration: latestReview.claimGeneration,
+                verdict: reviewVerdict,
+                lease: latestReview.lease,
+              }
+            : null,
+      };
+    }
+
+    if (this.client) {
+      const sId = decisionSessionId(workKey);
+      const { tasks } = await this.client.getTasksForSession(sId);
+      const planTasks = tasks.filter((t) => t.kind === "plan");
+      planTasks.sort((a, b) => b.revision - a.revision);
+      const latestPlan = planTasks[0];
+      let planVerdict: "ready" | "needs_clarification" | "needs_human" | undefined = undefined;
+      if (latestPlan && latestPlan.status === "completed") {
+        try {
+          const res = await this.client.getTaskResult(latestPlan.id);
+          if (res?.result && res.result.kind === "plan") {
+            planVerdict = res.result.verdict;
+          }
+        } catch {}
+      }
+
+      const reviewTasks = tasks.filter((t) => t.kind === "review");
+      reviewTasks.sort((a, b) => b.revision - a.revision);
+      const latestReview = reviewTasks[0];
+      let reviewVerdict: "approve" | "changes_requested" | "needs_human" | undefined = undefined;
+      if (latestReview && latestReview.status === "completed") {
+        try {
+          const res = await this.client.getTaskResult(latestReview.id);
+          if (res?.result && res.result.kind === "review") {
+            reviewVerdict = res.result.verdict;
+          }
+        } catch {}
+      }
+
+      return {
+        latestPlanTask: latestPlan
+          ? {
+              taskId: latestPlan.id,
+              revision: latestPlan.revision,
+              status: latestPlan.status,
+              claimGeneration: latestPlan.claimGeneration,
+              verdict: planVerdict,
+              lease: latestPlan.lease
+                ? {
+                    owner: latestPlan.lease.owner,
+                    generation: latestPlan.lease.generation,
+                    expiresAtMs: latestPlan.lease.expiresAtMs,
+                  }
+                : null,
+            }
+          : null,
+        latestReviewTask:
+          latestReview && latestReview.kind === "review" && (latestReview as { target?: DecisionReviewTarget }).target
+            ? {
+                taskId: latestReview.id,
+                revision: latestReview.revision,
+                status: latestReview.status,
+                target: (latestReview as { target: DecisionReviewTarget }).target,
+                claimGeneration: latestReview.claimGeneration,
+                verdict: reviewVerdict,
+                lease: latestReview.lease
+                  ? {
+                      owner: latestReview.lease.owner,
+                      generation: latestReview.lease.generation,
+                      expiresAtMs: latestReview.lease.expiresAtMs,
+                    }
+                  : null,
+              }
+            : null,
+      };
+    }
+
+    throw new Error("Invalid planning gate: neither client nor service configured");
   }
 
   async ensurePlanTask(sessionId: string, options: EnsurePlanTaskOptions = {}): Promise<DecisionTask> {

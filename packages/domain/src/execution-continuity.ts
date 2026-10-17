@@ -18,7 +18,7 @@
 
 import type { UtcTimestampMs } from "./time";
 import type { WorkKey } from "./operations-facts";
-import type { DecisionReviewTarget } from "./decision";
+import type { DecisionReviewTarget, DecisionSessionStatus, DecisionTaskStatus } from "./decision";
 import type { DecisionAdapterErrorCode, DecisionAdapterSuggestedAction } from "./decision-executor";
 import type { DeliveryErrorCode, DeliveryHandoffReason } from "./delivery";
 
@@ -1919,6 +1919,11 @@ export type RecoveryProposal =
       readonly kind: "orchestrator_stop_stalled";
       readonly authority: "orchestrator";
       readonly issueId: string;
+      readonly fence?: {
+        readonly expectedAttemptToken?: string | undefined;
+        readonly expectedGeneration?: number | undefined;
+        readonly expectedEpoch?: number | undefined;
+      } | undefined;
     }
   | {
       readonly kind: "delivery_compensate";
@@ -1938,7 +1943,11 @@ export type RecoveryProposal =
 export interface WorkItemFacts {
   readonly workKey: WorkKey;
   readonly github?: {
-    readonly issue: { readonly state: "open" | "closed"; readonly url?: string | undefined };
+    readonly issue: {
+      readonly id?: string | undefined;
+      readonly state: "open" | "closed";
+      readonly url?: string | undefined;
+    };
     readonly pullRequest: {
       readonly number: number;
       readonly state: "open" | "closed" | "merged";
@@ -1966,12 +1975,12 @@ export interface WorkItemFacts {
     } | null | undefined;
   } | null | undefined;
   readonly decision?: {
-    readonly sessionStatus?: "active" | "broken-binding" | "closed" | undefined;
+    readonly sessionStatus?: DecisionSessionStatus | undefined;
     readonly bindingGeneration?: number | undefined;
     readonly latestPlanTask?: {
       readonly taskId: string;
       readonly revision: number;
-      readonly status: "pending" | "claimed" | "running" | "completed" | "failed";
+      readonly status: DecisionTaskStatus;
       readonly lease?: { readonly owner: string; readonly generation: number; readonly expiresAtMs: UtcTimestampMs } | null | undefined;
       readonly claimGeneration?: number | undefined;
       readonly verdict?: "ready" | "needs_clarification" | "needs_human" | undefined;
@@ -1979,7 +1988,7 @@ export interface WorkItemFacts {
     readonly latestReviewTask?: {
       readonly taskId: string;
       readonly revision: number;
-      readonly status: "pending" | "claimed" | "running" | "completed" | "failed";
+      readonly status: DecisionTaskStatus;
       readonly lease?: { readonly owner: string; readonly generation: number; readonly expiresAtMs: UtcTimestampMs } | null | undefined;
       readonly claimGeneration?: number | undefined;
       readonly target: DecisionReviewTarget;
@@ -2022,6 +2031,13 @@ export interface WorkContinuityAnalysis {
   readonly blockedDetails?: BlockedReasonDetails | undefined;
   readonly strandedReason?: string | undefined;
   readonly recoveryProposal?: RecoveryProposal | null | undefined;
-  readonly descriptor: ExecutionContinuityDescriptor;
-  readonly sourceFreshness?: Readonly<Record<string, string>> | undefined;
+  readonly sourceFreshness?:
+    | {
+        readonly github?: "fresh" | "stale" | "unavailable" | "unknown" | undefined;
+        readonly decision?: "fresh" | "stale" | "unavailable" | "unknown" | undefined;
+        readonly unavailableReason?: string | undefined;
+      }
+    | Readonly<Record<string, string | undefined>>
+    | undefined;
+  readonly descriptor?: ExecutionContinuityDescriptor | undefined;
 }

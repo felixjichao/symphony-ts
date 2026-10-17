@@ -5,6 +5,7 @@ import {
   recoverDeliveryHandoff,
   runDeliverySkill,
   type DeliveryGitGhRunner,
+  type DeliveryLock,
   type DeliveryStateStorage,
   type RunDeliverySkillOptions,
 } from "@symphony/agent";
@@ -29,8 +30,113 @@ export interface DeliveryCliIo {
   readonly stderr: { write(text: string): unknown };
 }
 
+class InProcessMutex {
+  private queue: Promise<void> = Promise.resolve();
+
+  async acquire(): Promise<() => void> {
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const current = this.queue;
+    this.queue = current.then(() => next);
+    await current;
+    return release;
+  }
+}
+
+const fileMutexes = new Map<string, InProcessMutex>();
+
+export class FileDeliveryLock implements DeliveryLock {
+  private inProcessRelease: (() => void) | null = null;
+  private lockFd: number | null = null;
+  private readonly lockFilePath: string;
+
+  constructor(filePath: string) {
+    this.lockFilePath = path.resolve(`${filePath}.lock`);
+  }
+
+  async acquire(): Promise<void> {
+    let mutex = fileMutexes.get(this.lockFilePath);
+    if (!mutex) {
+      mutex = new InProcessMutex();
+      fileMutexes.set(this.lockFilePath, mutex);
+    }
+    const releaseMutex = await mutex.acquire();
+    this.inProcessRelease = releaseMutex;
+
+    const lockDir = path.dirname(this.lockFilePath);
+    if (!fs.existsSync(lockDir)) {
+      fs.mkdirSync(lockDir, { recursive: true });
+    }
+
+    const start = Date.now();
+    const timeoutMs = 30000;
+    while (true) {
+      try {
+        this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, time: Date.now() }));
+        break;
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        if (error && error.code === "EEXIST") {
+          try {
+            const stat = fs.statSync(this.lockFilePath);
+            if (Date.now() - stat.mtimeMs > 60000) {
+              fs.unlinkSync(this.lockFilePath);
+              continue;
+            }
+          } catch {
+            continue;
+          }
+
+          if (Date.now() - start > timeoutMs) {
+            throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
+  async release(): Promise<void> {
+    if (this.lockFd !== null) {
+      try {
+        fs.closeSync(this.lockFd);
+      } catch {}
+      this.lockFd = null;
+      try {
+        fs.unlinkSync(this.lockFilePath);
+      } catch {}
+    }
+    if (this.inProcessRelease) {
+      const rel = this.inProcessRelease;
+      this.inProcessRelease = null;
+      rel();
+    }
+  }
+}
+
+const sharedLocks = new Map<string, DeliveryLock>();
+
+export function getOrCreateDeliveryLock(filePath: string): DeliveryLock {
+  const normalized = path.resolve(filePath);
+  let lock = sharedLocks.get(normalized);
+  if (!lock) {
+    lock = new FileDeliveryLock(normalized);
+    sharedLocks.set(normalized, lock);
+  }
+  return lock;
+}
+
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  constructor(private readonly filePath: string) {}
+  public readonly lock: DeliveryLock;
+
+  constructor(private readonly filePath: string, lock?: DeliveryLock) {
+    this.lock = lock ?? getOrCreateDeliveryLock(filePath);
+  }
 
   readState(): PersistedDeliveryState | null {
     if (!fs.existsSync(this.filePath)) {
@@ -240,6 +346,7 @@ export async function runDeliverySkillCli(
       maxRepairs: parsed.maxRepairs,
       maxWait: parsed.maxWait,
       stateStorage,
+      lock: stateStorage.lock,
       runner,
       log: (msg) => io.stdout.write(`${msg}\n`),
     });
@@ -264,12 +371,24 @@ export async function runDeliverySkillCli(
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
     const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
-    let existingState: PersistedDeliveryState | null = null;
+    await stateStorage.lock.acquire();
     try {
-      existingState = stateStorage.readState();
-    } catch {
-      // ignore
-    }
+      let existingState: PersistedDeliveryState | null = null;
+      try {
+        existingState = stateStorage.readState();
+      } catch {
+        // ignore
+      }
+
+      if (
+        existingState?.isPaused &&
+        !existingState.pendingCompensation &&
+        existingState.readyLabelRemoved &&
+        existingState.commentPosted
+      ) {
+        io.stdout.write("symphony delivery-skill: dispatch already halted and compensated\n");
+        return 0;
+      }
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
     const spentWaitSeconds = existingState?.spentWaitSeconds ?? (parsed.maxWait ?? 300);
@@ -428,6 +547,9 @@ export async function runDeliverySkillCli(
     }
 
     return 0;
+    } finally {
+      await stateStorage.lock.release();
+    }
   }
 
   const headBranch = parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`;
@@ -435,6 +557,23 @@ export async function runDeliverySkillCli(
   const workspaceKey = parsed.workspaceKey ?? `GH-${parsed.issueNumber}`;
 
   const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+
+  let existingDeliveryState: PersistedDeliveryState | null = null;
+  await stateStorage.lock.acquire();
+  try {
+    existingDeliveryState = stateStorage.readState();
+  } catch {
+    // ignore
+  } finally {
+    await stateStorage.lock.release();
+  }
+
+  if (existingDeliveryState?.isPaused && !parsed.resume) {
+    io.stderr.write(
+      `symphony delivery-skill: delivery is paused (${existingDeliveryState.pauseReason ?? "manual intervention required"}). Use --resume or recover-handoff first.\n`,
+    );
+    return 1;
+  }
 
   let reviewGate = customReviewGate;
   let plan: DecisionMaterializedPlan | null | undefined = undefined;
