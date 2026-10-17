@@ -278,8 +278,16 @@ export interface GetLatestPlanResponse {
   readonly plan: DecisionPlanRecord | null;
 }
 
-export interface GetSessionTasksResponse {
-  readonly tasks: readonly DecisionTask[];
+export interface ReleaseExpiredTaskClaimRequest {
+  readonly expectedRevision?: number | undefined;
+  readonly expectedClaimGeneration?: number | undefined;
+  readonly expectedBindingGeneration?: number | undefined;
+}
+
+export interface ReleaseExpiredTaskClaimResponse {
+  readonly released: boolean;
+  readonly taskId: string;
+  readonly reason?: string | undefined;
 }
 
 export interface BridgeErrorEnvelope {

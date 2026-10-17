@@ -1824,3 +1824,204 @@ export const CanonicalStageDescriptors = {
     };
   },
 };
+
+// ---------------------------------------------------------------------------
+// 12. Work Continuity Condition & Derivation (NEST-131 / GitHub #147)
+// ---------------------------------------------------------------------------
+
+/**
+ * Diagnostic condition characterizing the execution continuity state of a work item.
+ * Deliberately distinguishes making progress, legitimate waits, blocked states,
+ * and stranded/contradictory anomalies.
+ */
+export type WorkContinuityCondition =
+  | "making_progress"
+  | "blocked"
+  | "external_wait"
+  | "retry_scheduled"
+  | "stranded"
+  | "contradictory"
+  | "observation_unavailable"
+  | "completed";
+
+export const WORK_CONTINUITY_CONDITIONS = [
+  "making_progress",
+  "blocked",
+  "external_wait",
+  "retry_scheduled",
+  "stranded",
+  "contradictory",
+  "observation_unavailable",
+  "completed",
+] as const satisfies readonly WorkContinuityCondition[];
+
+/**
+ * High-level lifecycle stage derived from authoritative cross-source facts.
+ */
+export type WorkContinuityStage =
+  | "planning"
+  | "coding"
+  | "ci_wait"
+  | "review"
+  | "repair"
+  | "delivery_compensate"
+  | "merge"
+  | "completed"
+  | "terminal";
+
+export const WORK_CONTINUITY_STAGES = [
+  "planning",
+  "coding",
+  "ci_wait",
+  "review",
+  "repair",
+  "delivery_compensate",
+  "merge",
+  "completed",
+  "terminal",
+] as const satisfies readonly WorkContinuityStage[];
+
+/**
+ * Concrete recovery delegation proposal produced when work is stranded.
+ * Carries the required authority and fence coordinates to prevent race conditions.
+ */
+export type RecoveryProposal =
+  | {
+      readonly kind: "decision_release_expired_claim";
+      readonly authority: "decision";
+      readonly taskId: string;
+      readonly revision?: number | undefined;
+      readonly claimGeneration?: number | undefined;
+      readonly bindingGeneration?: number | undefined;
+    }
+  | {
+      readonly kind: "decision_dispatch_plan";
+      readonly authority: "decision";
+      readonly sessionId: string;
+    }
+  | {
+      readonly kind: "decision_dispatch_review";
+      readonly authority: "decision";
+      readonly target: DecisionReviewTarget;
+      readonly sessionId: string;
+    }
+  | {
+      readonly kind: "orchestrator_dispatch";
+      readonly authority: "orchestrator";
+      readonly issueId: string;
+    }
+  | {
+      readonly kind: "orchestrator_retry";
+      readonly authority: "orchestrator";
+      readonly issueId: string;
+    }
+  | {
+      readonly kind: "orchestrator_stop_stalled";
+      readonly authority: "orchestrator";
+      readonly issueId: string;
+    }
+  | {
+      readonly kind: "delivery_compensate";
+      readonly authority: "delivery";
+      readonly handoffId?: string | undefined;
+      readonly target?: DecisionReviewTarget | undefined;
+    }
+  | {
+      readonly kind: "delivery_resume_repair";
+      readonly authority: "delivery";
+      readonly target: DecisionReviewTarget;
+    };
+
+/**
+ * Normalized fact bundle for one WorkKey across sources.
+ */
+export interface WorkItemFacts {
+  readonly workKey: WorkKey;
+  readonly github?: {
+    readonly issue: { readonly state: "open" | "closed"; readonly url?: string | undefined };
+    readonly pullRequest: {
+      readonly number: number;
+      readonly state: "open" | "closed" | "merged";
+      readonly headSha: string;
+      readonly isDraft: boolean;
+      readonly url?: string | undefined;
+    } | null;
+    readonly ci: {
+      readonly status: "pending" | "success" | "failure";
+      readonly headSha?: string | undefined;
+    } | null;
+  } | null | undefined;
+  readonly orchestrator?: {
+    readonly isRunning: boolean;
+    readonly isStalled: boolean;
+    readonly attempt?: number | null | undefined;
+    readonly attemptToken?: string | undefined;
+    readonly lifecycleGeneration?: number | undefined;
+    readonly reconciliationEpoch?: number | undefined;
+    readonly lastProgressAt?: UtcTimestampMs | "unknown" | undefined;
+    readonly retryScheduled?: {
+      readonly attempt: number;
+      readonly retryInMs: number;
+      readonly error: string | null;
+    } | null | undefined;
+  } | null | undefined;
+  readonly decision?: {
+    readonly sessionStatus?: "active" | "broken-binding" | "closed" | undefined;
+    readonly bindingGeneration?: number | undefined;
+    readonly latestPlanTask?: {
+      readonly taskId: string;
+      readonly revision: number;
+      readonly status: "pending" | "claimed" | "running" | "completed" | "failed";
+      readonly lease?: { readonly owner: string; readonly generation: number; readonly expiresAtMs: UtcTimestampMs } | null | undefined;
+      readonly claimGeneration?: number | undefined;
+      readonly verdict?: "ready" | "needs_clarification" | "needs_human" | undefined;
+    } | null | undefined;
+    readonly latestReviewTask?: {
+      readonly taskId: string;
+      readonly revision: number;
+      readonly status: "pending" | "claimed" | "running" | "completed" | "failed";
+      readonly lease?: { readonly owner: string; readonly generation: number; readonly expiresAtMs: UtcTimestampMs } | null | undefined;
+      readonly claimGeneration?: number | undefined;
+      readonly target: DecisionReviewTarget;
+      readonly verdict?: "approve" | "changes_requested" | "needs_human" | undefined;
+    } | null | undefined;
+  } | null | undefined;
+  readonly delivery?: {
+    readonly isPaused: boolean;
+    readonly pauseReason?: string | undefined;
+    readonly pendingCompensation: boolean;
+    readonly handoff?: {
+      readonly handoffId?: string | undefined;
+      readonly reason: string;
+      readonly details: string;
+    } | null | undefined;
+    readonly spentRepairs: number;
+    readonly maxRepairs: number;
+    readonly spentWaitSeconds: number;
+    readonly maxWaitSeconds: number;
+    readonly lastUpdated?: string | undefined;
+  } | null | undefined;
+  readonly sourceFreshness?: {
+    readonly github?: "fresh" | "stale" | "unavailable" | "unknown" | undefined;
+    readonly decision?: "fresh" | "stale" | "unavailable" | "unknown" | undefined;
+    readonly unavailableReason?: string | undefined;
+  } | undefined;
+}
+
+/**
+ * Result of deriving work continuity for a work item from its cross-source facts.
+ */
+export interface WorkContinuityAnalysis {
+  readonly workKey: WorkKey;
+  readonly stage: WorkContinuityStage;
+  readonly condition: WorkContinuityCondition;
+  readonly expectedAction: ExpectedNextAction | null;
+  readonly currentOwner: ActionAuthority | null;
+  readonly liveness: LivenessMetadata;
+  readonly fence: SafeOwnershipFence;
+  readonly blockedDetails?: BlockedReasonDetails | undefined;
+  readonly strandedReason?: string | undefined;
+  readonly recoveryProposal?: RecoveryProposal | null | undefined;
+  readonly descriptor: ExecutionContinuityDescriptor;
+  readonly sourceFreshness?: Readonly<Record<string, string>> | undefined;
+}

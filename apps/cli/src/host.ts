@@ -60,6 +60,7 @@ import {
   createOrchestratorRuntimeState,
   OrchestratorAuthority,
   OrchestratorLoop,
+  type WorkContinuityCoordinator,
   type DispatchPreflightResult,
   type DispatchPreflightSource,
   type PollScheduler,
@@ -116,6 +117,7 @@ export interface CreateHostOptions {
   readonly decisionBridgeUrl?: string | undefined;
   readonly decisionBridgeToken?: string | undefined;
   readonly planningGate?: DecisionPlanningGate | undefined;
+  readonly workContinuityCoordinator?: WorkContinuityCoordinator | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -355,6 +357,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       preflight,
       ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
       onDiagnostic: observers.onDiagnostic,
+      ...(options.workContinuityCoordinator !== undefined
+        ? { workContinuityCoordinator: options.workContinuityCoordinator }
+        : {}),
     });
 
     let stopping = false;

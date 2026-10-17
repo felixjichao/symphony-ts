@@ -27,6 +27,8 @@ export {
   type RebindSessionRequest,
   type CreateSessionRequest,
   type CreateTaskRequest,
+  type ReleaseExpiredTaskClaimRequest,
+  type ReleaseExpiredTaskClaimResponse,
   type BridgeErrorEnvelope,
 } from "./types.js";
 

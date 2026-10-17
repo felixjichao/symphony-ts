@@ -1373,6 +1373,41 @@ class DecisionService {
     const session = this.store.getSession(next.sessionId);
     return { task: next, session };
   }
+  /**
+   * Explicitly releases an expired claim on a task if it is still claimed/running
+   * and matches the expected revision/generations. Fail-closed if not expired or
+   * if any generation / revision has advanced.
+   */
+  async releaseExpiredTaskClaim(params) {
+    return await this.store.transaction((draft) => {
+      const task = draft.tasks[params.taskId];
+      if (!task) {
+        return { released: false, taskId: params.taskId, reason: "task_not_found" };
+      }
+      if (task.status !== "claimed" && task.status !== "running") {
+        return { released: false, taskId: params.taskId, reason: `task_not_leased (status is ${task.status})` };
+      }
+      if (params.expectedRevision !== void 0 && task.revision !== params.expectedRevision) {
+        return { released: false, taskId: params.taskId, reason: `revision_mismatch (current: ${task.revision}, expected: ${params.expectedRevision})` };
+      }
+      if (!task.lease) {
+        return { released: false, taskId: params.taskId, reason: "no_lease_on_task" };
+      }
+      if (params.expectedClaimGeneration !== void 0 && task.lease.generation !== params.expectedClaimGeneration) {
+        return { released: false, taskId: params.taskId, reason: `claim_generation_mismatch (current: ${task.lease.generation}, expected: ${params.expectedClaimGeneration})` };
+      }
+      const claimBindingGen = draft.claimBindingGenerations?.[task.id];
+      if (params.expectedBindingGeneration !== void 0 && claimBindingGen !== void 0 && claimBindingGen !== params.expectedBindingGeneration) {
+        return { released: false, taskId: params.taskId, reason: `binding_generation_mismatch (current: ${claimBindingGen}, expected: ${params.expectedBindingGeneration})` };
+      }
+      const now = this.clock();
+      if (now < task.lease.expiresAtMs) {
+        return { released: false, taskId: params.taskId, reason: `lease_not_expired (expires at ${task.lease.expiresAtMs}, now is ${now})` };
+      }
+      draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
+      return { released: true, taskId: task.id };
+    });
+  }
   async claimTask(taskId, params) {
     if (!params.owner || params.owner.trim() === "") {
       throw new DecisionValidationError("Claim owner must be a nonempty string");

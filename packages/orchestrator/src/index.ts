@@ -154,3 +154,17 @@ export type {
 } from "./loop";
 
 export type { OrchestratorEvent, RetryEventReason } from "./events";
+
+// --- NEST-131 / GitHub #147：work-level liveness and stranded-state reconciliation ---
+export {
+  WorkContinuityCoordinator,
+  deriveWorkContinuity,
+  isSameRecoveryProposal,
+} from "./work-continuity";
+export type {
+  DeriveWorkContinuityOptions,
+  RecoveryAuthorities,
+  WorkContinuityCoordinatorOptions,
+  WorkContinuityItemResult,
+  WorkContinuityReconciliationResult,
+} from "./work-continuity";

@@ -7,6 +7,11 @@ import {
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
 import type { DeliveryStateStorage } from "./delivery-skill-runner";
 
+export interface DeliveryLock {
+  acquire(): Promise<void> | void;
+  release(): Promise<void> | void;
+}
+
 export interface RecoverDeliveryHandoffOptions {
   readonly cwd: string;
   readonly repo: string;
@@ -16,6 +21,9 @@ export interface RecoverDeliveryHandoffOptions {
   readonly headBranch?: string | undefined;
   readonly maxRepairs?: number | undefined;
   readonly maxWait?: number | undefined;
+  readonly expectedHandoffId?: string | undefined;
+  readonly expectedLastUpdated?: string | undefined;
+  readonly lock?: DeliveryLock | undefined;
   readonly stateStorage: DeliveryStateStorage;
   readonly runner: DeliveryGitGhRunner;
   readonly log?: (msg: string) => void;
@@ -32,6 +40,21 @@ export interface RecoverDeliveryHandoffResult {
 }
 
 export async function recoverDeliveryHandoff(
+  options: RecoverDeliveryHandoffOptions,
+): Promise<RecoverDeliveryHandoffResult> {
+  if (options.lock) {
+    await options.lock.acquire();
+  }
+  try {
+    return await doRecoverDeliveryHandoff(options);
+  } finally {
+    if (options.lock) {
+      await options.lock.release();
+    }
+  }
+}
+
+async function doRecoverDeliveryHandoff(
   options: RecoverDeliveryHandoffOptions,
 ): Promise<RecoverDeliveryHandoffResult> {
   const { cwd, stateStorage, runner, log = () => {} } = options;
@@ -97,6 +120,36 @@ export async function recoverDeliveryHandoff(
     return {
       success: false,
       error: `error: workspace mismatch (persisted: ${currentState.workspaceKey}, argv: ${options.workspaceKey})`,
+      readyLabelRemoved: currentState.readyLabelRemoved ?? false,
+      commentPosted: currentState.commentPosted ?? false,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
+      pendingCompensation: true,
+    };
+  }
+
+  // 2. Version and handoff fencing: reject stale concurrent recovery attempts
+  if (
+    options.expectedHandoffId !== undefined &&
+    currentState.handoff?.handoffId &&
+    currentState.handoff.handoffId !== options.expectedHandoffId
+  ) {
+    return {
+      success: false,
+      error: `error: handoff id mismatch (persisted: ${currentState.handoff.handoffId}, expected: ${options.expectedHandoffId})`,
+      readyLabelRemoved: currentState.readyLabelRemoved ?? false,
+      commentPosted: currentState.commentPosted ?? false,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
+      pendingCompensation: true,
+    };
+  }
+  if (
+    options.expectedLastUpdated !== undefined &&
+    currentState.lastUpdated &&
+    currentState.lastUpdated !== options.expectedLastUpdated
+  ) {
+    return {
+      success: false,
+      error: `error: lastUpdated version mismatch (persisted: ${currentState.lastUpdated}, expected: ${options.expectedLastUpdated})`,
       readyLabelRemoved: currentState.readyLabelRemoved ?? false,
       commentPosted: currentState.commentPosted ?? false,
       commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",

@@ -205,6 +205,24 @@ export class DecisionBridge {
       return;
     }
 
+    // POST /v1/tasks/:id/release-expired-claim
+    const releaseClaimMatch = /^\/v1\/tasks\/([^/]+)\/release-expired-claim$/.exec(pathname);
+    if (method === "POST" && releaseClaimMatch) {
+      const id = decodeURIComponent(releaseClaimMatch[1]!);
+      const body = (await this.readJsonBody(req)) as Record<string, unknown> | null;
+      const expectedRevision = typeof body?.["expectedRevision"] === "number" ? body["expectedRevision"] : undefined;
+      const expectedClaimGeneration = typeof body?.["expectedClaimGeneration"] === "number" ? body["expectedClaimGeneration"] : undefined;
+      const expectedBindingGeneration = typeof body?.["expectedBindingGeneration"] === "number" ? body["expectedBindingGeneration"] : undefined;
+      const result = await this.service.releaseExpiredTaskClaim({
+        taskId: id,
+        expectedRevision,
+        expectedClaimGeneration,
+        expectedBindingGeneration,
+      });
+      this.sendJson(res, 200, result);
+      return;
+    }
+
     // POST /v1/tasks/:id/claim
     const claimMatch = /^\/v1\/tasks\/([^/]+)\/claim$/.exec(pathname);
     if (method === "POST" && claimMatch) {

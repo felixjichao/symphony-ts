@@ -37,6 +37,8 @@ import type {
   MarkPlanPublishedResponse,
   GetLatestPlanResponse,
   DecisionPlanRecord,
+  ReleaseExpiredTaskClaimRequest,
+  ReleaseExpiredTaskClaimResponse,
 } from "./types";
 
 /**
@@ -255,6 +257,17 @@ export class DecisionBridgeClient {
     return await this.request<{ task: DecisionTask | null }>(
       "GET",
       `/v1/sessions/${encodeURIComponent(sessionId)}/reviews/latest`
+    );
+  }
+
+  async releaseExpiredTaskClaim(
+    taskId: string,
+    params?: ReleaseExpiredTaskClaimRequest,
+  ): Promise<ReleaseExpiredTaskClaimResponse> {
+    return await this.request<ReleaseExpiredTaskClaimResponse>(
+      "POST",
+      `/v1/tasks/${encodeURIComponent(taskId)}/release-expired-claim`,
+      params ?? {},
     );
   }
 

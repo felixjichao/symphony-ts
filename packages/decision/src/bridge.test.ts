@@ -215,6 +215,12 @@ describe("DecisionBridge HTTP server", () => {
       });
       expect(rebindRes.session.bindingGeneration).toBe(2);
 
+      // Test releaseExpiredTaskClaim via bridge client
+      const releaseRes = await client.releaseExpiredTaskClaim(taskRes.task.id, {
+        expectedRevision: taskRes.task.revision,
+      });
+      expect(typeof releaseRes.released).toBe("boolean");
+
       // Test payload too large (> 1MB)
       const oversizedPayload = "x".repeat(1.5 * 1024 * 1024);
       const largeRes = await fetch(`${baseUrl}/v1/tasks`, {

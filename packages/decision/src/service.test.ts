@@ -881,4 +881,83 @@ describe("DecisionService", () => {
       await cleanup();
     }
   });
+
+  it("releaseExpiredTaskClaim safely verifies fences and releases expired claims", async () => {
+    const { service, clock, cleanup } = await createFixture();
+    try {
+      const root = githubDecisionRoot("felixjichao", "symphony-ts", 101);
+      const session = await service.createSession(root);
+
+      await service.putBinding(session.id, {
+        adapter: "chatgpt-web",
+        externalSessionRef: "ext-1",
+        resumeUri: null,
+      });
+
+      const task = await service.createPlanTask(session.id, {
+        requirements: { title: "Title", body: "Body" },
+      });
+
+      // Claim task with 60s TTL
+      const claimed = await service.claimTask(task.id, { owner: "executor-1", ttlMs: 60_000 });
+      expect(claimed.task.status).toBe("claimed");
+      expect(claimed.task.lease).not.toBeNull();
+
+      // Case 1: Lease not expired yet -> cannot release
+      const unexpired = await service.releaseExpiredTaskClaim({
+        taskId: task.id,
+      });
+      expect(unexpired.released).toBe(false);
+      expect(unexpired.reason).toContain("lease_not_expired");
+
+      // Case 2: Advance time past expiration
+      clock.advance(60_001);
+
+      // Case 3: Revision mismatch -> cannot release
+      const revMismatch = await service.releaseExpiredTaskClaim({
+        taskId: task.id,
+        expectedRevision: task.revision + 1,
+      });
+      expect(revMismatch.released).toBe(false);
+      expect(revMismatch.reason).toContain("revision_mismatch");
+
+      // Case 4: Claim generation mismatch -> cannot release
+      const claimGenMismatch = await service.releaseExpiredTaskClaim({
+        taskId: task.id,
+        expectedClaimGeneration: claimed.lease.generation + 1,
+      });
+      expect(claimGenMismatch.released).toBe(false);
+      expect(claimGenMismatch.reason).toContain("claim_generation_mismatch");
+
+      // Case 5: Binding generation mismatch -> cannot release
+      const bindGenMismatch = await service.releaseExpiredTaskClaim({
+        taskId: task.id,
+        expectedBindingGeneration: 99,
+      });
+      expect(bindGenMismatch.released).toBe(false);
+      expect(bindGenMismatch.reason).toContain("binding_generation_mismatch");
+
+      // Case 6: Successful release with matching fences
+      const success = await service.releaseExpiredTaskClaim({
+        taskId: task.id,
+        expectedRevision: task.revision,
+        expectedClaimGeneration: claimed.lease.generation,
+        expectedBindingGeneration: 1,
+      });
+      expect(success.released).toBe(true);
+
+      // Task is now back to pending with lease cleared
+      const allTasks = service.getTasksForSession(session.id);
+      const releasedTask = allTasks.find((t) => t.id === task.id);
+      expect(releasedTask?.status).toBe("pending");
+      expect(releasedTask?.lease).toBeNull();
+
+      // Case 7: Calling again when task is pending fails with task_not_leased
+      const pendingRelease = await service.releaseExpiredTaskClaim({ taskId: task.id });
+      expect(pendingRelease.released).toBe(false);
+      expect(pendingRelease.reason).toContain("task_not_leased");
+    } finally {
+      await cleanup();
+    }
+  });
 });
