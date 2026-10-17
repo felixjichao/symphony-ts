@@ -41,7 +41,8 @@ Define provider-neutral contracts, invariants, and failure taxonomies in `@symph
 
 5. **Multi-dimensional Ownership Fencing**:
    `OwnershipFence` retains multi-dimensional native evidence: retry token, lifecycle generation, reconciliation epoch, Decision lease generation, binding generation, and expected HEAD SHA. These dimensions are not collapsed into a single scalar.
-   - Fencing is **fail-closed**: candidate credentials must be complete and exact-match the authoritative state across all applicable dimensions. Any missing credential, superseded generation (smaller than current), or ahead/conflicting generation (greater than current) fails validation.
+   - Fencing is **fail-closed on both sides**: candidate credentials must be complete and exact-match the authoritative state across all applicable dimensions. Any missing credential (dual-sided missing, authoritative missing, or candidate missing), invalid numeric format (NaN, negative, float, non-finite), superseded generation (smaller than current), or ahead/conflicting generation (greater than current) fails validation.
+   - Numeric generation and epoch dimensions (`lifecycleGeneration`, `reconciliationEpoch`, `leaseGeneration`, `bindingGeneration`) are validated as non-negative safe integers (`Number.isSafeInteger(val) && val >= 0`) before exact-match equality checking.
    - Stale continuations may observe but cannot mutate current work.
    - `sanitizeOwnershipFence` strips secret capability tokens (`leaseToken`) before public observation.
    - **Boundary statement**: The `validateOwnershipFence` pure helper provides domain contract checking and classification; it **does NOT replace** source-authority atomic commit-time verification (such as CAS, atomic DB updates, or Git push lease checks at commit/push time).

@@ -255,6 +255,13 @@ export type OwnershipFenceViolationReason =
   | "missing_expected_head_sha"
   | "missing_retry_token"
   | "missing_lease_token"
+  | "missing_authoritative_lifecycle_generation"
+  | "missing_authoritative_reconciliation_epoch"
+  | "missing_authoritative_lease_generation"
+  | "missing_authoritative_binding_generation"
+  | "missing_authoritative_expected_head_sha"
+  | "missing_authoritative_retry_token"
+  | "missing_authoritative_lease_token"
   | "superseded_lifecycle_generation"
   | "conflicting_lifecycle_generation"
   | "superseded_reconciliation_epoch"
@@ -275,13 +282,18 @@ export type OwnershipFenceValidationResult =
       readonly details: string;
     };
 
+function isValidNonNegativeSafeInteger(val: unknown): val is number {
+  return typeof val === "number" && Number.isSafeInteger(val) && val >= 0;
+}
+
 /**
  * Validates whether candidate async continuation credentials match the current authoritative fence
  * across all applicable dimensions.
  *
- * Applicable dimensions are either explicitly supplied or inferred from defined fields on `current`.
- * Fencing is fail-closed: candidate credentials must be complete and exactly match the current
- * authoritative state. Any missing credential, superseded generation (smaller than current),
+ * Applicable dimensions are either explicitly supplied or inferred from defined fields on `current` or `candidate`.
+ * Fencing is fail-closed on both sides: applicable dimensions require both authoritative and candidate credentials
+ * to be present and to exact-match. Any missing credential (dual-sided, authoritative-missing, or candidate-missing),
+ * invalid numeric format (NaN, negative, float, non-finite), superseded generation (smaller than current),
  * or ahead/conflicting generation (greater than or differing from current) invalidates ownership.
  *
  * NOTE: This pure helper provides domain-level contract validation and classification. It DOES NOT
@@ -295,209 +307,309 @@ export function validateOwnershipFence(
 ): OwnershipFenceValidationResult {
   const dimensionsToCheck: readonly OwnershipFenceDimension[] =
     applicableDimensions ??
-    OWNERSHIP_FENCE_DIMENSIONS.filter((dim) => current[dim] !== undefined);
+    OWNERSHIP_FENCE_DIMENSIONS.filter(
+      (dim) => current[dim] !== undefined || candidate[dim] !== undefined,
+    );
 
   for (const dim of dimensionsToCheck) {
     switch (dim) {
       case "lifecycleGeneration":
-        if (current.lifecycleGeneration !== undefined) {
-          if (candidate.lifecycleGeneration === undefined) {
-            return {
-              valid: false,
-              reason: "missing_lifecycle_generation",
-              details: "Candidate is missing required lifecycleGeneration",
-            };
-          }
-          if (candidate.lifecycleGeneration < current.lifecycleGeneration) {
-            return {
-              valid: false,
-              reason: "superseded_lifecycle_generation",
-              details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} is superseded by current ${current.lifecycleGeneration}`,
-            };
-          }
-          if (candidate.lifecycleGeneration > current.lifecycleGeneration) {
-            return {
-              valid: false,
-              reason: "conflicting_lifecycle_generation",
-              details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} does not match current ${current.lifecycleGeneration} (ahead/unrecognized)`,
-            };
-          }
-        } else if (candidate.lifecycleGeneration !== undefined) {
+        if (current.lifecycleGeneration === undefined && candidate.lifecycleGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lifecycle_generation",
+            details: "Both authoritative fence and candidate are missing required lifecycleGeneration",
+          };
+        }
+        if (current.lifecycleGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_lifecycle_generation",
+            details: `Candidate provided lifecycleGeneration ${candidate.lifecycleGeneration} but authoritative fence has none`,
+          };
+        }
+        if (candidate.lifecycleGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lifecycle_generation",
+            details: "Candidate is missing required lifecycleGeneration",
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(current.lifecycleGeneration)) {
           return {
             valid: false,
             reason: "conflicting_lifecycle_generation",
-            details: `Candidate provided lifecycle generation ${candidate.lifecycleGeneration} but authoritative fence has none`,
+            details: `Authoritative fence has invalid non-integer or negative lifecycleGeneration: ${current.lifecycleGeneration}`,
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(candidate.lifecycleGeneration)) {
+          return {
+            valid: false,
+            reason: "conflicting_lifecycle_generation",
+            details: `Candidate has invalid non-integer or negative lifecycleGeneration: ${candidate.lifecycleGeneration}`,
+          };
+        }
+        if (candidate.lifecycleGeneration < current.lifecycleGeneration) {
+          return {
+            valid: false,
+            reason: "superseded_lifecycle_generation",
+            details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} is superseded by current ${current.lifecycleGeneration}`,
+          };
+        }
+        if (candidate.lifecycleGeneration > current.lifecycleGeneration) {
+          return {
+            valid: false,
+            reason: "conflicting_lifecycle_generation",
+            details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} does not match current ${current.lifecycleGeneration} (ahead/unrecognized)`,
           };
         }
         break;
 
       case "reconciliationEpoch":
-        if (current.reconciliationEpoch !== undefined) {
-          if (candidate.reconciliationEpoch === undefined) {
-            return {
-              valid: false,
-              reason: "missing_reconciliation_epoch",
-              details: "Candidate is missing required reconciliationEpoch",
-            };
-          }
-          if (candidate.reconciliationEpoch < current.reconciliationEpoch) {
-            return {
-              valid: false,
-              reason: "superseded_reconciliation_epoch",
-              details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} is superseded by current ${current.reconciliationEpoch}`,
-            };
-          }
-          if (candidate.reconciliationEpoch > current.reconciliationEpoch) {
-            return {
-              valid: false,
-              reason: "conflicting_reconciliation_epoch",
-              details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} does not match current ${current.reconciliationEpoch} (ahead/unrecognized)`,
-            };
-          }
-        } else if (candidate.reconciliationEpoch !== undefined) {
+        if (current.reconciliationEpoch === undefined && candidate.reconciliationEpoch === undefined) {
+          return {
+            valid: false,
+            reason: "missing_reconciliation_epoch",
+            details: "Both authoritative fence and candidate are missing required reconciliationEpoch",
+          };
+        }
+        if (current.reconciliationEpoch === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_reconciliation_epoch",
+            details: `Candidate provided reconciliationEpoch ${candidate.reconciliationEpoch} but authoritative fence has none`,
+          };
+        }
+        if (candidate.reconciliationEpoch === undefined) {
+          return {
+            valid: false,
+            reason: "missing_reconciliation_epoch",
+            details: "Candidate is missing required reconciliationEpoch",
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(current.reconciliationEpoch)) {
           return {
             valid: false,
             reason: "conflicting_reconciliation_epoch",
-            details: `Candidate provided reconciliation epoch ${candidate.reconciliationEpoch} but authoritative fence has none`,
+            details: `Authoritative fence has invalid non-integer or negative reconciliationEpoch: ${current.reconciliationEpoch}`,
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(candidate.reconciliationEpoch)) {
+          return {
+            valid: false,
+            reason: "conflicting_reconciliation_epoch",
+            details: `Candidate has invalid non-integer or negative reconciliationEpoch: ${candidate.reconciliationEpoch}`,
+          };
+        }
+        if (candidate.reconciliationEpoch < current.reconciliationEpoch) {
+          return {
+            valid: false,
+            reason: "superseded_reconciliation_epoch",
+            details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} is superseded by current ${current.reconciliationEpoch}`,
+          };
+        }
+        if (candidate.reconciliationEpoch > current.reconciliationEpoch) {
+          return {
+            valid: false,
+            reason: "conflicting_reconciliation_epoch",
+            details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} does not match current ${current.reconciliationEpoch} (ahead/unrecognized)`,
           };
         }
         break;
 
       case "leaseGeneration":
-        if (current.leaseGeneration !== undefined) {
-          if (candidate.leaseGeneration === undefined) {
-            return {
-              valid: false,
-              reason: "missing_lease_generation",
-              details: "Candidate is missing required leaseGeneration",
-            };
-          }
-          if (candidate.leaseGeneration < current.leaseGeneration) {
-            return {
-              valid: false,
-              reason: "superseded_lease_generation",
-              details: `Candidate lease generation ${candidate.leaseGeneration} is superseded by current ${current.leaseGeneration}`,
-            };
-          }
-          if (candidate.leaseGeneration > current.leaseGeneration) {
-            return {
-              valid: false,
-              reason: "conflicting_lease_generation",
-              details: `Candidate lease generation ${candidate.leaseGeneration} does not match current ${current.leaseGeneration} (ahead/unrecognized)`,
-            };
-          }
-        } else if (candidate.leaseGeneration !== undefined) {
+        if (current.leaseGeneration === undefined && candidate.leaseGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lease_generation",
+            details: "Both authoritative fence and candidate are missing required leaseGeneration",
+          };
+        }
+        if (current.leaseGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_lease_generation",
+            details: `Candidate provided leaseGeneration ${candidate.leaseGeneration} but authoritative fence has none`,
+          };
+        }
+        if (candidate.leaseGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lease_generation",
+            details: "Candidate is missing required leaseGeneration",
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(current.leaseGeneration)) {
           return {
             valid: false,
             reason: "conflicting_lease_generation",
-            details: `Candidate provided lease generation ${candidate.leaseGeneration} but authoritative fence has none`,
+            details: `Authoritative fence has invalid non-integer or negative leaseGeneration: ${current.leaseGeneration}`,
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(candidate.leaseGeneration)) {
+          return {
+            valid: false,
+            reason: "conflicting_lease_generation",
+            details: `Candidate has invalid non-integer or negative leaseGeneration: ${candidate.leaseGeneration}`,
+          };
+        }
+        if (candidate.leaseGeneration < current.leaseGeneration) {
+          return {
+            valid: false,
+            reason: "superseded_lease_generation",
+            details: `Candidate lease generation ${candidate.leaseGeneration} is superseded by current ${current.leaseGeneration}`,
+          };
+        }
+        if (candidate.leaseGeneration > current.leaseGeneration) {
+          return {
+            valid: false,
+            reason: "conflicting_lease_generation",
+            details: `Candidate lease generation ${candidate.leaseGeneration} does not match current ${current.leaseGeneration} (ahead/unrecognized)`,
           };
         }
         break;
 
       case "bindingGeneration":
-        if (current.bindingGeneration !== undefined) {
-          if (candidate.bindingGeneration === undefined) {
-            return {
-              valid: false,
-              reason: "missing_binding_generation",
-              details: "Candidate is missing required bindingGeneration",
-            };
-          }
-          if (candidate.bindingGeneration < current.bindingGeneration) {
-            return {
-              valid: false,
-              reason: "superseded_binding_generation",
-              details: `Candidate binding generation ${candidate.bindingGeneration} is superseded by current ${current.bindingGeneration}`,
-            };
-          }
-          if (candidate.bindingGeneration > current.bindingGeneration) {
-            return {
-              valid: false,
-              reason: "conflicting_binding_generation",
-              details: `Candidate binding generation ${candidate.bindingGeneration} does not match current ${current.bindingGeneration} (ahead/unrecognized)`,
-            };
-          }
-        } else if (candidate.bindingGeneration !== undefined) {
+        if (current.bindingGeneration === undefined && candidate.bindingGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_binding_generation",
+            details: "Both authoritative fence and candidate are missing required bindingGeneration",
+          };
+        }
+        if (current.bindingGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_binding_generation",
+            details: `Candidate provided bindingGeneration ${candidate.bindingGeneration} but authoritative fence has none`,
+          };
+        }
+        if (candidate.bindingGeneration === undefined) {
+          return {
+            valid: false,
+            reason: "missing_binding_generation",
+            details: "Candidate is missing required bindingGeneration",
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(current.bindingGeneration)) {
           return {
             valid: false,
             reason: "conflicting_binding_generation",
-            details: `Candidate provided binding generation ${candidate.bindingGeneration} but authoritative fence has none`,
+            details: `Authoritative fence has invalid non-integer or negative bindingGeneration: ${current.bindingGeneration}`,
+          };
+        }
+        if (!isValidNonNegativeSafeInteger(candidate.bindingGeneration)) {
+          return {
+            valid: false,
+            reason: "conflicting_binding_generation",
+            details: `Candidate has invalid non-integer or negative bindingGeneration: ${candidate.bindingGeneration}`,
+          };
+        }
+        if (candidate.bindingGeneration < current.bindingGeneration) {
+          return {
+            valid: false,
+            reason: "superseded_binding_generation",
+            details: `Candidate binding generation ${candidate.bindingGeneration} is superseded by current ${current.bindingGeneration}`,
+          };
+        }
+        if (candidate.bindingGeneration > current.bindingGeneration) {
+          return {
+            valid: false,
+            reason: "conflicting_binding_generation",
+            details: `Candidate binding generation ${candidate.bindingGeneration} does not match current ${current.bindingGeneration} (ahead/unrecognized)`,
           };
         }
         break;
 
       case "expectedHeadSha":
-        if (current.expectedHeadSha !== undefined) {
-          if (candidate.expectedHeadSha === undefined) {
-            return {
-              valid: false,
-              reason: "missing_expected_head_sha",
-              details: "Candidate is missing required expectedHeadSha",
-            };
-          }
-          if (current.expectedHeadSha !== candidate.expectedHeadSha) {
-            return {
-              valid: false,
-              reason: "stale_head_sha",
-              details: `Candidate HEAD SHA ${candidate.expectedHeadSha} does not match authoritative HEAD SHA ${current.expectedHeadSha}`,
-            };
-          }
-        } else if (candidate.expectedHeadSha !== undefined) {
+        if (current.expectedHeadSha === undefined && candidate.expectedHeadSha === undefined) {
+          return {
+            valid: false,
+            reason: "missing_expected_head_sha",
+            details: "Both authoritative fence and candidate are missing required expectedHeadSha",
+          };
+        }
+        if (current.expectedHeadSha === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_expected_head_sha",
+            details: `Candidate provided expectedHeadSha ${candidate.expectedHeadSha} but authoritative fence has none`,
+          };
+        }
+        if (candidate.expectedHeadSha === undefined) {
+          return {
+            valid: false,
+            reason: "missing_expected_head_sha",
+            details: "Candidate is missing required expectedHeadSha",
+          };
+        }
+        if (current.expectedHeadSha !== candidate.expectedHeadSha) {
           return {
             valid: false,
             reason: "stale_head_sha",
-            details: `Candidate provided expected HEAD SHA ${candidate.expectedHeadSha} but authoritative fence has none`,
+            details: `Candidate HEAD SHA ${candidate.expectedHeadSha} does not match authoritative HEAD SHA ${current.expectedHeadSha}`,
           };
         }
         break;
 
       case "retryToken":
-        if (current.retryToken !== undefined) {
-          if (candidate.retryToken === undefined) {
-            return {
-              valid: false,
-              reason: "missing_retry_token",
-              details: "Candidate is missing required retryToken",
-            };
-          }
-          if (current.retryToken !== candidate.retryToken) {
-            return {
-              valid: false,
-              reason: "conflicting_retry_token",
-              details: "Candidate retry token does not match authoritative retry token",
-            };
-          }
-        } else if (candidate.retryToken !== undefined) {
+        if (current.retryToken === undefined && candidate.retryToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_retry_token",
+            details: "Both authoritative fence and candidate are missing required retryToken",
+          };
+        }
+        if (current.retryToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_retry_token",
+            details: "Candidate provided retry token but authoritative fence has none",
+          };
+        }
+        if (candidate.retryToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_retry_token",
+            details: "Candidate is missing required retryToken",
+          };
+        }
+        if (current.retryToken !== candidate.retryToken) {
           return {
             valid: false,
             reason: "conflicting_retry_token",
-            details: "Candidate provided retry token but authoritative fence has none",
+            details: "Candidate retry token does not match authoritative retry token",
           };
         }
         break;
 
       case "leaseToken":
-        if (current.leaseToken !== undefined) {
-          if (candidate.leaseToken === undefined) {
-            return {
-              valid: false,
-              reason: "missing_lease_token",
-              details: "Candidate is missing required leaseToken",
-            };
-          }
-          if (current.leaseToken !== candidate.leaseToken) {
-            return {
-              valid: false,
-              reason: "conflicting_lease_token",
-              details: "Candidate lease token does not match authoritative lease token",
-            };
-          }
-        } else if (candidate.leaseToken !== undefined) {
+        if (current.leaseToken === undefined && candidate.leaseToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lease_token",
+            details: "Both authoritative fence and candidate are missing required leaseToken",
+          };
+        }
+        if (current.leaseToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_authoritative_lease_token",
+            details: "Candidate provided lease token but authoritative fence has none",
+          };
+        }
+        if (candidate.leaseToken === undefined) {
+          return {
+            valid: false,
+            reason: "missing_lease_token",
+            details: "Candidate is missing required leaseToken",
+          };
+        }
+        if (current.leaseToken !== candidate.leaseToken) {
           return {
             valid: false,
             reason: "conflicting_lease_token",
-            details: "Candidate provided lease token but authoritative fence has none",
+            details: "Candidate lease token does not match authoritative lease token",
           };
         }
         break;

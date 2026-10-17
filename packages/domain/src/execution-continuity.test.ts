@@ -367,6 +367,148 @@ describe("Execution Continuity Contracts", () => {
         expect(failedResult.reason).toBe("missing_lease_token");
       }
     });
+
+    describe("fail-closed on dual-sided missing dimensions", () => {
+      it.each([
+        ["lifecycleGeneration", "missing_lifecycle_generation"],
+        ["reconciliationEpoch", "missing_reconciliation_epoch"],
+        ["leaseGeneration", "missing_lease_generation"],
+        ["bindingGeneration", "missing_binding_generation"],
+        ["expectedHeadSha", "missing_expected_head_sha"],
+        ["retryToken", "missing_retry_token"],
+        ["leaseToken", "missing_lease_token"],
+      ] as const)("rejects dual-sided missing %s with %s", (dimension, expectedReason) => {
+        const result = validateOwnershipFence({}, {}, [dimension]);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+          expect(result.details).toContain(`Both authoritative fence and candidate are missing required ${dimension}`);
+        }
+      });
+    });
+
+    describe("fail-closed on authoritative-missing dimensions", () => {
+      const sampleValues: Record<OwnershipFenceDimension, OwnershipFence> = {
+        lifecycleGeneration: { lifecycleGeneration: 3 },
+        reconciliationEpoch: { reconciliationEpoch: 5 },
+        leaseGeneration: { leaseGeneration: 2 },
+        bindingGeneration: { bindingGeneration: 4 },
+        expectedHeadSha: { expectedHeadSha: "sha-1234567890abcdef1234567890abcdef" },
+        retryToken: { retryToken: "ret-1" },
+        leaseToken: { leaseToken: "tok-1" },
+      };
+
+      it.each([
+        ["lifecycleGeneration", "missing_authoritative_lifecycle_generation"],
+        ["reconciliationEpoch", "missing_authoritative_reconciliation_epoch"],
+        ["leaseGeneration", "missing_authoritative_lease_generation"],
+        ["bindingGeneration", "missing_authoritative_binding_generation"],
+        ["expectedHeadSha", "missing_authoritative_expected_head_sha"],
+        ["retryToken", "missing_authoritative_retry_token"],
+        ["leaseToken", "missing_authoritative_lease_token"],
+      ] as const)("rejects candidate-provided but authoritative-missing %s with %s", (dimension, expectedReason) => {
+        const candidate = sampleValues[dimension];
+        const result = validateOwnershipFence({}, candidate, [dimension]);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+        }
+      });
+
+      it("rejects multi-dimension fence when authoritative lacks one of the required dimensions", () => {
+        const current: OwnershipFence = { leaseGeneration: 2 };
+        const candidate: OwnershipFence = { leaseGeneration: 2 };
+        const result = validateOwnershipFence(current, candidate, ["leaseGeneration", "leaseToken"]);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe("missing_lease_token");
+        }
+      });
+
+      it("rejects candidate providing extra dimension when authoritative fence has none (inferred dimensions)", () => {
+        const current: OwnershipFence = { leaseGeneration: 2 };
+        const candidate: OwnershipFence = { leaseGeneration: 2, leaseToken: "tok-1" };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe("missing_authoritative_lease_token");
+        }
+      });
+    });
+
+    describe("safe non-negative integer validation for numeric generation/epoch dimensions", () => {
+      it.each([
+        ["lifecycleGeneration", "conflicting_lifecycle_generation"],
+        ["reconciliationEpoch", "conflicting_reconciliation_epoch"],
+        ["leaseGeneration", "conflicting_lease_generation"],
+        ["bindingGeneration", "conflicting_binding_generation"],
+      ] as const)("rejects NaN candidate %s with %s", (dimension, expectedReason) => {
+        const current: OwnershipFence = { [dimension]: 4 };
+        const candidate: OwnershipFence = { [dimension]: Number.NaN };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+          expect(result.details).toContain("Candidate has invalid non-integer or negative");
+        }
+      });
+
+      it.each([
+        ["lifecycleGeneration", "conflicting_lifecycle_generation"],
+        ["reconciliationEpoch", "conflicting_reconciliation_epoch"],
+        ["leaseGeneration", "conflicting_lease_generation"],
+        ["bindingGeneration", "conflicting_binding_generation"],
+      ] as const)("rejects negative candidate %s with %s", (dimension, expectedReason) => {
+        const current: OwnershipFence = { [dimension]: 4 };
+        const candidate: OwnershipFence = { [dimension]: -1 };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+        }
+      });
+
+      it.each([
+        ["lifecycleGeneration", "conflicting_lifecycle_generation"],
+        ["reconciliationEpoch", "conflicting_reconciliation_epoch"],
+        ["leaseGeneration", "conflicting_lease_generation"],
+        ["bindingGeneration", "conflicting_binding_generation"],
+      ] as const)("rejects non-integer float candidate %s with %s", (dimension, expectedReason) => {
+        const current: OwnershipFence = { [dimension]: 4 };
+        const candidate: OwnershipFence = { [dimension]: 4.5 };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+        }
+      });
+
+      it.each([
+        ["lifecycleGeneration", "conflicting_lifecycle_generation"],
+        ["reconciliationEpoch", "conflicting_reconciliation_epoch"],
+        ["leaseGeneration", "conflicting_lease_generation"],
+        ["bindingGeneration", "conflicting_binding_generation"],
+      ] as const)("rejects Infinity candidate %s with %s", (dimension, expectedReason) => {
+        const current: OwnershipFence = { [dimension]: 4 };
+        const candidate: OwnershipFence = { [dimension]: Number.POSITIVE_INFINITY };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe(expectedReason);
+        }
+      });
+
+      it("rejects authoritative fence with NaN bindingGeneration", () => {
+        const current: OwnershipFence = { bindingGeneration: Number.NaN };
+        const candidate: OwnershipFence = { bindingGeneration: 4 };
+        const result = validateOwnershipFence(current, candidate);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.reason).toBe("conflicting_binding_generation");
+          expect(result.details).toContain("Authoritative fence has invalid non-integer or negative");
+        }
+      });
+    });
   });
 
   describe("Subsystem Failure Taxonomy Mappings", () => {
