@@ -2055,32 +2055,36 @@ it("FileDeliveryLock: race during eviction of abandoned authority does not delet
 
   const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
   fs.mkdirSync(authority);
+  const ownerPath = path.join(authority, "owner.json");
+  fs.writeFileSync(ownerPath, JSON.stringify({ pid: 9999999, token: "dead", createdAt: Date.now() - 70000 }), "utf8");
   fs.utimesSync(authority, old, old);
 
-  const realRename = fs.renameSync;
-  const spy = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
-    if (source === authority && !replaced) {
+  const realUnlink = fs.unlinkSync;
+  const spy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+    if (target === ownerPath && !replaced) {
       replaced = true;
-      // Interleaving: Cleaner B finishes, and fresh living successor C acquires authority
-      fs.rmdirSync(authority);
-      fs.mkdirSync(authority);
-      successorFd = fs.openSync(path.join(authority, "owner.json"), "wx");
+      // Interleaving: Cleaner B unlinks dead owner, and fresh living successor C acquires owner.json
+      realUnlink(ownerPath);
+      successorFd = fs.openSync(ownerPath, "wx");
       fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "fresh-successor", createdAt: Date.now() }), "utf8");
       expect(fs.fstatSync(successorFd).nlink).toBe(1);
+      return;
     }
-    return realRename(source, target);
+    return realUnlink(target);
   });
 
   const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
   locks.push(lock);
 
   try {
-    // Contender must rollback and NOT delete successor, and must time out safely!
+    // Contender must recognize living successor, NOT unlink successor, and time out safely!
     await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
     expect(replaced).toBe(true);
     expect(successorFd).toBeDefined();
     expect(fs.fstatSync(successorFd!).nlink).toBe(1);
     expect(fs.existsSync(authority)).toBe(true);
+    const currentOwner = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as { token?: string };
+    expect(currentOwner.token).toBe("fresh-successor");
   } finally {
     spy.mockRestore();
     if (successorFd !== undefined) {
@@ -2090,6 +2094,41 @@ it("FileDeliveryLock: race during eviction of abandoned authority does not delet
         // ignore
       }
     }
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: corrupt owner.json in authority directory is safely recovered and permits acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-corrupt-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    fs.writeFileSync(path.join(authority, "owner.json"), "{", "utf8");
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.existsSync(authority)).toBe(false);
+  } finally {
     for (const l of locks) {
       await l.release().catch(() => {});
     }
