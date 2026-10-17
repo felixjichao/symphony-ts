@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1905,7 +1906,7 @@ it("FileDeliveryLock: crashed retirement authority directory is safely recovered
     expect(fs.existsSync(lockPath)).toBe(true);
     const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
     expect(content.pid).toBe(process.pid);
-    expect(fs.existsSync(authority)).toBe(false);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
   } finally {
     for (const l of locks) {
       await l.release().catch(() => {});
@@ -1946,7 +1947,7 @@ it("FileDeliveryLock: retirement authority with dead process PID is safely recov
     expect(fs.existsSync(lockPath)).toBe(true);
     const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
     expect(content.pid).toBe(process.pid);
-    expect(fs.existsSync(authority)).toBe(false);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
   } finally {
     for (const l of locks) {
       await l.release().catch(() => {});
@@ -2038,65 +2039,128 @@ it("FileDeliveryLock: living retirement authority is not preempted even when old
   }
 });
 
-it("FileDeliveryLock: race during eviction of abandoned authority does not delete fresh living successor", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-evict-race-"));
+// Round 11 reproductions adapted to the publication protocol. Every intercepted
+// system call still executes; a winning successor keeps its real inode linked.
+it("FileDeliveryLock: actual publication conflict preserves a fresh living successor", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-publish-race-"));
   const statePath = path.join(dir, "delivery.json");
-  const lockPath = `${statePath}.lock`;
-  const reclaimPath = `${lockPath}.reclaim`;
-  const locks: FileDeliveryLock[] = [];
-  let successorFd: number | undefined;
-  let replaced = false;
-
-  const old = (Date.now() - 70000) / 1000;
-  fs.writeFileSync(lockPath, "", "utf8");
-  fs.utimesSync(lockPath, old, old);
-  fs.writeFileSync(reclaimPath, "", "utf8");
-  fs.utimesSync(reclaimPath, old, old);
-
-  const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
   fs.mkdirSync(authority);
-  const ownerPath = path.join(authority, "owner.json");
-  fs.writeFileSync(ownerPath, JSON.stringify({ pid: 9999999, token: "dead", createdAt: Date.now() - 70000 }), "utf8");
-  fs.utimesSync(authority, old, old);
-
-  const realUnlink = fs.unlinkSync;
-  const spy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-    if (target === ownerPath && !replaced) {
-      replaced = true;
-      // Interleaving: Cleaner B unlinks dead owner, and fresh living successor C acquires owner.json
-      realUnlink(ownerPath);
-      successorFd = fs.openSync(ownerPath, "wx");
-      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "fresh-successor", createdAt: Date.now() }), "utf8");
-      expect(fs.fstatSync(successorFd).nlink).toBe(1);
-      return;
+  const predecessor = path.join(authority, "owner.json");
+  const deadContent = JSON.stringify({ pid: 99999999, token: "dead" });
+  fs.writeFileSync(predecessor, deadContent);
+  let successorFd: number | undefined;
+  let successorPath = "";
+  let actualConflict = false;
+  const link = fs.linkSync;
+  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((source, target) => {
+    if (!successorPath && String(target).startsWith(authority)) {
+      successorPath = String(target);
+      const candidate = path.join(authority, "winner");
+      successorFd = fs.openSync(candidate, "wx");
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "C-live" }));
+      link(candidate, target);
+      fs.unlinkSync(candidate);
     }
-    return realUnlink(target);
+    try {
+      return link(source, target); // Resume A's real syscall; it MUST lose with EEXIST.
+    } catch (err) {
+      actualConflict = (err as NodeJS.ErrnoException).code === "EEXIST";
+      throw err;
+    }
   });
-
-  const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
-  locks.push(lock);
-
+  const unlink = fs.unlinkSync;
+  const ownerUnlinks: string[] = [];
+  const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+    if (target === predecessor || target === successorPath) ownerUnlinks.push(String(target));
+    return unlink(target);
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
   try {
-    // Contender must recognize living successor, NOT unlink successor, and time out safely!
     await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
-    expect(replaced).toBe(true);
+    expect(actualConflict).toBe(true);
     expect(successorFd).toBeDefined();
     expect(fs.fstatSync(successorFd!).nlink).toBe(1);
-    expect(fs.existsSync(authority)).toBe(true);
-    const currentOwner = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as { token?: string };
-    expect(currentOwner.token).toBe("fresh-successor");
+    expect(JSON.parse(fs.readFileSync(successorPath, "utf8")).token).toBe("C-live");
+    expect(fs.readFileSync(predecessor, "utf8")).toBe(deadContent);
+    expect(ownerUnlinks).toEqual([]);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
   } finally {
-    spy.mockRestore();
-    if (successorFd !== undefined) {
-      try {
-        fs.closeSync(successorFd);
-      } catch {
-        // ignore
-      }
+    linkSpy.mockRestore();
+    unlinkSpy.mockRestore();
+    await lock.release();
+    if (successorFd !== undefined) fs.closeSync(successorFd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ["absent", "ENOSPC"],
+  ["dead", "EIO"],
+  ["corrupt", "ENOSPC"],
+])("FileDeliveryLock: %s owner publication failure (%s) closes every fd and can retry", async (initial, code) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-publish-fd-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  fs.mkdirSync(authority);
+  const ownerPath = path.join(authority, "owner.json");
+  if (initial !== "absent") {
+    fs.writeFileSync(ownerPath, initial === "dead" ? JSON.stringify({ pid: 99999999 }) : "{");
+    fs.utimesSync(ownerPath, old, old);
+  }
+  const captured: number[] = [];
+  const active = new Set<number>();
+  const open = fs.openSync;
+  const close = fs.closeSync;
+  const write = fs.writeFileSync;
+  const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+    const fd = open(...args);
+    if (String(args[0]).startsWith(path.join(authority, "candidate-"))) {
+      captured.push(fd);
+      active.add(fd);
     }
-    for (const l of locks) {
-      await l.release().catch(() => {});
+    return fd;
+  });
+  const closeSpy = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+    close(fd);
+    active.delete(fd);
+  });
+  const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+    if (typeof args[0] === "number" && active.has(args[0])) {
+      write(args[0], "{"); // Also exercise partially written metadata.
+      throw Object.assign(new Error(`injected ${code}`), { code });
     }
+    return write(...args);
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    await lock.release();
+    expect(captured.length).toBeGreaterThan(1); // Repeated polling, not just one failed write.
+    expect(active.size).toBe(0);
+    for (const fd of captured) expect(() => fs.fstatSync(fd)).toThrow(/EBADF/);
+    expect(fs.readdirSync(authority).filter((name) => name.startsWith("candidate-"))).toEqual([]);
+    expect(fs.existsSync(ownerPath)).toBe(initial !== "absent");
+    writeSpy.mockRestore();
+    await lock.acquire();
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    writeSpy.mockRestore();
+    openSpy.mockRestore();
+    closeSpy.mockRestore();
+    await lock.release();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -2118,6 +2182,7 @@ it("FileDeliveryLock: corrupt owner.json in authority directory is safely recove
     const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
     fs.mkdirSync(authority);
     fs.writeFileSync(path.join(authority, "owner.json"), "{", "utf8");
+    fs.utimesSync(path.join(authority, "owner.json"), old, old);
     fs.utimesSync(authority, old, old);
 
     const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
@@ -2127,11 +2192,153 @@ it("FileDeliveryLock: corrupt owner.json in authority directory is safely recove
     expect(fs.existsSync(lockPath)).toBe(true);
     const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
     expect(content.pid).toBe(process.pid);
-    expect(fs.existsSync(authority)).toBe(false);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
   } finally {
     for (const l of locks) {
       await l.release().catch(() => {});
     }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+it.each(["published", "action"])("FileDeliveryLock: a real process crash at %s recovers through a successor", async (phase) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-crash-process-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 100, inProcessMutex: false });
+  try {
+    const child = spawnSync(process.execPath, [
+      path.resolve("../../node_modules/vite-node/vite-node.mjs"),
+      "test-fixtures/delivery-lock-crash.ts",
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, DELIVERY_LOCK_CRASH_STATE: statePath, DELIVERY_LOCK_CRASH_PHASE: phase },
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(23);
+    const original = fs.readFileSync(path.join(authority, "owner.json"), "utf8");
+    expect(JSON.parse(original).pid).toBe(child.pid);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(false);
+    await lock.acquire();
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(original);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    await lock.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 15000);
+
+it("FileDeliveryLock: actual live retirement claim survives aging and competing acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-live-published-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const contender = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  let competing: Promise<unknown> | undefined;
+  let before: string | undefined;
+  const lock = new FileDeliveryLock(statePath, {
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      const owner = path.join(authority, "owner.json");
+      before = fs.readFileSync(owner, "utf8");
+      fs.utimesSync(owner, old, old);
+      fs.utimesSync(authority, old, old);
+      // Starts while A is inside the protected action, without the process mutex.
+      competing = contender.acquire().then(() => "unexpected owner", (err: Error) => err.message);
+      expect(fs.readFileSync(owner, "utf8")).toBe(before);
+      expect(fs.existsSync(guard)).toBe(true);
+    },
+  });
+  try {
+    await lock.acquire();
+    expect(before).toBeDefined();
+    expect(await competing).toMatch(/Timed out waiting for delivery lock/);
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(before);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+    // A second real acquisition works once A releases the main lock.
+    await lock.release();
+    await contender.acquire();
+  } finally {
+    await lock.release();
+    await competing;
+    await contender.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: publication I/O failure leaves no owner and closes its fd", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-link-failure-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation(() => {
+    throw Object.assign(new Error("injected link EIO"), { code: "EIO" });
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(linkSpy).toHaveBeenCalled();
+    expect(fs.readdirSync(authority)).toEqual([]);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
+    linkSpy.mockRestore();
+    await lock.acquire();
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    linkSpy.mockRestore();
+    await lock.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+it("FileDeliveryLock: rejected action cannot mark changed owner metadata completed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-owner-fence-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const replacement = JSON.stringify({ pid: process.pid, token: "changed-live-owner" });
+  let hookCount = 0;
+  const lock = new FileDeliveryLock(statePath, {
+    timeoutMs: 60,
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      hookCount++;
+      fs.writeFileSync(path.join(authority, "owner.json"), replacement);
+    },
+  });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(hookCount).toBe(1); // Completion for the rejected token must not release the new owner.
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(replacement);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
+    expect(fs.readFileSync(`${statePath}.lock`, "utf8")).toBe("");
+  } finally {
+    await lock.release();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

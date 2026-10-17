@@ -50,6 +50,37 @@ Pure derivation covers all supported lifecycle stages:
 - **Decision Store**: Added `releaseExpiredTaskClaim` to `DecisionService`, executing inside an exclusive database transaction. It verifies `expectedRevision`, `expectedClaimGeneration`, `expectedBindingGeneration`, and asserts that the current wall clock has exceeded `lease.expiresAtMs`. If any check fails (e.g. claim was refreshed or completed), the release is rejected without mutation.
 - **Delivery Recovery**: Enhanced `recoverDeliveryHandoff` with an optional `DeliveryLock` and `expectedLastUpdated` fencing, preventing concurrent recovery runs from corrupting delivery handoff markers.
 
+### 5. Immutable Delivery retirement claims (review round 11)
+
+The CLI file lock's stale-reclaim retirement authority uses an append-only claim
+chain within the inode-specific `.reclaim.retire-*` directory. An owner record is
+written to an exclusive candidate file, closed in `finally` on failure, and
+published with an atomic hard link. Contenders for the same generation link to
+the same destination; `EEXIST` means the other claim won. No owner pathname is
+unlinked, truncated, or replaced, and the directory is never moved during recovery.
+
+A live PID without a completion marker prevents takeover regardless of age.
+After a confirmed process death, or a completed claim, contenders advance to the
+same successor path derived from the predecessor's path and immutable contents.
+Only legacy corrupt metadata uses an age threshold, measured from the file itself;
+an old directory does not make newly written metadata stale. Each attempt bounds
+traversal by the directory snapshot size, so long histories remain recoverable.
+
+The winner rechecks its published record and the observed reclaim inode, mtime,
+and token before retiring the stale reclaim file. It publishes a content-bound `.done` marker
+only after its protected retirement actions have stopped; a rejected stale token
+cannot mark changed owner metadata completed. A failed completion
+write leaves the claim conservatively owned until process exit. Unpublished
+candidate files left by crashes grant no authority. Failed metadata writes never
+publish partial owner records and always close the candidate fd.
+
+This protocol assumes cooperating processes and local filesystem atomic hard-link
+semantics. Retained claims/completion markers and crash-left candidates consume
+small amounts of disk space; remove them only while all users of that delivery
+lock are stopped. Do not run the old mutable-owner retirement protocol concurrently
+with this version during an upgrade. NFS/CIFS and real GitHub/Codex integration
+are outside the local lock tests.
+
 ## Alternatives considered
 
 1. **Centralized monolithic workflow state machine in Orchestrator**:
@@ -63,6 +94,13 @@ Pure derivation covers all supported lifecycle stages:
 3. **Optimistic recovery without pre-action re-observation**:
    *Alternative*: Dispatch recovery immediately upon deriving a stranded condition during the initial scan, without re-reading facts right before delegation.
    *Rejected because*: In asynchronous distributed systems, another process or external event (e.g. GitHub webhook or human reviewer action) may have resolved or advanced the issue between the initial scan and action execution. Re-observing immediately before mutation eliminates stale-recovery races.
+
+4. **Mutable owner eviction protected by a timeout-based takeover file**:
+   *Rejected because*: deleting an aged takeover file can preempt a paused living
+   cleaner. A final inode/token read followed by pathname unlink still allows a
+   successor to be deleted. Immutable atomic publication removes that deletion
+   race without adding native locking dependencies, at the cost of retained
+   arbitration metadata.
 
 ## Consequences
 

@@ -382,6 +382,7 @@ Bounded work continuity derivation and stranded-state reconciliation across stag
 | Fail-safe behavior under source observation errors (no mutations on source failure) | same suite: fails safe when observation errors are present |
 | Decision Plane transactional claim release with lease expiration verification (`releaseExpiredTaskClaim`) | `packages/decision/src/service.test.ts`: releaseExpiredTaskClaim, `packages/decision/src/bridge.test.ts`: POST /v1/tasks/:id/release-expired-claim |
 | Delivery handoff compensation mutex fencing and `expectedLastUpdated` validation | `packages/agent/src/delivery/recover-handoff.ts`, `apps/cli/src/delivery-reconciliation-recovery.test.ts` |
+| Delivery file-lock retirement successor preservation, fd cleanup, and crash recovery | `apps/cli/src/delivery-skill-cli.test.ts`: real hard-link conflict, partial ENOSPC/EIO writes (initial/dead/corrupt owners), link failure, live aged claim contention, and child-process exits after publication/before action; fixture `apps/cli/test-fixtures/delivery-lock-crash.ts` |
 | Orchestrator thin coordinator architecture (`WorkContinuityCoordinator`) and poll loop integration | `packages/orchestrator/src/loop.ts`, `packages/orchestrator/src/work-continuity.test.ts` |
 | CLI host composition and dependency inversion boundary preservation | `apps/cli/src/host.ts`, `apps/cli/src/host.test.ts` |
 

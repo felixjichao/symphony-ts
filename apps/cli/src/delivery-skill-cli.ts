@@ -65,6 +65,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function retirementCompletionPath(ownerPath: string, content: string): string {
+  const key = crypto.createHash("sha256").update(content).digest("hex");
+  return `${ownerPath}.${key}.done`;
+}
+
 const fileMutexes = new Map<string, InProcessMutex>();
 
 export interface FileDeliveryLockOptions {
@@ -90,6 +95,65 @@ export class FileDeliveryLock implements DeliveryLock {
     this.inProcessMutex = options?.inProcessMutex ?? true;
     this.beforeStaleReclaimRetire = options?._beforeStaleReclaimRetire;
     this.beforeReclaimRelease = options?._beforeReclaimRelease;
+  }
+
+  private acquireRetirementAuthority(authDir: string): { ownerPath: string; content: string } | null {
+    fs.mkdirSync(authDir, { recursive: true });
+    let ownerPath = path.join(authDir, "owner.json");
+    // Bound each observation by the existing directory snapshot, while allowing
+    // recovery through arbitrarily many previously completed/crashed claims.
+    const limit = fs.readdirSync(authDir).length + 1;
+    for (let generation = 0; generation < limit; generation++) {
+      let content: string;
+      try {
+        content = fs.readFileSync(ownerPath, "utf8");
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        // Publish fully written metadata atomically. No visible empty owner and
+        // no fd retained if metadata writing (including partial writing) fails.
+        const candidate = path.join(authDir, `candidate-${crypto.randomUUID()}`);
+        let fd: number | null = null;
+        const ownContent = JSON.stringify({ pid: process.pid, token: crypto.randomUUID() });
+        try {
+          fd = fs.openSync(candidate, "wx");
+          fs.writeFileSync(fd, ownContent, "utf8");
+          fs.closeSync(fd);
+          fd = null;
+          fs.linkSync(candidate, ownerPath);
+          return { ownerPath, content: ownContent };
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+          // Another contender published this generation. Read its authority.
+          continue;
+        } finally {
+          if (fd !== null) fs.closeSync(fd);
+          try {
+            fs.unlinkSync(candidate);
+          } catch {
+            // A crash may also leave an unpublished candidate; it grants no authority.
+          }
+        }
+      }
+      let alive = false;
+      let valid = false;
+      try {
+        const owner = JSON.parse(content);
+        if (Number.isInteger(owner.pid) && owner.pid > 0) {
+          valid = true;
+          alive = isProcessAlive(owner.pid);
+        }
+      } catch {
+        // Only legacy metadata can be incomplete; new claims publish atomically.
+      }
+      const completed = fs.existsSync(retirementCompletionPath(ownerPath, content));
+      if (alive && !completed) return null;
+      if (!valid && Date.now() - fs.statSync(ownerPath).mtimeMs <= 5000) return null;
+      // All contenders observing this immutable generation compete at the same
+      // next pathname. Neither the predecessor nor a winning successor is deleted.
+      const key = crypto.createHash("sha256").update(ownerPath).update(content).digest("hex");
+      ownerPath = path.join(authDir, `owner-${key}.json`);
+    }
+    return null;
   }
 
   private tryReclaimAndAcquire(token: string, observedStat: fs.Stats): boolean {
@@ -130,123 +194,8 @@ export class FileDeliveryLock implements DeliveryLock {
             if ((!reclaimOwnerAlive && isStale) || (!validJson && isStale)) {
               // Mutex directory to arbitrate retirement among competing cleaners
               const authDir = `${reclaimPath}.retire-${reclaimStat.ino}`;
-              const authOwnerToken = crypto.randomUUID();
-              const authOwnerPath = path.join(authDir, "owner.json");
-              let acquiredAuth = false;
-              let authOwnerFd: number | null = null;
-
-              // Ensure the authority directory container exists (never renamed or moved)
-              try {
-                fs.mkdirSync(authDir);
-              } catch (err: unknown) {
-                const error = err as { code?: string };
-                if (!error || error.code !== "EEXIST") {
-                  return false;
-                }
-              }
-
-              // Attempt exclusive creation of owner.json
-              try {
-                authOwnerFd = fs.openSync(authOwnerPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-                fs.writeFileSync(
-                  authOwnerFd,
-                  JSON.stringify({
-                    pid: process.pid,
-                    token: authOwnerToken,
-                    createdAt: Date.now(),
-                  }),
-                  "utf8"
-                );
-                acquiredAuth = true;
-              } catch (err: unknown) {
-                const error = err as { code?: string };
-                if (error && error.code === "EEXIST") {
-                  // owner.json already exists: inspect ownership
-                  try {
-                    const ownerStat = fs.statSync(authOwnerPath);
-                    let authOwnerAlive = false;
-                    let validAuthJson = false;
-
-                    try {
-                      const authData = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
-                      if (typeof authData.pid === "number") {
-                        authOwnerAlive = isProcessAlive(authData.pid);
-                        validAuthJson = true;
-                      }
-                    } catch {
-                      // empty or invalid JSON (e.g. "{" or corrupted)
-                    }
-
-                    if (validAuthJson && authOwnerAlive) {
-                      // CRITICAL: A living owner MUST NEVER be preempted, regardless of elapsed time!
-                      acquiredAuth = false;
-                    } else {
-                      // It is abandoned if:
-                      // 1. Valid owner record exists but owner process is confirmed DEAD (!authOwnerAlive).
-                      // 2. Corrupt/empty owner record (!validAuthJson) and the file or directory is aged (> 5000ms).
-                      const dirAge = Date.now() - fs.statSync(authDir).mtimeMs;
-                      const fileAge = Date.now() - ownerStat.mtimeMs;
-                      const isAbandoned =
-                        (validAuthJson && !authOwnerAlive) ||
-                        (!validAuthJson && (fileAge > 5000 || dirAge > 5000));
-
-                      if (isAbandoned) {
-                        // Safe eviction of abandoned metadata:
-                        // Never rename authDir itself to avoid exposing idle path gaps.
-                        // Verify inode and mtime haven't changed, and re-verify not living before unlinking.
-                        let canUnlink = false;
-                        try {
-                          const curStat = fs.statSync(authOwnerPath);
-                          if (curStat.ino === ownerStat.ino && curStat.mtimeMs === ownerStat.mtimeMs) {
-                            try {
-                              const curData = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
-                              if (typeof curData.pid === "number" && isProcessAlive(curData.pid)) {
-                                canUnlink = false;
-                              } else {
-                                canUnlink = true;
-                              }
-                            } catch {
-                              canUnlink = true;
-                            }
-                          }
-                        } catch {
-                          canUnlink = false;
-                        }
-
-                        if (canUnlink) {
-                          try {
-                            fs.unlinkSync(authOwnerPath);
-                          } catch {
-                            // lost race to another unlinker
-                          }
-                          // Now try O_CREAT | O_EXCL
-                          try {
-                            authOwnerFd = fs.openSync(authOwnerPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-                            fs.writeFileSync(
-                              authOwnerFd,
-                              JSON.stringify({
-                                pid: process.pid,
-                                token: authOwnerToken,
-                                createdAt: Date.now(),
-                              }),
-                              "utf8"
-                            );
-                            acquiredAuth = true;
-                          } catch {
-                            acquiredAuth = false;
-                          }
-                        }
-                      }
-                    }
-                  } catch {
-                    acquiredAuth = false;
-                  }
-                } else {
-                  acquiredAuth = false;
-                }
-              }
-
-              if (acquiredAuth && authOwnerFd !== null) {
+              const authority = this.acquireRetirementAuthority(authDir);
+              if (authority !== null) {
                 try {
                   if (this.beforeStaleReclaimRetire) {
                     try {
@@ -256,23 +205,9 @@ export class FileDeliveryLock implements DeliveryLock {
                     }
                   }
 
-                  // CRITICAL (Round 10 Commit Fence):
-                  // Verify that our open file descriptor is still linked (nlink === 1),
-                  // its inode matches the path on disk, and the content matches our token and PID!
-                  try {
-                    const fstat = fs.fstatSync(authOwnerFd);
-                    if (fstat.nlink !== 1) {
-                      return false;
-                    }
-                    const curStat = fs.statSync(authOwnerPath);
-                    if (curStat.ino !== fstat.ino) {
-                      return false;
-                    }
-                    const curData = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
-                    if (curData.token !== authOwnerToken || curData.pid !== process.pid) {
-                      return false;
-                    }
-                  } catch {
+                  // Claims are immutable. A live claim cannot gain a successor;
+                  // completion is published only after all protected actions stop.
+                  if (fs.readFileSync(authority.ownerPath, "utf8") !== authority.content) {
                     return false;
                   }
 
@@ -315,45 +250,9 @@ export class FileDeliveryLock implements DeliveryLock {
                 } catch {
                   // ignore
                 } finally {
-                  if (authOwnerFd !== null) {
-                    try {
-                      fs.closeSync(authOwnerFd);
-                    } catch {
-                      // ignore
-                    }
-                    authOwnerFd = null;
-                  }
-
-                  // Release authority:
-                  // Only remove our own owner.json if it still contains our token and PID!
-                  try {
-                    let isOurToken = false;
-                    try {
-                      if (fs.existsSync(authOwnerPath)) {
-                        const d = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
-                        if (d.token === authOwnerToken && d.pid === process.pid) {
-                          isOurToken = true;
-                        }
-                      }
-                    } catch {
-                      isOurToken = false;
-                    }
-
-                    if (isOurToken) {
-                      try {
-                        fs.unlinkSync(authOwnerPath);
-                      } catch {
-                        // ignore
-                      }
-                      try {
-                        fs.rmdirSync(authDir);
-                      } catch {
-                        // ignore if directory not empty
-                      }
-                    }
-                  } catch {
-                    // ignore
-                  }
+                  // Never unlink owner paths or move the authority directory: an
+                  // observer may still be paused on any earlier generation.
+                  fs.writeFileSync(retirementCompletionPath(authority.ownerPath, authority.content), "", { flag: "wx" });
                 }
               }
             }
