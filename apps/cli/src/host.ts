@@ -452,7 +452,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
         // GitHub / tracker facts
         try {
-          const issues = await trackerProxy.fetchIssuesByIds([issueId, `GH-${issueId}`]);
+          const queryId = issueId.replace(/^GH-/, "");
+          const issues = await trackerProxy.fetchIssuesByIds([queryId]);
           if (issues.length > 0 && issues[0]) {
             const iss = issues[0];
             githubIssue = {
@@ -497,7 +498,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
               };
             }
           } catch {
-            // Delivery service observation may fail if git/gh is not configured or in mock test
+            sourceFreshness["github"] = "unavailable";
           }
         }
 
@@ -536,7 +537,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         try {
           let workspacePath: string | null = null;
           try {
-            workspacePath = workspaceCoordinator.resolveForDispatch({ id: issueId, identifier: `GH-${issueId}` } as Issue);
+            workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueId}`, issueId);
           } catch {}
           const deliveryStatePath = workspacePath
             ? path.join(workspacePath, ".symphony", "delivery-state.json")
@@ -578,7 +579,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       authorities: {
         orchestrator: {
           dispatch: async (targetIssueId: string) => {
-            const issues = await trackerProxy.fetchIssuesByIds([targetIssueId, `GH-${targetIssueId}`]);
+            const queryId = targetIssueId.replace(/^GH-/, "");
+            const issues = await trackerProxy.fetchIssuesByIds([queryId]);
             if (issues.length > 0 && issues[0]) {
               const res = authority.dispatchIssue(issues[0]);
               return res.kind === "dispatched";
@@ -594,9 +596,24 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
           },
         },
         decision: planningGate ? {
-          dispatchPlan: async ({ sessionId }) => {
+          dispatchPlan: async ({ sessionId, workKey }) => {
             try {
-              await planningGate.ensurePlanTask(sessionId);
+              let requirements: { title: string; body: string } | undefined;
+              try {
+                const parts = workKey.key.split("#");
+                const cleanId = (parts[1] ?? workKey.key).replace(/^GH-/, "");
+                const issues = await trackerProxy.fetchIssuesByIds([cleanId]);
+                if (issues.length > 0 && issues[0]) {
+                  requirements = {
+                    title: issues[0].title,
+                    body: issues[0].description ?? "",
+                  };
+                }
+              } catch {}
+
+              await planningGate.ensurePlanTask(sessionId, {
+                requirements,
+              });
               return { executed: true };
             } catch (err) {
               return { executed: false, error: String(err) };
@@ -654,7 +671,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
               const issueNumber = Number(parts[1] ?? workKey.key.replace(/^GH-/, ""));
               let workspacePath: string | null = null;
               try {
-                workspacePath = workspaceCoordinator.resolveForDispatch({ id: String(issueNumber), identifier: `GH-${issueNumber}` } as Issue);
+                workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueNumber}`, String(issueNumber));
               } catch {}
               const deliveryStatePath = workspacePath
                 ? path.join(workspacePath, ".symphony", "delivery-state.json")

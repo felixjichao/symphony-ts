@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -45,15 +46,34 @@ class InProcessMutex {
   }
 }
 
+function getCanonicalLockPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  const base = path.basename(resolved);
+  const canonicalDir = fs.existsSync(dir) ? fs.realpathSync(dir) : dir;
+  return path.join(canonicalDir, `${base}.lock`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    const error = err as { code?: string };
+    return error.code === "EPERM";
+  }
+}
+
 const fileMutexes = new Map<string, InProcessMutex>();
 
 export class FileDeliveryLock implements DeliveryLock {
   private inProcessRelease: (() => void) | null = null;
   private lockFd: number | null = null;
+  private lockToken: string | null = null;
   private readonly lockFilePath: string;
 
   constructor(filePath: string) {
-    this.lockFilePath = path.resolve(`${filePath}.lock`);
+    this.lockFilePath = getCanonicalLockPath(filePath);
   }
 
   async acquire(): Promise<void> {
@@ -70,19 +90,32 @@ export class FileDeliveryLock implements DeliveryLock {
       fs.mkdirSync(lockDir, { recursive: true });
     }
 
+    const token = crypto.randomUUID();
     const start = Date.now();
     const timeoutMs = 30000;
     while (true) {
       try {
         this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, time: Date.now() }));
+        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
+        this.lockToken = token;
         break;
       } catch (err: unknown) {
         const error = err as { code?: string };
         if (error && error.code === "EEXIST") {
           try {
             const stat = fs.statSync(this.lockFilePath);
-            if (Date.now() - stat.mtimeMs > 60000) {
+            let ownerAlive = true;
+            try {
+              const content = fs.readFileSync(this.lockFilePath, "utf8");
+              const data = JSON.parse(content);
+              if (typeof data.pid === "number") {
+                ownerAlive = isProcessAlive(data.pid);
+              }
+            } catch {
+              // unable to read/parse: treat as alive to be safe
+            }
+
+            if (!ownerAlive && Date.now() - stat.mtimeMs > 60000) {
               fs.unlinkSync(this.lockFilePath);
               continue;
             }
@@ -107,8 +140,18 @@ export class FileDeliveryLock implements DeliveryLock {
         fs.closeSync(this.lockFd);
       } catch {}
       this.lockFd = null;
+    }
+    if (this.lockToken !== null) {
+      const tokenToRelease = this.lockToken;
+      this.lockToken = null;
       try {
-        fs.unlinkSync(this.lockFilePath);
+        if (fs.existsSync(this.lockFilePath)) {
+          const content = fs.readFileSync(this.lockFilePath, "utf8");
+          const data = JSON.parse(content);
+          if (data.token === tokenToRelease) {
+            fs.unlinkSync(this.lockFilePath);
+          }
+        }
       } catch {}
     }
     if (this.inProcessRelease) {
@@ -122,7 +165,7 @@ export class FileDeliveryLock implements DeliveryLock {
 const sharedLocks = new Map<string, DeliveryLock>();
 
 export function getOrCreateDeliveryLock(filePath: string): DeliveryLock {
-  const normalized = path.resolve(filePath);
+  const normalized = getCanonicalLockPath(filePath);
   let lock = sharedLocks.get(normalized);
   if (!lock) {
     lock = new FileDeliveryLock(normalized);

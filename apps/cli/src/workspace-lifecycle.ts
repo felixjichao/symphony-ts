@@ -51,6 +51,15 @@ export class WorkspaceLifecycleCoordinator {
     return path;
   }
 
+  public getWorkspacePath(identifier: string, issueId?: string | null): string {
+    const binding = (issueId ? this.issueBindings.get(issueId) : undefined)
+      ?? this.identifierBindings.get(identifier);
+    if (binding) {
+      return binding.workspacePath;
+    }
+    return this.controller.current.workspaceManager.resolveWorkspacePath(identifier);
+  }
+
   public createAttemptOptions(
     context: AttemptContext,
     extraOptions?: { readonly plan?: DecisionMaterializedPlan | null | undefined } | undefined,

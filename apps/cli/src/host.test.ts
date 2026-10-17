@@ -1,7 +1,7 @@
 import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   decisionSessionId,
   githubDecisionRoot,
@@ -12,7 +12,7 @@ import { DurableDecisionStore, DecisionService, DecisionPlanningGate } from "@sy
 import type { RetryScheduler } from "@symphony/orchestrator";
 import { SymphonyConfigError } from "@symphony/config";
 import { createStructuredLogger } from "@symphony/observability";
-import { createGitHubAdapterProfile, type TrackerAdapterProfile } from "@symphony/tracker";
+import { createGitHubAdapterProfile, GitHubDeliveryService, type TrackerAdapterProfile } from "@symphony/tracker";
 import { fileURLToPath } from "node:url";
 import { createHost } from "./host";
 
@@ -769,6 +769,217 @@ describe("createHost in-process composition", () => {
       const res = await host.workContinuityCoordinator.reconcile();
       expect(res).toBeDefined();
       expect(res.reconciledCount).toBeGreaterThanOrEqual(0);
+      await host.stop();
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("queries tracker with clean opaque ID and succeeds with real GitHub adapter profile", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-gh-query-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const rawIssue = {
+      number: 1,
+      title: "Actual requirements",
+      body: "Actual body",
+      state: "open",
+      html_url: "https://github.com/acme/repo/issues/1",
+      labels: [],
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const workKey = { provider: "github", key: "acme/repo#1" };
+    const observe = vi.spyOn(GitHubDeliveryService.prototype, "observeWork").mockResolvedValue({
+      workKey,
+      issue: { state: "open", url: rawIssue.html_url },
+      pullRequest: null,
+      ci: null,
+    });
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: github\n  provider:\n    repo: acme/repo\n    token: test-token\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        cwd: temp,
+        env: {},
+        enablePlanning: false,
+        trackerProfiles: [
+          createGitHubAdapterProfile({
+            fetchImpl: async (url) => ({
+              status: 200,
+              ok: true,
+              headers: { get: () => null },
+              json: async () => (url.includes("/issues/") ? rawIssue : [rawIssue]),
+            }),
+          }),
+        ],
+      });
+
+      const result = await host.workContinuityCoordinator.reconcile();
+      expect(result.reconciledCount).toBe(1);
+      expect(result.items[0]?.analysis?.condition).not.toBe("observation_unavailable");
+      expect(result.recoveredCount).toBe(1);
+      await host.stop();
+    } finally {
+      observe.mockRestore();
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates delivery observeWork failure to observation_unavailable and does not dispatch coding worker", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-obs-fail-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const issue: Issue = {
+      id: "1",
+      identifier: "GH-1",
+      nativeRef: { repo: "acme/repo", number: 1 },
+      title: "Actual requirements",
+      description: "Actual body",
+      state: "open",
+      priority: 1,
+      branchName: null,
+      url: "https://github.com/acme/repo/issues/1",
+      assigneeId: null,
+      labels: [],
+      blockedBy: [],
+      dispatchable: true,
+      createdAt: 1000,
+      updatedAt: null,
+    };
+    const observe = vi.spyOn(GitHubDeliveryService.prototype, "observeWork").mockRejectedValue(new Error("source unavailable"));
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\n  provider:\n    repo: acme/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        cwd: temp,
+        env: {},
+        enablePlanning: false,
+        trackerProfiles: [fixtureProfile([], [issue])],
+      });
+      const dispatch = vi.spyOn(host.authority, "dispatchIssue");
+
+      const result = await host.workContinuityCoordinator.reconcile();
+      expect(result.reconciledCount).toBe(1);
+      expect(result.items[0]?.analysis?.condition).toBe("observation_unavailable");
+      expect(dispatch).toHaveBeenCalledTimes(0);
+      expect(result.recoveredCount).toBe(0);
+      await host.stop();
+    } finally {
+      observe.mockRestore();
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("idempotently reuses active pending planning task and preserves real requirements", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-planning-idempotent-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const rawIssue = {
+      number: 1,
+      title: "Real Feature Requirements",
+      body: "Detailed Feature Body",
+      state: "open",
+      html_url: "https://github.com/acme/repo/issues/1",
+      labels: [],
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const workKey = { provider: "github", key: "acme/repo#1" };
+    const issue: Issue = {
+      id: "1",
+      identifier: "GH-1",
+      nativeRef: { repo: "acme/repo", number: 1 },
+      title: "Real Feature Requirements",
+      description: "Detailed Feature Body",
+      state: "open",
+      priority: 1,
+      branchName: null,
+      url: rawIssue.html_url,
+      assigneeId: null,
+      labels: [],
+      blockedBy: [],
+      dispatchable: true,
+      createdAt: 1000,
+      updatedAt: null,
+    };
+
+    const store = new DurableDecisionStore({ storeDir: path.join(temp, "decision") });
+    await store.open();
+    const service = new DecisionService(store);
+    const observe = vi.spyOn(GitHubDeliveryService.prototype, "observeWork").mockResolvedValue({
+      workKey,
+      issue: { state: "open", url: rawIssue.html_url },
+      pullRequest: null,
+      ci: null,
+    });
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\n  provider:\n    repo: acme/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        cwd: temp,
+        env: {},
+        trackerProfiles: [fixtureProfile([], [issue])],
+        planningGate: new DecisionPlanningGate(service),
+      });
+
+      await host.workContinuityCoordinator.reconcile();
+      await host.workContinuityCoordinator.reconcile();
+
+      const tasks = service.getTasksForSession(decisionSessionId(workKey));
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.status).toBe("pending");
+      expect(tasks[0]?.revision).toBe(1);
+
+      const latest = service.getLatestPlan(decisionSessionId(workKey));
+      expect(latest?.requirements.title).toBe("Real Feature Requirements");
+      expect(latest?.requirements.body).toBe("Detailed Feature Body");
+
+      await host.stop();
+    } finally {
+      await store.close();
+      observe.mockRestore();
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses read-only getWorkspacePath without overwriting workspace bindings during observation", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-workspace-read-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const issue = makeIssue("1", "open", { id: "1", identifier: "GH-1" });
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        cwd: temp,
+        env: {},
+        enablePlanning: false,
+        trackerProfiles: [fixtureProfile([], [issue])],
+      });
+
+      const originalPath = host.workspaceCoordinator.resolveForDispatch(issue);
+      expect(originalPath).toBeDefined();
+
+      const path1 = host.workspaceCoordinator.getWorkspacePath("GH-1", "1");
+      expect(path1).toBe(originalPath);
+
+      const res = await host.workContinuityCoordinator.reconcile();
+      expect(res).toBeDefined();
+
+      const pathAfterReconcile = host.workspaceCoordinator.getWorkspacePath("GH-1", "1");
+      expect(pathAfterReconcile).toBe(originalPath);
+
       await host.stop();
     } finally {
       await rm(temp, { recursive: true, force: true });

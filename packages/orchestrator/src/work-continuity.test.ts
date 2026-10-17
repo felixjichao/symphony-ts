@@ -443,6 +443,113 @@ describe("deriveWorkContinuity", () => {
     });
   });
 
+  it("evaluates repair stage when review requests changes and repair worker is stalled as stranded worker_stalled", () => {
+    const key = makeWorkKey(repo, 1);
+    const facts: WorkItemFacts = {
+      workKey: key,
+      github: {
+        issue: { state: "open" },
+        pullRequest: {
+          number: 42,
+          state: "open",
+          headSha: "abc1234",
+          isDraft: false,
+        },
+        ci: {
+          status: "success",
+          headSha: "abc1234",
+        },
+      },
+      decision: {
+        latestReviewTask: {
+          taskId: "rev-1",
+          revision: 1,
+          status: "completed",
+          verdict: "changes_requested",
+          target: {
+            repository: "acme/repo",
+            prNumber: 42,
+            headSha: "abc1234",
+          },
+        },
+      },
+      orchestrator: {
+        isRunning: true,
+        isStalled: true,
+        attempt: 1,
+        attemptToken: "tok-repair-stalled",
+        lifecycleGeneration: 2,
+        reconciliationEpoch: 3,
+        lastProgressAt: "unknown",
+      },
+    };
+
+    const analysis = deriveWorkContinuity(facts, now);
+    expect(analysis.stage).toBe("repair");
+    expect(analysis.condition).toBe("stranded");
+    expect(analysis.strandedReason).toBe("worker_stalled");
+    expect(analysis.liveness.lastProgressAt).toBe("unknown");
+    expect(analysis.recoveryProposal).toEqual({
+      kind: "orchestrator_stop_stalled",
+      authority: "orchestrator",
+      issueId: "1",
+      fence: {
+        expectedAttemptToken: "tok-repair-stalled",
+        expectedGeneration: 2,
+        expectedEpoch: 3,
+      },
+    });
+  });
+
+  it("evaluates repair stage when review requests changes and repair worker is actively progressing as making_progress", () => {
+    const key = makeWorkKey(repo, 1);
+    const progressTime = now - 5000;
+    const facts: WorkItemFacts = {
+      workKey: key,
+      github: {
+        issue: { state: "open" },
+        pullRequest: {
+          number: 42,
+          state: "open",
+          headSha: "abc1234",
+          isDraft: false,
+        },
+        ci: {
+          status: "success",
+          headSha: "abc1234",
+        },
+      },
+      decision: {
+        latestReviewTask: {
+          taskId: "rev-1",
+          revision: 1,
+          status: "completed",
+          verdict: "changes_requested",
+          target: {
+            repository: "acme/repo",
+            prNumber: 42,
+            headSha: "abc1234",
+          },
+        },
+      },
+      orchestrator: {
+        isRunning: true,
+        isStalled: false,
+        attempt: 1,
+        attemptToken: "tok-repair-active",
+        lifecycleGeneration: 2,
+        reconciliationEpoch: 3,
+        lastProgressAt: progressTime,
+      },
+    };
+
+    const analysis = deriveWorkContinuity(facts, now);
+    expect(analysis.stage).toBe("repair");
+    expect(analysis.condition).toBe("making_progress");
+    expect(analysis.liveness.lastProgressAt).toBe(progressTime);
+    expect(analysis.recoveryProposal).toBeUndefined();
+  });
+
   it("evaluates delivery handoff pending compensation as delivery_compensate stranded", () => {
     const key = makeWorkKey(repo, 1);
     const facts: WorkItemFacts = {

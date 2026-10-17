@@ -363,10 +363,11 @@ export class OrchestratorAuthority {
     return isWorkerStalled(record.entry, record.telemetry, now, timeout);
   }
 
-  /** 取某 running issue 最近一次 progress 时间（若无则返回 "unknown"）。 */
+  /** 取某 running issue 最近一次 progress 时间（若无或已卡滞则返回 "unknown"）。 */
   public getIssueLastProgressAt(issueId: string): UtcTimestampMs | "unknown" {
     const record = this.active.get(issueId);
     if (!record) return "unknown";
+    if (this.isIssueStalled(issueId)) return "unknown";
     const sessionTs = record.entry.session?.lastCodexTimestamp ?? null;
     return sessionTs ?? "unknown";
   }

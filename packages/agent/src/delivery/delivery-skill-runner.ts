@@ -556,16 +556,32 @@ export async function runDeliverySkill(
     }
 
     // 标签移除结果立即可持久化
-    const handoffAfterLabel: DeliveryHandoff = { ...handoffForRemote, readyLabelRemoved };
+    let latestPersisted: PersistedDeliveryState | null = null;
+    try {
+      latestPersisted = (await stateStorage?.readState()) ?? null;
+    } catch {}
+
+    if (latestPersisted?.commentPosted) {
+      commentPosted = true;
+    }
+    if (latestPersisted?.readyLabelRemoved) {
+      readyLabelRemoved = true;
+    }
+
+    const handoffAfterLabel: DeliveryHandoff = {
+      ...handoffForRemote,
+      readyLabelRemoved,
+      commentPosted,
+    };
     await persistCurrentState({
       isPaused: true,
       pauseReason: reason,
       spentWaitSeconds,
       handoff: handoffAfterLabel,
       readyLabelRemoved,
-      commentPosted: false,
-      commentVerifyStatus: "pending",
-      pendingCompensation: true,
+      commentPosted,
+      commentVerifyStatus: commentPosted ? "posted" : "pending",
+      pendingCompensation: !(readyLabelRemoved && commentPosted),
     });
 
     if (options.signal?.aborted) {
@@ -573,34 +589,52 @@ export async function runDeliverySkill(
     }
 
     // 发表交接评论
-    let commentVerifyStatus: "posted" | "failed" | "unverified" = "unverified";
+    let commentVerifyStatus: "posted" | "failed" | "unverified" = commentPosted ? "posted" : "unverified";
     const commentBody = formatDeliveryHandoffMarkdown(handoffAfterLabel);
 
-    try {
-      const commentTarget = prNumber !== null ? ["pr", "comment", String(prNumber)] : ["issue", "comment", String(context.issueNumber)];
-      const commentRes = await runner.gh(
-        [...commentTarget, "--repo", context.repo, "--body", commentBody],
-        options.cwd,
-      );
-      if (commentRes.exitCode === 0) {
-        commentPosted = true;
-        commentVerifyStatus = "posted";
-      } else {
-        commentPosted = false;
-        commentVerifyStatus = "failed";
-        log(`[delivery-skill] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
+    if (!commentPosted) {
+      const lock = stateStorage?.lock;
+      if (lock) await lock.acquire();
+      try {
+        try {
+          const underLockState = await stateStorage?.readState();
+          if (underLockState?.commentPosted) {
+            commentPosted = true;
+            commentVerifyStatus = "posted";
+          }
+        } catch {}
+
+        if (!commentPosted) {
+          try {
+            const commentTarget = prNumber !== null ? ["pr", "comment", String(prNumber)] : ["issue", "comment", String(context.issueNumber)];
+            const commentRes = await runner.gh(
+              [...commentTarget, "--repo", context.repo, "--body", commentBody],
+              options.cwd,
+            );
+            if (commentRes.exitCode === 0) {
+              commentPosted = true;
+              commentVerifyStatus = "posted";
+            } else {
+              commentPosted = false;
+              commentVerifyStatus = "failed";
+              log(`[delivery-skill] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
+            }
+          } catch (err) {
+            if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
+              throw err;
+            }
+            log(`[delivery-skill] Warning: Failed to post handoff comment: ${String(err)}`);
+            commentPosted = false;
+            commentVerifyStatus = "failed";
+          }
+        }
+      } finally {
+        if (lock) await lock.release();
       }
-    } catch (err) {
-      if (err instanceof Error && (err.message.includes("canceled_by_reconciliation") || err.name === "AbortError")) {
-        throw err;
-      }
-      log(`[delivery-skill] Warning: Failed to post handoff comment: ${String(err)}`);
-      commentPosted = false;
-      commentVerifyStatus = "failed";
     }
 
     // 更新包含真实 commentPosted 的 markdown 供本地返回
-    const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted };
+    const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted, readyLabelRemoved };
     const handoffMarkdown = formatDeliveryHandoffMarkdown(handoffFinal);
     const pendingCompensation = !(readyLabelRemoved && commentPosted);
 

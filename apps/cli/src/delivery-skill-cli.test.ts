@@ -10,7 +10,7 @@ import {
   type DeliveryReviewGate,
 } from "@symphony/domain";
 
-import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
+import { FileDeliveryLock, FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
 class MockCliRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
@@ -1342,6 +1342,116 @@ it("Blocker 5: concurrent recoverDeliveryHandoff calls serialize via FileDeliver
     ]);
     expect(results.every((r) => r.success)).toBe(true);
     expect(posts).toBe(1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: resolves canonical alias paths to share in-process mutex and protects living locks", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-alias-"));
+  const physical = path.join(dir, "physical");
+  const alias = path.join(dir, "alias");
+  fs.mkdirSync(physical);
+  fs.symlinkSync(physical, alias);
+  const file = path.join(physical, "delivery.json");
+  const first = new FileDeliveryLock(file);
+  const second = new FileDeliveryLock(path.join(alias, "delivery.json"));
+
+  try {
+    await first.acquire();
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+
+    let secondAcquired = false;
+    const secondPromise = second.acquire().then(() => {
+      secondAcquired = true;
+    });
+
+    // Verify second lock acquisition is blocked by in-process mutex
+    await new Promise((r) => setTimeout(r, 100));
+    expect(secondAcquired).toBe(false);
+
+    // Release first lock; second acquisition can now proceed
+    await first.release();
+    await secondPromise;
+    expect(secondAcquired).toBe(true);
+
+    // Now release second
+    await second.release();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  } finally {
+    await first.release();
+    await second.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: release only deletes the lock if token matches", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-token-"));
+  const file = path.join(dir, "delivery.json");
+  const lock = new FileDeliveryLock(file);
+
+  try {
+    await lock.acquire();
+    const lockFile = `${file}.lock`;
+    expect(fs.existsSync(lockFile)).toBe(true);
+
+    // Overwrite the lock file with a different token from another entity
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token: "other-token", time: Date.now() }));
+
+    // Releasing the original lock should NOT delete the lock belonging to other-token
+    await lock.release();
+    expect(fs.existsSync(lockFile)).toBe(true);
+
+    const content = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+    expect(content.token).toBe("other-token");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("Delivery halt side effects are serialized with recoverDeliveryHandoff under shared lock", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-halt-serial-"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(dir, "delivery.json"));
+  let recovering = false;
+  let posts = 0;
+  const runner = {
+    git: async () => ({ exitCode: 0, stdout: "wrong-branch", stderr: "" }),
+    exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    gh: async (args: readonly string[]) => {
+      if (args[1] === "edit" && !recovering) {
+        recovering = true;
+        const recovered = await recoverDeliveryHandoff({
+          cwd: dir,
+          repo: "acme/repo",
+          issueNumber: 1,
+          stateStorage,
+          runner,
+        });
+        expect(recovered.success).toBe(true);
+      }
+      if (args[1] === "comment") posts++;
+      return { exitCode: 0, stdout: JSON.stringify({ comments: [], labels: [] }), stderr: "" };
+    },
+  };
+
+  try {
+    const result = await runDeliverySkill({
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      headBranch: "symphony/GH-1",
+      baseBranch: "main",
+      runner,
+      stateStorage,
+    });
+    expect(result.status).toBe("blocked");
+    // Verify only exactly 1 comment was posted despite concurrent recovery during halt
+    expect(posts).toBe(1);
+
+    const finalState = stateStorage.readState();
+    expect(finalState?.commentPosted).toBe(true);
+    expect(finalState?.pendingCompensation).toBe(false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

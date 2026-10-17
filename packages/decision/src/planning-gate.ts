@@ -28,6 +28,7 @@ export interface EnsurePlanTaskOptions {
     readonly clarifications?: readonly string[] | undefined;
   } | undefined;
   readonly previousTaskId?: string | null | undefined;
+  readonly forceNew?: boolean | undefined;
 }
 
 export class DecisionPlanningGate {
@@ -111,12 +112,10 @@ export class DecisionPlanningGate {
       const latestPlan = planTasks[0];
       let planVerdict: "ready" | "needs_clarification" | "needs_human" | undefined = undefined;
       if (latestPlan && latestPlan.status === "completed") {
-        try {
-          const res = await this.client.getTaskResult(latestPlan.id);
-          if (res?.result && res.result.kind === "plan") {
-            planVerdict = res.result.verdict;
-          }
-        } catch {}
+        const res = await this.client.getTaskResult(latestPlan.id);
+        if (res?.result && res.result.kind === "plan") {
+          planVerdict = res.result.verdict;
+        }
       }
 
       const reviewTasks = tasks.filter((t) => t.kind === "review");
@@ -124,12 +123,10 @@ export class DecisionPlanningGate {
       const latestReview = reviewTasks[0];
       let reviewVerdict: "approve" | "changes_requested" | "needs_human" | undefined = undefined;
       if (latestReview && latestReview.status === "completed") {
-        try {
-          const res = await this.client.getTaskResult(latestReview.id);
-          if (res?.result && res.result.kind === "review") {
-            reviewVerdict = res.result.verdict;
-          }
-        } catch {}
+        const res = await this.client.getTaskResult(latestReview.id);
+        if (res?.result && res.result.kind === "review") {
+          reviewVerdict = res.result.verdict;
+        }
       }
 
       return {
@@ -181,6 +178,22 @@ export class DecisionPlanningGate {
         session = await this.service.createSession(root);
       }
 
+      const shouldReuse =
+        !options.forceNew &&
+        (!options.triggerKind || options.triggerKind === "initial");
+
+      if (shouldReuse) {
+        const existingTasks = this.service.getTasksForSession(sessionId);
+        const planTasks = existingTasks.filter((t) => t.kind === "plan");
+        planTasks.sort((a, b) => b.revision - a.revision);
+        const activeTask = planTasks.find(
+          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running",
+        );
+        if (activeTask) {
+          return activeTask;
+        }
+      }
+
       return await this.service.createPlanTask(sessionId, options);
     }
 
@@ -190,6 +203,22 @@ export class DecisionPlanningGate {
       } catch {
         const root = parseDecisionSessionRootFromId(sessionId);
         await this.client.createSession(root);
+      }
+
+      const shouldReuse =
+        !options.forceNew &&
+        (!options.triggerKind || options.triggerKind === "initial");
+
+      if (shouldReuse) {
+        const { tasks } = await this.client.getTasksForSession(sessionId);
+        const planTasks = tasks.filter((t) => t.kind === "plan");
+        planTasks.sort((a, b) => b.revision - a.revision);
+        const activeTask = planTasks.find(
+          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running",
+        );
+        if (activeTask) {
+          return activeTask;
+        }
       }
 
       const res = await this.client.createTask({

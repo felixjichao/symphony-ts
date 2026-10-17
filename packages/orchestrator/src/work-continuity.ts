@@ -644,18 +644,63 @@ export function deriveWorkContinuity(
 
         // If changes requested -> Repair stage
         if (revTask.verdict === "changes_requested") {
+          const isStalled = facts.orchestrator?.isStalled ?? false;
+          const orchestratorProgress = facts.orchestrator?.lastProgressAt;
+          const lastProgressAt = isStalled ? "unknown" : (orchestratorProgress ?? "unknown");
           const liveness: LivenessMetadata = {
             startedAt: now,
-            lastProgressAt: now,
+            lastProgressAt,
             lastObservedAt: now,
           };
           const fence: SafeOwnershipFence = {
             hasLeaseToken: false,
             expectedHeadSha: pr.headSha,
+            retryToken: facts.orchestrator?.attemptToken,
+            lifecycleGeneration: facts.orchestrator?.lifecycleGeneration,
+            reconciliationEpoch: facts.orchestrator?.reconciliationEpoch,
           };
 
           // Check if repair worker is already running or retry scheduled
           if (facts.orchestrator?.isRunning) {
+            if (isStalled) {
+              const expectedAction: ExpectedNextAction = {
+                action: "reclaim",
+                description: `Stop stalled repair worker for issue ${issueId}`,
+                authority: { kind: "internal", authority: "orchestrator" },
+                target: reviewTarget,
+              };
+              const descriptor: ExecutionContinuityDescriptor = {
+                workKey,
+                scope: "attempt",
+                state: "running",
+                expectedAction,
+                liveness,
+                fence,
+              };
+              const recoveryProposal: RecoveryProposal = {
+                kind: "orchestrator_stop_stalled",
+                authority: "orchestrator",
+                issueId,
+                fence: {
+                  expectedAttemptToken: facts.orchestrator.attemptToken,
+                  expectedGeneration: facts.orchestrator.lifecycleGeneration,
+                  expectedEpoch: facts.orchestrator.reconciliationEpoch,
+                },
+              };
+              return {
+                workKey,
+                stage: "repair",
+                condition: "stranded",
+                strandedReason: "worker_stalled",
+                expectedAction,
+                currentOwner: { kind: "internal", authority: "orchestrator" },
+                liveness,
+                fence,
+                recoveryProposal,
+                descriptor,
+              };
+            }
+
             const expectedAction: ExpectedNextAction = {
               action: "none",
               description: "Repair agent active in workspace executing review feedback",
