@@ -108,3 +108,7 @@ export * from "./decision-entry";
 // (NEST-113 / GitHub #109). Never a second workflow state machine.
 export * from "./operations";
 
+// Execution Continuity extension: cross-stage continuity, ownership fencing, and failure contracts
+// (NEST-130 / GitHub #146). Provider-neutral shared vocabulary.
+export * from "./execution-continuity";
+

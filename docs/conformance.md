@@ -350,4 +350,23 @@ Stable in-process Operational Query Service and full multi-source integration ac
 
 Validation: `npm test -w @symphony/operations`, `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Transports (HTTP/SSE/WebSocket) and Web Dashboard remain out of scope for #108 acceptance.
 
+## Execution continuity and recovery contracts (NEST-130 / #146)
+
+Provider-neutral execution continuity, ownership fencing, and failure taxonomy contracts adjacent to §4. Establishes the shared language used by Orchestrator, Decision, Web Driver, Delivery, and future reconciliation code before adding automated recovery behaviors (#147–#151). [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md).
+
+| Capability | Evidence |
+|---|---|
+| Provider-neutral continuity states (`running`, `retry_queued`, `recovering`, `blocked`, `completed`, `released`) with first-class non-terminal `blocked` | `packages/domain/src/execution-continuity.test.ts`: Enumerations and State Predicates |
+| Expected-next-action and authority semantics distinguishing internal, external, and human authorities | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Liveness and forward progress metadata distinguishing observation from genuine progress (explicit "unknown") | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Multi-dimensional ownership fencing across lifecycle generations, epochs, lease generations, binding generations, and HEAD SHAs | same suite: Multi-dimensional Ownership Fencing |
+| Capability credential protection (`sanitizeOwnershipFence` stripping `leaseToken` before public display) | same suite: sanitizes ownership fence for safe public observation |
+| Common failure taxonomy (`transient`, `recoverable`, `blocked_external`, `superseded`, `invariant_violation`) with structured diagnostics | same suite: Subsystem Failure Taxonomy Mappings |
+| Subsystem failure mappers for Decision, Delivery, Web Driver, and Orchestrator with explicit unmapped gap handling | same suite: Subsystem Failure Taxonomy Mappings |
+| Invariant validation pure helper (`validateContinuityDescriptor`) enforcing active action, authority, blocked details, retry re-evaluation, and liveness rules | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Canonical stage descriptors covering planning, coding, CI waiting, review claim, repair, delivery resume, and merge confirmation | same suite: validates all canonical stage descriptors |
+| Domain purity, zero Node I/O, zero timer, and zero UI framework dependencies | same suite: Architectural and Boundary Invariants |
+
+Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
+
 
