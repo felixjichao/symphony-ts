@@ -1773,49 +1773,105 @@ it("FileDeliveryLock: token-bound release does not delete a successor's reclaim 
   const statePath = path.join(dir, "delivery.json");
   const lockPath = `${statePath}.lock`;
   const reclaimPath = `${lockPath}.reclaim`;
-  const lock = new FileDeliveryLock(statePath, { timeoutMs: 100 });
-  let openSpy: { mockRestore: () => void } | undefined;
+  let successorFd: number | undefined;
+  let successorIno: number | undefined;
+
+  const lock = new FileDeliveryLock(statePath, {
+    timeoutMs: 150,
+    _beforeReclaimRelease: () => {
+      // Barrier before release: another process takes over reclaimPath with successor-token
+      try {
+        fs.unlinkSync(reclaimPath);
+      } catch {
+        // ignore
+      }
+      successorFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "successor-token", time: Date.now() }), "utf8");
+      successorIno = fs.fstatSync(successorFd).ino;
+    },
+  });
 
   try {
     fs.writeFileSync(lockPath, "", "utf8");
     const old = (Date.now() - 70000) / 1000;
     fs.utimesSync(lockPath, old, old);
 
-    const origOpenSync = fs.openSync;
-    openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-      const res = origOpenSync(...args);
-      if (args[0] === `${lockPath}.reclaim`) {
-        // Simulate an external race or change of reclaim file right after creation
-        // Overwrite reclaim file with another token
-        setTimeout(() => {
-          try {
-            fs.writeFileSync(reclaimPath, JSON.stringify({ pid: process.pid, token: "successor-token", time: Date.now() }), "utf8");
-          } catch {
-            // ignore
-          }
-        }, 10);
-      }
-      return res;
-    });
+    // Acquire will execute tryReclaimAndAcquire and trigger _beforeReclaimRelease in finally
+    await lock.acquire();
 
-    // Acquire will fail or succeed, but we want to verify that when tryReclaimAndAcquire finishes,
-    // it will not delete a reclaimPath containing successor-token.
-    try {
-      await lock.acquire();
-    } catch {
-      // ignore
-    }
-
-    if (fs.existsSync(reclaimPath)) {
-      const content = fs.readFileSync(reclaimPath, "utf8");
-      const parsed = JSON.parse(content);
-      if (parsed.token === "successor-token") {
-        expect(fs.existsSync(reclaimPath)).toBe(true);
-      }
-    }
+    expect(successorFd).toBeDefined();
+    expect(fs.existsSync(reclaimPath)).toBe(true);
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(fs.fstatSync(successorFd!).ino).toBe(successorIno);
+    const content = JSON.parse(fs.readFileSync(reclaimPath, "utf8")) as { token?: string };
+    expect(content.token).toBe("successor-token");
   } finally {
-    openSpy?.mockRestore();
+    if (successorFd !== undefined) {
+      try {
+        fs.closeSync(successorFd);
+      } catch {
+        // ignore
+      }
+    }
     await lock.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: stale arbitration retirement does not delete a newly established living successor", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-stale-retire-race-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  let successorFd: number | undefined;
+  let successorIno: number | undefined;
+  let hookFired = false;
+
+  const contender = new FileDeliveryLock(statePath, {
+    timeoutMs: 150,
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      // Barrier before stale retirement: another cleaner removes the old guard
+      // and a new living arbitrator establishes its own lock before contender unlinks.
+      hookFired = true;
+      try {
+        fs.unlinkSync(reclaimPath);
+      } catch {
+        // ignore
+      }
+      successorFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "living-successor", time: Date.now() }), "utf8");
+      successorIno = fs.fstatSync(successorFd).ino;
+    },
+  });
+
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    // Contender attempts to acquire. Because the living successor took over reclaimPath,
+    // contender must NOT delete the successor and must time out safely.
+    await expect(contender.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+
+    expect(hookFired).toBe(true);
+    expect(successorFd).toBeDefined();
+    // Critical assertion: successor's nlink remains 1 and is NOT deleted!
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(fs.fstatSync(successorFd!).ino).toBe(successorIno);
+    const content = JSON.parse(fs.readFileSync(reclaimPath, "utf8")) as { token?: string };
+    expect(content.token).toBe("living-successor");
+  } finally {
+    if (successorFd !== undefined) {
+      try {
+        fs.closeSync(successorFd);
+      } catch {
+        // ignore
+      }
+    }
+    await contender.release().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

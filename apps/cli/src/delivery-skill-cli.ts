@@ -67,6 +67,13 @@ function isProcessAlive(pid: number): boolean {
 
 const fileMutexes = new Map<string, InProcessMutex>();
 
+export interface FileDeliveryLockOptions {
+  timeoutMs?: number | undefined;
+  inProcessMutex?: boolean | undefined;
+  _beforeStaleReclaimRetire?: (() => void) | undefined;
+  _beforeReclaimRelease?: (() => void) | undefined;
+}
+
 export class FileDeliveryLock implements DeliveryLock {
   private inProcessRelease: (() => void) | null = null;
   private lockFd: number | null = null;
@@ -74,11 +81,15 @@ export class FileDeliveryLock implements DeliveryLock {
   private readonly lockFilePath: string;
   private readonly timeoutMs: number;
   private readonly inProcessMutex: boolean;
+  private readonly beforeStaleReclaimRetire?: (() => void) | undefined;
+  private readonly beforeReclaimRelease?: (() => void) | undefined;
 
-  constructor(filePath: string, options?: { timeoutMs?: number; inProcessMutex?: boolean }) {
+  constructor(filePath: string, options?: FileDeliveryLockOptions) {
     this.lockFilePath = getCanonicalLockPath(filePath);
     this.timeoutMs = options?.timeoutMs ?? 30000;
     this.inProcessMutex = options?.inProcessMutex ?? true;
+    this.beforeStaleReclaimRetire = options?._beforeStaleReclaimRetire;
+    this.beforeReclaimRelease = options?._beforeReclaimRelease;
   }
 
   private tryReclaimAndAcquire(token: string, observedStat: fs.Stats): boolean {
@@ -96,28 +107,85 @@ export class FileDeliveryLock implements DeliveryLock {
             const reclaimStat = fs.statSync(reclaimPath);
             let reclaimOwnerAlive = true;
             let validJson = false;
+            let existingToken: string | null = null;
             try {
               const data = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
               if (typeof data.pid === "number") {
                 reclaimOwnerAlive = isProcessAlive(data.pid);
                 validJson = true;
               }
+              if (typeof data.token === "string") {
+                existingToken = data.token;
+              }
             } catch {
               // empty or corrupt reclaim lock
             }
 
-            // CRITICAL (Blocker 2): A living arbitrator MUST NEVER be preempted merely due to elapsed time!
+            // CRITICAL (Blocker 2 & Round 7 Blocker):
+            // 1. A living arbitrator MUST NEVER be preempted merely due to elapsed time.
+            // 2. Retiring a stale arbitrator MUST NOT delete or steal a newly established living successor.
             // Only clean up if the owner process is confirmed dead (!reclaimOwnerAlive),
             // or if the file is corrupt/empty (!validJson) AND stale (> 60000ms).
             const isStale = Date.now() - reclaimStat.mtimeMs > 60000;
             if ((!reclaimOwnerAlive && isStale) || (!validJson && isStale)) {
+              // Mutex directory to arbitrate retirement among competing cleaners
+              const authDir = `${reclaimPath}.retire-${reclaimStat.ino}`;
+              let acquiredAuth = false;
               try {
-                const currentReclaimStat = fs.statSync(reclaimPath);
-                if (currentReclaimStat.ino === reclaimStat.ino && currentReclaimStat.mtimeMs === reclaimStat.mtimeMs) {
-                  fs.unlinkSync(reclaimPath);
-                }
+                fs.mkdirSync(authDir);
+                acquiredAuth = true;
               } catch {
-                // ignore
+                acquiredAuth = false;
+              }
+
+              if (acquiredAuth) {
+                try {
+                  if (this.beforeStaleReclaimRetire) {
+                    try {
+                      this.beforeStaleReclaimRetire();
+                    } catch {
+                      // ignore hook error
+                    }
+                  }
+
+                  // Verify identity before retirement: inode, mtime, and token must still match
+                  const currentReclaimStat = fs.statSync(reclaimPath);
+                  if (currentReclaimStat.ino !== reclaimStat.ino || currentReclaimStat.mtimeMs !== reclaimStat.mtimeMs) {
+                    return false;
+                  }
+
+                  if (validJson && existingToken !== null) {
+                    try {
+                      const currentData = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
+                      if (currentData.token !== existingToken) {
+                        return false;
+                      }
+                    } catch {
+                      return false;
+                    }
+                  }
+
+                  // Safely retire via atomic rename to unique tombstone then unlink
+                  const tombstone = `${reclaimPath}.retired.${reclaimStat.ino}.${Date.now()}.${crypto.randomUUID()}`;
+                  try {
+                    fs.renameSync(reclaimPath, tombstone);
+                    try {
+                      fs.unlinkSync(tombstone);
+                    } catch {
+                      // ignore
+                    }
+                  } catch {
+                    // ignore rename error
+                  }
+                } catch {
+                  // ignore
+                } finally {
+                  try {
+                    fs.rmdirSync(authDir);
+                  } catch {
+                    // ignore
+                  }
+                }
               }
             }
           } catch {
@@ -196,12 +264,29 @@ export class FileDeliveryLock implements DeliveryLock {
         }
         reclaimFd = null;
         try {
+          if (this.beforeReclaimRelease) {
+            try {
+              this.beforeReclaimRelease();
+            } catch {
+              // ignore
+            }
+          }
           // Token-bound release: Only delete reclaimPath if it still contains our own reclaimToken!
           if (fs.existsSync(reclaimPath)) {
             const content = fs.readFileSync(reclaimPath, "utf8");
             const data = JSON.parse(content);
             if (data.token === reclaimToken) {
-              fs.unlinkSync(reclaimPath);
+              const releaseTombstone = `${reclaimPath}.released.${crypto.randomUUID()}`;
+              try {
+                fs.renameSync(reclaimPath, releaseTombstone);
+                try {
+                  fs.unlinkSync(releaseTombstone);
+                } catch {
+                  // ignore
+                }
+              } catch {
+                // ignore
+              }
             }
           }
         } catch {
