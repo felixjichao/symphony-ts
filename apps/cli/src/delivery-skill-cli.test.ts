@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { runDeliverySkill, recoverDeliveryHandoff, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
 import {
@@ -1546,4 +1546,66 @@ it("delivery records comment receipt under lock preventing duplicate comment fro
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("FileDeliveryLock: metadata write failure (ENOSPC) cleans up created lock file and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-enospc-"));
+  const file = path.join(dir, "delivery.json");
+  const lock = new FileDeliveryLock(file);
+
+  const originalWriteFileSync = fs.writeFileSync;
+  let writeInjected = false;
+  const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args: any[]) => {
+    const target = args[0];
+    if (typeof target === "number" && !writeInjected) {
+      writeInjected = true;
+      const err = new Error("ENOSPC: no space left on device") as NodeJS.ErrnoException;
+      err.code = "ENOSPC";
+      throw err;
+    }
+    return (originalWriteFileSync as any)(...args);
+  });
+
+  try {
+    await expect(lock.acquire()).rejects.toThrow("ENOSPC");
+    // Verify .lock file was unlinked and does not remain on disk
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+
+    // Subsequent acquire succeeds without being blocked by an abandoned empty lock
+    writeSpy.mockRestore();
+    await lock.acquire();
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+    await lock.release();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  } finally {
+    writeSpy.mockRestore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: stale unparseable or empty lock file (>60s) is safely reclaimed by subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-stale-"));
+  const file = path.join(dir, "delivery.json");
+  const lockFile = `${file}.lock`;
+  const lock = new FileDeliveryLock(file);
+
+  try {
+    // Create an empty lock file with mtime > 60s in the past
+    fs.writeFileSync(lockFile, "", "utf8");
+    const pastTime = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockFile, pastTime, pastTime);
+
+    // Acquire should detect the stale empty lock, reclaim it, and succeed
+    await lock.acquire();
+    expect(fs.existsSync(lockFile)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+    expect(content.pid).toBe(process.pid);
+    expect(typeof content.token).toBe("string");
+
+    await lock.release();
+    expect(fs.existsSync(lockFile)).toBe(false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 

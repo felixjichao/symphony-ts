@@ -107,18 +107,25 @@ export class FileDeliveryLock implements DeliveryLock {
             try {
               const stat = fs.statSync(this.lockFilePath);
               let ownerAlive = true;
+              let validJson = false;
               try {
                 const content = fs.readFileSync(this.lockFilePath, "utf8");
                 const data = JSON.parse(content);
                 if (typeof data.pid === "number") {
                   ownerAlive = isProcessAlive(data.pid);
+                  validJson = true;
                 }
               } catch {
-                // unable to read/parse: treat as alive to be safe
+                // unable to read/parse: empty or corrupted lock file
               }
 
-              if (!ownerAlive && Date.now() - stat.mtimeMs > 60000) {
-                fs.unlinkSync(this.lockFilePath);
+              const isStale = Date.now() - stat.mtimeMs > 60000;
+              if ((!ownerAlive && isStale) || (!validJson && isStale)) {
+                try {
+                  fs.unlinkSync(this.lockFilePath);
+                } catch {
+                  // ignore
+                }
                 continue;
               }
             } catch {
@@ -130,6 +137,15 @@ export class FileDeliveryLock implements DeliveryLock {
             }
             await new Promise((r) => setTimeout(r, 50));
           } else {
+            if (this.lockFd !== null) {
+              try {
+                fs.closeSync(this.lockFd);
+              } catch {}
+              this.lockFd = null;
+              try {
+                fs.unlinkSync(this.lockFilePath);
+              } catch {}
+            }
             throw err;
           }
         }
@@ -142,6 +158,9 @@ export class FileDeliveryLock implements DeliveryLock {
           fs.closeSync(this.lockFd);
         } catch {}
         this.lockFd = null;
+        try {
+          fs.unlinkSync(this.lockFilePath);
+        } catch {}
       }
       this.lockToken = null;
       throw err;

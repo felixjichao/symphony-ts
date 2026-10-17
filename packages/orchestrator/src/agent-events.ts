@@ -66,6 +66,8 @@ export interface AgentTelemetryState {
   pendingPid: string | null;
   /** 最近一次产生实质有效进展的时间戳（turn 推进、turn 完成或 token 消耗）。 */
   lastProgressTimestamp?: UtcTimestampMs | null | undefined;
+  /** 最近一次记录有效进展的已完成 turnId（用于 turn_completed 去重）。 */
+  lastCompletedTurnId?: string | null | undefined;
 }
 
 /** 尚无 thread 身份的 usage（会话 thread 建立前）归入的占位基线 key。 */
@@ -83,6 +85,7 @@ export function createAgentTelemetryState(): AgentTelemetryState {
     pendingLastMessage: null,
     pendingPid: null,
     lastProgressTimestamp: null,
+    lastCompletedTurnId: null,
   };
 }
 
@@ -174,8 +177,13 @@ export function applyAgentEvent(
     }
   }
 
-  if (reliableLifecycle && (event.event === "session_started" || event.event === "turn_completed")) {
-    telemetry.lastProgressTimestamp = event.timestamp;
+  // turn 完成也记录有效进展（按 turnId 去重，避免重复 turn_completed 刷新基准）
+  if (reliableLifecycle && event.event === "turn_completed") {
+    const turnKey = eventTurnId ?? telemetry.turnId;
+    if (turnKey !== null && turnKey !== telemetry.lastCompletedTurnId) {
+      telemetry.lastCompletedTurnId = turnKey;
+      telemetry.lastProgressTimestamp = event.timestamp;
+    }
   }
 
   materializeSession(entry, telemetry, event);

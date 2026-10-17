@@ -456,4 +456,82 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.telemetry.lastProgressTimestamp).toBe(1050);
     expect(isWorkerStalled(ctx.entry, ctx.telemetry, 2500, stallTimeoutMs)).toBe(true);
   });
+
+  it("Blocker 1: duplicate session_started with same thread/turn does not update lastProgressTimestamp and keeps worker stalled", () => {
+    const ctx = makeCtx();
+    const stallTimeoutMs = 1000;
+
+    apply(
+      ctx,
+      event({
+        timestamp: 1000,
+        event: "session_started",
+        threadId: "t1",
+        turnId: "u1",
+        sessionId: "t1-u1",
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1000);
+    expect(ctx.entry.session?.turnCount).toBe(1);
+
+    // At t=100000, worker is stalled
+    expect(isWorkerStalled(ctx.entry, ctx.telemetry, 100000, stallTimeoutMs)).toBe(true);
+
+    // Duplicate session_started arrives with the same thread and turn
+    apply(
+      ctx,
+      event({
+        timestamp: 100000,
+        event: "session_started",
+        threadId: "t1",
+        turnId: "u1",
+        sessionId: "t1-u1",
+      }),
+    );
+    // lastProgressTimestamp MUST NOT advance to 100000
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1000);
+    expect(ctx.entry.session?.turnCount).toBe(1);
+    expect(isWorkerStalled(ctx.entry, ctx.telemetry, 100000, stallTimeoutMs)).toBe(true);
+  });
+
+  it("Blocker 1: duplicate turn_completed does not update lastProgressTimestamp", () => {
+    const ctx = makeCtx();
+
+    apply(
+      ctx,
+      event({
+        timestamp: 1000,
+        event: "session_started",
+        threadId: "t1",
+        turnId: "u1",
+        sessionId: "t1-u1",
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1000);
+
+    // Turn 1 completes at t=1200
+    apply(
+      ctx,
+      event({
+        timestamp: 1200,
+        event: "turn_completed",
+        threadId: "t1",
+        turnId: "u1",
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1200);
+
+    // Duplicate turn_completed arrives at t=1500 for same turn 1
+    apply(
+      ctx,
+      event({
+        timestamp: 1500,
+        event: "turn_completed",
+        threadId: "t1",
+        turnId: "u1",
+      }),
+    );
+    // lastProgressTimestamp MUST NOT advance to 1500
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1200);
+  });
 });
