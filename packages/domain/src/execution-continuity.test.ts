@@ -6,6 +6,7 @@ import {
   CONTINUITY_STATES,
   FAILURE_CATEGORIES,
   FAILURE_REASONS,
+  OWNERSHIP_FENCE_DIMENSIONS,
   RECOVERY_ACTIONS,
   CanonicalStageDescriptors,
   isTerminalContinuityState,
@@ -16,11 +17,13 @@ import {
   mapOrchestratorFailure,
   mapWebDriverFailure,
   sanitizeOwnershipFence,
+  validateActionAuthority,
   validateContinuityDescriptor,
   validateOwnershipFence,
   type ExecutionContinuityDescriptor,
   type OwnershipFence,
-} from "./execution-continuity";
+  type OwnershipFenceDimension,
+} from "./index";
 import { githubWorkKey } from "./operations-facts";
 
 describe("Execution Continuity Contracts", () => {
@@ -95,7 +98,22 @@ describe("Execution Continuity Contracts", () => {
       expect(FAILURE_REASONS).toContain("stale_generation");
       expect(FAILURE_REASONS).toContain("conflicting_owner");
       expect(FAILURE_REASONS).toContain("impossible_transition");
+      expect(FAILURE_REASONS).toContain("ci_checks_pending");
       expect(FAILURE_REASONS).toContain("unmapped");
+    });
+
+    it("validates action authority structures directly", () => {
+      expect(validateActionAuthority({ kind: "internal", authority: "delivery" })).toEqual({
+        valid: true,
+      });
+      expect(validateActionAuthority({ kind: "internal", authority: "   " })).toEqual({
+        valid: false,
+        reason: "Internal action authority must specify a non-empty authority name",
+      });
+      expect(validateActionAuthority(null)).toEqual({
+        valid: false,
+        reason: "Action authority must be an object",
+      });
     });
   });
 
@@ -110,6 +128,18 @@ describe("Execution Continuity Contracts", () => {
       leaseToken: "secret-lease-uuid-xyz",
     };
 
+    it("exports all 7 ownership fence dimensions", () => {
+      const dimensions: readonly OwnershipFenceDimension[] = OWNERSHIP_FENCE_DIMENSIONS;
+      expect(dimensions).toHaveLength(7);
+      expect(dimensions).toContain("lifecycleGeneration");
+      expect(dimensions).toContain("reconciliationEpoch");
+      expect(dimensions).toContain("leaseGeneration");
+      expect(dimensions).toContain("bindingGeneration");
+      expect(dimensions).toContain("expectedHeadSha");
+      expect(dimensions).toContain("retryToken");
+      expect(dimensions).toContain("leaseToken");
+    });
+
     it("sanitizes ownership fence for safe public observation", () => {
       const sanitized = sanitizeOwnershipFence(baseFence);
       expect(sanitized.hasLeaseToken).toBe(true);
@@ -121,18 +151,73 @@ describe("Execution Continuity Contracts", () => {
       expect(emptySanitized.hasLeaseToken).toBe(false);
     });
 
-    it("validates compatible or advancing continuation credentials", () => {
-      const candidate: OwnershipFence = {
-        lifecycleGeneration: 3,
-        reconciliationEpoch: 5,
-        leaseGeneration: 2,
-        bindingGeneration: 4,
-        expectedHeadSha: "abcdef1234567890abcdef1234567890abcdef12",
-        retryToken: "token-attempt-3",
-        leaseToken: "secret-lease-uuid-xyz",
-      };
+    it("validates exact-match continuation credentials across all applicable dimensions", () => {
+      const candidate: OwnershipFence = { ...baseFence };
       const result = validateOwnershipFence(baseFence, candidate);
       expect(result.valid).toBe(true);
+    });
+
+    it("fails closed when candidate lacks required authoritative dimensions", () => {
+      const current: OwnershipFence = {
+        leaseToken: "current",
+        bindingGeneration: 4,
+        expectedHeadSha: "new",
+      };
+      const candidate: OwnershipFence = {};
+      const result = validateOwnershipFence(current, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason.startsWith("missing_")).toBe(true);
+      }
+    });
+
+    it("rejects candidate with missing lifecycleGeneration", () => {
+      const { lifecycleGeneration: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_lifecycle_generation");
+    });
+
+    it("rejects candidate with missing reconciliationEpoch", () => {
+      const { reconciliationEpoch: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_reconciliation_epoch");
+    });
+
+    it("rejects candidate with missing leaseGeneration", () => {
+      const { leaseGeneration: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_lease_generation");
+    });
+
+    it("rejects candidate with missing bindingGeneration", () => {
+      const { bindingGeneration: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_binding_generation");
+    });
+
+    it("rejects candidate with missing expectedHeadSha", () => {
+      const { expectedHeadSha: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_expected_head_sha");
+    });
+
+    it("rejects candidate with missing retryToken", () => {
+      const { retryToken: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_retry_token");
+    });
+
+    it("rejects candidate with missing leaseToken", () => {
+      const { leaseToken: _, ...candidate } = baseFence;
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe("missing_lease_token");
     });
 
     it("rejects superseded lifecycle generation", () => {
@@ -144,6 +229,18 @@ describe("Execution Continuity Contracts", () => {
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.reason).toBe("superseded_lifecycle_generation");
+      }
+    });
+
+    it("rejects ahead / overshot lifecycle generation", () => {
+      const candidate: OwnershipFence = {
+        ...baseFence,
+        lifecycleGeneration: 4,
+      };
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason).toBe("conflicting_lifecycle_generation");
       }
     });
 
@@ -159,6 +256,18 @@ describe("Execution Continuity Contracts", () => {
       }
     });
 
+    it("rejects ahead / overshot reconciliation epoch", () => {
+      const candidate: OwnershipFence = {
+        ...baseFence,
+        reconciliationEpoch: 6,
+      };
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason).toBe("conflicting_reconciliation_epoch");
+      }
+    });
+
     it("rejects superseded lease generation", () => {
       const candidate: OwnershipFence = {
         ...baseFence,
@@ -171,6 +280,18 @@ describe("Execution Continuity Contracts", () => {
       }
     });
 
+    it("rejects ahead / overshot lease generation", () => {
+      const candidate: OwnershipFence = {
+        ...baseFence,
+        leaseGeneration: 3,
+      };
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason).toBe("conflicting_lease_generation");
+      }
+    });
+
     it("rejects superseded binding generation", () => {
       const candidate: OwnershipFence = {
         ...baseFence,
@@ -180,6 +301,18 @@ describe("Execution Continuity Contracts", () => {
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.reason).toBe("superseded_binding_generation");
+      }
+    });
+
+    it("rejects ahead / overshot binding generation", () => {
+      const candidate: OwnershipFence = {
+        ...baseFence,
+        bindingGeneration: 5,
+      };
+      const result = validateOwnershipFence(baseFence, candidate);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason).toBe("conflicting_binding_generation");
       }
     });
 
@@ -218,6 +351,22 @@ describe("Execution Continuity Contracts", () => {
         expect(result.reason).toBe("conflicting_lease_token");
       }
     });
+
+    it("honors explicitly requested applicableDimensions", () => {
+      const current: OwnershipFence = {
+        bindingGeneration: 4,
+        leaseToken: "tok-1",
+        retryToken: "ret-1",
+      };
+      const candidate: OwnershipFence = { bindingGeneration: 4 };
+      expect(validateOwnershipFence(current, candidate, ["bindingGeneration"]).valid).toBe(true);
+
+      const failedResult = validateOwnershipFence(current, candidate, ["leaseToken"]);
+      expect(failedResult.valid).toBe(false);
+      if (!failedResult.valid) {
+        expect(failedResult.reason).toBe("missing_lease_token");
+      }
+    });
   });
 
   describe("Subsystem Failure Taxonomy Mappings", () => {
@@ -244,10 +393,25 @@ describe("Execution Continuity Contracts", () => {
         expect(result.diagnostic.suggestedAction).toBe("require_human");
       });
 
-      it("maps revision_mismatch to superseded / stale_generation / none", () => {
+      it("returns unmapped for bare revision_mismatch without authoritative superseded proof", () => {
         const result = mapDecisionAdapterFailure({
           code: "revision_mismatch",
-          message: "Task revision 1 is superseded by 2",
+          message: "Result revision 2 did not match task revision 1",
+          details: { expectedRevision: 1, actualRevision: 2 },
+        });
+        expect(result.mapped).toBe(false);
+        if (!result.mapped) {
+          expect(result.gapReason).toContain("does not prove task is superseded");
+          expect(result.diagnostic.category).toBe("invariant_violation");
+          expect(result.diagnostic.reason).toBe("unmapped");
+        }
+      });
+
+      it("maps revision_mismatch to superseded when authoritative proof is present", () => {
+        const result = mapDecisionAdapterFailure({
+          code: "revision_mismatch",
+          message: "Task revision 1 is superseded",
+          details: { taskSuperseded: true },
         });
         expect(result.mapped).toBe(true);
         expect(result.diagnostic.category).toBe("superseded");
@@ -278,13 +442,30 @@ describe("Execution Continuity Contracts", () => {
         }
       });
 
-      it("maps target_mismatch with HEAD SHA difference to superseded / stale_head", () => {
+      it("returns unmapped for target_mismatch when only output extraction differs without authoritative proof", () => {
         const result = mapDecisionAdapterFailure({
           code: "target_mismatch",
-          message: "Review target HEAD changed",
+          message: "Review result filled wrong HEAD SHA",
           details: {
-            expectedHeadSha: "sha-new",
-            actualHeadSha: "sha-old",
+            expectedHeadSha: "sha-old",
+            actualHeadSha: "sha-wrong-output",
+          },
+        });
+        expect(result.mapped).toBe(false);
+        if (!result.mapped) {
+          expect(result.gapReason).toContain("does not prove GitHub HEAD changed");
+          expect(result.diagnostic.category).toBe("invariant_violation");
+          expect(result.diagnostic.reason).toBe("unmapped");
+        }
+      });
+
+      it("maps target_mismatch to superseded / stale_head when authoritative HEAD changed", () => {
+        const result = mapDecisionAdapterFailure({
+          code: "target_mismatch",
+          message: "Review target HEAD changed on GitHub",
+          details: {
+            expectedHeadSha: "sha-old",
+            authoritativeHeadSha: "sha-new",
           },
         });
         expect(result.mapped).toBe(true);
@@ -390,13 +571,15 @@ describe("Execution Continuity Contracts", () => {
         expect(multiResult.diagnostic.reason).toBe("conflicting_owner");
       });
 
-      it("maps checks_waiting to blocked_external / await_external", () => {
+      it("maps checks_waiting to blocked_external / ci_checks_pending / await_external", () => {
         const waitResult = mapDeliveryFailure({
           code: "checks_waiting",
           message: "CI suites in progress",
         });
         expect(waitResult.mapped).toBe(true);
         expect(waitResult.diagnostic.category).toBe("blocked_external");
+        expect(waitResult.diagnostic.reason).toBe("ci_checks_pending");
+        expect(waitResult.diagnostic.reason).not.toBe("auth_required");
         expect(waitResult.diagnostic.suggestedAction).toBe("await_external");
       });
 
@@ -581,6 +764,36 @@ describe("Execution Continuity Contracts", () => {
         target: { repository: "felixjichao/symphony-ts", prNumber: 42, headSha: "abcdef1234567890abcdef1234567890abcdef12" },
       });
       expect(validateContinuityDescriptor(merge)).toEqual({ valid: true });
+      expect(merge.liveness.lastProgressAt).toBe("unknown");
+    });
+
+    it("merge confirmation descriptor does not conflate repeated observations with progress (defaults to unknown)", () => {
+      const obs1 = CanonicalStageDescriptors.createMergeConfirmationDescriptor({
+        workKey: dummyWorkKey,
+        observedAt: 2,
+        startedAt: 1,
+        target: { repository: "felixjichao/symphony-ts", prNumber: 42, headSha: "abcdef1234567890abcdef1234567890abcdef12" },
+      });
+      const obs2 = CanonicalStageDescriptors.createMergeConfirmationDescriptor({
+        workKey: dummyWorkKey,
+        observedAt: 3,
+        startedAt: 1,
+        target: { repository: "felixjichao/symphony-ts", prNumber: 42, headSha: "abcdef1234567890abcdef1234567890abcdef12" },
+      });
+      expect(obs1.liveness.lastProgressAt).toBe("unknown");
+      expect(obs2.liveness.lastProgressAt).toBe("unknown");
+      expect(obs1.liveness.lastObservedAt).toBe(2);
+      expect(obs2.liveness.lastObservedAt).toBe(3);
+
+      const withProgress = CanonicalStageDescriptors.createMergeConfirmationDescriptor({
+        workKey: dummyWorkKey,
+        observedAt: 3,
+        startedAt: 1,
+        lastProgressAt: 2,
+        target: { repository: "felixjichao/symphony-ts", prNumber: 42, headSha: "abcdef1234567890abcdef1234567890abcdef12" },
+      });
+      expect(withProgress.liveness.lastProgressAt).toBe(2);
+      expect(withProgress.liveness.lastObservedAt).toBe(3);
     });
 
     it("enforces Invariant 1: active state must specify expectedNextAction", () => {
@@ -639,6 +852,60 @@ describe("Execution Continuity Contracts", () => {
       if (!result.valid) {
         expect(result.invariant).toBe(3);
         expect(result.reason).toContain("must provide blockedDetails");
+      }
+    });
+
+    it("enforces Invariant 3: rejects blocked state with blank reason, blank unblockCondition, or invalid authority", () => {
+      const reproducedReviewerCase: ExecutionContinuityDescriptor = {
+        workKey: dummyWorkKey,
+        scope: "work",
+        state: "blocked",
+        expectedAction: null,
+        blockedDetails: {
+          reason: "",
+          waitingOn: { kind: "internal", authority: "" },
+          unblockCondition: "",
+          blockedAt: 2,
+        },
+        liveness: { startedAt: 1, lastProgressAt: "unknown", lastObservedAt: 2 },
+        fence: { hasLeaseToken: false },
+      };
+      const res1 = validateContinuityDescriptor(reproducedReviewerCase);
+      expect(res1.valid).toBe(false);
+      if (!res1.valid) {
+        expect(res1.invariant).toBe(3);
+        expect(res1.reason).toContain("blockedDetails must specify a non-empty reason");
+      }
+
+      const blankUnblockCase: ExecutionContinuityDescriptor = {
+        ...reproducedReviewerCase,
+        blockedDetails: {
+          ...reproducedReviewerCase.blockedDetails!,
+          reason: "ci_checks_pending",
+          unblockCondition: "   ",
+        },
+      };
+      const res2 = validateContinuityDescriptor(blankUnblockCase);
+      expect(res2.valid).toBe(false);
+      if (!res2.valid) {
+        expect(res2.invariant).toBe(3);
+        expect(res2.reason).toContain("blockedDetails must specify a non-empty unblockCondition");
+      }
+
+      const invalidWaitingOnCase: ExecutionContinuityDescriptor = {
+        ...reproducedReviewerCase,
+        blockedDetails: {
+          ...reproducedReviewerCase.blockedDetails!,
+          reason: "ci_checks_pending",
+          unblockCondition: "CI checks green",
+          waitingOn: { kind: "internal", authority: "   " },
+        },
+      };
+      const res3 = validateContinuityDescriptor(invalidWaitingOnCase);
+      expect(res3.valid).toBe(false);
+      if (!res3.valid) {
+        expect(res3.invariant).toBe(3);
+        expect(res3.reason).toContain("Internal action authority must specify a non-empty authority name");
       }
     });
 

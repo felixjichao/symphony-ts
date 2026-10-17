@@ -228,11 +228,41 @@ export function sanitizeOwnershipFence(fence: OwnershipFence): SafeOwnershipFenc
   };
 }
 
+export type OwnershipFenceDimension =
+  | "lifecycleGeneration"
+  | "reconciliationEpoch"
+  | "leaseGeneration"
+  | "bindingGeneration"
+  | "expectedHeadSha"
+  | "retryToken"
+  | "leaseToken";
+
+export const OWNERSHIP_FENCE_DIMENSIONS: readonly OwnershipFenceDimension[] = [
+  "lifecycleGeneration",
+  "reconciliationEpoch",
+  "leaseGeneration",
+  "bindingGeneration",
+  "expectedHeadSha",
+  "retryToken",
+  "leaseToken",
+] as const;
+
 export type OwnershipFenceViolationReason =
+  | "missing_lifecycle_generation"
+  | "missing_reconciliation_epoch"
+  | "missing_lease_generation"
+  | "missing_binding_generation"
+  | "missing_expected_head_sha"
+  | "missing_retry_token"
+  | "missing_lease_token"
   | "superseded_lifecycle_generation"
+  | "conflicting_lifecycle_generation"
   | "superseded_reconciliation_epoch"
+  | "conflicting_reconciliation_epoch"
   | "superseded_lease_generation"
+  | "conflicting_lease_generation"
   | "superseded_binding_generation"
+  | "conflicting_binding_generation"
   | "stale_head_sha"
   | "conflicting_retry_token"
   | "conflicting_lease_token";
@@ -246,95 +276,232 @@ export type OwnershipFenceValidationResult =
     };
 
 /**
- * Validates whether candidate async continuation credentials match or are superseded by
- * the current authoritative fence across all applicable dimensions.
+ * Validates whether candidate async continuation credentials match the current authoritative fence
+ * across all applicable dimensions.
+ *
+ * Applicable dimensions are either explicitly supplied or inferred from defined fields on `current`.
+ * Fencing is fail-closed: candidate credentials must be complete and exactly match the current
+ * authoritative state. Any missing credential, superseded generation (smaller than current),
+ * or ahead/conflicting generation (greater than or differing from current) invalidates ownership.
+ *
+ * NOTE: This pure helper provides domain-level contract validation and classification. It DOES NOT
+ * replace source-authority atomic commit-time verification (such as CAS, atomic DB updates, or
+ * Git push lease checks at commit/push time).
  */
 export function validateOwnershipFence(
   current: OwnershipFence,
   candidate: OwnershipFence,
+  applicableDimensions?: readonly OwnershipFenceDimension[],
 ): OwnershipFenceValidationResult {
-  if (
-    current.lifecycleGeneration !== undefined &&
-    candidate.lifecycleGeneration !== undefined &&
-    candidate.lifecycleGeneration < current.lifecycleGeneration
-  ) {
-    return {
-      valid: false,
-      reason: "superseded_lifecycle_generation",
-      details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} is superseded by current ${current.lifecycleGeneration}`,
-    };
-  }
+  const dimensionsToCheck: readonly OwnershipFenceDimension[] =
+    applicableDimensions ??
+    OWNERSHIP_FENCE_DIMENSIONS.filter((dim) => current[dim] !== undefined);
 
-  if (
-    current.reconciliationEpoch !== undefined &&
-    candidate.reconciliationEpoch !== undefined &&
-    candidate.reconciliationEpoch < current.reconciliationEpoch
-  ) {
-    return {
-      valid: false,
-      reason: "superseded_reconciliation_epoch",
-      details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} is superseded by current ${current.reconciliationEpoch}`,
-    };
-  }
+  for (const dim of dimensionsToCheck) {
+    switch (dim) {
+      case "lifecycleGeneration":
+        if (current.lifecycleGeneration !== undefined) {
+          if (candidate.lifecycleGeneration === undefined) {
+            return {
+              valid: false,
+              reason: "missing_lifecycle_generation",
+              details: "Candidate is missing required lifecycleGeneration",
+            };
+          }
+          if (candidate.lifecycleGeneration < current.lifecycleGeneration) {
+            return {
+              valid: false,
+              reason: "superseded_lifecycle_generation",
+              details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} is superseded by current ${current.lifecycleGeneration}`,
+            };
+          }
+          if (candidate.lifecycleGeneration > current.lifecycleGeneration) {
+            return {
+              valid: false,
+              reason: "conflicting_lifecycle_generation",
+              details: `Candidate lifecycle generation ${candidate.lifecycleGeneration} does not match current ${current.lifecycleGeneration} (ahead/unrecognized)`,
+            };
+          }
+        } else if (candidate.lifecycleGeneration !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_lifecycle_generation",
+            details: `Candidate provided lifecycle generation ${candidate.lifecycleGeneration} but authoritative fence has none`,
+          };
+        }
+        break;
 
-  if (
-    current.leaseGeneration !== undefined &&
-    candidate.leaseGeneration !== undefined &&
-    candidate.leaseGeneration < current.leaseGeneration
-  ) {
-    return {
-      valid: false,
-      reason: "superseded_lease_generation",
-      details: `Candidate lease generation ${candidate.leaseGeneration} is superseded by current ${current.leaseGeneration}`,
-    };
-  }
+      case "reconciliationEpoch":
+        if (current.reconciliationEpoch !== undefined) {
+          if (candidate.reconciliationEpoch === undefined) {
+            return {
+              valid: false,
+              reason: "missing_reconciliation_epoch",
+              details: "Candidate is missing required reconciliationEpoch",
+            };
+          }
+          if (candidate.reconciliationEpoch < current.reconciliationEpoch) {
+            return {
+              valid: false,
+              reason: "superseded_reconciliation_epoch",
+              details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} is superseded by current ${current.reconciliationEpoch}`,
+            };
+          }
+          if (candidate.reconciliationEpoch > current.reconciliationEpoch) {
+            return {
+              valid: false,
+              reason: "conflicting_reconciliation_epoch",
+              details: `Candidate reconciliation epoch ${candidate.reconciliationEpoch} does not match current ${current.reconciliationEpoch} (ahead/unrecognized)`,
+            };
+          }
+        } else if (candidate.reconciliationEpoch !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_reconciliation_epoch",
+            details: `Candidate provided reconciliation epoch ${candidate.reconciliationEpoch} but authoritative fence has none`,
+          };
+        }
+        break;
 
-  if (
-    current.bindingGeneration !== undefined &&
-    candidate.bindingGeneration !== undefined &&
-    candidate.bindingGeneration < current.bindingGeneration
-  ) {
-    return {
-      valid: false,
-      reason: "superseded_binding_generation",
-      details: `Candidate binding generation ${candidate.bindingGeneration} is superseded by current ${current.bindingGeneration}`,
-    };
-  }
+      case "leaseGeneration":
+        if (current.leaseGeneration !== undefined) {
+          if (candidate.leaseGeneration === undefined) {
+            return {
+              valid: false,
+              reason: "missing_lease_generation",
+              details: "Candidate is missing required leaseGeneration",
+            };
+          }
+          if (candidate.leaseGeneration < current.leaseGeneration) {
+            return {
+              valid: false,
+              reason: "superseded_lease_generation",
+              details: `Candidate lease generation ${candidate.leaseGeneration} is superseded by current ${current.leaseGeneration}`,
+            };
+          }
+          if (candidate.leaseGeneration > current.leaseGeneration) {
+            return {
+              valid: false,
+              reason: "conflicting_lease_generation",
+              details: `Candidate lease generation ${candidate.leaseGeneration} does not match current ${current.leaseGeneration} (ahead/unrecognized)`,
+            };
+          }
+        } else if (candidate.leaseGeneration !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_lease_generation",
+            details: `Candidate provided lease generation ${candidate.leaseGeneration} but authoritative fence has none`,
+          };
+        }
+        break;
 
-  if (
-    current.expectedHeadSha !== undefined &&
-    candidate.expectedHeadSha !== undefined &&
-    current.expectedHeadSha !== candidate.expectedHeadSha
-  ) {
-    return {
-      valid: false,
-      reason: "stale_head_sha",
-      details: `Candidate HEAD SHA ${candidate.expectedHeadSha} does not match authoritative HEAD SHA ${current.expectedHeadSha}`,
-    };
-  }
+      case "bindingGeneration":
+        if (current.bindingGeneration !== undefined) {
+          if (candidate.bindingGeneration === undefined) {
+            return {
+              valid: false,
+              reason: "missing_binding_generation",
+              details: "Candidate is missing required bindingGeneration",
+            };
+          }
+          if (candidate.bindingGeneration < current.bindingGeneration) {
+            return {
+              valid: false,
+              reason: "superseded_binding_generation",
+              details: `Candidate binding generation ${candidate.bindingGeneration} is superseded by current ${current.bindingGeneration}`,
+            };
+          }
+          if (candidate.bindingGeneration > current.bindingGeneration) {
+            return {
+              valid: false,
+              reason: "conflicting_binding_generation",
+              details: `Candidate binding generation ${candidate.bindingGeneration} does not match current ${current.bindingGeneration} (ahead/unrecognized)`,
+            };
+          }
+        } else if (candidate.bindingGeneration !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_binding_generation",
+            details: `Candidate provided binding generation ${candidate.bindingGeneration} but authoritative fence has none`,
+          };
+        }
+        break;
 
-  if (
-    current.retryToken !== undefined &&
-    candidate.retryToken !== undefined &&
-    current.retryToken !== candidate.retryToken
-  ) {
-    return {
-      valid: false,
-      reason: "conflicting_retry_token",
-      details: `Candidate retry token does not match authoritative retry token`,
-    };
-  }
+      case "expectedHeadSha":
+        if (current.expectedHeadSha !== undefined) {
+          if (candidate.expectedHeadSha === undefined) {
+            return {
+              valid: false,
+              reason: "missing_expected_head_sha",
+              details: "Candidate is missing required expectedHeadSha",
+            };
+          }
+          if (current.expectedHeadSha !== candidate.expectedHeadSha) {
+            return {
+              valid: false,
+              reason: "stale_head_sha",
+              details: `Candidate HEAD SHA ${candidate.expectedHeadSha} does not match authoritative HEAD SHA ${current.expectedHeadSha}`,
+            };
+          }
+        } else if (candidate.expectedHeadSha !== undefined) {
+          return {
+            valid: false,
+            reason: "stale_head_sha",
+            details: `Candidate provided expected HEAD SHA ${candidate.expectedHeadSha} but authoritative fence has none`,
+          };
+        }
+        break;
 
-  if (
-    current.leaseToken !== undefined &&
-    candidate.leaseToken !== undefined &&
-    current.leaseToken !== candidate.leaseToken
-  ) {
-    return {
-      valid: false,
-      reason: "conflicting_lease_token",
-      details: `Candidate lease token does not match authoritative lease token`,
-    };
+      case "retryToken":
+        if (current.retryToken !== undefined) {
+          if (candidate.retryToken === undefined) {
+            return {
+              valid: false,
+              reason: "missing_retry_token",
+              details: "Candidate is missing required retryToken",
+            };
+          }
+          if (current.retryToken !== candidate.retryToken) {
+            return {
+              valid: false,
+              reason: "conflicting_retry_token",
+              details: "Candidate retry token does not match authoritative retry token",
+            };
+          }
+        } else if (candidate.retryToken !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_retry_token",
+            details: "Candidate provided retry token but authoritative fence has none",
+          };
+        }
+        break;
+
+      case "leaseToken":
+        if (current.leaseToken !== undefined) {
+          if (candidate.leaseToken === undefined) {
+            return {
+              valid: false,
+              reason: "missing_lease_token",
+              details: "Candidate is missing required leaseToken",
+            };
+          }
+          if (current.leaseToken !== candidate.leaseToken) {
+            return {
+              valid: false,
+              reason: "conflicting_lease_token",
+              details: "Candidate lease token does not match authoritative lease token",
+            };
+          }
+        } else if (candidate.leaseToken !== undefined) {
+          return {
+            valid: false,
+            reason: "conflicting_lease_token",
+            details: "Candidate provided lease token but authoritative fence has none",
+          };
+        }
+        break;
+    }
   }
 
   return { valid: true };
@@ -380,6 +547,7 @@ export type FailureReason =
   | "incomplete_handoff"
   | "auth_required"
   | "human_required"
+  | "ci_checks_pending"
   | "stale_head"
   | "stale_task"
   | "stale_generation"
@@ -397,6 +565,7 @@ export const FAILURE_REASONS = [
   "incomplete_handoff",
   "auth_required",
   "human_required",
+  "ci_checks_pending",
   "stale_head",
   "stale_task",
   "stale_generation",
@@ -471,19 +640,45 @@ export function mapDecisionAdapterFailure(input: {
         },
       };
 
-    case "revision_mismatch":
+    case "revision_mismatch": {
+      const isAuthoritativelySuperseded =
+        details?.["taskSuperseded"] === true ||
+        (typeof details?.["authoritativeTaskStatus"] === "string" &&
+          (details["authoritativeTaskStatus"] === "superseded" ||
+            details["authoritativeTaskStatus"] === "cancelled"));
+
+      if (isAuthoritativelySuperseded) {
+        return {
+          mapped: true,
+          diagnostic: {
+            category: "superseded",
+            reason: "stale_generation",
+            source: "decision",
+            sourceCode: code,
+            message,
+            suggestedAction: "none",
+            details,
+          },
+        };
+      }
+
       return {
-        mapped: true,
+        mapped: false,
+        rawCode: code,
+        message,
+        gapReason:
+          "revision_mismatch from adapter output extraction does not prove task is superseded without authoritative store status; returned unmapped to prevent dropping active task",
         diagnostic: {
-          category: "superseded",
-          reason: "stale_generation",
+          category: "invariant_violation",
+          reason: "unmapped",
           source: "decision",
           sourceCode: code,
           message,
-          suggestedAction: "none",
+          suggestedAction: "require_human",
           details,
         },
       };
+    }
 
     case "task_mismatch": {
       // Check if context details reveal superseded vs invariant violation
@@ -524,11 +719,13 @@ export function mapDecisionAdapterFailure(input: {
     }
 
     case "target_mismatch": {
-      const isHeadMismatch =
-        typeof details?.["expectedHeadSha"] === "string" &&
-        typeof details?.["actualHeadSha"] === "string" &&
-        details["expectedHeadSha"] !== details["actualHeadSha"];
-      if (isHeadMismatch) {
+      const isAuthoritativelySupersededHead =
+        details?.["headSuperseded"] === true ||
+        (typeof details?.["authoritativeHeadSha"] === "string" &&
+          typeof details?.["expectedHeadSha"] === "string" &&
+          details["authoritativeHeadSha"] !== details["expectedHeadSha"]);
+
+      if (isAuthoritativelySupersededHead) {
         return {
           mapped: true,
           diagnostic: {
@@ -542,6 +739,7 @@ export function mapDecisionAdapterFailure(input: {
           },
         };
       }
+
       const isRepoOrPrMismatch =
         details?.["expectedPrNumber"] !== undefined || details?.["expectedRepo"] !== undefined;
       if (isRepoOrPrMismatch) {
@@ -558,12 +756,13 @@ export function mapDecisionAdapterFailure(input: {
           },
         };
       }
+
       return {
         mapped: false,
         rawCode: code,
         message,
         gapReason:
-          "target_mismatch requires explicit target context (PR number vs HEAD SHA) to distinguish stale_head from invariant_violation",
+          "target_mismatch from adapter output extraction does not prove GitHub HEAD changed without authoritative tracker verification; returned unmapped to prevent dropping active task",
         diagnostic: {
           category: "invariant_violation",
           reason: "unmapped",
@@ -720,7 +919,7 @@ export function mapDeliveryFailure(input: {
         mapped: true,
         diagnostic: {
           category: "blocked_external",
-          reason: "auth_required",
+          reason: "ci_checks_pending",
           source: "delivery",
           sourceCode: code,
           message,
@@ -1080,6 +1279,58 @@ export type ContinuityValidationResult =
   | { readonly valid: true }
   | { readonly valid: false; readonly invariant: number; readonly reason: string };
 
+/** Validates that an ActionAuthority object is well-formed with non-empty fields. */
+export function validateActionAuthority(
+  authority: ActionAuthority | undefined | null,
+): { readonly valid: true } | { readonly valid: false; readonly reason: string } {
+  if (!authority || typeof authority !== "object") {
+    return { valid: false, reason: "Action authority must be an object" };
+  }
+  if (authority.kind === "internal") {
+    if (!authority.authority || authority.authority.trim() === "") {
+      return {
+        valid: false,
+        reason: "Internal action authority must specify a non-empty authority name",
+      };
+    }
+    return { valid: true };
+  }
+  if (authority.kind === "external") {
+    if (!authority.system || authority.system.trim() === "") {
+      return {
+        valid: false,
+        reason: "External action authority must specify a non-empty system name",
+      };
+    }
+    if (!authority.condition || authority.condition.trim() === "") {
+      return {
+        valid: false,
+        reason: "External action authority must specify a non-empty condition",
+      };
+    }
+    return { valid: true };
+  }
+  if (authority.kind === "human") {
+    if (!authority.role || authority.role.trim() === "") {
+      return {
+        valid: false,
+        reason: "Human action authority must specify a non-empty role",
+      };
+    }
+    if (!authority.instruction || authority.instruction.trim() === "") {
+      return {
+        valid: false,
+        reason: "Human action authority must specify a non-empty instruction",
+      };
+    }
+    return { valid: true };
+  }
+  return {
+    valid: false,
+    reason: `Unknown action authority kind: ${(authority as { readonly kind: string }).kind}`,
+  };
+}
+
 /**
  * Pure function that validates that an ExecutionContinuityDescriptor adheres to the 8 required invariants.
  */
@@ -1101,31 +1352,13 @@ export function validateContinuityDescriptor(
 
   // Invariant 2: Every expected action must have an owner or explicit external/human waiting authority.
   if (expectedAction) {
-    const { authority } = expectedAction;
-    if (authority.kind === "internal") {
-      if (!authority.authority || authority.authority.trim() === "") {
-        return {
-          valid: false,
-          invariant: 2,
-          reason: `Internal action authority must specify a non-empty authority name`,
-        };
-      }
-    } else if (authority.kind === "external") {
-      if (!authority.system || authority.system.trim() === "" || !authority.condition) {
-        return {
-          valid: false,
-          invariant: 2,
-          reason: `External action authority must specify non-empty system and condition`,
-        };
-      }
-    } else if (authority.kind === "human") {
-      if (!authority.role || authority.role.trim() === "" || !authority.instruction) {
-        return {
-          valid: false,
-          invariant: 2,
-          reason: `Human action authority must specify non-empty role and instruction`,
-        };
-      }
+    const authVal = validateActionAuthority(expectedAction.authority);
+    if (!authVal.valid) {
+      return {
+        valid: false,
+        invariant: 2,
+        reason: authVal.reason,
+      };
     }
   }
 
@@ -1135,7 +1368,7 @@ export function validateContinuityDescriptor(
       return {
         valid: false,
         invariant: 3,
-        reason: `State 'blocked' must provide blockedDetails with reason and unblock condition`,
+        reason: `State 'blocked' must provide blockedDetails with reason, waitingOn authority, and unblock condition`,
       };
     }
     if (isTerminalContinuityState(state)) {
@@ -1143,6 +1376,31 @@ export function validateContinuityDescriptor(
         valid: false,
         invariant: 3,
         reason: `State 'blocked' must never be categorized as terminal`,
+      };
+    }
+    if (
+      !blockedDetails.reason ||
+      (typeof blockedDetails.reason === "string" && blockedDetails.reason.trim() === "")
+    ) {
+      return {
+        valid: false,
+        invariant: 3,
+        reason: `State 'blocked' blockedDetails must specify a non-empty reason`,
+      };
+    }
+    if (!blockedDetails.unblockCondition || blockedDetails.unblockCondition.trim() === "") {
+      return {
+        valid: false,
+        invariant: 3,
+        reason: `State 'blocked' blockedDetails must specify a non-empty unblockCondition`,
+      };
+    }
+    const waitingAuthVal = validateActionAuthority(blockedDetails.waitingOn);
+    if (!waitingAuthVal.valid) {
+      return {
+        valid: false,
+        invariant: 3,
+        reason: `State 'blocked' waitingOn authority invalid: ${waitingAuthVal.reason}`,
       };
     }
   }
@@ -1429,6 +1687,7 @@ export const CanonicalStageDescriptors = {
     readonly observedAt: UtcTimestampMs;
     readonly startedAt: UtcTimestampMs;
     readonly target: DecisionReviewTarget;
+    readonly lastProgressAt?: UtcTimestampMs | "unknown" | undefined;
   }): ExecutionContinuityDescriptor {
     return {
       workKey: params.workKey,
@@ -1443,7 +1702,7 @@ export const CanonicalStageDescriptors = {
       },
       liveness: {
         startedAt: params.startedAt,
-        lastProgressAt: params.observedAt,
+        lastProgressAt: params.lastProgressAt ?? "unknown",
         lastObservedAt: params.observedAt,
       },
       fence: {

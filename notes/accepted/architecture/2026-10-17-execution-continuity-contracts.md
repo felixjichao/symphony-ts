@@ -40,20 +40,27 @@ Define provider-neutral contracts, invariants, and failure taxonomies in `@symph
    - `human`: Explicit human role (e.g. `reviewer`, `operator`) and instruction.
 
 5. **Multi-dimensional Ownership Fencing**:
-   `OwnershipFence` retains multi-dimensional native evidence: retry token, lifecycle generation, reconciliation epoch, Decision lease generation, binding generation, and expected HEAD SHA. These dimensions are not collapsed into a single scalar. Stale continuations may observe but cannot mutate current work. `sanitizeOwnershipFence` strips secret capability tokens (`leaseToken`) before public observation.
+   `OwnershipFence` retains multi-dimensional native evidence: retry token, lifecycle generation, reconciliation epoch, Decision lease generation, binding generation, and expected HEAD SHA. These dimensions are not collapsed into a single scalar.
+   - Fencing is **fail-closed**: candidate credentials must be complete and exact-match the authoritative state across all applicable dimensions. Any missing credential, superseded generation (smaller than current), or ahead/conflicting generation (greater than current) fails validation.
+   - Stale continuations may observe but cannot mutate current work.
+   - `sanitizeOwnershipFence` strips secret capability tokens (`leaseToken`) before public observation.
+   - **Boundary statement**: The `validateOwnershipFence` pure helper provides domain contract checking and classification; it **does NOT replace** source-authority atomic commit-time verification (such as CAS, atomic DB updates, or Git push lease checks at commit/push time).
 
 6. **Liveness and Forward Progress**:
-   Tracks `startedAt`, `lastProgressAt` (UTC ms or explicitly `"unknown"`), and `lastObservedAt`. Heartbeats, polling successes, or process existence do not count as forward progress. Missing progress is honestly recorded as `"unknown"`.
+   Tracks `startedAt`, `lastProgressAt` (UTC ms or explicitly `"unknown"`), and `lastObservedAt`. Heartbeats, polling successes, or process existence do not count as forward progress. Missing progress is honestly recorded as `"unknown"`. Continuous observation (e.g. merge confirmation polling) updates `lastObservedAt` but does not advance `lastProgressAt` without concrete new progress evidence.
 
 7. **Failure Taxonomy and Subsystem Mapping**:
    Five orthogonal failure categories:
    - `transient`: Network timeouts, bridge connection drops, temporary tracker rate limits.
    - `recoverable`: Binding broken, navigation lost, process stalled, incomplete delivery handoffs.
-   - `blocked_external`: Auth required, human review/approval required, exhausted repair budgets.
+   - `blocked_external`: Auth required, CI checks waiting (`ci_checks_pending`), human review/approval required, exhausted repair budgets.
    - `superseded`: Stale generation, stale task revision, stale HEAD SHA, cancelled continuation.
    - `invariant_violation`: Conflicting owners, impossible transitions, conflicting delivery markers.
 
-   Subsystem error mappers (`mapDecisionAdapterFailure`, `mapDeliveryFailure`, `mapDeliveryHandoffReason`, `mapWebDriverFailure`, `mapOrchestratorFailure`) map structured errors into this taxonomy. Where diagnostic context is insufficient (e.g. bare `execution_failed` or `malformed_output`), mappers return an explicit `mapped: false` result with documented gaps rather than guessing `transient`.
+   Subsystem error mappers (`mapDecisionAdapterFailure`, `mapDeliveryFailure`, `mapDeliveryHandoffReason`, `mapWebDriverFailure`, `mapOrchestratorFailure`) map structured errors into this taxonomy:
+   - Adapters strictly distinguish between model output extraction mismatches (e.g. LLM generated wrong revision or HEAD in output JSON while current claimed task remains active) and authoritative facts proving task/HEAD has been superseded. Output mismatches without authoritative proof return explicit `mapped: false` unmapped results to prevent silently dropping active tasks.
+   - Delivery `checks_waiting` maps to `blocked_external` with specific reason `ci_checks_pending` and action `await_external`.
+   - Where diagnostic context is insufficient (e.g. bare `execution_failed` or `malformed_output`), mappers return an explicit `mapped: false` result with documented gaps rather than guessing `transient`.
 
 ### Existing Mechanism Mapping Table
 
@@ -62,7 +69,7 @@ Define provider-neutral contracts, invariants, and failure taxonomies in `@symph
 | **Orchestrator** (`authority.ts`, `reconciliation.ts`) | Running entries, retry queue, stall timeout, attempt tokens, lifecycle generation, reconciliation epoch (§7, §8, §14) | Worker running → `running`; retry queued → `retry_queued` with action `retry`; stall detected → `recoverable` / `process_stalled`; stale epoch/generation → `superseded` | In-process timer and retry monotonically measured; must not be persisted as cross-restart UTC deadline |
 | **Decision Plane** (`decision.ts`, `service.ts`) | Task status (`pending`, `claimed`, `running`, `completed`, `failed`), lease token, claim generation, binding generation | Task claimed/running → `running`; lease expired but reclaimable → `recoverable` / `stale_claim` / `reclaim`; binding broken → `recoverable` / `stale_binding` / `rebind` | Task completion records task scope completion only; does not declare work scope completed |
 | **ChatGPT Web** (`checkpoint.ts`, `driver.ts`) | Driver checkpoint, navigation timeout, result receipt acknowledgement, rollover generation | In-flight execution → `running`; navigation lost → `recoverable` / `navigation_lost` / `rebind`; older checkpoint → `superseded` / `stale_generation` | Checkpoints are recovery hints only; do not confer execution authority |
-| **Delivery Skill** (`delivery.ts`, `recover-handoff.ts`) | Persisted paused state, repair budget, handoff report, pending compensation | CI waiting → `blocked` / `await_external`; budget exhausted → `blocked` / `require_human`; pending compensation → `recovering` / `compensate` | Handoff compensation does not close Issue; operator retains recovery control |
+| **Delivery Skill** (`delivery.ts`, `recover-handoff.ts`) | Persisted paused state, repair budget, handoff report, pending compensation | CI waiting (`checks_waiting`) → `blocked` / `ci_checks_pending` / `await_external`; budget exhausted → `blocked` / `require_human`; pending compensation → `recovering` / `compensate` | Handoff compensation does not close Issue; operator retains recovery control |
 | **Operations** (`operations-facts.ts`, `projectors.ts`) | Read-only facts, `WorkPhase`, `WaitingReason`, `AttentionState` | Displays continuity facts and expected next actions; read-only consumer | Operations is strictly read-only; never acts as a second state machine or scheduler |
 
 ## Alternatives considered
