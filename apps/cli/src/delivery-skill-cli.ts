@@ -51,7 +51,8 @@ function getCanonicalLockPath(filePath: string): string {
   const dir = path.dirname(resolved);
   const base = path.basename(resolved);
   const canonicalDir = fs.existsSync(dir) ? fs.realpathSync(dir) : dir;
-  return path.join(canonicalDir, `${base}.lock`);
+  const lockBase = base.endsWith(".lock") ? base : `${base}.lock`;
+  return path.join(canonicalDir, lockBase);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -85,52 +86,65 @@ export class FileDeliveryLock implements DeliveryLock {
     const releaseMutex = await mutex.acquire();
     this.inProcessRelease = releaseMutex;
 
-    const lockDir = path.dirname(this.lockFilePath);
-    if (!fs.existsSync(lockDir)) {
-      fs.mkdirSync(lockDir, { recursive: true });
-    }
+    try {
+      const lockDir = path.dirname(this.lockFilePath);
+      if (!fs.existsSync(lockDir)) {
+        fs.mkdirSync(lockDir, { recursive: true });
+      }
 
-    const token = crypto.randomUUID();
-    const start = Date.now();
-    const timeoutMs = 30000;
-    while (true) {
-      try {
-        this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
-        this.lockToken = token;
-        break;
-      } catch (err: unknown) {
-        const error = err as { code?: string };
-        if (error && error.code === "EEXIST") {
-          try {
-            const stat = fs.statSync(this.lockFilePath);
-            let ownerAlive = true;
+      const token = crypto.randomUUID();
+      const start = Date.now();
+      const timeoutMs = 30000;
+      while (true) {
+        try {
+          this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+          fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
+          this.lockToken = token;
+          break;
+        } catch (err: unknown) {
+          const error = err as { code?: string };
+          if (error && error.code === "EEXIST") {
             try {
-              const content = fs.readFileSync(this.lockFilePath, "utf8");
-              const data = JSON.parse(content);
-              if (typeof data.pid === "number") {
-                ownerAlive = isProcessAlive(data.pid);
+              const stat = fs.statSync(this.lockFilePath);
+              let ownerAlive = true;
+              try {
+                const content = fs.readFileSync(this.lockFilePath, "utf8");
+                const data = JSON.parse(content);
+                if (typeof data.pid === "number") {
+                  ownerAlive = isProcessAlive(data.pid);
+                }
+              } catch {
+                // unable to read/parse: treat as alive to be safe
+              }
+
+              if (!ownerAlive && Date.now() - stat.mtimeMs > 60000) {
+                fs.unlinkSync(this.lockFilePath);
+                continue;
               }
             } catch {
-              // unable to read/parse: treat as alive to be safe
-            }
-
-            if (!ownerAlive && Date.now() - stat.mtimeMs > 60000) {
-              fs.unlinkSync(this.lockFilePath);
               continue;
             }
-          } catch {
-            continue;
-          }
 
-          if (Date.now() - start > timeoutMs) {
-            throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
+            if (Date.now() - start > timeoutMs) {
+              throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
+            }
+            await new Promise((r) => setTimeout(r, 50));
+          } else {
+            throw err;
           }
-          await new Promise((r) => setTimeout(r, 50));
-        } else {
-          throw err;
         }
       }
+    } catch (err) {
+      this.inProcessRelease = null;
+      releaseMutex();
+      if (this.lockFd !== null) {
+        try {
+          fs.closeSync(this.lockFd);
+        } catch {}
+        this.lockFd = null;
+      }
+      this.lockToken = null;
+      throw err;
     }
   }
 

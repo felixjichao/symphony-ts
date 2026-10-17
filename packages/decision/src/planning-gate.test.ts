@@ -420,4 +420,27 @@ describe("DecisionPlanningGate", () => {
     expect(latest2?.revision).toBe(2);
     expect(latest2?.taskId).toBe(task2.id);
   });
+
+  it("concurrent ensurePlanTask reuses active pending task atomically without bumping revision or superseding", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "decision-concurrent-plan-"));
+    const store = new DurableDecisionStore({ storeDir: path.join(dir, "decision") });
+    await store.open();
+    const service = new DecisionService(store);
+    try {
+      const session = await service.createSession({ provider: "github", key: "acme/repo#1" });
+      const gate = new DecisionPlanningGate(service);
+      const req = { title: "Title", body: "Description" };
+      await Promise.all([
+        gate.ensurePlanTask(session.id, { requirements: req }),
+        gate.ensurePlanTask(session.id, { requirements: req }),
+      ]);
+      const tasks = service.getTasksForSession(session.id);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.status).toBe("pending");
+      expect(tasks[0]?.revision).toBe(1);
+    } finally {
+      await store.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -520,12 +520,16 @@ export class DecisionBridge {
         }
         const context = b["context"] ? parseDecisionContextBundle(b["context"]) : undefined;
         const previousTaskId = typeof b["previousTaskId"] === "string" ? b["previousTaskId"] : undefined;
+        const reuseActive = b["reuseActive"] !== undefined ? Boolean(b["reuseActive"]) : undefined;
+        const forceNew = Boolean(b["forceNew"] || b["forceNewRevision"]);
         const task = await this.service.createPlanTask(b["sessionId"], {
           ...(operationKey !== undefined ? { operationKey } : {}),
           ...(context !== undefined ? { context } : {}),
           ...(triggerKind !== undefined ? { triggerKind } : {}),
           ...(requirements !== undefined ? { requirements } : {}),
           ...(previousTaskId !== undefined ? { previousTaskId } : {}),
+          ...(reuseActive !== undefined ? { reuseActive } : {}),
+          forceNew,
         });
         this.sendJson(res, 201, { task });
         return;

@@ -950,6 +950,95 @@ describe("createHost in-process composition", () => {
     }
   });
 
+  it("stops plan dispatch and reports not executed when tracker fails to read requirements at action time", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-planning-tracker-err-"));
+    const workflowPath = path.join(temp, "WORKFLOW.md");
+    const rawIssue = {
+      number: 1,
+      title: "Real Feature Requirements",
+      body: "Detailed Feature Body",
+      state: "open",
+      html_url: "https://github.com/acme/repo/issues/1",
+      labels: [],
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const workKey = { provider: "github", key: "acme/repo#1" };
+    const issue: Issue = {
+      id: "1",
+      identifier: "GH-1",
+      nativeRef: { repo: "acme/repo", number: 1 },
+      title: "Real Feature Requirements",
+      description: "Detailed Feature Body",
+      state: "open",
+      priority: 1,
+      branchName: null,
+      url: rawIssue.html_url,
+      assigneeId: null,
+      labels: [],
+      blockedBy: [],
+      dispatchable: true,
+      createdAt: 1000,
+      updatedAt: null,
+    };
+
+    const store = new DurableDecisionStore({ storeDir: path.join(temp, "decision") });
+    await store.open();
+    const service = new DecisionService(store);
+    const observe = vi.spyOn(GitHubDeliveryService.prototype, "observeWork").mockResolvedValue({
+      workKey,
+      issue: { state: "open", url: rawIssue.html_url },
+      pullRequest: null,
+      ci: null,
+    });
+
+    let fetchCount = 0;
+    const base = fixtureProfile([], [issue]);
+    const profile: TrackerAdapterProfile = {
+      ...base,
+      createAdapter: (config) => {
+        const adapter = base.createAdapter(config);
+        return {
+          ...adapter,
+          fetchIssuesByIds: async (ids) => {
+            fetchCount++;
+            // Let the first 2 observations succeed (initial scan + pre-action check),
+            // and fail on the 3rd fetch (during dispatchPlan action).
+            if (fetchCount > 2) {
+              throw new Error("Tracker network error during action dispatch");
+            }
+            return adapter.fetchIssuesByIds(ids);
+          },
+        };
+      },
+    };
+
+    try {
+      await writeFile(
+        workflowPath,
+        `---\ntracker:\n  kind: fixture\n  provider:\n    repo: acme/repo\nworkspace:\n  root: ${temp}\n---\nPrompt\n`,
+      );
+      const host = await createHost({
+        workflowPath,
+        cwd: temp,
+        env: {},
+        trackerProfiles: [profile],
+        planningGate: new DecisionPlanningGate(service),
+      });
+
+      const result = await host.workContinuityCoordinator.reconcile();
+      expect(result.recoveredCount).toBe(0);
+
+      const tasks = service.getTasksForSession(decisionSessionId(workKey));
+      expect(tasks).toHaveLength(0);
+
+      await host.stop();
+    } finally {
+      await store.close();
+      observe.mockRestore();
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
   it("uses read-only getWorkspacePath without overwriting workspace bindings during observation", async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), "symphony-host-workspace-read-"));
     const workflowPath = path.join(temp, "WORKFLOW.md");

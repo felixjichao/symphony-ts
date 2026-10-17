@@ -63,6 +63,9 @@ export function stallActivityBaselineMs(
   entry: RunningEntry,
   telemetry: AgentTelemetryState,
 ): UtcTimestampMs {
+  if (telemetry.lastProgressTimestamp !== null && telemetry.lastProgressTimestamp !== undefined) {
+    return telemetry.lastProgressTimestamp;
+  }
   const sessionTimestamp = entry.session?.lastCodexTimestamp ?? null;
   return sessionTimestamp ?? telemetry.pendingLastTimestamp ?? entry.attempt.startedAt;
 }

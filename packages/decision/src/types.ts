@@ -229,6 +229,8 @@ export interface CreateTaskRequest {
   readonly context?: DecisionContextBundle | undefined;
   readonly supersedeSessionReviews?: boolean | undefined;
   readonly forceNewRevision?: boolean | undefined;
+  readonly forceNew?: boolean | undefined;
+  readonly reuseActive?: boolean | undefined;
   readonly triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
   readonly requirements?: {
     readonly title: string;

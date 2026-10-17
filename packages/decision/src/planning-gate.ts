@@ -178,23 +178,7 @@ export class DecisionPlanningGate {
         session = await this.service.createSession(root);
       }
 
-      const shouldReuse =
-        !options.forceNew &&
-        (!options.triggerKind || options.triggerKind === "initial");
-
-      if (shouldReuse) {
-        const existingTasks = this.service.getTasksForSession(sessionId);
-        const planTasks = existingTasks.filter((t) => t.kind === "plan");
-        planTasks.sort((a, b) => b.revision - a.revision);
-        const activeTask = planTasks.find(
-          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running",
-        );
-        if (activeTask) {
-          return activeTask;
-        }
-      }
-
-      return await this.service.createPlanTask(sessionId, options);
+      return await this.service.ensurePlanTask(sessionId, options);
     }
 
     if (this.client) {
@@ -209,18 +193,6 @@ export class DecisionPlanningGate {
         !options.forceNew &&
         (!options.triggerKind || options.triggerKind === "initial");
 
-      if (shouldReuse) {
-        const { tasks } = await this.client.getTasksForSession(sessionId);
-        const planTasks = tasks.filter((t) => t.kind === "plan");
-        planTasks.sort((a, b) => b.revision - a.revision);
-        const activeTask = planTasks.find(
-          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running",
-        );
-        if (activeTask) {
-          return activeTask;
-        }
-      }
-
       const res = await this.client.createTask({
         sessionId,
         kind: "plan",
@@ -229,6 +201,8 @@ export class DecisionPlanningGate {
         ...(options.triggerKind !== undefined ? { triggerKind: options.triggerKind } : {}),
         ...(options.requirements !== undefined ? { requirements: options.requirements } : {}),
         ...(options.previousTaskId !== undefined ? { previousTaskId: options.previousTaskId } : {}),
+        ...(options.forceNew !== undefined ? { forceNew: options.forceNew } : {}),
+        reuseActive: shouldReuse,
       });
       return res.task;
     }

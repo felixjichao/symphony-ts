@@ -368,8 +368,7 @@ export class OrchestratorAuthority {
     const record = this.active.get(issueId);
     if (!record) return "unknown";
     if (this.isIssueStalled(issueId)) return "unknown";
-    const sessionTs = record.entry.session?.lastCodexTimestamp ?? null;
-    return sessionTs ?? "unknown";
+    return record.telemetry.lastProgressTimestamp ?? "unknown";
   }
 
   /** 所有当前 running 的 issue id。 */

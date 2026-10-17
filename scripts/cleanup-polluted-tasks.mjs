@@ -917,6 +917,31 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
       const now = this.clock();
+      if (params.reuseActive) {
+        const planTasks = Object.values(draft.tasks).filter(
+          (t) => t.sessionId === sessionId && t.kind === "plan" && t.status !== "superseded" && t.status !== "failed" && t.status !== "cancelled"
+        );
+        planTasks.sort((a, b) => b.revision - a.revision);
+        const activeTask = planTasks.find(
+          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running"
+        );
+        if (activeTask) {
+          if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+            draft.operationReceipts[params.operationKey] = {
+              schemaVersion: 1,
+              operationKey: params.operationKey,
+              kind: "create-plan-task",
+              sessionId,
+              triggerKind,
+              fingerprint,
+              previousTaskId,
+              entityId: activeTask.id,
+              createdAtMs: now
+            };
+          }
+          return activeTask;
+        }
+      }
       const revKey = `plan:${sessionId}`;
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
@@ -1050,6 +1075,13 @@ class DecisionService {
         };
       }
       return task;
+    });
+  }
+  async ensurePlanTask(sessionId, params = {}) {
+    const shouldReuse = !params.forceNew && (!params.triggerKind || params.triggerKind === "initial");
+    return await this.createPlanTask(sessionId, {
+      ...params,
+      reuseActive: shouldReuse
     });
   }
   async createReviewTask(sessionId, params) {

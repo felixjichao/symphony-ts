@@ -438,22 +438,27 @@ export async function runDeliverySkill(
   // Bound it by the existing persisted delivery deadline instead.
   const getRepairTimeoutMs = (): number => Math.max(1, (deadlineTimestampMs ?? startTimeMs) - now());
 
+  const writeStateInternal = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
+    if (!stateStorage) return;
+    await stateStorage.writeState({
+      repo: context.repo,
+      issueNumber: context.issueNumber,
+      workspaceKey: context.workspaceKey,
+      spentRepairs,
+      spentWaitSeconds: getElapsedWaitSeconds(),
+      deadlineTimestampMs,
+      isPaused: false,
+      lastUpdated: new Date(now()).toISOString(),
+      ...overrides,
+    });
+  };
+
   const persistCurrentState = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
     if (!stateStorage) return;
     const lock = stateStorage.lock;
     if (lock) await lock.acquire();
     try {
-      await stateStorage.writeState({
-        repo: context.repo,
-        issueNumber: context.issueNumber,
-        workspaceKey: context.workspaceKey,
-        spentRepairs,
-        spentWaitSeconds: getElapsedWaitSeconds(),
-        deadlineTimestampMs,
-        isPaused: false,
-        lastUpdated: new Date(now()).toISOString(),
-        ...overrides,
-      });
+      await writeStateInternal(overrides);
     } catch (err) {
       log(`[delivery-skill] Error persisting delivery state: ${String(err)}`);
       throw err;
@@ -602,6 +607,9 @@ export async function runDeliverySkill(
             commentPosted = true;
             commentVerifyStatus = "posted";
           }
+          if (underLockState?.readyLabelRemoved) {
+            readyLabelRemoved = true;
+          }
         } catch {}
 
         if (!commentPosted) {
@@ -628,27 +636,40 @@ export async function runDeliverySkill(
             commentVerifyStatus = "failed";
           }
         }
+
+        // 持久化最终交接状态（必须在持有交接锁期间记录发布结果，防止已排队的 recover 获取锁时读到未发布的旧状态并重复发评）
+        const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted, readyLabelRemoved };
+        const pendingCompensation = !(readyLabelRemoved && commentPosted);
+        await writeStateInternal({
+          isPaused: true,
+          pauseReason: reason,
+          spentWaitSeconds,
+          handoff: handoffFinal,
+          readyLabelRemoved,
+          commentPosted,
+          commentVerifyStatus,
+          pendingCompensation,
+        });
       } finally {
         if (lock) await lock.release();
       }
+    } else {
+      const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted, readyLabelRemoved };
+      const pendingCompensation = !(readyLabelRemoved && commentPosted);
+      await persistCurrentState({
+        isPaused: true,
+        pauseReason: reason,
+        spentWaitSeconds,
+        handoff: handoffFinal,
+        readyLabelRemoved,
+        commentPosted,
+        commentVerifyStatus,
+        pendingCompensation,
+      });
     }
 
-    // 更新包含真实 commentPosted 的 markdown 供本地返回
     const handoffFinal: DeliveryHandoff = { ...handoffAfterLabel, commentPosted, readyLabelRemoved };
     const handoffMarkdown = formatDeliveryHandoffMarkdown(handoffFinal);
-    const pendingCompensation = !(readyLabelRemoved && commentPosted);
-
-    // 持久化最终交接状态
-    await persistCurrentState({
-      isPaused: true,
-      pauseReason: reason,
-      spentWaitSeconds,
-      handoff: handoffFinal,
-      readyLabelRemoved,
-      commentPosted,
-      commentVerifyStatus,
-      pendingCompensation,
-    });
 
     return {
       status: "blocked",

@@ -10,6 +10,7 @@ import {
   applyAgentEvent,
   createAgentTelemetryState,
   createOrchestratorRuntimeState,
+  isWorkerStalled,
   type AgentTelemetryState,
 } from "./index";
 
@@ -402,5 +403,57 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.entry.session?.turnId).toBe("u1");
     expect(ctx.entry.session?.threadId).toBe("t1");
     expect(ctx.telemetry.turnCount).toBe(1);
+  });
+
+  it("Blocker 5: unchanged zero-usage notification does not update lastProgressTimestamp and keeps worker stalled", () => {
+    const ctx = makeCtx();
+    const stallTimeoutMs = 1000;
+
+    apply(
+      ctx,
+      event({
+        timestamp: 1000,
+        event: "session_started",
+        threadId: "t1",
+        turnId: "u1",
+        sessionId: "t1-u1",
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1000);
+
+    apply(
+      ctx,
+      event({
+        timestamp: 1050,
+        event: "notification",
+        threadId: "t1",
+        usage: { inputTokens: 50, outputTokens: 10, totalTokens: 60 },
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1050);
+
+    apply(
+      ctx,
+      event({
+        timestamp: 2100,
+        event: "notification",
+        threadId: "t1",
+        usage: { inputTokens: 50, outputTokens: 10, totalTokens: 60 },
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1050);
+    expect(isWorkerStalled(ctx.entry, ctx.telemetry, 2100, stallTimeoutMs)).toBe(true);
+
+    apply(
+      ctx,
+      event({
+        timestamp: 2500,
+        event: "notification",
+        threadId: "t1",
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      }),
+    );
+    expect(ctx.telemetry.lastProgressTimestamp).toBe(1050);
+    expect(isWorkerStalled(ctx.entry, ctx.telemetry, 2500, stallTimeoutMs)).toBe(true);
   });
 });

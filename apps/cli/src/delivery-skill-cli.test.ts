@@ -10,7 +10,7 @@ import {
   type DeliveryReviewGate,
 } from "@symphony/domain";
 
-import { FileDeliveryLock, FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
+import { FileDeliveryLock, FileDeliveryStateStorage, getOrCreateDeliveryLock, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
 class MockCliRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
@@ -1452,6 +1452,96 @@ it("Delivery halt side effects are serialized with recoverDeliveryHandoff under 
     const finalState = stateStorage.readState();
     expect(finalState?.commentPosted).toBe(true);
     expect(finalState?.pendingCompensation).toBe(false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("failed file lock acquisition cleanly releases in-process mutex", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-fail-"));
+  const parent = path.join(dir, "blocker");
+  fs.writeFileSync(parent, "not a directory");
+  const first = new FileDeliveryLock(path.join(parent, "delivery.json"));
+  let second: FileDeliveryLock | undefined;
+  try {
+    await expect(first.acquire()).rejects.toMatchObject({ code: "ENOTDIR" });
+    fs.unlinkSync(parent);
+    fs.mkdirSync(parent);
+    second = new FileDeliveryLock(path.join(parent, "delivery.json"));
+    const acquired = await Promise.race([
+      second.acquire().then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 200)),
+    ]);
+    expect(acquired).toBe("acquired");
+  } finally {
+    await second?.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("getOrCreateDeliveryLock and new FileDeliveryLock share canonical lock path and mutex", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-canonical-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lock1 = getOrCreateDeliveryLock(statePath);
+  const lock2 = new FileDeliveryLock(statePath);
+  try {
+    await lock1.acquire();
+    const acquirePromise = lock2.acquire();
+    const probe = await Promise.race([
+      acquirePromise.then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 50)),
+    ]);
+    expect(probe).toBe("blocked");
+    await lock1.release();
+    const result = await Promise.race([
+      acquirePromise.then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    ]);
+    expect(result).toBe("acquired");
+    await lock2.release();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("delivery records comment receipt under lock preventing duplicate comment from concurrent recovery", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-comment-receipt-race-"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(dir, "delivery.json"));
+  let recovery: Promise<{ success: boolean }> | undefined;
+  let posts = 0;
+  const runner = {
+    git: async () => ({ exitCode: 0, stdout: "wrong-branch", stderr: "" }),
+    exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    gh: async (args: readonly string[]) => {
+      if (args[1] === "comment") {
+        posts++;
+        if (posts === 1) {
+          recovery = recoverDeliveryHandoff({
+            cwd: dir,
+            repo: "acme/repo",
+            issueNumber: 1,
+            stateStorage,
+            runner,
+          });
+        }
+      }
+      return { exitCode: 0, stdout: JSON.stringify({ comments: [], labels: [] }), stderr: "" };
+    },
+  };
+  try {
+    const result = await runDeliverySkill({
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      headBranch: "symphony/GH-1",
+      baseBranch: "main",
+      runner,
+      stateStorage,
+    });
+    expect(result.status).toBe("blocked");
+    expect((await recovery!)?.success).toBe(true);
+    expect(posts).toBe(1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

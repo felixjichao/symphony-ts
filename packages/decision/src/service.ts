@@ -418,6 +418,8 @@ export class DecisionService {
       triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
       requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
       previousTaskId?: string | null | undefined;
+      forceNew?: boolean | undefined;
+      reuseActive?: boolean | undefined;
     } = {}
   ): Promise<DecisionTask> {
     const title =
@@ -488,6 +490,38 @@ export class DecisionService {
       }
 
       const now = this.clock();
+
+      if (params.reuseActive) {
+        const planTasks = Object.values(draft.tasks).filter(
+          (t) =>
+            t.sessionId === sessionId &&
+            t.kind === "plan" &&
+            t.status !== "superseded" &&
+            t.status !== "failed" &&
+            t.status !== "cancelled",
+        );
+        planTasks.sort((a, b) => b.revision - a.revision);
+        const activeTask = planTasks.find(
+          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running",
+        );
+        if (activeTask) {
+          if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+            draft.operationReceipts[params.operationKey] = {
+              schemaVersion: 1,
+              operationKey: params.operationKey,
+              kind: "create-plan-task",
+              sessionId,
+              triggerKind,
+              fingerprint,
+              previousTaskId,
+              entityId: activeTask.id,
+              createdAtMs: now,
+            };
+          }
+          return activeTask;
+        }
+      }
+
       const revKey = `plan:${sessionId}`;
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
@@ -632,6 +666,24 @@ export class DecisionService {
       }
 
       return task;
+    });
+  }
+
+  async ensurePlanTask(
+    sessionId: string,
+    params: {
+      operationKey?: string | undefined;
+      context?: DecisionContextBundle | undefined;
+      triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
+      requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined;
+      previousTaskId?: string | null | undefined;
+      forceNew?: boolean | undefined;
+    } = {}
+  ): Promise<DecisionTask> {
+    const shouldReuse = !params.forceNew && (!params.triggerKind || params.triggerKind === "initial");
+    return await this.createPlanTask(sessionId, {
+      ...params,
+      reuseActive: shouldReuse,
     });
   }
 

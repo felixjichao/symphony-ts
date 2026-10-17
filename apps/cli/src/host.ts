@@ -598,18 +598,28 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         decision: planningGate ? {
           dispatchPlan: async ({ sessionId, workKey }) => {
             try {
-              let requirements: { title: string; body: string } | undefined;
+              const parts = workKey.key.split("#");
+              const cleanId = (parts[1] ?? workKey.key).replace(/^GH-/, "");
+              let issues: readonly Issue[];
               try {
-                const parts = workKey.key.split("#");
-                const cleanId = (parts[1] ?? workKey.key).replace(/^GH-/, "");
-                const issues = await trackerProxy.fetchIssuesByIds([cleanId]);
-                if (issues.length > 0 && issues[0]) {
-                  requirements = {
-                    title: issues[0].title,
-                    body: issues[0].description ?? "",
-                  };
-                }
-              } catch {}
+                issues = await trackerProxy.fetchIssuesByIds([cleanId]);
+              } catch (trackerErr) {
+                return {
+                  executed: false,
+                  error: `Tracker unavailable when reading requirements for plan dispatch: ${String(trackerErr)}`,
+                };
+              }
+              const issue = issues.find((i) => i.id === cleanId || String(i.nativeRef?.number) === cleanId) ?? issues[0];
+              if (!issue) {
+                return {
+                  executed: false,
+                  error: `Issue not found in tracker for cleanId ${cleanId}`,
+                };
+              }
+              const requirements = {
+                title: issue.title,
+                body: issue.description ?? "",
+              };
 
               await planningGate.ensurePlanTask(sessionId, {
                 requirements,
