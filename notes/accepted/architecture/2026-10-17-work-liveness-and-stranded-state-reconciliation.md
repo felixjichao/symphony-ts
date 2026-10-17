@@ -81,6 +81,22 @@ lock are stopped. Do not run the old mutable-owner retirement protocol concurren
 with this version during an upgrade. NFS/CIFS and real GitHub/Codex integration
 are outside the local lock tests.
 
+### 6. Atomic primary and reclaim publication (review round 12)
+
+The main lock and both reclaim acquisition paths now write complete PID/token
+metadata into a private `.candidate-*` file before atomically linking it to the
+public lock pathname. The successful link is the ownership commit. A writer
+paused before that commit holds no public authority; another process may win,
+and the late writer's real link must fail with `EEXIST`. Published files already
+contain a live PID, so aging them alone cannot permit recovery.
+
+Write/link failure closes the private fd and removes only its candidate pathname.
+Failed acquisition never unlinks the public lock: it may belong to the successful
+competitor. Both initial main acquisition and post-reclaim main acquisition use
+the same publication primitive, as do initial and post-retirement reclaim
+acquisition. Crash-left candidates have no authority and use the same quiescent
+cleanup boundary as retained arbitration records.
+
 ## Alternatives considered
 
 1. **Centralized monolithic workflow state machine in Orchestrator**:

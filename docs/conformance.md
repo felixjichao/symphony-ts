@@ -383,6 +383,7 @@ Bounded work continuity derivation and stranded-state reconciliation across stag
 | Decision Plane transactional claim release with lease expiration verification (`releaseExpiredTaskClaim`) | `packages/decision/src/service.test.ts`: releaseExpiredTaskClaim, `packages/decision/src/bridge.test.ts`: POST /v1/tasks/:id/release-expired-claim |
 | Delivery handoff compensation mutex fencing and `expectedLastUpdated` validation | `packages/agent/src/delivery/recover-handoff.ts`, `apps/cli/src/delivery-reconciliation-recovery.test.ts` |
 | Delivery file-lock retirement successor preservation, fd cleanup, and crash recovery | `apps/cli/src/delivery-skill-cli.test.ts`: real hard-link conflict, partial ENOSPC/EIO writes (initial/dead/corrupt owners), link failure, live aged claim contention, and child-process exits after publication/before action; fixture `apps/cli/test-fixtures/delivery-lock-crash.ts` |
+| Atomic primary/reclaim lock publication and losing-writer cleanup | `apps/cli/src/delivery-skill-cli.test.ts`: paused initial writer (normal/EIO), recovered-main/new-reclaim/recovered-reclaim publication contention (normal/EIO); late writers cannot enter while the winner holds the lock and cannot delete its inode on failure/release |
 | Orchestrator thin coordinator architecture (`WorkContinuityCoordinator`) and poll loop integration | `packages/orchestrator/src/loop.ts`, `packages/orchestrator/src/work-continuity.test.ts` |
 | CLI host composition and dependency inversion boundary preservation | `apps/cli/src/host.ts`, `apps/cli/src/host.test.ts` |
 

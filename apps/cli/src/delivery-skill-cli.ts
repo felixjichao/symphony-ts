@@ -65,6 +65,36 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+// Only the hard link grants ownership. A paused or failed metadata writer owns
+// a private candidate, so it cannot expose an empty lock or clean up a successor.
+function publishOwnerFile(filePath: string, content: string): number {
+  const candidate = `${filePath}.candidate-${crypto.randomUUID()}`;
+  let fd: number | null = null;
+  let published = false;
+  try {
+    fd = fs.openSync(candidate, "wx");
+    fs.writeFileSync(fd, content, "utf8");
+    fs.linkSync(candidate, filePath);
+    published = true;
+    return fd;
+  } finally {
+    if (!published && fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Best-effort close; never remove the public pathname on failure.
+      }
+    }
+    if (fd !== null) {
+      try {
+        fs.unlinkSync(candidate);
+      } catch {
+        // An unpublished candidate grants no authority, even after a crash.
+      }
+    }
+  }
+}
+
 function retirementCompletionPath(ownerPath: string, content: string): string {
   const key = crypto.createHash("sha256").update(content).digest("hex");
   return `${ownerPath}.${key}.done`;
@@ -162,8 +192,7 @@ export class FileDeliveryLock implements DeliveryLock {
     let reclaimFd: number | null = null;
     try {
       try {
-        reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-        fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
+        reclaimFd = publishOwnerFile(reclaimPath, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }));
       } catch (err: unknown) {
         const error = err as { code?: string };
         if (error && error.code === "EEXIST") {
@@ -239,8 +268,7 @@ export class FileDeliveryLock implements DeliveryLock {
                     }
                     // Attempt immediate acquisition of reclaimPath now that stale file is retired
                     try {
-                      reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-                      fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
+                      reclaimFd = publishOwnerFile(reclaimPath, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }));
                     } catch {
                       // grabbed by another contender or failed, will retry in loop
                     }
@@ -306,24 +334,10 @@ export class FileDeliveryLock implements DeliveryLock {
 
       // Atomically create the new lock file before releasing reclaim arbitration
       try {
-        this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
+        this.lockFd = publishOwnerFile(this.lockFilePath, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
         this.lockToken = token;
         return true;
       } catch {
-        if (this.lockFd !== null) {
-          try {
-            fs.closeSync(this.lockFd);
-          } catch {
-            // ignore
-          }
-          this.lockFd = null;
-          try {
-            fs.unlinkSync(this.lockFilePath);
-          } catch {
-            // ignore
-          }
-        }
         return false;
       }
     } finally {
@@ -389,8 +403,7 @@ export class FileDeliveryLock implements DeliveryLock {
       const start = Date.now();
       while (true) {
         try {
-          this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-          fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
+          this.lockFd = publishOwnerFile(this.lockFilePath, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
           this.lockToken = token;
           break;
         } catch (err: unknown) {
@@ -432,19 +445,6 @@ export class FileDeliveryLock implements DeliveryLock {
             }
             await new Promise((r) => setTimeout(r, 50));
           } else {
-            if (this.lockFd !== null) {
-              try {
-                fs.closeSync(this.lockFd);
-              } catch {
-                // ignore
-              }
-              this.lockFd = null;
-              try {
-                fs.unlinkSync(this.lockFilePath);
-              } catch {
-                // ignore
-              }
-            }
             throw err;
           }
         }
@@ -462,11 +462,6 @@ export class FileDeliveryLock implements DeliveryLock {
           // ignore
         }
         this.lockFd = null;
-        try {
-          fs.unlinkSync(this.lockFilePath);
-        } catch {
-          // ignore
-        }
       }
       this.lockToken = null;
       throw err;

@@ -1717,7 +1717,7 @@ it("FileDeliveryLock: failed arbitration times out cleanly without synchronous s
 
     const origOpenSync = fs.openSync;
     openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-      if (args[0] === `${lockPath}.reclaim`) {
+      if (String(args[0]).startsWith(`${lockPath}.reclaim.candidate-`)) {
         attempts++;
         throw Object.assign(new Error("injected reclaim permission failure"), { code: "EACCES" });
       }
@@ -2291,13 +2291,19 @@ it("FileDeliveryLock: publication I/O failure leaves no owner and closes its fd"
     fs.utimesSync(file, old, old);
   }
   const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
-  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation(() => {
-    throw Object.assign(new Error("injected link EIO"), { code: "EIO" });
+  const link = fs.linkSync;
+  let failures = 0;
+  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((source, target) => {
+    if (String(target).startsWith(authority)) {
+      failures++;
+      throw Object.assign(new Error("injected link EIO"), { code: "EIO" });
+    }
+    return link(source, target);
   });
   const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
   try {
     await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
-    expect(linkSpy).toHaveBeenCalled();
+    expect(failures).toBeGreaterThan(0);
     expect(fs.readdirSync(authority)).toEqual([]);
     expect(fs.readFileSync(guard, "utf8")).toBe("");
     linkSpy.mockRestore();
@@ -2342,3 +2348,136 @@ it("FileDeliveryLock: rejected action cannot mark changed owner metadata complet
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it.each([false, true])("FileDeliveryLock: paused initial writer loses to a complete successor, write failure=%s", async (failWrite) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-initial-publication-"));
+  const state = path.join(dir, "delivery.json");
+  const primary = `${state}.lock`;
+  const first = new FileDeliveryLock(state, { timeoutMs: 60, inProcessMutex: false });
+  const second = new FileDeliveryLock(state, { timeoutMs: 60, inProcessMutex: false });
+  let firstFd: number | undefined;
+  let firstPath = "";
+  let competing: Promise<void> | undefined;
+  let interleaved = false;
+  const open = fs.openSync;
+  const write = fs.writeFileSync;
+  const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+    const fd = open(...args);
+    if (firstFd === undefined && (args[0] === primary || String(args[0]).startsWith(`${primary}.candidate-`))) {
+      firstFd = fd;
+      firstPath = String(args[0]);
+    }
+    return fd;
+  });
+  const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+    if (args[0] === firstFd && !interleaved) {
+      interleaved = true;
+      const old = new Date(Date.now() - 70000);
+      fs.utimesSync(firstPath, old, old);
+      competing = second.acquire();
+      if (failWrite) {
+        write(...args); // Also exercise a partially/completely written candidate before EIO.
+        throw Object.assign(new Error("injected late write EIO"), { code: "EIO" });
+      }
+    }
+    return write(...args); // Resume the real write; do not suppress the losing syscall.
+  });
+  try {
+    await expect(first.acquire()).rejects.toThrow(failWrite ? /EIO/ : /Timed out waiting/);
+    expect(interleaved).toBe(true);
+    expect(competing).toBeDefined();
+    await competing;
+    expect(() => fs.fstatSync(firstFd!)).toThrow(/EBADF/);
+    const owner = fs.readFileSync(primary, "utf8");
+    expect(JSON.parse(owner).pid).toBe(process.pid);
+    await first.release();
+    expect(fs.readFileSync(primary, "utf8")).toBe(owner);
+    expect(fs.statSync(primary).nlink).toBe(1);
+    expect(fs.readdirSync(dir).some((name) => name.includes(".candidate-"))).toBe(false);
+    await second.release();
+    expect(fs.existsSync(primary)).toBe(false);
+  } finally {
+    writeSpy.mockRestore();
+    openSpy.mockRestore();
+    await competing?.catch(() => {});
+    await first.release();
+    await second.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+it.each([
+  ["recovered-main", false], ["recovered-main", true],
+  ["new-reclaim", false], ["new-reclaim", true],
+  ["recovered-reclaim", false], ["recovered-reclaim", true],
+] as const)(
+  "FileDeliveryLock: paused %s publication preserves the winner, write failure=%s",
+  async (phase, failWrite) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-recovery-publication-"));
+    const state = path.join(dir, "delivery.json");
+    const primary = `${state}.lock`;
+    const guard = `${primary}.reclaim`;
+    const old = new Date(Date.now() - 70000);
+    fs.writeFileSync(primary, "");
+    fs.utimesSync(primary, old, old);
+    if (phase === "recovered-reclaim") {
+      fs.writeFileSync(guard, "");
+      fs.utimesSync(guard, old, old);
+    }
+    const first = new FileDeliveryLock(state, { timeoutMs: 60, inProcessMutex: false });
+    const second = new FileDeliveryLock(state, { timeoutMs: 60, inProcessMutex: false });
+    const prefix = `${phase === "recovered-main" ? primary : guard}.candidate-`;
+    const targetAttempt = phase === "new-reclaim" ? 1 : 2;
+    let attempts = 0;
+    let pausedFd: number | undefined;
+    let pausedPath = "";
+    let interleaved = false;
+    let competing: Promise<void> | undefined;
+    const open = fs.openSync;
+    const write = fs.writeFileSync;
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+      const fd = open(...args);
+      if (String(args[0]).startsWith(prefix) && ++attempts === targetAttempt) {
+        pausedFd = fd;
+        pausedPath = String(args[0]);
+      }
+      return fd;
+    });
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+      if (args[0] === pausedFd && !interleaved) {
+        interleaved = true;
+        fs.utimesSync(pausedPath, old, old);
+        competing = second.acquire();
+      }
+      if (args[0] === pausedFd && failWrite && fs.existsSync(pausedPath)) {
+        write(...args);
+        throw Object.assign(new Error("injected recovery write EIO"), { code: "EIO" });
+      }
+      return write(...args);
+    });
+    try {
+      await expect(first.acquire()).rejects.toThrow(/Timed out waiting/);
+      expect(interleaved).toBe(true);
+      expect(competing).toBeDefined();
+      await competing;
+      const winner = fs.readFileSync(primary, "utf8");
+      expect(JSON.parse(winner).pid).toBe(process.pid);
+      expect(() => fs.fstatSync(pausedFd!)).toThrow(/EBADF/);
+      await first.release();
+      expect(fs.readFileSync(primary, "utf8")).toBe(winner);
+      expect(fs.statSync(primary).nlink).toBe(1);
+      expect(fs.existsSync(guard)).toBe(false);
+      expect(fs.readdirSync(dir).some((name) => name.includes(".candidate-"))).toBe(false);
+      await second.release();
+      expect(fs.existsSync(primary)).toBe(false);
+    } finally {
+      writeSpy.mockRestore();
+      openSpy.mockRestore();
+      await competing?.catch(() => {});
+      await first.release();
+      await second.release();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
