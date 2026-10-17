@@ -1876,6 +1876,117 @@ it("FileDeliveryLock: stale arbitration retirement does not delete a newly estab
   }
 });
 
+it("FileDeliveryLock: crashed retirement authority directory is safely recovered and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-crash-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
 
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
 
+    // Exact on-disk state after previous cleaner crashed after mkdirSync(authDir)
+    // without writing owner metadata or finishing finally.
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    fs.utimesSync(authority, old, old);
 
+    // New lock instance attempts acquire. It must recover the crashed authority directory,
+    // retire the stale reclaim file, and acquire the lock without timing out!
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.existsSync(authority)).toBe(false);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: retirement authority with dead process PID is safely recovered and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-dead-pid-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    // Dead PID that does not exist in the OS process table
+    const deadPid = 9999999;
+    fs.writeFileSync(
+      path.join(authority, "owner.json"),
+      JSON.stringify({ pid: deadPid, createdAt: Date.now() - 10000 }),
+      "utf8"
+    );
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.existsSync(authority)).toBe(false);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: living retirement authority directory is not preempted and contender times out safely", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-living-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    // Living process PID (process.pid) created just now
+    fs.writeFileSync(
+      path.join(authority, "owner.json"),
+      JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+      "utf8"
+    );
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 100 });
+    locks.push(lock);
+    // Because owner is alive, contender MUST NOT preempt and must time out
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(fs.existsSync(authority)).toBe(true);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

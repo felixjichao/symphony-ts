@@ -134,12 +134,78 @@ export class FileDeliveryLock implements DeliveryLock {
               try {
                 fs.mkdirSync(authDir);
                 acquiredAuth = true;
-              } catch {
-                acquiredAuth = false;
+              } catch (err: unknown) {
+                const error = err as { code?: string };
+                if (error && error.code === "EEXIST") {
+                  try {
+                    const authStat = fs.statSync(authDir);
+                    let authOwnerAlive = true;
+                    let validAuthJson = false;
+                    const authOwnerPath = path.join(authDir, "owner.json");
+                    try {
+                      if (fs.existsSync(authOwnerPath)) {
+                        const authData = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
+                        if (typeof authData.pid === "number") {
+                          authOwnerAlive = isProcessAlive(authData.pid);
+                          validAuthJson = true;
+                        }
+                      }
+                    } catch {
+                      // empty or invalid owner file
+                    }
+
+                    const authAge = Date.now() - authStat.mtimeMs;
+                    // Abandoned if:
+                    // 1. Valid owner record exists but the owner process is confirmed dead.
+                    // 2. No valid owner record exists (crashed before/during write) and directory is aged (> 5000ms).
+                    // 3. Or directory has been held longer than max timeout (> 60000ms).
+                    const isAuthAbandoned =
+                      (validAuthJson && !authOwnerAlive) ||
+                      (!validAuthJson && authAge > 5000) ||
+                      authAge > 60000;
+
+                    if (isAuthAbandoned) {
+                      const authTombstone = `${authDir}.tombstone.${Date.now()}.${crypto.randomUUID()}`;
+                      try {
+                        // Atomic eviction of the abandoned authority directory
+                        fs.renameSync(authDir, authTombstone);
+                        try {
+                          fs.rmSync(authTombstone, { recursive: true, force: true });
+                        } catch {
+                          // ignore
+                        }
+                        fs.mkdirSync(authDir);
+                        acquiredAuth = true;
+                      } catch {
+                        // lost race to another cleaner
+                        acquiredAuth = false;
+                      }
+                    }
+                  } catch {
+                    acquiredAuth = false;
+                  }
+                } else {
+                  acquiredAuth = false;
+                }
               }
 
               if (acquiredAuth) {
                 try {
+                  const authOwnerPath = path.join(authDir, "owner.json");
+                  try {
+                    fs.writeFileSync(
+                      authOwnerPath,
+                      JSON.stringify({
+                        pid: process.pid,
+                        token: crypto.randomUUID(),
+                        createdAt: Date.now(),
+                      }),
+                      "utf8"
+                    );
+                  } catch {
+                    // ignore
+                  }
+
                   if (this.beforeStaleReclaimRetire) {
                     try {
                       this.beforeStaleReclaimRetire();
@@ -174,6 +240,13 @@ export class FileDeliveryLock implements DeliveryLock {
                     } catch {
                       // ignore
                     }
+                    // Attempt immediate acquisition of reclaimPath now that stale file is retired
+                    try {
+                      reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+                      fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
+                    } catch {
+                      // grabbed by another contender or failed, will retry in loop
+                    }
                   } catch {
                     // ignore rename error
                   }
@@ -181,7 +254,7 @@ export class FileDeliveryLock implements DeliveryLock {
                   // ignore
                 } finally {
                   try {
-                    fs.rmdirSync(authDir);
+                    fs.rmSync(authDir, { recursive: true, force: true });
                   } catch {
                     // ignore
                   }
@@ -191,9 +264,12 @@ export class FileDeliveryLock implements DeliveryLock {
           } catch {
             // ignore
           }
+          if (reclaimFd === null) {
+            return false;
+          }
+        } else {
           return false;
         }
-        return false;
       }
 
       // We hold exclusive reclamation arbitration.

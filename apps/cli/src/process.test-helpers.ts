@@ -60,14 +60,14 @@ export async function httpsTracker() {
 }
 
 export interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
-export function startProcess(args: string[], cwd?: string, executable = binPath) {
+export function startProcess(args: string[], cwd?: string, executable = binPath, timeoutMs = 15000) {
   const child = spawn(executable, args, { cwd, env: { ...process.env, NODE_EXTRA_CA_CERTS: cert }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   let closed = false;
   const events = new EventEmitter();
   const result = new Promise<ProcessResult>((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`Process timeout: ${stderr}`)); }, 15000);
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`Process timeout: ${stderr}`)); }, timeoutMs);
     child.on("error", (error) => { clearTimeout(timer); reject(error); });
     child.stdout.on("data", (data: Buffer) => { stdout += data.toString(); events.emit("output"); });
     child.stderr.on("data", (data: Buffer) => { stderr += data.toString(); events.emit("output"); });
@@ -83,7 +83,7 @@ export function startProcess(args: string[], cwd?: string, executable = binPath)
       if (stderr.includes(text) || stdout.includes(text)) return;
       if (closed) throw new Error(`Early exit: ${stderr}`);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { events.removeListener("output", check); reject(new Error(`Output barrier ${text}: ${stderr}`)); }, 10000);
+        const timer = setTimeout(() => { events.removeListener("output", check); reject(new Error(`Output barrier ${text}: ${stderr}`)); }, timeoutMs);
         function check() {
           if (stderr.includes(text) || stdout.includes(text)) { clearTimeout(timer); events.removeListener("output", check); resolve(); }
           else if (closed) { clearTimeout(timer); events.removeListener("output", check); reject(new Error(`Early exit: ${stderr}`)); }
