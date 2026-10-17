@@ -130,6 +130,7 @@ export class FileDeliveryLock implements DeliveryLock {
             if ((!reclaimOwnerAlive && isStale) || (!validJson && isStale)) {
               // Mutex directory to arbitrate retirement among competing cleaners
               const authDir = `${reclaimPath}.retire-${reclaimStat.ino}`;
+              const authOwnerToken = crypto.randomUUID();
               let acquiredAuth = false;
               try {
                 fs.mkdirSync(authDir);
@@ -141,6 +142,7 @@ export class FileDeliveryLock implements DeliveryLock {
                     const authStat = fs.statSync(authDir);
                     let authOwnerAlive = true;
                     let validAuthJson = false;
+                    let observedAuthToken: string | null = null;
                     const authOwnerPath = path.join(authDir, "owner.json");
                     try {
                       if (fs.existsSync(authOwnerPath)) {
@@ -149,33 +151,74 @@ export class FileDeliveryLock implements DeliveryLock {
                           authOwnerAlive = isProcessAlive(authData.pid);
                           validAuthJson = true;
                         }
+                        if (typeof authData.token === "string") {
+                          observedAuthToken = authData.token;
+                        }
                       }
                     } catch {
                       // empty or invalid owner file
                     }
 
                     const authAge = Date.now() - authStat.mtimeMs;
-                    // Abandoned if:
-                    // 1. Valid owner record exists but the owner process is confirmed dead.
-                    // 2. No valid owner record exists (crashed before/during write) and directory is aged (> 5000ms).
-                    // 3. Or directory has been held longer than max timeout (> 60000ms).
+                    // CRITICAL (Round 9 Blocker 1): A living owner MUST NEVER be preempted!
+                    // Only abandoned if:
+                    // 1. Valid owner record exists but the owner process is confirmed DEAD (!authOwnerAlive).
+                    // 2. No valid owner record exists (crashed during/before write) and directory is aged (> 5000ms).
                     const isAuthAbandoned =
                       (validAuthJson && !authOwnerAlive) ||
-                      (!validAuthJson && authAge > 5000) ||
-                      authAge > 60000;
+                      (!validAuthJson && authAge > 5000);
 
                     if (isAuthAbandoned) {
+                      const observedAuthIno = authStat.ino;
+                      const observedAuthMtime = authStat.mtimeMs;
                       const authTombstone = `${authDir}.tombstone.${Date.now()}.${crypto.randomUUID()}`;
                       try {
-                        // Atomic eviction of the abandoned authority directory
-                        fs.renameSync(authDir, authTombstone);
-                        try {
-                          fs.rmSync(authTombstone, { recursive: true, force: true });
-                        } catch {
-                          // ignore
+                        const preStat = fs.statSync(authDir);
+                        if (preStat.ino !== observedAuthIno || preStat.mtimeMs !== observedAuthMtime) {
+                          acquiredAuth = false;
+                        } else {
+                          // Atomic eviction of the abandoned authority directory
+                          fs.renameSync(authDir, authTombstone);
+
+                          // CRITICAL (Round 9 Blocker 2): Verify identity inside tombstone!
+                          // If a living successor took over before rename, we must NOT delete it!
+                          let tombMatches = false;
+                          try {
+                            const tombStat = fs.statSync(authTombstone);
+                            let tombToken: string | null = null;
+                            let tombAlive = false;
+                            const tombOwnerPath = path.join(authTombstone, "owner.json");
+                            if (fs.existsSync(tombOwnerPath)) {
+                              const tombData = JSON.parse(fs.readFileSync(tombOwnerPath, "utf8"));
+                              if (typeof tombData.token === "string") tombToken = tombData.token;
+                              if (typeof tombData.pid === "number") tombAlive = isProcessAlive(tombData.pid);
+                            }
+
+                            if (tombStat.ino === observedAuthIno && tombToken === observedAuthToken && !tombAlive) {
+                              tombMatches = true;
+                            }
+                          } catch {
+                            tombMatches = false;
+                          }
+
+                          if (tombMatches) {
+                            try {
+                              fs.rmSync(authTombstone, { recursive: true, force: true });
+                            } catch {
+                              // ignore
+                            }
+                            fs.mkdirSync(authDir);
+                            acquiredAuth = true;
+                          } else {
+                            // Rollback: put successor directory back so its open files (nlink) remain intact!
+                            try {
+                              fs.renameSync(authTombstone, authDir);
+                            } catch {
+                              // ignore
+                            }
+                            acquiredAuth = false;
+                          }
                         }
-                        fs.mkdirSync(authDir);
-                        acquiredAuth = true;
                       } catch {
                         // lost race to another cleaner
                         acquiredAuth = false;
@@ -190,14 +233,14 @@ export class FileDeliveryLock implements DeliveryLock {
               }
 
               if (acquiredAuth) {
+                const authOwnerPath = path.join(authDir, "owner.json");
                 try {
-                  const authOwnerPath = path.join(authDir, "owner.json");
                   try {
                     fs.writeFileSync(
                       authOwnerPath,
                       JSON.stringify({
                         pid: process.pid,
-                        token: crypto.randomUUID(),
+                        token: authOwnerToken,
                         createdAt: Date.now(),
                       }),
                       "utf8"
@@ -212,6 +255,20 @@ export class FileDeliveryLock implements DeliveryLock {
                     } catch {
                       // ignore hook error
                     }
+                  }
+
+                  // CRITICAL (Round 9 Commit Fence):
+                  // Verify our authority identity before executing retirement side effects!
+                  try {
+                    if (!fs.existsSync(authOwnerPath)) {
+                      return false;
+                    }
+                    const currentAuth = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
+                    if (currentAuth.token !== authOwnerToken || currentAuth.pid !== process.pid) {
+                      return false;
+                    }
+                  } catch {
+                    return false;
                   }
 
                   // Verify identity before retirement: inode, mtime, and token must still match
@@ -254,7 +311,52 @@ export class FileDeliveryLock implements DeliveryLock {
                   // ignore
                 } finally {
                   try {
-                    fs.rmSync(authDir, { recursive: true, force: true });
+                    // CRITICAL (Round 9 Release Fence):
+                    // Only release if authDir still contains our own authOwnerToken and PID!
+                    let canRelease = false;
+                    try {
+                      if (fs.existsSync(authOwnerPath)) {
+                        const data = JSON.parse(fs.readFileSync(authOwnerPath, "utf8"));
+                        if (data.token === authOwnerToken && data.pid === process.pid) {
+                          canRelease = true;
+                        }
+                      }
+                    } catch {
+                      canRelease = false;
+                    }
+
+                    if (canRelease) {
+                      const releaseTombstone = `${authDir}.released.${Date.now()}.${crypto.randomUUID()}`;
+                      try {
+                        fs.renameSync(authDir, releaseTombstone);
+                        let tombValid = false;
+                        try {
+                          const tombOwnerPath = path.join(releaseTombstone, "owner.json");
+                          const tombData = JSON.parse(fs.readFileSync(tombOwnerPath, "utf8"));
+                          if (tombData.token === authOwnerToken && tombData.pid === process.pid) {
+                            tombValid = true;
+                          }
+                        } catch {
+                          tombValid = false;
+                        }
+
+                        if (tombValid) {
+                          try {
+                            fs.rmSync(releaseTombstone, { recursive: true, force: true });
+                          } catch {
+                            // ignore
+                          }
+                        } else {
+                          try {
+                            fs.renameSync(releaseTombstone, authDir);
+                          } catch {
+                            // ignore
+                          }
+                        }
+                      } catch {
+                        // ignore
+                      }
+                    }
                   } catch {
                     // ignore
                   }

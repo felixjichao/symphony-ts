@@ -1990,3 +1990,109 @@ it("FileDeliveryLock: living retirement authority directory is not preempted and
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("FileDeliveryLock: living retirement authority is not preempted even when older than 60s", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-living-60s-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+  let ownerFd: number | undefined;
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    const ownerFile = path.join(authority, "owner.json");
+    ownerFd = fs.openSync(ownerFile, "wx");
+    fs.writeFileSync(
+      ownerFd,
+      JSON.stringify({ pid: process.pid, token: "still-living", createdAt: Date.now() - 70000 }),
+      "utf8"
+    );
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+    locks.push(lock);
+    // Because owner is alive, contender MUST NOT preempt even when older than 60s
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(fs.existsSync(authority)).toBe(true);
+    expect(fs.fstatSync(ownerFd).nlink).toBe(1);
+  } finally {
+    if (ownerFd !== undefined) {
+      try {
+        fs.closeSync(ownerFd);
+      } catch {
+        // ignore
+      }
+    }
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: race during eviction of abandoned authority does not delete fresh living successor", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-evict-race-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+  let successorFd: number | undefined;
+  let replaced = false;
+
+  const old = (Date.now() - 70000) / 1000;
+  fs.writeFileSync(lockPath, "", "utf8");
+  fs.utimesSync(lockPath, old, old);
+  fs.writeFileSync(reclaimPath, "", "utf8");
+  fs.utimesSync(reclaimPath, old, old);
+
+  const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+  fs.mkdirSync(authority);
+  fs.utimesSync(authority, old, old);
+
+  const realRename = fs.renameSync;
+  const spy = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+    if (source === authority && !replaced) {
+      replaced = true;
+      // Interleaving: Cleaner B finishes, and fresh living successor C acquires authority
+      fs.rmdirSync(authority);
+      fs.mkdirSync(authority);
+      successorFd = fs.openSync(path.join(authority, "owner.json"), "wx");
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "fresh-successor", createdAt: Date.now() }), "utf8");
+      expect(fs.fstatSync(successorFd).nlink).toBe(1);
+    }
+    return realRename(source, target);
+  });
+
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+  locks.push(lock);
+
+  try {
+    // Contender must rollback and NOT delete successor, and must time out safely!
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(replaced).toBe(true);
+    expect(successorFd).toBeDefined();
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(fs.existsSync(authority)).toBe(true);
+  } finally {
+    spy.mockRestore();
+    if (successorFd !== undefined) {
+      try {
+        fs.closeSync(successorFd);
+      } catch {
+        // ignore
+      }
+    }
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
