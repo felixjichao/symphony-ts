@@ -538,7 +538,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
           let workspacePath: string | null = null;
           try {
             workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueId}`, issueId);
-          } catch {}
+          } catch {
+            // ignore
+          }
           const deliveryStatePath = workspacePath
             ? path.join(workspacePath, ".symphony", "delivery-state.json")
             : path.join(cwd, ".symphony", "delivery-state.json");
@@ -682,7 +684,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
               let workspacePath: string | null = null;
               try {
                 workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueNumber}`, String(issueNumber));
-              } catch {}
+              } catch {
+                // ignore
+              }
               const deliveryStatePath = workspacePath
                 ? path.join(workspacePath, ".symphony", "delivery-state.json")
                 : path.join(cwd, ".symphony", "delivery-state.json");

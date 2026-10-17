@@ -958,15 +958,16 @@ describe("WorkContinuityCoordinator", () => {
 
     it("Blocker 8: stop during awaited observation does NOT delegate recovery", async () => {
       const dispatch = vi.fn(async () => true);
-      let c: WorkContinuityCoordinator;
-      c = new WorkContinuityCoordinator({
+      const holder: { coordinator?: WorkContinuityCoordinator } = {};
+      const c = new WorkContinuityCoordinator({
         factsReader: async () => {
-          c.stop();
+          holder.coordinator?.stop();
           return { workKey, github, decision: ready };
         },
         activeWorkKeysSource: async () => [workKey],
         authorities: { orchestrator: { dispatch, stopStalled: async () => true } },
       });
+      holder.coordinator = c;
       await c.reconcile();
       expect(c.isStopping).toBe(true);
       expect(dispatch).not.toHaveBeenCalled();

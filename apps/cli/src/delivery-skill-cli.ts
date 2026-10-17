@@ -72,9 +72,122 @@ export class FileDeliveryLock implements DeliveryLock {
   private lockFd: number | null = null;
   private lockToken: string | null = null;
   private readonly lockFilePath: string;
+  private readonly timeoutMs: number;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options?: { timeoutMs?: number }) {
     this.lockFilePath = getCanonicalLockPath(filePath);
+    this.timeoutMs = options?.timeoutMs ?? 30000;
+  }
+
+  private tryReclaimAndAcquire(token: string, observedStat: fs.Stats): boolean {
+    const reclaimPath = `${this.lockFilePath}.reclaim`;
+    let reclaimFd: number | null = null;
+    try {
+      try {
+        reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, time: Date.now() }), "utf8");
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        if (error && error.code === "EEXIST") {
+          try {
+            const reclaimStat = fs.statSync(reclaimPath);
+            let reclaimOwnerAlive = true;
+            try {
+              const data = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
+              if (typeof data.pid === "number") {
+                reclaimOwnerAlive = isProcessAlive(data.pid);
+              }
+            } catch {
+              // empty or corrupt reclaim lock
+            }
+            if (!reclaimOwnerAlive || Date.now() - reclaimStat.mtimeMs > 5000) {
+              try {
+                fs.unlinkSync(reclaimPath);
+              } catch {
+                // ignore
+              }
+            }
+          } catch {
+            // ignore
+          }
+          return false;
+        }
+        return false;
+      }
+
+      // We hold exclusive reclamation arbitration.
+      // Re-verify that the lock file still matches observed identity (inode and mtime)
+      try {
+        const currentStat = fs.statSync(this.lockFilePath);
+        if (currentStat.ino !== observedStat.ino || currentStat.mtimeMs !== observedStat.mtimeMs) {
+          // File identity changed: someone else replaced it or touched it; abort reclamation
+          return false;
+        }
+
+        let ownerAlive = true;
+        let validJson = false;
+        try {
+          const content = fs.readFileSync(this.lockFilePath, "utf8");
+          const data = JSON.parse(content);
+          if (typeof data.pid === "number") {
+            ownerAlive = isProcessAlive(data.pid);
+            validJson = true;
+          }
+        } catch {
+          // empty or corrupt
+        }
+
+        const isStale = Date.now() - currentStat.mtimeMs > 60000;
+        if (!((!ownerAlive && isStale) || (!validJson && isStale))) {
+          // No longer stale
+          return false;
+        }
+
+        // Stale file identity confirmed. Safely unlink the stale file.
+        fs.unlinkSync(this.lockFilePath);
+      } catch (statErr: unknown) {
+        const error = statErr as { code?: string };
+        if (!error || error.code !== "ENOENT") {
+          return false;
+        }
+      }
+
+      // Atomically create the new lock file before releasing reclaim arbitration
+      try {
+        this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
+        this.lockToken = token;
+        return true;
+      } catch {
+        if (this.lockFd !== null) {
+          try {
+            fs.closeSync(this.lockFd);
+          } catch {
+            // ignore
+          }
+          this.lockFd = null;
+          try {
+            fs.unlinkSync(this.lockFilePath);
+          } catch {
+            // ignore
+          }
+        }
+        return false;
+      }
+    } finally {
+      if (reclaimFd !== null) {
+        try {
+          fs.closeSync(reclaimFd);
+        } catch {
+          // ignore
+        }
+        try {
+          fs.unlinkSync(reclaimPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 
   async acquire(): Promise<void> {
@@ -94,11 +207,10 @@ export class FileDeliveryLock implements DeliveryLock {
 
       const token = crypto.randomUUID();
       const start = Date.now();
-      const timeoutMs = 30000;
       while (true) {
         try {
           this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-          fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }));
+          fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
           this.lockToken = token;
           break;
         } catch (err: unknown) {
@@ -121,10 +233,8 @@ export class FileDeliveryLock implements DeliveryLock {
 
               const isStale = Date.now() - stat.mtimeMs > 60000;
               if ((!ownerAlive && isStale) || (!validJson && isStale)) {
-                try {
-                  fs.unlinkSync(this.lockFilePath);
-                } catch {
-                  // ignore
+                if (this.tryReclaimAndAcquire(token, stat)) {
+                  break;
                 }
                 continue;
               }
@@ -132,7 +242,7 @@ export class FileDeliveryLock implements DeliveryLock {
               continue;
             }
 
-            if (Date.now() - start > timeoutMs) {
+            if (Date.now() - start > this.timeoutMs) {
               throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
             }
             await new Promise((r) => setTimeout(r, 50));
@@ -140,11 +250,15 @@ export class FileDeliveryLock implements DeliveryLock {
             if (this.lockFd !== null) {
               try {
                 fs.closeSync(this.lockFd);
-              } catch {}
+              } catch {
+                // ignore
+              }
               this.lockFd = null;
               try {
                 fs.unlinkSync(this.lockFilePath);
-              } catch {}
+              } catch {
+                // ignore
+              }
             }
             throw err;
           }
@@ -156,11 +270,15 @@ export class FileDeliveryLock implements DeliveryLock {
       if (this.lockFd !== null) {
         try {
           fs.closeSync(this.lockFd);
-        } catch {}
+        } catch {
+          // ignore
+        }
         this.lockFd = null;
         try {
           fs.unlinkSync(this.lockFilePath);
-        } catch {}
+        } catch {
+          // ignore
+        }
       }
       this.lockToken = null;
       throw err;
@@ -171,7 +289,9 @@ export class FileDeliveryLock implements DeliveryLock {
     if (this.lockFd !== null) {
       try {
         fs.closeSync(this.lockFd);
-      } catch {}
+      } catch {
+        // ignore
+      }
       this.lockFd = null;
     }
     if (this.lockToken !== null) {
@@ -185,7 +305,9 @@ export class FileDeliveryLock implements DeliveryLock {
             fs.unlinkSync(this.lockFilePath);
           }
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
     if (this.inProcessRelease) {
       const rel = this.inProcessRelease;

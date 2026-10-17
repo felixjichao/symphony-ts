@@ -564,7 +564,9 @@ export async function runDeliverySkill(
     let latestPersisted: PersistedDeliveryState | null = null;
     try {
       latestPersisted = (await stateStorage?.readState()) ?? null;
-    } catch {}
+    } catch {
+      // ignore
+    }
 
     if (latestPersisted?.commentPosted) {
       commentPosted = true;
@@ -610,7 +612,9 @@ export async function runDeliverySkill(
           if (underLockState?.readyLabelRemoved) {
             readyLabelRemoved = true;
           }
-        } catch {}
+        } catch {
+          // ignore
+        }
 
         if (!commentPosted) {
           try {
