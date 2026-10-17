@@ -229,6 +229,8 @@ export interface CreateTaskRequest {
   readonly context?: DecisionContextBundle | undefined;
   readonly supersedeSessionReviews?: boolean | undefined;
   readonly forceNewRevision?: boolean | undefined;
+  readonly forceNew?: boolean | undefined;
+  readonly reuseActive?: boolean | undefined;
   readonly triggerKind?: "initial" | "requirements_changed" | "clarification" | "retry" | undefined;
   readonly requirements?: {
     readonly title: string;
@@ -278,8 +280,16 @@ export interface GetLatestPlanResponse {
   readonly plan: DecisionPlanRecord | null;
 }
 
-export interface GetSessionTasksResponse {
-  readonly tasks: readonly DecisionTask[];
+export interface ReleaseExpiredTaskClaimRequest {
+  readonly expectedRevision?: number | undefined;
+  readonly expectedClaimGeneration?: number | undefined;
+  readonly expectedBindingGeneration?: number | undefined;
+}
+
+export interface ReleaseExpiredTaskClaimResponse {
+  readonly released: boolean;
+  readonly taskId: string;
+  readonly reason?: string | undefined;
 }
 
 export interface BridgeErrorEnvelope {

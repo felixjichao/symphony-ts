@@ -328,6 +328,59 @@ export class OrchestratorAuthority {
     return this.stopping;
   }
 
+  /** 取某 issue 的当前 running entry。 */
+  public getRunningEntry(issueId: string): RunningEntry | undefined {
+    return this.active.get(issueId)?.entry;
+  }
+
+  /** 取某 issue 的当前 attempt token。 */
+  public getAttemptToken(issueId: string): string | undefined {
+    return this.active.get(issueId)?.token;
+  }
+
+  /** 取某 issue 当前的 lifecycle generation。 */
+  public getIssueLifecycleGeneration(issueId: string): number {
+    return this.lifecycleGeneration.get(issueId) ?? 0;
+  }
+
+  /** 取某 issue 当前的 reconciliation epoch。 */
+  public getIssueReconciliationEpoch(issueId: string): number {
+    return this.reconcileEpoch.get(issueId) ?? 0;
+  }
+
+  /** 取某 issue 当前在队中的 retry entry。 */
+  public getRetryEntry(issueId: string): RetryEntry | undefined {
+    return this.state.retryAttempts.get(issueId);
+  }
+
+  /** 判断某 running worker 是否处于 stalled 状态。 */
+  public isIssueStalled(issueId: string, nowUtc?: number): boolean {
+    const record = this.active.get(issueId);
+    if (!record) return false;
+    const timeout = this.stallTimeoutMs();
+    if (!isStallDetectionEnabled(timeout)) return false;
+    const now = nowUtc ?? this.now();
+    return isWorkerStalled(record.entry, record.telemetry, now, timeout);
+  }
+
+  /** 取某 running issue 最近一次 progress 时间（若无或已卡滞则返回 "unknown"）。 */
+  public getIssueLastProgressAt(issueId: string): UtcTimestampMs | "unknown" {
+    const record = this.active.get(issueId);
+    if (!record) return "unknown";
+    if (this.isIssueStalled(issueId)) return "unknown";
+    return record.telemetry.lastProgressTimestamp ?? "unknown";
+  }
+
+  /** 所有当前 running 的 issue id。 */
+  public getAllRunningIssueIds(): readonly string[] {
+    return [...this.active.keys()];
+  }
+
+  /** 所有当前排队 retry 的 issue id。 */
+  public getAllRetryIssueIds(): readonly string[] {
+    return [...this.state.retryAttempts.keys()];
+  }
+
   /**
    * 原子应用一次 effective 调度配置（M5.5 live config re-apply，SPEC §6.2）。
    *
@@ -454,6 +507,42 @@ export class OrchestratorAuthority {
       return;
     }
     await record.worker.stop(reason);
+  }
+
+  /**
+   * 带 fencing 核验地停止某 stalled issue 的 worker。
+   * 核验 attemptToken、lifecycleGeneration 与 reconciliationEpoch；任一不匹配则拒绝停止。
+   */
+  public async stopStalledWorker(
+    issueId: string,
+    fence?: {
+      readonly expectedAttemptToken?: string | undefined;
+      readonly expectedGeneration?: number | undefined;
+      readonly expectedEpoch?: number | undefined;
+    },
+  ): Promise<{ stopped: boolean; reason?: string }> {
+    const record = this.active.get(issueId);
+    if (record === undefined) {
+      return { stopped: false, reason: "not_running" };
+    }
+    if (fence?.expectedAttemptToken !== undefined && record.token !== fence.expectedAttemptToken) {
+      return { stopped: false, reason: "fence_mismatch_attempt_token" };
+    }
+    if (
+      fence?.expectedGeneration !== undefined &&
+      (this.lifecycleGeneration.get(issueId) ?? 0) !== fence.expectedGeneration
+    ) {
+      return { stopped: false, reason: "fence_mismatch_lifecycle_generation" };
+    }
+    if (
+      fence?.expectedEpoch !== undefined &&
+      (this.reconcileEpoch.get(issueId) ?? 0) !== fence.expectedEpoch
+    ) {
+      return { stopped: false, reason: "fence_mismatch_reconciliation_epoch" };
+    }
+
+    await record.worker.stop({ kind: "stall" });
+    return { stopped: true };
   }
 
   /** 等待所有活跃 worker（含 stop 后的收尾）真正结束。 */

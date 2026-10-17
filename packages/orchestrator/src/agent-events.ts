@@ -64,6 +64,10 @@ export interface AgentTelemetryState {
   pendingLastTimestamp: UtcTimestampMs | null;
   pendingLastMessage: string | null;
   pendingPid: string | null;
+  /** 最近一次产生实质有效进展的时间戳（turn 推进、turn 完成或 token 消耗）。 */
+  lastProgressTimestamp?: UtcTimestampMs | null | undefined;
+  /** 最近一次记录有效进展的已完成 turnId（用于 turn_completed 去重）。 */
+  lastCompletedTurnId?: string | null | undefined;
 }
 
 /** 尚无 thread 身份的 usage（会话 thread 建立前）归入的占位基线 key。 */
@@ -80,6 +84,8 @@ export function createAgentTelemetryState(): AgentTelemetryState {
     pendingLastTimestamp: null,
     pendingLastMessage: null,
     pendingPid: null,
+    lastProgressTimestamp: null,
+    lastCompletedTurnId: null,
   };
 }
 
@@ -154,7 +160,7 @@ export function applyAgentEvent(
 
   // usage 入账与 session 是否建立无关：到达即按所属 thread 的基线入账，避免漏账。
   if (event.usage !== undefined) {
-    accountUsage(state, entry, telemetry, eventThreadId ?? UNKNOWN_THREAD_KEY, event.usage);
+    accountUsage(state, entry, telemetry, eventThreadId ?? UNKNOWN_THREAD_KEY, event.usage, event.timestamp);
   }
 
   // turn 身份 / 计数只由可靠生命周期事件推进。
@@ -163,9 +169,20 @@ export function applyAgentEvent(
     if (telemetry.turnId === null) {
       telemetry.turnId = eventTurnId;
       telemetry.turnCount = Math.max(telemetry.turnCount, 1);
+      telemetry.lastProgressTimestamp = event.timestamp;
     } else if (eventTurnId !== telemetry.turnId) {
       telemetry.turnId = eventTurnId;
       telemetry.turnCount += 1;
+      telemetry.lastProgressTimestamp = event.timestamp;
+    }
+  }
+
+  // turn 完成也记录有效进展（按 turnId 去重，避免重复 turn_completed 刷新基准）
+  if (reliableLifecycle && event.event === "turn_completed") {
+    const turnKey = eventTurnId ?? telemetry.turnId;
+    if (turnKey !== null && turnKey !== telemetry.lastCompletedTurnId) {
+      telemetry.lastCompletedTurnId = turnKey;
+      telemetry.lastProgressTimestamp = event.timestamp;
     }
   }
 
@@ -254,6 +271,7 @@ function accountUsage(
   telemetry: AgentTelemetryState,
   threadKey: string,
   usage: AgentTokenUsage,
+  eventTimestamp?: UtcTimestampMs,
 ): void {
   const reportedInput = nonNegative(usage.inputTokens);
   const reportedOutput = nonNegative(usage.outputTokens);
@@ -273,6 +291,10 @@ function accountUsage(
   state.codexTotals.inputTokens += deltaInput;
   state.codexTotals.outputTokens += deltaOutput;
   state.codexTotals.totalTokens += deltaTotal;
+
+  if (eventTimestamp !== undefined && (deltaInput > 0 || deltaOutput > 0 || deltaTotal > 0)) {
+    telemetry.lastProgressTimestamp = eventTimestamp;
+  }
 
   baseline.lastUsage = {
     inputTokens: reportedInput,

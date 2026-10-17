@@ -108,6 +108,6 @@ export { runDeliverySkill } from "./delivery/delivery-skill-runner";
 export type { DeliveryStateStorage, RunDeliverySkillOptions } from "./delivery/delivery-skill-runner";
 
 export { recoverDeliveryHandoff } from "./delivery/recover-handoff";
-export type { RecoverDeliveryHandoffOptions, RecoverDeliveryHandoffResult } from "./delivery/recover-handoff";
+export type { DeliveryLock, RecoverDeliveryHandoffOptions, RecoverDeliveryHandoffResult } from "./delivery/recover-handoff";
 
 

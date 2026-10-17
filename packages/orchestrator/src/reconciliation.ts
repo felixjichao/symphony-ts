@@ -52,19 +52,21 @@ export function isStallDetectionEnabled(stallTimeoutMs: number): boolean {
 }
 
 /**
- * stall elapsed 的基准时刻（UTC）：有 agent event 时取最近一次事件时间戳，否则取
- * worker 启动时间（§8.5 Part A）。
+ * stall elapsed 的基准时刻（UTC）：有实质有效进展时取最近一次有效进展时间戳，
+ * 否则取 worker 启动时间 `entry.attempt.startedAt`。
  *
- * 身份未齐时 `entry.session` 可能尚未物化，因此必须回退到 per-attempt 遥测里暂存的
- * `pendingLastTimestamp`——只读 `entry.session` 会漏掉握手期事件，把活跃 worker 误判
- * 为 stall。`RunAttempt.startedAt` 与事件时间戳同属 UTC 墙上时钟域。
+ * 进度证据严格绑定有效进展（turn 推进、turn 完成或正 token 增量）。身份未齐或无
+ * 进展的普通 notification / 心跳不得通过 pendingLastTimestamp 清除 stall，否则
+ * 无有效业务进展的 worker 可持续掩盖搁浅。
  */
 export function stallActivityBaselineMs(
   entry: RunningEntry,
   telemetry: AgentTelemetryState,
 ): UtcTimestampMs {
-  const sessionTimestamp = entry.session?.lastCodexTimestamp ?? null;
-  return sessionTimestamp ?? telemetry.pendingLastTimestamp ?? entry.attempt.startedAt;
+  if (telemetry.lastProgressTimestamp !== null && telemetry.lastProgressTimestamp !== undefined) {
+    return telemetry.lastProgressTimestamp;
+  }
+  return entry.attempt.startedAt;
 }
 
 /** 当前 stall elapsed（毫秒）：`max(now - baseline, 0)`（负差值按 0 处理）。 */

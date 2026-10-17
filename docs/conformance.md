@@ -367,6 +367,26 @@ Provider-neutral execution continuity, ownership fencing, and failure taxonomy c
 | Canonical stage descriptors covering planning, coding, CI waiting, review claim, repair, delivery resume, and merge confirmation | same suite: validates all canonical stage descriptors |
 | Domain purity, zero Node I/O, zero timer, and zero UI framework dependencies | same suite: Architectural and Boundary Invariants |
 
-Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
+Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation and stranded-state reconciliation (#147) are verified below; browser heartbeat (#148) remains in subsequent issues.
+
+## Work-level liveness and stranded-state reconciliation (NEST-131 / #147)
+
+Bounded work continuity derivation and stranded-state reconciliation across stage boundaries (planning, coding, CI wait, review, repair, delivery compensation, merge) under SPEC §7, §8, §14, and #146 contracts. Introduces a thin coordinator in `@symphony/orchestrator` (`WorkContinuityCoordinator`), pure derivation logic (`deriveWorkContinuity`), transactional lease claim release in `@symphony/decision` (`releaseExpiredTaskClaim`), and mutex-fenced handoff compensation in `@symphony/agent` (`recoverDeliveryHandoff`). [Reconciliation note](../notes/accepted/architecture/2026-10-17-work-liveness-and-stranded-state-reconciliation.md).
+
+| Capability | Evidence |
+|---|---|
+| Pure derivation matrix across all stage boundaries (`deriveWorkContinuity`) | `packages/orchestrator/src/work-continuity.test.ts`: deriveWorkContinuity |
+| Liveness and stall timeout evaluation distinguishing genuine progress from heartbeats | same suite: evaluates active coding worker exceeding stall timeout as stranded |
+| Safe 5-step reconciliation protocol (observe → derive → pre-action re-observe → delegate → post-action re-observe) | same suite: coordinates full safe 5-step reconciliation protocol for stranded work |
+| Race prevention: abort recovery delegation if state converged or changed before execution | same suite: aborts recovery delegation if state converged or changed during pre-action check |
+| Fail-safe behavior under source observation errors (no mutations on source failure) | same suite: fails safe when observation errors are present |
+| Decision Plane transactional claim release with lease expiration verification (`releaseExpiredTaskClaim`) | `packages/decision/src/service.test.ts`: releaseExpiredTaskClaim, `packages/decision/src/bridge.test.ts`: POST /v1/tasks/:id/release-expired-claim |
+| Delivery handoff compensation mutex fencing and `expectedLastUpdated` validation | `packages/agent/src/delivery/recover-handoff.ts`, `apps/cli/src/delivery-reconciliation-recovery.test.ts` |
+| Delivery file-lock retirement successor preservation, fd cleanup, and crash recovery | `apps/cli/src/delivery-skill-cli.test.ts`: real hard-link conflict, partial ENOSPC/EIO writes (initial/dead/corrupt owners), link failure, live aged claim contention, and child-process exits after publication/before action; fixture `apps/cli/test-fixtures/delivery-lock-crash.ts` |
+| Orchestrator thin coordinator architecture (`WorkContinuityCoordinator`) and poll loop integration | `packages/orchestrator/src/loop.ts`, `packages/orchestrator/src/work-continuity.test.ts` |
+| CLI host composition and dependency inversion boundary preservation | `apps/cli/src/host.ts`, `apps/cli/src/host.test.ts` |
+
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/agent`, `npm test -w @symphony/orchestrator`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`. ChatGPT Web browser agent progress heartbeat and execution evidence (#148) remain in subsequent issues.
+
 
 

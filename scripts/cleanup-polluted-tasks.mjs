@@ -917,6 +917,31 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
       const now = this.clock();
+      if (params.reuseActive) {
+        const planTasks = Object.values(draft.tasks).filter(
+          (t) => t.sessionId === sessionId && t.kind === "plan" && t.status !== "superseded" && t.status !== "failed" && t.status !== "cancelled"
+        );
+        planTasks.sort((a, b) => b.revision - a.revision);
+        const activeTask = planTasks.find(
+          (t) => t.status === "pending" || t.status === "claimed" || t.status === "running"
+        );
+        if (activeTask) {
+          if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+            draft.operationReceipts[params.operationKey] = {
+              schemaVersion: 1,
+              operationKey: params.operationKey,
+              kind: "create-plan-task",
+              sessionId,
+              triggerKind,
+              fingerprint,
+              previousTaskId,
+              entityId: activeTask.id,
+              createdAtMs: now
+            };
+          }
+          return activeTask;
+        }
+      }
       const revKey = `plan:${sessionId}`;
       const rev = (draft.revisions[revKey] ?? 0) + 1;
       draft.revisions[revKey] = rev;
@@ -1050,6 +1075,13 @@ class DecisionService {
         };
       }
       return task;
+    });
+  }
+  async ensurePlanTask(sessionId, params = {}) {
+    const shouldReuse = !params.forceNew && (!params.triggerKind || params.triggerKind === "initial");
+    return await this.createPlanTask(sessionId, {
+      ...params,
+      reuseActive: shouldReuse
     });
   }
   async createReviewTask(sessionId, params) {
@@ -1372,6 +1404,41 @@ class DecisionService {
     if (!next) return null;
     const session = this.store.getSession(next.sessionId);
     return { task: next, session };
+  }
+  /**
+   * Explicitly releases an expired claim on a task if it is still claimed/running
+   * and matches the expected revision/generations. Fail-closed if not expired or
+   * if any generation / revision has advanced.
+   */
+  async releaseExpiredTaskClaim(params) {
+    return await this.store.transaction((draft) => {
+      const task = draft.tasks[params.taskId];
+      if (!task) {
+        return { released: false, taskId: params.taskId, reason: "task_not_found" };
+      }
+      if (task.status !== "claimed" && task.status !== "running") {
+        return { released: false, taskId: params.taskId, reason: `task_not_leased (status is ${task.status})` };
+      }
+      if (params.expectedRevision !== void 0 && task.revision !== params.expectedRevision) {
+        return { released: false, taskId: params.taskId, reason: `revision_mismatch (current: ${task.revision}, expected: ${params.expectedRevision})` };
+      }
+      if (!task.lease) {
+        return { released: false, taskId: params.taskId, reason: "no_lease_on_task" };
+      }
+      if (params.expectedClaimGeneration !== void 0 && task.lease.generation !== params.expectedClaimGeneration) {
+        return { released: false, taskId: params.taskId, reason: `claim_generation_mismatch (current: ${task.lease.generation}, expected: ${params.expectedClaimGeneration})` };
+      }
+      const claimBindingGen = draft.claimBindingGenerations?.[task.id];
+      if (params.expectedBindingGeneration !== void 0 && claimBindingGen !== void 0 && claimBindingGen !== params.expectedBindingGeneration) {
+        return { released: false, taskId: params.taskId, reason: `binding_generation_mismatch (current: ${claimBindingGen}, expected: ${params.expectedBindingGeneration})` };
+      }
+      const now = this.clock();
+      if (now < task.lease.expiresAtMs) {
+        return { released: false, taskId: params.taskId, reason: `lease_not_expired (expires at ${task.lease.expiresAtMs}, now is ${now})` };
+      }
+      draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
+      return { released: true, taskId: task.id };
+    });
   }
   async claimTask(taskId, params) {
     if (!params.owner || params.owner.trim() === "") {

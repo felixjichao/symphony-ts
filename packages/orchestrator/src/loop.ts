@@ -41,6 +41,7 @@ import type { DispatchPolicy } from "./eligibility";
 import type { StartupCleanupResult } from "./reconciliation";
 import { createRetryScheduler, type RetryScheduler } from "./retry";
 import { sortForDispatch } from "./sort";
+import type { WorkContinuityCoordinator } from "./work-continuity";
 
 /**
  * 一次 dispatch preflight 产出的 **effective 调度配置**（§6.4 中影响调度的子集）。
@@ -102,6 +103,7 @@ export interface LoopDiagnostic {
     | "tick_validation_failed"
     | "candidate_fetch_failed"
     | "reconciliation_failed"
+    | "work_continuity_reconciliation_failed"
     | "tick_failed";
   readonly message: string;
 }
@@ -133,6 +135,8 @@ export interface OrchestratorLoopOptions {
   readonly scheduler?: PollScheduler | undefined;
   /** operator-visible 诊断出口；异常被隔离。 */
   readonly onDiagnostic?: ((diagnostic: LoopDiagnostic) => void) | undefined;
+  /** 可选：工作级 liveness / stranded 状态协调器（NEST-131 / GitHub #147）。 */
+  readonly workContinuityCoordinator?: WorkContinuityCoordinator | undefined;
 }
 
 type LoopStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
@@ -149,6 +153,7 @@ export class OrchestratorLoop {
   private readonly preflight: DispatchPreflightSource;
   private readonly scheduler: PollScheduler;
   private readonly onDiagnostic: ((diagnostic: LoopDiagnostic) => void) | undefined;
+  private readonly workContinuityCoordinator?: WorkContinuityCoordinator | undefined;
 
   private status: LoopStatus = "idle";
   private pollTimer: TimerHandle | null = null;
@@ -162,6 +167,7 @@ export class OrchestratorLoop {
     this.preflight = options.preflight;
     this.scheduler = options.scheduler ?? createRetryScheduler();
     this.onDiagnostic = options.onDiagnostic;
+    this.workContinuityCoordinator = options.workContinuityCoordinator;
   }
 
   /** 是否正在调度（已通过 startup，且未 stop）。 */
@@ -251,6 +257,7 @@ export class OrchestratorLoop {
     }
     this.status = "stopping";
     this.cancelPollTimer();
+    this.workContinuityCoordinator?.stop();
     // 同步前缀：在等待任何在途异步工作**之前**关闭调度并开始停止 workers。
     const shutdown = this.authority.shutdown();
     const startup = this.startupPromise;
@@ -325,6 +332,21 @@ export class OrchestratorLoop {
       }
       if (this.status !== "running") {
         return;
+      }
+
+      // 1.1 reconcile work continuity (work-level liveness & stranded-state reconciliation)
+      if (this.workContinuityCoordinator !== undefined) {
+        try {
+          await this.workContinuityCoordinator.reconcile();
+        } catch (error) {
+          this.emit({
+            kind: "work_continuity_reconciliation_failed",
+            message: describeError(error),
+          });
+        }
+        if (this.status !== "running") {
+          return;
+        }
       }
 
       // 2. per-tick dispatch preflight（§6.3）；失败跳过本 tick dispatch。

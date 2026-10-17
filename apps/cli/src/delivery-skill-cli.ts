@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -5,6 +6,7 @@ import {
   recoverDeliveryHandoff,
   runDeliverySkill,
   type DeliveryGitGhRunner,
+  type DeliveryLock,
   type DeliveryStateStorage,
   type RunDeliverySkillOptions,
 } from "@symphony/agent";
@@ -29,8 +31,498 @@ export interface DeliveryCliIo {
   readonly stderr: { write(text: string): unknown };
 }
 
+class InProcessMutex {
+  private queue: Promise<void> = Promise.resolve();
+
+  async acquire(): Promise<() => void> {
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const current = this.queue;
+    this.queue = current.then(() => next);
+    await current;
+    return release;
+  }
+}
+
+function getCanonicalLockPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  const base = path.basename(resolved);
+  const canonicalDir = fs.existsSync(dir) ? fs.realpathSync(dir) : dir;
+  const lockBase = base.endsWith(".lock") ? base : `${base}.lock`;
+  return path.join(canonicalDir, lockBase);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    const error = err as { code?: string };
+    return error.code === "EPERM";
+  }
+}
+
+function retirementCompletionPath(ownerPath: string, content: string): string {
+  const key = crypto.createHash("sha256").update(content).digest("hex");
+  return `${ownerPath}.${key}.done`;
+}
+
+const fileMutexes = new Map<string, InProcessMutex>();
+
+export interface FileDeliveryLockOptions {
+  timeoutMs?: number | undefined;
+  inProcessMutex?: boolean | undefined;
+  _beforeStaleReclaimRetire?: (() => void) | undefined;
+  _beforeReclaimRelease?: (() => void) | undefined;
+}
+
+export class FileDeliveryLock implements DeliveryLock {
+  private inProcessRelease: (() => void) | null = null;
+  private lockFd: number | null = null;
+  private lockToken: string | null = null;
+  private readonly lockFilePath: string;
+  private readonly timeoutMs: number;
+  private readonly inProcessMutex: boolean;
+  private readonly beforeStaleReclaimRetire?: (() => void) | undefined;
+  private readonly beforeReclaimRelease?: (() => void) | undefined;
+
+  constructor(filePath: string, options?: FileDeliveryLockOptions) {
+    this.lockFilePath = getCanonicalLockPath(filePath);
+    this.timeoutMs = options?.timeoutMs ?? 30000;
+    this.inProcessMutex = options?.inProcessMutex ?? true;
+    this.beforeStaleReclaimRetire = options?._beforeStaleReclaimRetire;
+    this.beforeReclaimRelease = options?._beforeReclaimRelease;
+  }
+
+  private acquireRetirementAuthority(authDir: string): { ownerPath: string; content: string } | null {
+    fs.mkdirSync(authDir, { recursive: true });
+    let ownerPath = path.join(authDir, "owner.json");
+    // Bound each observation by the existing directory snapshot, while allowing
+    // recovery through arbitrarily many previously completed/crashed claims.
+    const limit = fs.readdirSync(authDir).length + 1;
+    for (let generation = 0; generation < limit; generation++) {
+      let content: string;
+      try {
+        content = fs.readFileSync(ownerPath, "utf8");
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        // Publish fully written metadata atomically. No visible empty owner and
+        // no fd retained if metadata writing (including partial writing) fails.
+        const candidate = path.join(authDir, `candidate-${crypto.randomUUID()}`);
+        let fd: number | null = null;
+        const ownContent = JSON.stringify({ pid: process.pid, token: crypto.randomUUID() });
+        try {
+          fd = fs.openSync(candidate, "wx");
+          fs.writeFileSync(fd, ownContent, "utf8");
+          fs.closeSync(fd);
+          fd = null;
+          fs.linkSync(candidate, ownerPath);
+          return { ownerPath, content: ownContent };
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+          // Another contender published this generation. Read its authority.
+          continue;
+        } finally {
+          if (fd !== null) fs.closeSync(fd);
+          try {
+            fs.unlinkSync(candidate);
+          } catch {
+            // A crash may also leave an unpublished candidate; it grants no authority.
+          }
+        }
+      }
+      let alive = false;
+      let valid = false;
+      try {
+        const owner = JSON.parse(content);
+        if (Number.isInteger(owner.pid) && owner.pid > 0) {
+          valid = true;
+          alive = isProcessAlive(owner.pid);
+        }
+      } catch {
+        // Only legacy metadata can be incomplete; new claims publish atomically.
+      }
+      const completed = fs.existsSync(retirementCompletionPath(ownerPath, content));
+      if (alive && !completed) return null;
+      if (!valid && Date.now() - fs.statSync(ownerPath).mtimeMs <= 5000) return null;
+      // All contenders observing this immutable generation compete at the same
+      // next pathname. Neither the predecessor nor a winning successor is deleted.
+      const key = crypto.createHash("sha256").update(ownerPath).update(content).digest("hex");
+      ownerPath = path.join(authDir, `owner-${key}.json`);
+    }
+    return null;
+  }
+
+  private tryReclaimAndAcquire(token: string, observedStat: fs.Stats): boolean {
+    const reclaimPath = `${this.lockFilePath}.reclaim`;
+    const reclaimToken = crypto.randomUUID();
+    let reclaimFd: number | null = null;
+    try {
+      try {
+        reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        if (error && error.code === "EEXIST") {
+          try {
+            const reclaimStat = fs.statSync(reclaimPath);
+            let reclaimOwnerAlive = true;
+            let validJson = false;
+            let existingToken: string | null = null;
+            try {
+              const data = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
+              if (typeof data.pid === "number") {
+                reclaimOwnerAlive = isProcessAlive(data.pid);
+                validJson = true;
+              }
+              if (typeof data.token === "string") {
+                existingToken = data.token;
+              }
+            } catch {
+              // empty or corrupt reclaim lock
+            }
+
+            // CRITICAL (Blocker 2 & Round 7 Blocker):
+            // 1. A living arbitrator MUST NEVER be preempted merely due to elapsed time.
+            // 2. Retiring a stale arbitrator MUST NOT delete or steal a newly established living successor.
+            // Only clean up if the owner process is confirmed dead (!reclaimOwnerAlive),
+            // or if the file is corrupt/empty (!validJson) AND stale (> 60000ms).
+            const isStale = Date.now() - reclaimStat.mtimeMs > 60000;
+            if ((!reclaimOwnerAlive && isStale) || (!validJson && isStale)) {
+              // Mutex directory to arbitrate retirement among competing cleaners
+              const authDir = `${reclaimPath}.retire-${reclaimStat.ino}`;
+              const authority = this.acquireRetirementAuthority(authDir);
+              if (authority !== null) {
+                try {
+                  if (this.beforeStaleReclaimRetire) {
+                    try {
+                      this.beforeStaleReclaimRetire();
+                    } catch {
+                      // ignore hook error
+                    }
+                  }
+
+                  // Claims are immutable. A live claim cannot gain a successor;
+                  // completion is published only after all protected actions stop.
+                  if (fs.readFileSync(authority.ownerPath, "utf8") !== authority.content) {
+                    return false;
+                  }
+
+                  // Verify identity before retirement: inode, mtime, and token must still match
+                  const currentReclaimStat = fs.statSync(reclaimPath);
+                  if (currentReclaimStat.ino !== reclaimStat.ino || currentReclaimStat.mtimeMs !== reclaimStat.mtimeMs) {
+                    return false;
+                  }
+
+                  if (validJson && existingToken !== null) {
+                    try {
+                      const currentData = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
+                      if (currentData.token !== existingToken) {
+                        return false;
+                      }
+                    } catch {
+                      return false;
+                    }
+                  }
+
+                  // Safely retire via atomic rename to unique tombstone then unlink
+                  const tombstone = `${reclaimPath}.retired.${reclaimStat.ino}.${Date.now()}.${crypto.randomUUID()}`;
+                  try {
+                    fs.renameSync(reclaimPath, tombstone);
+                    try {
+                      fs.unlinkSync(tombstone);
+                    } catch {
+                      // ignore
+                    }
+                    // Attempt immediate acquisition of reclaimPath now that stale file is retired
+                    try {
+                      reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+                      fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
+                    } catch {
+                      // grabbed by another contender or failed, will retry in loop
+                    }
+                  } catch {
+                    // ignore rename error
+                  }
+                } catch {
+                  // ignore
+                } finally {
+                  // Never unlink owner paths or move the authority directory: an
+                  // observer may still be paused on any earlier generation.
+                  fs.writeFileSync(retirementCompletionPath(authority.ownerPath, authority.content), "", { flag: "wx" });
+                }
+              }
+            }
+          } catch {
+            // ignore
+          }
+          if (reclaimFd === null) {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      }
+
+      // We hold exclusive reclamation arbitration.
+      // Re-verify that the lock file still matches observed identity (inode and mtime)
+      try {
+        const currentStat = fs.statSync(this.lockFilePath);
+        if (currentStat.ino !== observedStat.ino || currentStat.mtimeMs !== observedStat.mtimeMs) {
+          // File identity changed: someone else replaced it or touched it; abort reclamation
+          return false;
+        }
+
+        let ownerAlive = true;
+        let validJson = false;
+        try {
+          const content = fs.readFileSync(this.lockFilePath, "utf8");
+          const data = JSON.parse(content);
+          if (typeof data.pid === "number") {
+            ownerAlive = isProcessAlive(data.pid);
+            validJson = true;
+          }
+        } catch {
+          // empty or corrupt
+        }
+
+        const isStale = Date.now() - currentStat.mtimeMs > 60000;
+        if (!((!ownerAlive && isStale) || (!validJson && isStale))) {
+          // No longer stale
+          return false;
+        }
+
+        // Stale file identity confirmed. Safely unlink the stale file.
+        fs.unlinkSync(this.lockFilePath);
+      } catch (statErr: unknown) {
+        const error = statErr as { code?: string };
+        if (!error || error.code !== "ENOENT") {
+          return false;
+        }
+      }
+
+      // Atomically create the new lock file before releasing reclaim arbitration
+      try {
+        this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
+        this.lockToken = token;
+        return true;
+      } catch {
+        if (this.lockFd !== null) {
+          try {
+            fs.closeSync(this.lockFd);
+          } catch {
+            // ignore
+          }
+          this.lockFd = null;
+          try {
+            fs.unlinkSync(this.lockFilePath);
+          } catch {
+            // ignore
+          }
+        }
+        return false;
+      }
+    } finally {
+      if (reclaimFd !== null) {
+        try {
+          fs.closeSync(reclaimFd);
+        } catch {
+          // ignore
+        }
+        reclaimFd = null;
+        try {
+          if (this.beforeReclaimRelease) {
+            try {
+              this.beforeReclaimRelease();
+            } catch {
+              // ignore
+            }
+          }
+          // Token-bound release: Only delete reclaimPath if it still contains our own reclaimToken!
+          if (fs.existsSync(reclaimPath)) {
+            const content = fs.readFileSync(reclaimPath, "utf8");
+            const data = JSON.parse(content);
+            if (data.token === reclaimToken) {
+              const releaseTombstone = `${reclaimPath}.released.${crypto.randomUUID()}`;
+              try {
+                fs.renameSync(reclaimPath, releaseTombstone);
+                try {
+                  fs.unlinkSync(releaseTombstone);
+                } catch {
+                  // ignore
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  async acquire(): Promise<void> {
+    let releaseMutex: (() => void) | null = null;
+    if (this.inProcessMutex) {
+      let mutex = fileMutexes.get(this.lockFilePath);
+      if (!mutex) {
+        mutex = new InProcessMutex();
+        fileMutexes.set(this.lockFilePath, mutex);
+      }
+      releaseMutex = await mutex.acquire();
+      this.inProcessRelease = releaseMutex;
+    }
+
+    try {
+      const lockDir = path.dirname(this.lockFilePath);
+      if (!fs.existsSync(lockDir)) {
+        fs.mkdirSync(lockDir, { recursive: true });
+      }
+
+      const token = crypto.randomUUID();
+      const start = Date.now();
+      while (true) {
+        try {
+          this.lockFd = fs.openSync(this.lockFilePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+          fs.writeFileSync(this.lockFd, JSON.stringify({ pid: process.pid, token, time: Date.now() }), "utf8");
+          this.lockToken = token;
+          break;
+        } catch (err: unknown) {
+          const error = err as { code?: string };
+          if (error && error.code === "EEXIST") {
+            let reclaimed = false;
+            try {
+              const stat = fs.statSync(this.lockFilePath);
+              let ownerAlive = true;
+              let validJson = false;
+              try {
+                const content = fs.readFileSync(this.lockFilePath, "utf8");
+                const data = JSON.parse(content);
+                if (typeof data.pid === "number") {
+                  ownerAlive = isProcessAlive(data.pid);
+                  validJson = true;
+                }
+              } catch {
+                // unable to read/parse: empty or corrupted lock file
+              }
+
+              const isStale = Date.now() - stat.mtimeMs > 60000;
+              if ((!ownerAlive && isStale) || (!validJson && isStale)) {
+                if (this.tryReclaimAndAcquire(token, stat)) {
+                  reclaimed = true;
+                }
+              }
+            } catch {
+              // ignore stat/read failure and proceed to timeout check
+            }
+
+            if (reclaimed) {
+              break;
+            }
+
+            // CRITICAL (Blocker 1): All retry paths MUST pass through deadline check and yield
+            if (Date.now() - start > this.timeoutMs) {
+              throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
+            }
+            await new Promise((r) => setTimeout(r, 50));
+          } else {
+            if (this.lockFd !== null) {
+              try {
+                fs.closeSync(this.lockFd);
+              } catch {
+                // ignore
+              }
+              this.lockFd = null;
+              try {
+                fs.unlinkSync(this.lockFilePath);
+              } catch {
+                // ignore
+              }
+            }
+            throw err;
+          }
+        }
+      }
+    } catch (err) {
+      if (this.inProcessRelease) {
+        const rel = this.inProcessRelease;
+        this.inProcessRelease = null;
+        rel();
+      }
+      if (this.lockFd !== null) {
+        try {
+          fs.closeSync(this.lockFd);
+        } catch {
+          // ignore
+        }
+        this.lockFd = null;
+        try {
+          fs.unlinkSync(this.lockFilePath);
+        } catch {
+          // ignore
+        }
+      }
+      this.lockToken = null;
+      throw err;
+    }
+  }
+
+  async release(): Promise<void> {
+    if (this.lockFd !== null) {
+      try {
+        fs.closeSync(this.lockFd);
+      } catch {
+        // ignore
+      }
+      this.lockFd = null;
+    }
+    if (this.lockToken !== null) {
+      const tokenToRelease = this.lockToken;
+      this.lockToken = null;
+      try {
+        if (fs.existsSync(this.lockFilePath)) {
+          const content = fs.readFileSync(this.lockFilePath, "utf8");
+          const data = JSON.parse(content);
+          if (data.token === tokenToRelease) {
+            fs.unlinkSync(this.lockFilePath);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (this.inProcessRelease) {
+      const rel = this.inProcessRelease;
+      this.inProcessRelease = null;
+      rel();
+    }
+  }
+}
+
+const sharedLocks = new Map<string, DeliveryLock>();
+
+export function getOrCreateDeliveryLock(filePath: string): DeliveryLock {
+  const normalized = getCanonicalLockPath(filePath);
+  let lock = sharedLocks.get(normalized);
+  if (!lock) {
+    lock = new FileDeliveryLock(normalized);
+    sharedLocks.set(normalized, lock);
+  }
+  return lock;
+}
+
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  constructor(private readonly filePath: string) {}
+  public readonly lock: DeliveryLock;
+
+  constructor(private readonly filePath: string, lock?: DeliveryLock) {
+    this.lock = lock ?? getOrCreateDeliveryLock(filePath);
+  }
 
   readState(): PersistedDeliveryState | null {
     if (!fs.existsSync(this.filePath)) {
@@ -240,6 +732,7 @@ export async function runDeliverySkillCli(
       maxRepairs: parsed.maxRepairs,
       maxWait: parsed.maxWait,
       stateStorage,
+      lock: stateStorage.lock,
       runner,
       log: (msg) => io.stdout.write(`${msg}\n`),
     });
@@ -264,12 +757,24 @@ export async function runDeliverySkillCli(
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
     const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
-    let existingState: PersistedDeliveryState | null = null;
+    await stateStorage.lock.acquire();
     try {
-      existingState = stateStorage.readState();
-    } catch {
-      // ignore
-    }
+      let existingState: PersistedDeliveryState | null = null;
+      try {
+        existingState = stateStorage.readState();
+      } catch {
+        // ignore
+      }
+
+      if (
+        existingState?.isPaused &&
+        !existingState.pendingCompensation &&
+        existingState.readyLabelRemoved &&
+        existingState.commentPosted
+      ) {
+        io.stdout.write("symphony delivery-skill: dispatch already halted and compensated\n");
+        return 0;
+      }
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
     const spentWaitSeconds = existingState?.spentWaitSeconds ?? (parsed.maxWait ?? 300);
@@ -428,6 +933,9 @@ export async function runDeliverySkillCli(
     }
 
     return 0;
+    } finally {
+      await stateStorage.lock.release();
+    }
   }
 
   const headBranch = parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`;
@@ -435,6 +943,23 @@ export async function runDeliverySkillCli(
   const workspaceKey = parsed.workspaceKey ?? `GH-${parsed.issueNumber}`;
 
   const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+
+  let existingDeliveryState: PersistedDeliveryState | null = null;
+  await stateStorage.lock.acquire();
+  try {
+    existingDeliveryState = stateStorage.readState();
+  } catch {
+    // ignore
+  } finally {
+    await stateStorage.lock.release();
+  }
+
+  if (existingDeliveryState?.isPaused && !parsed.resume) {
+    io.stderr.write(
+      `symphony delivery-skill: delivery is paused (${existingDeliveryState.pauseReason ?? "manual intervention required"}). Use --resume or recover-handoff first.\n`,
+    );
+    return 1;
+  }
 
   let reviewGate = customReviewGate;
   let plan: DecisionMaterializedPlan | null | undefined = undefined;

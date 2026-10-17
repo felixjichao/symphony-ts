@@ -7,6 +7,11 @@ import {
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
 import type { DeliveryStateStorage } from "./delivery-skill-runner";
 
+export interface DeliveryLock {
+  acquire(): Promise<void> | void;
+  release(): Promise<void> | void;
+}
+
 export interface RecoverDeliveryHandoffOptions {
   readonly cwd: string;
   readonly repo: string;
@@ -16,6 +21,9 @@ export interface RecoverDeliveryHandoffOptions {
   readonly headBranch?: string | undefined;
   readonly maxRepairs?: number | undefined;
   readonly maxWait?: number | undefined;
+  readonly expectedHandoffId?: string | undefined;
+  readonly expectedLastUpdated?: string | undefined;
+  readonly lock?: DeliveryLock | undefined;
   readonly stateStorage: DeliveryStateStorage;
   readonly runner: DeliveryGitGhRunner;
   readonly log?: (msg: string) => void;
@@ -32,6 +40,22 @@ export interface RecoverDeliveryHandoffResult {
 }
 
 export async function recoverDeliveryHandoff(
+  options: RecoverDeliveryHandoffOptions,
+): Promise<RecoverDeliveryHandoffResult> {
+  const lock = options.lock ?? (options.stateStorage as { lock?: DeliveryLock })?.lock;
+  if (lock) {
+    await lock.acquire();
+  }
+  try {
+    return await doRecoverDeliveryHandoff(options);
+  } finally {
+    if (lock) {
+      await lock.release();
+    }
+  }
+}
+
+async function doRecoverDeliveryHandoff(
   options: RecoverDeliveryHandoffOptions,
 ): Promise<RecoverDeliveryHandoffResult> {
   const { cwd, stateStorage, runner, log = () => {} } = options;
@@ -72,6 +96,18 @@ export async function recoverDeliveryHandoff(
     };
   }
 
+  // If already compensated under the shared lock
+  if (currentState.commentPosted && currentState.readyLabelRemoved && !currentState.pendingCompensation) {
+    return {
+      success: true,
+      message: "delivery handoff compensation already completed",
+      readyLabelRemoved: true,
+      commentPosted: true,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "posted",
+      pendingCompensation: false,
+    };
+  }
+
   // 1. Identity validation: repo, issueNumber, workspaceKey
   if (currentState.repo && currentState.repo !== options.repo) {
     return {
@@ -97,6 +133,51 @@ export async function recoverDeliveryHandoff(
     return {
       success: false,
       error: `error: workspace mismatch (persisted: ${currentState.workspaceKey}, argv: ${options.workspaceKey})`,
+      readyLabelRemoved: currentState.readyLabelRemoved ?? false,
+      commentPosted: currentState.commentPosted ?? false,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
+      pendingCompensation: true,
+    };
+  }
+
+  // 2. Version and handoff fencing: reject stale concurrent recovery attempts
+  if (
+    options.expectedHandoffId !== undefined &&
+    currentState.handoff?.handoffId &&
+    currentState.handoff.handoffId !== options.expectedHandoffId
+  ) {
+    return {
+      success: false,
+      error: `error: handoff id mismatch (persisted: ${currentState.handoff.handoffId}, expected: ${options.expectedHandoffId})`,
+      readyLabelRemoved: currentState.readyLabelRemoved ?? false,
+      commentPosted: currentState.commentPosted ?? false,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
+      pendingCompensation: true,
+    };
+  }
+  if (
+    options.expectedLastUpdated !== undefined &&
+    currentState.lastUpdated &&
+    currentState.lastUpdated !== options.expectedLastUpdated
+  ) {
+    if (
+      currentState.commentPosted &&
+      currentState.readyLabelRemoved &&
+      !currentState.pendingCompensation &&
+      (options.expectedHandoffId === undefined || currentState.handoff?.handoffId === options.expectedHandoffId)
+    ) {
+      return {
+        success: true,
+        message: "delivery handoff compensation already completed by concurrent recovery",
+        readyLabelRemoved: true,
+        commentPosted: true,
+        commentVerifyStatus: currentState.commentVerifyStatus ?? "posted",
+        pendingCompensation: false,
+      };
+    }
+    return {
+      success: false,
+      error: `error: lastUpdated version mismatch (persisted: ${currentState.lastUpdated}, expected: ${options.expectedLastUpdated})`,
       readyLabelRemoved: currentState.readyLabelRemoved ?? false,
       commentPosted: currentState.commentPosted ?? false,
       commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
@@ -296,22 +377,35 @@ export async function recoverDeliveryHandoff(
         lastUpdated: new Date().toISOString(),
       });
 
-      const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
+      // Intra-lock re-check before posting comment
+      let latestState: PersistedDeliveryState | null = null;
       try {
-        const commentRes = await runner.gh([...commentTargetArgs, "--body", commentBody], cwd);
-        if (commentRes.exitCode === 0) {
-          commentPosted = true;
-          commentVerifyStatus = "posted";
-          log("[delivery-recovery] Successfully posted handoff report comment.");
-        } else {
+        latestState = await stateStorage.readState();
+      } catch {
+        // ignore
+      }
+      if (latestState?.commentPosted) {
+        commentPosted = true;
+        commentVerifyStatus = "posted";
+        log("[delivery-recovery] Handoff report comment already posted; skipped duplicate post.");
+      } else {
+        const commentBody = formatDeliveryHandoffMarkdown({ ...handoffToPost, readyLabelRemoved, commentPosted: true });
+        try {
+          const commentRes = await runner.gh([...commentTargetArgs, "--body", commentBody], cwd);
+          if (commentRes.exitCode === 0) {
+            commentPosted = true;
+            commentVerifyStatus = "posted";
+            log("[delivery-recovery] Successfully posted handoff report comment.");
+          } else {
+            commentPosted = false;
+            commentVerifyStatus = "unverified";
+            log(`[delivery-recovery] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
+          }
+        } catch (err) {
           commentPosted = false;
           commentVerifyStatus = "unverified";
-          log(`[delivery-recovery] Warning: Failed to post handoff comment (exit ${commentRes.exitCode}): ${commentRes.stderr}`);
+          log(`[delivery-recovery] Warning: Exception posting comment: ${String(err)}`);
         }
-      } catch (err) {
-        commentPosted = false;
-        commentVerifyStatus = "unverified";
-        log(`[delivery-recovery] Warning: Exception posting comment: ${String(err)}`);
       }
     }
   }

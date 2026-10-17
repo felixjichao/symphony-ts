@@ -13,7 +13,7 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
-- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；跨阶段 expected-action 派生、启动对账扫描与自动恢复循环为后续任务。
+- **Execution Continuity extension（GitHub #145 / NEST-129）推进中**：NEST-130 / GitHub #146 已完成契约、fencing 与故障分类；NEST-131 / GitHub #147 已完成跨阶段工作级存活判定与搁浅状态协调（`deriveWorkContinuity`、`WorkContinuityCoordinator`、Decision `releaseExpiredTaskClaim` 与 Delivery 并发保护）；后续推进 #148（ChatGPT Web 浏览器智能体进度心跳与执行证据）。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
@@ -59,6 +59,7 @@
 ## Execution Continuity and Recovery extension
 
 - NEST-130 / GitHub #146: provider-neutral execution continuity, ownership fencing, and failure contracts in `@symphony/domain` (`src/execution-continuity.ts`) — continuity scopes (`work` / `task` / `attempt` / `binding`), continuity states with first-class non-terminal `blocked`, recovery actions (`none` / `dispatch` / `resume` / `retry` / `rebind` / `reclaim` / `compensate` / `await_external` / `require_human`), expected next actions with typed internal/external/human authority, multi-dimensional ownership fencing with capability credential sanitization, liveness and forward progress tracking, failure taxonomy (`transient` / `recoverable` / `blocked_external` / `superseded` / `invariant_violation`), pure subsystem error mapping for Decision, Delivery, Web Driver, and Orchestrator with explicit unmapped diagnostic gap handling, and canonical stage descriptors. [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md); evidence in [conformance](conformance.md#execution-continuity-and-recovery-contracts-nest-130--146).
+- NEST-131 / GitHub #147: work-level liveness and stranded-state reconciliation across stage boundaries (planning, coding, CI wait, review, repair, delivery compensation, merge) — pure derivation matrix (`deriveWorkContinuity`), safe 5-step reconciliation protocol (observe → derive → pre-action re-observe → delegate to authority → post-action re-observe) in `@symphony/orchestrator` (`WorkContinuityCoordinator`), transactional lease expiration claim release in `@symphony/decision` (`releaseExpiredTaskClaim`), mutex-locked handoff compensation in `@symphony/agent` (`recoverDeliveryHandoff`), and host wiring in `@symphony/cli`. [Reconciliation note](../notes/accepted/architecture/2026-10-17-work-liveness-and-stranded-state-reconciliation.md); evidence in [conformance](conformance.md#work-level-liveness-and-stranded-state-reconciliation-nest-131--147).
 
 ## 已完成能力
 

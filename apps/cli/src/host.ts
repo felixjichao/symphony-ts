@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runAgentAttempt } from "@symphony/agent";
+import { recoverDeliveryHandoff, runAgentAttempt } from "@symphony/agent";
 import {
   SymphonyConfigError,
   watchWorkflow,
@@ -14,6 +14,8 @@ import {
   type DecisionMaterializedPlan,
   type Issue,
   type OrchestratorRuntimeState,
+  type WorkItemFacts,
+  type WorkKey,
 } from "@symphony/domain";
 import {
   DecisionBridgeClient,
@@ -47,6 +49,33 @@ function resolveIssueSessionId(issue: Issue, fallbackRepo?: string | null): stri
   }
   return null;
 }
+
+function resolveIssueWorkKey(issue: Issue, fallbackRepo?: string | null): WorkKey | null {
+  if (issue.nativeRef && typeof issue.nativeRef["repo"] === "string" && typeof issue.nativeRef["number"] === "number") {
+    const parts = (issue.nativeRef["repo"] as string).split("/");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      return githubDecisionRoot(parts[0], parts[1], issue.nativeRef["number"] as number);
+    }
+  }
+  if (issue.url) {
+    const match = issue.url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/i);
+    if (match && match[1] && match[2] && match[3]) {
+      return githubDecisionRoot(match[1], match[2], Number(match[3]));
+    }
+  }
+  const repoToUse = fallbackRepo ?? (issue.nativeRef && typeof issue.nativeRef["repo"] === "string" ? (issue.nativeRef["repo"] as string) : null);
+  if (repoToUse) {
+    const parts = repoToUse.split("/");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      const num = Number(issue.id.replace(/^GH-/, "")) || Number(issue.identifier.replace(/^GH-/, ""));
+      if (!Number.isNaN(num) && num > 0) {
+        return githubDecisionRoot(parts[0], parts[1], num);
+      }
+    }
+  }
+  return { provider: "github", key: issue.id };
+}
+
 import {
   createStructuredLogger,
   projectObservabilitySnapshot,
@@ -60,6 +89,7 @@ import {
   createOrchestratorRuntimeState,
   OrchestratorAuthority,
   OrchestratorLoop,
+  WorkContinuityCoordinator,
   type DispatchPreflightResult,
   type DispatchPreflightSource,
   type PollScheduler,
@@ -69,6 +99,7 @@ import {
 } from "@symphony/orchestrator";
 import {
   createGitHubAdapterProfile,
+  GitHubDeliveryService,
   TrackerAdapterRegistry,
   type TrackerAdapter,
   type TrackerAdapterProfile,
@@ -78,6 +109,8 @@ import { resolveWorkflowPath } from "./args";
 import { EffectiveRuntimeController } from "./effective-runtime";
 import { createRuntimeLogObservers } from "./logging";
 import { WorkspaceLifecycleCoordinator } from "./workspace-lifecycle";
+import { FileDeliveryStateStorage } from "./delivery-skill-cli";
+import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
 
 export interface SymphonyHost {
   readonly workflowPath: string;
@@ -90,6 +123,7 @@ export interface SymphonyHost {
   readonly loop: OrchestratorLoop;
   readonly logger: StructuredLogger;
   readonly clock: SnapshotClock;
+  readonly workContinuityCoordinator: WorkContinuityCoordinator;
   getSnapshot(): ObservabilitySnapshot;
   tryGetSnapshot(): SnapshotResult;
   readonly failure: Promise<unknown>;
@@ -116,6 +150,7 @@ export interface CreateHostOptions {
   readonly decisionBridgeUrl?: string | undefined;
   readonly decisionBridgeToken?: string | undefined;
   readonly planningGate?: DecisionPlanningGate | undefined;
+  readonly workContinuityCoordinator?: WorkContinuityCoordinator | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -349,12 +384,351 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
     controller.setAuthority(authority);
 
+    const workContinuityCoordinator = options.workContinuityCoordinator ?? new WorkContinuityCoordinator({
+      clock: now,
+      activeWorkKeysSource: async () => {
+        const keys = new Map<string, WorkKey>();
+        const repo = getEffectiveRepo();
+        // 1. All running issues in authority
+        for (const issueId of authority.getAllRunningIssueIds()) {
+          const wk: WorkKey = repo
+            ? { provider: "github", key: `${repo}#${issueId.replace(/^GH-/, "")}` }
+            : { provider: "github", key: issueId };
+          keys.set(`${wk.provider}:${wk.key}`, wk);
+        }
+        // 2. All retry issues in authority
+        for (const issueId of authority.getAllRetryIssueIds()) {
+          const wk: WorkKey = repo
+            ? { provider: "github", key: `${repo}#${issueId.replace(/^GH-/, "")}` }
+            : { provider: "github", key: issueId };
+          keys.set(`${wk.provider}:${wk.key}`, wk);
+        }
+        // 3. Active candidate issues from tracker (discovers work when no running worker exists)
+        try {
+          const activeStates = controller.current.scheduling.policy.activeStates ?? ["open", "in_progress", "todo"];
+          const candidates = await trackerProxy.fetchIssuesByStates(activeStates);
+          for (const issue of candidates) {
+            const wk = resolveIssueWorkKey(issue, repo);
+            if (wk) {
+              keys.set(`${wk.provider}:${wk.key}`, wk);
+            }
+          }
+        } catch (err) {
+          logger.emit({
+            scope: "service",
+            severity: "warn",
+            event: "work_continuity_scan",
+            outcome: "failed",
+            reason: String(err),
+          });
+        }
+        return Array.from(keys.values());
+      },
+      factsReader: async (workKey: WorkKey): Promise<WorkItemFacts> => {
+        let repo = getEffectiveRepo();
+        let issueNumber: number | null = null;
+        if (workKey.key.includes("#")) {
+          const parts = workKey.key.split("#");
+          repo = parts[0] || repo;
+          const parsed = Number(parts[1]);
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            issueNumber = parsed;
+          }
+        } else {
+          const parsed = Number(workKey.key.replace(/^GH-/, ""));
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            issueNumber = parsed;
+          }
+        }
+
+        const issueId = issueNumber !== null ? String(issueNumber) : workKey.key;
+        let githubIssue: { id?: string; state: "open" | "closed"; url?: string } | undefined;
+        const sourceFreshness: Record<string, "fresh" | "stale" | "unavailable" | "unknown"> = {
+          github: "fresh",
+          decision: planningGate ? "fresh" : "unknown",
+          orchestrator: "fresh",
+          delivery: "fresh",
+        };
+
+        // GitHub / tracker facts
+        try {
+          const queryId = issueId.replace(/^GH-/, "");
+          const issues = await trackerProxy.fetchIssuesByIds([queryId]);
+          if (issues.length > 0 && issues[0]) {
+            const iss = issues[0];
+            githubIssue = {
+              ...(iss.id ? { id: iss.id } : {}),
+              state: iss.state === "closed" ? "closed" : "open",
+              ...(iss.url ? { url: iss.url } : {}),
+            };
+          }
+        } catch {
+          sourceFreshness["github"] = "unavailable";
+        }
+
+        let pullRequest: { number: number; state: "open" | "closed" | "merged"; headSha: string; isDraft: boolean } | null = null;
+        let ci: { status: "pending" | "success" | "failure"; headSha?: string } | null = null;
+
+        if (repo && issueNumber !== null) {
+          try {
+            const runner = new DefaultDeliveryGitGhRunner();
+            const deliveryService = new GitHubDeliveryService({
+              exec: async (args) => runner.gh(args, cwd),
+            });
+            const deliveryContext = {
+              repo,
+              issueNumber,
+              workspaceKey: `GH-${issueNumber}`,
+              headBranch: `symphony/GH-${issueNumber}`,
+              baseBranch: "main",
+            };
+            const obs = await deliveryService.observeWork(deliveryContext);
+            if (obs.pullRequest) {
+              pullRequest = {
+                number: obs.pullRequest.number,
+                state: obs.pullRequest.state,
+                headSha: obs.pullRequest.headSha,
+                isDraft: obs.pullRequest.isDraft,
+              };
+            }
+            if (obs.ci) {
+              ci = {
+                status: obs.ci.status,
+                ...(obs.ci.headSha ? { headSha: obs.ci.headSha } : {}),
+              };
+            }
+          } catch {
+            sourceFreshness["github"] = "unavailable";
+          }
+        }
+
+        const isRunning = authority.getWorker(issueId) !== undefined;
+        const isStalled = authority.isIssueStalled(issueId);
+        const attemptToken = authority.getAttemptToken(issueId);
+        const lifecycleGeneration = authority.getIssueLifecycleGeneration(issueId);
+        const reconciliationEpoch = authority.getIssueReconciliationEpoch(issueId);
+        const retryEntry = authority.getRetryEntry(issueId);
+        const lastProgressAt = authority.getIssueLastProgressAt(issueId);
+
+        const orchestrator = {
+          isRunning,
+          isStalled,
+          attemptToken,
+          lifecycleGeneration,
+          reconciliationEpoch,
+          lastProgressAt,
+          retryScheduled: retryEntry ? {
+            attempt: retryEntry.attempt,
+            retryInMs: Math.max(0, retryEntry.dueAtMs - (options.now ? options.now() : Date.now())),
+            error: retryEntry.error,
+          } : null,
+        };
+
+        let decision: WorkItemFacts["decision"] = undefined;
+        if (planningGate) {
+          try {
+            decision = await planningGate.observeWork(workKey);
+          } catch {
+            sourceFreshness["decision"] = "unavailable";
+          }
+        }
+
+        let delivery: WorkItemFacts["delivery"] = undefined;
+        try {
+          let workspacePath: string | null = null;
+          try {
+            workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueId}`, issueId);
+          } catch {
+            // ignore
+          }
+          const deliveryStatePath = workspacePath
+            ? path.join(workspacePath, ".symphony", "delivery-state.json")
+            : path.join(cwd, ".symphony", "delivery-state.json");
+          if (fs.existsSync(deliveryStatePath)) {
+            const stateStorage = new FileDeliveryStateStorage(deliveryStatePath);
+            const persisted = stateStorage.readState();
+            if (persisted) {
+              delivery = {
+                isPaused: persisted.isPaused,
+                ...(persisted.pauseReason ? { pauseReason: persisted.pauseReason } : {}),
+                pendingCompensation: persisted.pendingCompensation ?? false,
+                handoff: persisted.handoff ?? null,
+                spentRepairs: persisted.spentRepairs ?? 0,
+                maxRepairs: 3,
+                spentWaitSeconds: persisted.spentWaitSeconds ?? 0,
+                maxWaitSeconds: 300,
+                ...(persisted.lastUpdated ? { lastUpdated: persisted.lastUpdated } : {}),
+              };
+            }
+          }
+        } catch {
+          sourceFreshness["delivery"] = "unavailable";
+        }
+
+        return {
+          workKey,
+          github: githubIssue ? {
+            issue: githubIssue,
+            pullRequest,
+            ci,
+          } : null,
+          orchestrator,
+          decision,
+          delivery,
+          sourceFreshness,
+        };
+      },
+      authorities: {
+        orchestrator: {
+          dispatch: async (targetIssueId: string) => {
+            const queryId = targetIssueId.replace(/^GH-/, "");
+            const issues = await trackerProxy.fetchIssuesByIds([queryId]);
+            if (issues.length > 0 && issues[0]) {
+              const res = authority.dispatchIssue(issues[0]);
+              return res.kind === "dispatched";
+            }
+            return false;
+          },
+          stopStalled: async (targetIssueId: string, fence?: {
+            expectedAttemptToken?: string;
+            expectedGeneration?: number;
+            expectedEpoch?: number;
+          }) => {
+            return authority.stopStalledWorker(targetIssueId, fence);
+          },
+        },
+        decision: planningGate ? {
+          dispatchPlan: async ({ sessionId, workKey }) => {
+            try {
+              const parts = workKey.key.split("#");
+              const cleanId = (parts[1] ?? workKey.key).replace(/^GH-/, "");
+              let issues: readonly Issue[];
+              try {
+                issues = await trackerProxy.fetchIssuesByIds([cleanId]);
+              } catch (trackerErr) {
+                return {
+                  executed: false,
+                  error: `Tracker unavailable when reading requirements for plan dispatch: ${String(trackerErr)}`,
+                };
+              }
+              const issue = issues.find((i) => i.id === cleanId || String(i.nativeRef?.number) === cleanId) ?? issues[0];
+              if (!issue) {
+                return {
+                  executed: false,
+                  error: `Issue not found in tracker for cleanId ${cleanId}`,
+                };
+              }
+              const requirements = {
+                title: issue.title,
+                body: issue.description ?? "",
+              };
+
+              await planningGate.ensurePlanTask(sessionId, {
+                requirements,
+              });
+              return { executed: true };
+            } catch (err) {
+              return { executed: false, error: String(err) };
+            }
+          },
+          dispatchReview: async ({ sessionId, target }) => {
+            try {
+              if (planningGate.serviceInstance) {
+                await planningGate.serviceInstance.createReviewTask(sessionId, { target });
+                return { executed: true };
+              }
+              if (planningGate.clientInstance) {
+                await planningGate.clientInstance.createTask({
+                  sessionId,
+                  kind: "review",
+                  target,
+                });
+                return { executed: true };
+              }
+              return { executed: false, error: "No client or service to dispatch review" };
+            } catch (err) {
+              return { executed: false, error: String(err) };
+            }
+          },
+          releaseExpiredClaim: async ({ taskId, expectedRevision, expectedClaimGeneration, expectedBindingGeneration }) => {
+            try {
+              if (planningGate.serviceInstance) {
+                const res = await planningGate.serviceInstance.releaseExpiredTaskClaim({
+                  taskId,
+                  expectedRevision,
+                  expectedClaimGeneration,
+                  expectedBindingGeneration,
+                });
+                return { released: res.released, reason: res.reason };
+              }
+              if (planningGate.clientInstance) {
+                const res = await planningGate.clientInstance.releaseExpiredTaskClaim(taskId, {
+                  expectedRevision,
+                  expectedClaimGeneration,
+                  expectedBindingGeneration,
+                });
+                return { released: res.released, reason: res.reason };
+              }
+              return { released: false, reason: "No client or service for claim release" };
+            } catch (err) {
+              return { released: false, reason: String(err) };
+            }
+          },
+        } : undefined,
+        delivery: {
+          compensateHandoff: async ({ workKey, expectedHandoffId }) => {
+            try {
+              const parts = workKey.key.split("#");
+              const repo = parts[0] || (getEffectiveRepo() ?? "");
+              const issueNumber = Number(parts[1] ?? workKey.key.replace(/^GH-/, ""));
+              let workspacePath: string | null = null;
+              try {
+                workspacePath = workspaceCoordinator.getWorkspacePath(`GH-${issueNumber}`, String(issueNumber));
+              } catch {
+                // ignore
+              }
+              const deliveryStatePath = workspacePath
+                ? path.join(workspacePath, ".symphony", "delivery-state.json")
+                : path.join(cwd, ".symphony", "delivery-state.json");
+              const stateStorage = new FileDeliveryStateStorage(deliveryStatePath);
+              const runner = new DefaultDeliveryGitGhRunner();
+              const res = await recoverDeliveryHandoff({
+                cwd: workspacePath ?? cwd,
+                repo,
+                issueNumber,
+                expectedHandoffId,
+                stateStorage,
+                runner,
+              });
+              return { success: res.success, error: res.error };
+            } catch (err) {
+              return { success: false, error: String(err) };
+            }
+          },
+        },
+      },
+      deriveOptions: {
+        planningEnabled: Boolean(planningGate),
+        defaultStallTimeoutMs: controller.current.serviceConfig.codex.stallTimeoutMs,
+      },
+      log: (msg) => {
+        logger.emit({
+          scope: "service",
+          severity: "info",
+          event: "work_continuity",
+          outcome: "completed",
+          reason: msg,
+        });
+      },
+    });
+
     const loop = new OrchestratorLoop({
       authority,
       candidates: trackerProxy,
       preflight,
       ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
       onDiagnostic: observers.onDiagnostic,
+      workContinuityCoordinator,
     });
 
     let stopping = false;
@@ -398,6 +772,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       loop,
       logger,
       clock,
+      workContinuityCoordinator,
       getSnapshot: () => projectObservabilitySnapshot(state, clock),
       tryGetSnapshot: () => tryProjectObservabilitySnapshot(state, clock),
       failure,

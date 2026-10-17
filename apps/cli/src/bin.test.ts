@@ -211,7 +211,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
     const rootA = path.join(dir, "root-a"); const rootB = path.join(dir, "root-b");
     const file = path.join(dir, "WORKFLOW.md");
     await writeFile(file, workflow(rootA, tracker.url, { command: command(), afterRun: hook() }));
-    const proc = startProcess([], dir);
+    const proc = startProcess([], dir, binPath, 30000);
     try {
       await proc.waitForOutput('event="session_started"');
       const worldA = readJson<{ pid: number; cwd: string }>(path.join(rootA, "GH-1", "world.json"));
@@ -233,7 +233,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       expect(result.stderr).toContain('event="workflow_reload" outcome="completed"');
       expect(result.stderr).not.toContain("Rejected secret prompt");
     } finally { await closeFixture(proc, tracker, dir); }
-  });
+  }, 30000);
 
   it("classifies SIGKILL only as abnormal termination", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-kill-"));

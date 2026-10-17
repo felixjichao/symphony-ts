@@ -1,16 +1,17 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { runDeliverySkill, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
+import { runDeliverySkill, recoverDeliveryHandoff, type DeliveryGitGhRunner, type DeliverySubprocessResult } from "@symphony/agent";
 import {
   formatPrBody,
   type DecisionReviewTarget,
   type DeliveryReviewGate,
 } from "@symphony/domain";
 
-import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
+import { FileDeliveryLock, FileDeliveryStateStorage, getOrCreateDeliveryLock, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
 class MockCliRunner implements DeliveryGitGhRunner {
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
@@ -1269,6 +1270,1075 @@ it("restores the pending deadline from a real state file after interrupted waiti
     expect(restartedStorage.readState()?.isPaused).toBe(true);
     expect(pushes).toBeGreaterThan(0);
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("Blocker 5: concurrent recoverDeliveryHandoff calls serialize via FileDeliveryStateStorage lock and post only one comment", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-"));
+  try {
+    const stateFile = path.join(dir, "delivery.json");
+    const stateStorage = new FileDeliveryStateStorage(stateFile);
+    stateStorage.writeState({
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      spentRepairs: 0,
+      spentWaitSeconds: 0,
+      isPaused: true,
+      pendingCompensation: true,
+      readyLabelRemoved: true,
+      commentPosted: false,
+      lastUpdated: "v1",
+      handoff: {
+        handoffId: "h1",
+        reason: "manual_intervention_required",
+        details: "manual",
+        repo: "acme/repo",
+        issueNumber: 1,
+        headBranch: "symphony/GH-1",
+        prNumber: 2,
+        prUrl: null,
+        headSha: "head",
+        spentRepairs: 0,
+        maxRepairs: 3,
+        spentWaitSeconds: 0,
+        maxWaitSeconds: 300,
+        readyLabel: "ready",
+        readyLabelRemoved: true,
+      },
+    });
+
+    let queries = 0;
+    let posts = 0;
+    const runner: DeliveryGitGhRunner = {
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      git: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      gh: async (args) => {
+        if (args[1] === "view") {
+          queries++;
+          return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: "" };
+        }
+        if (args[1] === "comment") {
+          posts++;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    const options = {
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      stateStorage,
+      runner,
+      expectedHandoffId: "h1",
+      expectedLastUpdated: "v1",
+    };
+
+    const results = await Promise.all([
+      recoverDeliveryHandoff(options),
+      recoverDeliveryHandoff(options),
+    ]);
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(queries).toBeGreaterThanOrEqual(1);
+    expect(posts).toBe(1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: resolves canonical alias paths to share in-process mutex and protects living locks", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-alias-"));
+  const physical = path.join(dir, "physical");
+  const alias = path.join(dir, "alias");
+  fs.mkdirSync(physical);
+  fs.symlinkSync(physical, alias);
+  const file = path.join(physical, "delivery.json");
+  const first = new FileDeliveryLock(file);
+  const second = new FileDeliveryLock(path.join(alias, "delivery.json"));
+
+  try {
+    await first.acquire();
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+
+    let secondAcquired = false;
+    const secondPromise = second.acquire().then(() => {
+      secondAcquired = true;
+    });
+
+    // Verify second lock acquisition is blocked by in-process mutex
+    await new Promise((r) => setTimeout(r, 100));
+    expect(secondAcquired).toBe(false);
+
+    // Release first lock; second acquisition can now proceed
+    await first.release();
+    await secondPromise;
+    expect(secondAcquired).toBe(true);
+
+    // Now release second
+    await second.release();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  } finally {
+    await first.release();
+    await second.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: release only deletes the lock if token matches", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-token-"));
+  const file = path.join(dir, "delivery.json");
+  const lock = new FileDeliveryLock(file);
+
+  try {
+    await lock.acquire();
+    const lockFile = `${file}.lock`;
+    expect(fs.existsSync(lockFile)).toBe(true);
+
+    // Overwrite the lock file with a different token from another entity
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token: "other-token", time: Date.now() }));
+
+    // Releasing the original lock should NOT delete the lock belonging to other-token
+    await lock.release();
+    expect(fs.existsSync(lockFile)).toBe(true);
+
+    const content = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+    expect(content.token).toBe("other-token");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("Delivery halt side effects are serialized with recoverDeliveryHandoff under shared lock", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-halt-serial-"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(dir, "delivery.json"));
+  let recovering = false;
+  let posts = 0;
+  const runner = {
+    git: async () => ({ exitCode: 0, stdout: "wrong-branch", stderr: "" }),
+    exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    gh: async (args: readonly string[]) => {
+      if (args[1] === "edit" && !recovering) {
+        recovering = true;
+        const recovered = await recoverDeliveryHandoff({
+          cwd: dir,
+          repo: "acme/repo",
+          issueNumber: 1,
+          stateStorage,
+          runner,
+        });
+        expect(recovered.success).toBe(true);
+      }
+      if (args[1] === "comment") posts++;
+      return { exitCode: 0, stdout: JSON.stringify({ comments: [], labels: [] }), stderr: "" };
+    },
+  };
+
+  try {
+    const result = await runDeliverySkill({
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      headBranch: "symphony/GH-1",
+      baseBranch: "main",
+      runner,
+      stateStorage,
+    });
+    expect(result.status).toBe("blocked");
+    // Verify only exactly 1 comment was posted despite concurrent recovery during halt
+    expect(posts).toBe(1);
+
+    const finalState = stateStorage.readState();
+    expect(finalState?.commentPosted).toBe(true);
+    expect(finalState?.pendingCompensation).toBe(false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("failed file lock acquisition cleanly releases in-process mutex", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-fail-"));
+  const parent = path.join(dir, "blocker");
+  fs.writeFileSync(parent, "not a directory");
+  const first = new FileDeliveryLock(path.join(parent, "delivery.json"));
+  let second: FileDeliveryLock | undefined;
+  try {
+    await expect(first.acquire()).rejects.toMatchObject({ code: "ENOTDIR" });
+    fs.unlinkSync(parent);
+    fs.mkdirSync(parent);
+    second = new FileDeliveryLock(path.join(parent, "delivery.json"));
+    const acquired = await Promise.race([
+      second.acquire().then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 200)),
+    ]);
+    expect(acquired).toBe("acquired");
+  } finally {
+    await second?.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("getOrCreateDeliveryLock and new FileDeliveryLock share canonical lock path and mutex", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-canonical-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lock1 = getOrCreateDeliveryLock(statePath);
+  const lock2 = new FileDeliveryLock(statePath);
+  try {
+    await lock1.acquire();
+    const acquirePromise = lock2.acquire();
+    const probe = await Promise.race([
+      acquirePromise.then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 50)),
+    ]);
+    expect(probe).toBe("blocked");
+    await lock1.release();
+    const result = await Promise.race([
+      acquirePromise.then(() => "acquired"),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    ]);
+    expect(result).toBe("acquired");
+    await lock2.release();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("delivery records comment receipt under lock preventing duplicate comment from concurrent recovery", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-comment-receipt-race-"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(dir, "delivery.json"));
+  let recovery: Promise<{ success: boolean }> | undefined;
+  let posts = 0;
+  const runner = {
+    git: async () => ({ exitCode: 0, stdout: "wrong-branch", stderr: "" }),
+    exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    gh: async (args: readonly string[]) => {
+      if (args[1] === "comment") {
+        posts++;
+        if (posts === 1) {
+          recovery = recoverDeliveryHandoff({
+            cwd: dir,
+            repo: "acme/repo",
+            issueNumber: 1,
+            stateStorage,
+            runner,
+          });
+        }
+      }
+      return { exitCode: 0, stdout: JSON.stringify({ comments: [], labels: [] }), stderr: "" };
+    },
+  };
+  try {
+    const result = await runDeliverySkill({
+      cwd: dir,
+      repo: "acme/repo",
+      issueNumber: 1,
+      workspaceKey: "GH-1",
+      headBranch: "symphony/GH-1",
+      baseBranch: "main",
+      runner,
+      stateStorage,
+    });
+    expect(result.status).toBe("blocked");
+    expect((await recovery!)?.success).toBe(true);
+    expect(posts).toBe(1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: metadata write failure (ENOSPC) cleans up created lock file and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-enospc-"));
+  const file = path.join(dir, "delivery.json");
+  const lock = new FileDeliveryLock(file);
+
+  const originalWriteFileSync = fs.writeFileSync;
+  let writeInjected = false;
+  const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+    const target = args[0];
+    if (typeof target === "number" && !writeInjected) {
+      writeInjected = true;
+      const err = new Error("ENOSPC: no space left on device") as NodeJS.ErrnoException;
+      err.code = "ENOSPC";
+      throw err;
+    }
+    return originalWriteFileSync(...args);
+  });
+
+  try {
+    await expect(lock.acquire()).rejects.toThrow("ENOSPC");
+    // Verify .lock file was unlinked and does not remain on disk
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+
+    // Subsequent acquire succeeds without being blocked by an abandoned empty lock
+    writeSpy.mockRestore();
+    await lock.acquire();
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+    await lock.release();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  } finally {
+    writeSpy.mockRestore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: stale unparseable or empty lock file (>60s) is safely reclaimed by subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-stale-"));
+  const file = path.join(dir, "delivery.json");
+  const lockFile = `${file}.lock`;
+  const lock = new FileDeliveryLock(file);
+
+  try {
+    // Create an empty lock file with mtime > 60s in the past
+    fs.writeFileSync(lockFile, "", "utf8");
+    const pastTime = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockFile, pastTime, pastTime);
+
+    // Acquire should detect the stale empty lock, reclaim it, and succeed
+    await lock.acquire();
+    expect(fs.existsSync(lockFile)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockFile, "utf8")) as { pid?: number; token?: string };
+    expect(content.pid).toBe(process.pid);
+    expect(typeof content.token).toBe("string");
+
+    await lock.release();
+    expect(fs.existsSync(lockFile)).toBe(false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: interleaved acquisition by another live owner prevents stale reclamation from deleting the new lock", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-interleaved-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const actorA = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+  let actorBFd: number | undefined;
+
+  fs.writeFileSync(lockPath, "", "utf8");
+  const old = (Date.now() - 70000) / 1000;
+  fs.utimesSync(lockPath, old, old);
+
+  const originalReadFileSync = fs.readFileSync;
+  let injected = false;
+  const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(
+    (path: fs.PathOrFileDescriptor, options?: (fs.ObjectEncodingOptions & { flag?: string | undefined }) | BufferEncoding | null | undefined) => {
+      const observed = originalReadFileSync(path, options);
+      if (!injected && path === lockPath) {
+        injected = true;
+        // B unlinks stale lock and establishes a new live lock
+        fs.unlinkSync(lockPath);
+        actorBFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+        fs.writeFileSync(actorBFd, JSON.stringify({ pid: process.pid, token: "live-owner-B", time: Date.now() }), "utf8");
+      }
+      return observed;
+    },
+  );
+
+  try {
+    // A attempts to acquire, but because B established a live lock, A cannot acquire and times out safely
+    await expect(actorA.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    readSpy.mockRestore();
+
+    expect(injected).toBe(true);
+    // Critical assertion: B's live lock was NOT deleted by A's stale observation!
+    expect(fs.fstatSync(actorBFd!).nlink).toBe(1);
+    const diskContent = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { token?: string };
+    expect(diskContent.token).toBe("live-owner-B");
+  } finally {
+    readSpy.mockRestore();
+    if (actorBFd !== undefined) {
+      try {
+        fs.closeSync(actorBFd);
+      } catch {
+        // ignore
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: concurrent reclaimers arbitrate safely with only one winner taking over the stale lock", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-concurrent-reclaim-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const lockA = new FileDeliveryLock(statePath, { inProcessMutex: false });
+  const lockB = new FileDeliveryLock(statePath, { inProcessMutex: false });
+
+  try {
+    // Stale lock file (>60s)
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    // Both re-acquire concurrently
+    let winner = "";
+    const pA = lockA.acquire().then(() => {
+      winner = winner || "A";
+    });
+    const pB = lockB.acquire().then(() => {
+      winner = winner || "B";
+    });
+
+    await Promise.race([pA, pB]);
+    expect(["A", "B"]).toContain(winner);
+
+    // Release the winner's lock so the second actor can acquire
+    if (winner === "A") {
+      await lockA.release();
+      await pB;
+      await lockB.release();
+    } else {
+      await lockB.release();
+      await pA;
+      await lockA.release();
+    }
+    expect(fs.existsSync(lockPath)).toBe(false);
+  } finally {
+    await lockA.release().catch(() => {});
+    await lockB.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: failed arbitration times out cleanly without synchronous spinning or bypassing yield", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-timeout-yield-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+  let openSpy: { mockRestore: () => void } | undefined;
+  let attempts = 0;
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    const origOpenSync = fs.openSync;
+    openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] === `${lockPath}.reclaim`) {
+        attempts++;
+        throw Object.assign(new Error("injected reclaim permission failure"), { code: "EACCES" });
+      }
+      return origOpenSync(...args);
+    });
+
+    const start = Date.now();
+    await expect(lock.acquire()).rejects.toThrow(/Timed out waiting for delivery lock/);
+    const duration = Date.now() - start;
+    expect(duration).toBeGreaterThanOrEqual(140);
+    expect(attempts).toBeGreaterThanOrEqual(1);
+    expect(attempts).toBeLessThan(20);
+  } finally {
+    openSpy?.mockRestore();
+    await lock.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: reclamation arbitration held by a living owner is never stolen after five seconds", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-live-owner-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const contender = new FileDeliveryLock(statePath, { timeoutMs: 150, inProcessMutex: false });
+  let liveFd: number | undefined;
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    liveFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+    fs.writeFileSync(liveFd, JSON.stringify({ pid: process.pid, time: Date.now() - 6000 }), "utf8");
+    const guardAge = (Date.now() - 6000) / 1000;
+    fs.utimesSync(reclaimPath, guardAge, guardAge);
+
+    await expect(contender.acquire()).rejects.toThrow(/Timed out waiting for delivery lock/);
+    expect(fs.fstatSync(liveFd).nlink).toBe(1);
+  } finally {
+    await contender.release().catch(() => {});
+    if (liveFd !== undefined) {
+      try {
+        fs.closeSync(liveFd);
+      } catch {
+        // ignore
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: token-bound release does not delete a successor's reclaim file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-token-bound-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  let successorFd: number | undefined;
+  let successorIno: number | undefined;
+
+  const lock = new FileDeliveryLock(statePath, {
+    timeoutMs: 150,
+    _beforeReclaimRelease: () => {
+      // Barrier before release: another process takes over reclaimPath with successor-token
+      try {
+        fs.unlinkSync(reclaimPath);
+      } catch {
+        // ignore
+      }
+      successorFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "successor-token", time: Date.now() }), "utf8");
+      successorIno = fs.fstatSync(successorFd).ino;
+    },
+  });
+
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    // Acquire will execute tryReclaimAndAcquire and trigger _beforeReclaimRelease in finally
+    await lock.acquire();
+
+    expect(successorFd).toBeDefined();
+    expect(fs.existsSync(reclaimPath)).toBe(true);
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(fs.fstatSync(successorFd!).ino).toBe(successorIno);
+    const content = JSON.parse(fs.readFileSync(reclaimPath, "utf8")) as { token?: string };
+    expect(content.token).toBe("successor-token");
+  } finally {
+    if (successorFd !== undefined) {
+      try {
+        fs.closeSync(successorFd);
+      } catch {
+        // ignore
+      }
+    }
+    await lock.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: stale arbitration retirement does not delete a newly established living successor", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-stale-retire-race-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  let successorFd: number | undefined;
+  let successorIno: number | undefined;
+  let hookFired = false;
+
+  const contender = new FileDeliveryLock(statePath, {
+    timeoutMs: 150,
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      // Barrier before stale retirement: another cleaner removes the old guard
+      // and a new living arbitrator establishes its own lock before contender unlinks.
+      hookFired = true;
+      try {
+        fs.unlinkSync(reclaimPath);
+      } catch {
+        // ignore
+      }
+      successorFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "living-successor", time: Date.now() }), "utf8");
+      successorIno = fs.fstatSync(successorFd).ino;
+    },
+  });
+
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    // Contender attempts to acquire. Because the living successor took over reclaimPath,
+    // contender must NOT delete the successor and must time out safely.
+    await expect(contender.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+
+    expect(hookFired).toBe(true);
+    expect(successorFd).toBeDefined();
+    // Critical assertion: successor's nlink remains 1 and is NOT deleted!
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(fs.fstatSync(successorFd!).ino).toBe(successorIno);
+    const content = JSON.parse(fs.readFileSync(reclaimPath, "utf8")) as { token?: string };
+    expect(content.token).toBe("living-successor");
+  } finally {
+    if (successorFd !== undefined) {
+      try {
+        fs.closeSync(successorFd);
+      } catch {
+        // ignore
+      }
+    }
+    await contender.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: crashed retirement authority directory is safely recovered and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-crash-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    // Exact on-disk state after previous cleaner crashed after mkdirSync(authDir)
+    // without writing owner metadata or finishing finally.
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    fs.utimesSync(authority, old, old);
+
+    // New lock instance attempts acquire. It must recover the crashed authority directory,
+    // retire the stale reclaim file, and acquire the lock without timing out!
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: retirement authority with dead process PID is safely recovered and permits subsequent acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-dead-pid-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    // Dead PID that does not exist in the OS process table
+    const deadPid = 9999999;
+    fs.writeFileSync(
+      path.join(authority, "owner.json"),
+      JSON.stringify({ pid: deadPid, createdAt: Date.now() - 10000 }),
+      "utf8"
+    );
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: living retirement authority directory is not preempted and contender times out safely", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-living-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    // Living process PID (process.pid) created just now
+    fs.writeFileSync(
+      path.join(authority, "owner.json"),
+      JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+      "utf8"
+    );
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 100 });
+    locks.push(lock);
+    // Because owner is alive, contender MUST NOT preempt and must time out
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(fs.existsSync(authority)).toBe(true);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: living retirement authority is not preempted even when older than 60s", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-living-60s-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+  let ownerFd: number | undefined;
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    const ownerFile = path.join(authority, "owner.json");
+    ownerFd = fs.openSync(ownerFile, "wx");
+    fs.writeFileSync(
+      ownerFd,
+      JSON.stringify({ pid: process.pid, token: "still-living", createdAt: Date.now() - 70000 }),
+      "utf8"
+    );
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+    locks.push(lock);
+    // Because owner is alive, contender MUST NOT preempt even when older than 60s
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(fs.existsSync(authority)).toBe(true);
+    expect(fs.fstatSync(ownerFd).nlink).toBe(1);
+  } finally {
+    if (ownerFd !== undefined) {
+      try {
+        fs.closeSync(ownerFd);
+      } catch {
+        // ignore
+      }
+    }
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Round 11 reproductions adapted to the publication protocol. Every intercepted
+// system call still executes; a winning successor keeps its real inode linked.
+it("FileDeliveryLock: actual publication conflict preserves a fresh living successor", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-publish-race-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  fs.mkdirSync(authority);
+  const predecessor = path.join(authority, "owner.json");
+  const deadContent = JSON.stringify({ pid: 99999999, token: "dead" });
+  fs.writeFileSync(predecessor, deadContent);
+  let successorFd: number | undefined;
+  let successorPath = "";
+  let actualConflict = false;
+  const link = fs.linkSync;
+  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((source, target) => {
+    if (!successorPath && String(target).startsWith(authority)) {
+      successorPath = String(target);
+      const candidate = path.join(authority, "winner");
+      successorFd = fs.openSync(candidate, "wx");
+      fs.writeFileSync(successorFd, JSON.stringify({ pid: process.pid, token: "C-live" }));
+      link(candidate, target);
+      fs.unlinkSync(candidate);
+    }
+    try {
+      return link(source, target); // Resume A's real syscall; it MUST lose with EEXIST.
+    } catch (err) {
+      actualConflict = (err as NodeJS.ErrnoException).code === "EEXIST";
+      throw err;
+    }
+  });
+  const unlink = fs.unlinkSync;
+  const ownerUnlinks: string[] = [];
+  const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+    if (target === predecessor || target === successorPath) ownerUnlinks.push(String(target));
+    return unlink(target);
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(actualConflict).toBe(true);
+    expect(successorFd).toBeDefined();
+    expect(fs.fstatSync(successorFd!).nlink).toBe(1);
+    expect(JSON.parse(fs.readFileSync(successorPath, "utf8")).token).toBe("C-live");
+    expect(fs.readFileSync(predecessor, "utf8")).toBe(deadContent);
+    expect(ownerUnlinks).toEqual([]);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
+  } finally {
+    linkSpy.mockRestore();
+    unlinkSpy.mockRestore();
+    await lock.release();
+    if (successorFd !== undefined) fs.closeSync(successorFd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ["absent", "ENOSPC"],
+  ["dead", "EIO"],
+  ["corrupt", "ENOSPC"],
+])("FileDeliveryLock: %s owner publication failure (%s) closes every fd and can retry", async (initial, code) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-publish-fd-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  fs.mkdirSync(authority);
+  const ownerPath = path.join(authority, "owner.json");
+  if (initial !== "absent") {
+    fs.writeFileSync(ownerPath, initial === "dead" ? JSON.stringify({ pid: 99999999 }) : "{");
+    fs.utimesSync(ownerPath, old, old);
+  }
+  const captured: number[] = [];
+  const active = new Set<number>();
+  const open = fs.openSync;
+  const close = fs.closeSync;
+  const write = fs.writeFileSync;
+  const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+    const fd = open(...args);
+    if (String(args[0]).startsWith(path.join(authority, "candidate-"))) {
+      captured.push(fd);
+      active.add(fd);
+    }
+    return fd;
+  });
+  const closeSpy = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+    close(fd);
+    active.delete(fd);
+  });
+  const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+    if (typeof args[0] === "number" && active.has(args[0])) {
+      write(args[0], "{"); // Also exercise partially written metadata.
+      throw Object.assign(new Error(`injected ${code}`), { code });
+    }
+    return write(...args);
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    await lock.release();
+    expect(captured.length).toBeGreaterThan(1); // Repeated polling, not just one failed write.
+    expect(active.size).toBe(0);
+    for (const fd of captured) expect(() => fs.fstatSync(fd)).toThrow(/EBADF/);
+    expect(fs.readdirSync(authority).filter((name) => name.startsWith("candidate-"))).toEqual([]);
+    expect(fs.existsSync(ownerPath)).toBe(initial !== "absent");
+    writeSpy.mockRestore();
+    await lock.acquire();
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    writeSpy.mockRestore();
+    openSpy.mockRestore();
+    closeSpy.mockRestore();
+    await lock.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: corrupt owner.json in authority directory is safely recovered and permits acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-retire-corrupt-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const locks: FileDeliveryLock[] = [];
+
+  try {
+    const old = (Date.now() - 70000) / 1000;
+    fs.writeFileSync(lockPath, "", "utf8");
+    fs.utimesSync(lockPath, old, old);
+    fs.writeFileSync(reclaimPath, "", "utf8");
+    fs.utimesSync(reclaimPath, old, old);
+
+    const authority = `${reclaimPath}.retire-${fs.statSync(reclaimPath).ino}`;
+    fs.mkdirSync(authority);
+    fs.writeFileSync(path.join(authority, "owner.json"), "{", "utf8");
+    fs.utimesSync(path.join(authority, "owner.json"), old, old);
+    fs.utimesSync(authority, old, old);
+
+    const lock = new FileDeliveryLock(statePath, { timeoutMs: 300 });
+    locks.push(lock);
+    await lock.acquire();
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: number };
+    expect(content.pid).toBe(process.pid);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+  } finally {
+    for (const l of locks) {
+      await l.release().catch(() => {});
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+it.each(["published", "action"])("FileDeliveryLock: a real process crash at %s recovers through a successor", async (phase) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-crash-process-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 100, inProcessMutex: false });
+  try {
+    const child = spawnSync(process.execPath, [
+      path.resolve("../../node_modules/vite-node/vite-node.mjs"),
+      "test-fixtures/delivery-lock-crash.ts",
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, DELIVERY_LOCK_CRASH_STATE: statePath, DELIVERY_LOCK_CRASH_PHASE: phase },
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(23);
+    const original = fs.readFileSync(path.join(authority, "owner.json"), "utf8");
+    expect(JSON.parse(original).pid).toBe(child.pid);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(false);
+    await lock.acquire();
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(original);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    await lock.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 15000);
+
+it("FileDeliveryLock: actual live retirement claim survives aging and competing acquire", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-live-published-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const contender = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  let competing: Promise<unknown> | undefined;
+  let before: string | undefined;
+  const lock = new FileDeliveryLock(statePath, {
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      const owner = path.join(authority, "owner.json");
+      before = fs.readFileSync(owner, "utf8");
+      fs.utimesSync(owner, old, old);
+      fs.utimesSync(authority, old, old);
+      // Starts while A is inside the protected action, without the process mutex.
+      competing = contender.acquire().then(() => "unexpected owner", (err: Error) => err.message);
+      expect(fs.readFileSync(owner, "utf8")).toBe(before);
+      expect(fs.existsSync(guard)).toBe(true);
+    },
+  });
+  try {
+    await lock.acquire();
+    expect(before).toBeDefined();
+    expect(await competing).toMatch(/Timed out waiting for delivery lock/);
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(before);
+    expect(fs.readdirSync(authority).some((name) => name.endsWith(".done"))).toBe(true);
+    // A second real acquisition works once A releases the main lock.
+    await lock.release();
+    await contender.acquire();
+  } finally {
+    await lock.release();
+    await competing;
+    await contender.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: publication I/O failure leaves no owner and closes its fd", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-link-failure-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation(() => {
+    throw Object.assign(new Error("injected link EIO"), { code: "EIO" });
+  });
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 60, inProcessMutex: false });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(linkSpy).toHaveBeenCalled();
+    expect(fs.readdirSync(authority)).toEqual([]);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
+    linkSpy.mockRestore();
+    await lock.acquire();
+    expect(JSON.parse(fs.readFileSync(`${statePath}.lock`, "utf8")).pid).toBe(process.pid);
+  } finally {
+    linkSpy.mockRestore();
+    await lock.release();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+it("FileDeliveryLock: rejected action cannot mark changed owner metadata completed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-owner-fence-"));
+  const statePath = path.join(dir, "delivery.json");
+  const guard = `${statePath}.lock.reclaim`;
+  const old = new Date(Date.now() - 70000);
+  for (const file of [`${statePath}.lock`, guard]) {
+    fs.writeFileSync(file, "");
+    fs.utimesSync(file, old, old);
+  }
+  const authority = `${guard}.retire-${fs.statSync(guard).ino}`;
+  const replacement = JSON.stringify({ pid: process.pid, token: "changed-live-owner" });
+  let hookCount = 0;
+  const lock = new FileDeliveryLock(statePath, {
+    timeoutMs: 60,
+    inProcessMutex: false,
+    _beforeStaleReclaimRetire: () => {
+      hookCount++;
+      fs.writeFileSync(path.join(authority, "owner.json"), replacement);
+    },
+  });
+  try {
+    await expect(lock.acquire()).rejects.toThrow("Timed out waiting for delivery lock");
+    expect(hookCount).toBe(1); // Completion for the rejected token must not release the new owner.
+    expect(fs.readFileSync(path.join(authority, "owner.json"), "utf8")).toBe(replacement);
+    expect(fs.readFileSync(guard, "utf8")).toBe("");
+    expect(fs.readFileSync(`${statePath}.lock`, "utf8")).toBe("");
+  } finally {
+    await lock.release();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
