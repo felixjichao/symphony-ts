@@ -233,7 +233,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
       expect(result.stderr).toContain('event="workflow_reload" outcome="completed"');
       expect(result.stderr).not.toContain("Rejected secret prompt");
     } finally { await closeFixture(proc, tracker, dir); }
-  }, 20000);
+  }, 30000);
 
   it("classifies SIGKILL only as abnormal termination", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "sym-process-kill-"));

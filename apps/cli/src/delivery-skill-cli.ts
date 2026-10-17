@@ -73,36 +73,49 @@ export class FileDeliveryLock implements DeliveryLock {
   private lockToken: string | null = null;
   private readonly lockFilePath: string;
   private readonly timeoutMs: number;
+  private readonly inProcessMutex: boolean;
 
-  constructor(filePath: string, options?: { timeoutMs?: number }) {
+  constructor(filePath: string, options?: { timeoutMs?: number; inProcessMutex?: boolean }) {
     this.lockFilePath = getCanonicalLockPath(filePath);
     this.timeoutMs = options?.timeoutMs ?? 30000;
+    this.inProcessMutex = options?.inProcessMutex ?? true;
   }
 
   private tryReclaimAndAcquire(token: string, observedStat: fs.Stats): boolean {
     const reclaimPath = `${this.lockFilePath}.reclaim`;
+    const reclaimToken = crypto.randomUUID();
     let reclaimFd: number | null = null;
     try {
       try {
         reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
-        fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, time: Date.now() }), "utf8");
+        fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, time: Date.now() }), "utf8");
       } catch (err: unknown) {
         const error = err as { code?: string };
         if (error && error.code === "EEXIST") {
           try {
             const reclaimStat = fs.statSync(reclaimPath);
             let reclaimOwnerAlive = true;
+            let validJson = false;
             try {
               const data = JSON.parse(fs.readFileSync(reclaimPath, "utf8"));
               if (typeof data.pid === "number") {
                 reclaimOwnerAlive = isProcessAlive(data.pid);
+                validJson = true;
               }
             } catch {
               // empty or corrupt reclaim lock
             }
-            if (!reclaimOwnerAlive || Date.now() - reclaimStat.mtimeMs > 5000) {
+
+            // CRITICAL (Blocker 2): A living arbitrator MUST NEVER be preempted merely due to elapsed time!
+            // Only clean up if the owner process is confirmed dead (!reclaimOwnerAlive),
+            // or if the file is corrupt/empty (!validJson) AND stale (> 60000ms).
+            const isStale = Date.now() - reclaimStat.mtimeMs > 60000;
+            if ((!reclaimOwnerAlive && isStale) || (!validJson && isStale)) {
               try {
-                fs.unlinkSync(reclaimPath);
+                const currentReclaimStat = fs.statSync(reclaimPath);
+                if (currentReclaimStat.ino === reclaimStat.ino && currentReclaimStat.mtimeMs === reclaimStat.mtimeMs) {
+                  fs.unlinkSync(reclaimPath);
+                }
               } catch {
                 // ignore
               }
@@ -181,8 +194,16 @@ export class FileDeliveryLock implements DeliveryLock {
         } catch {
           // ignore
         }
+        reclaimFd = null;
         try {
-          fs.unlinkSync(reclaimPath);
+          // Token-bound release: Only delete reclaimPath if it still contains our own reclaimToken!
+          if (fs.existsSync(reclaimPath)) {
+            const content = fs.readFileSync(reclaimPath, "utf8");
+            const data = JSON.parse(content);
+            if (data.token === reclaimToken) {
+              fs.unlinkSync(reclaimPath);
+            }
+          }
         } catch {
           // ignore
         }
@@ -191,13 +212,16 @@ export class FileDeliveryLock implements DeliveryLock {
   }
 
   async acquire(): Promise<void> {
-    let mutex = fileMutexes.get(this.lockFilePath);
-    if (!mutex) {
-      mutex = new InProcessMutex();
-      fileMutexes.set(this.lockFilePath, mutex);
+    let releaseMutex: (() => void) | null = null;
+    if (this.inProcessMutex) {
+      let mutex = fileMutexes.get(this.lockFilePath);
+      if (!mutex) {
+        mutex = new InProcessMutex();
+        fileMutexes.set(this.lockFilePath, mutex);
+      }
+      releaseMutex = await mutex.acquire();
+      this.inProcessRelease = releaseMutex;
     }
-    const releaseMutex = await mutex.acquire();
-    this.inProcessRelease = releaseMutex;
 
     try {
       const lockDir = path.dirname(this.lockFilePath);
@@ -216,6 +240,7 @@ export class FileDeliveryLock implements DeliveryLock {
         } catch (err: unknown) {
           const error = err as { code?: string };
           if (error && error.code === "EEXIST") {
+            let reclaimed = false;
             try {
               const stat = fs.statSync(this.lockFilePath);
               let ownerAlive = true;
@@ -234,14 +259,18 @@ export class FileDeliveryLock implements DeliveryLock {
               const isStale = Date.now() - stat.mtimeMs > 60000;
               if ((!ownerAlive && isStale) || (!validJson && isStale)) {
                 if (this.tryReclaimAndAcquire(token, stat)) {
-                  break;
+                  reclaimed = true;
                 }
-                continue;
               }
             } catch {
-              continue;
+              // ignore stat/read failure and proceed to timeout check
             }
 
+            if (reclaimed) {
+              break;
+            }
+
+            // CRITICAL (Blocker 1): All retry paths MUST pass through deadline check and yield
             if (Date.now() - start > this.timeoutMs) {
               throw new Error(`Timed out waiting for delivery lock at ${this.lockFilePath}`);
             }
@@ -265,8 +294,11 @@ export class FileDeliveryLock implements DeliveryLock {
         }
       }
     } catch (err) {
-      this.inProcessRelease = null;
-      releaseMutex();
+      if (this.inProcessRelease) {
+        const rel = this.inProcessRelease;
+        this.inProcessRelease = null;
+        rel();
+      }
       if (this.lockFd !== null) {
         try {
           fs.closeSync(this.lockFd);

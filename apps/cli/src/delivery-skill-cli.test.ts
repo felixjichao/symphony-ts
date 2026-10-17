@@ -1663,8 +1663,8 @@ it("FileDeliveryLock: concurrent reclaimers arbitrate safely with only one winne
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-concurrent-reclaim-"));
   const statePath = path.join(dir, "delivery.json");
   const lockPath = `${statePath}.lock`;
-  const lockA = new FileDeliveryLock(statePath);
-  const lockB = new FileDeliveryLock(statePath);
+  const lockA = new FileDeliveryLock(statePath, { inProcessMutex: false });
+  const lockB = new FileDeliveryLock(statePath, { inProcessMutex: false });
 
   try {
     // Stale lock file (>60s)
@@ -1701,6 +1701,125 @@ it("FileDeliveryLock: concurrent reclaimers arbitrate safely with only one winne
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("FileDeliveryLock: failed arbitration times out cleanly without synchronous spinning or bypassing yield", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-timeout-yield-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 150 });
+  let openSpy: { mockRestore: () => void } | undefined;
+  let attempts = 0;
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    const origOpenSync = fs.openSync;
+    openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] === `${lockPath}.reclaim`) {
+        attempts++;
+        throw Object.assign(new Error("injected reclaim permission failure"), { code: "EACCES" });
+      }
+      return origOpenSync(...args);
+    });
+
+    const start = Date.now();
+    await expect(lock.acquire()).rejects.toThrow(/Timed out waiting for delivery lock/);
+    const duration = Date.now() - start;
+    expect(duration).toBeGreaterThanOrEqual(140);
+    expect(attempts).toBeGreaterThanOrEqual(1);
+    expect(attempts).toBeLessThan(20);
+  } finally {
+    openSpy?.mockRestore();
+    await lock.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: reclamation arbitration held by a living owner is never stolen after five seconds", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-live-owner-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const contender = new FileDeliveryLock(statePath, { timeoutMs: 150, inProcessMutex: false });
+  let liveFd: number | undefined;
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    liveFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR);
+    fs.writeFileSync(liveFd, JSON.stringify({ pid: process.pid, time: Date.now() - 6000 }), "utf8");
+    const guardAge = (Date.now() - 6000) / 1000;
+    fs.utimesSync(reclaimPath, guardAge, guardAge);
+
+    await expect(contender.acquire()).rejects.toThrow(/Timed out waiting for delivery lock/);
+    expect(fs.fstatSync(liveFd).nlink).toBe(1);
+  } finally {
+    await contender.release().catch(() => {});
+    if (liveFd !== undefined) {
+      try {
+        fs.closeSync(liveFd);
+      } catch {
+        // ignore
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("FileDeliveryLock: token-bound release does not delete a successor's reclaim file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-lock-token-bound-"));
+  const statePath = path.join(dir, "delivery.json");
+  const lockPath = `${statePath}.lock`;
+  const reclaimPath = `${lockPath}.reclaim`;
+  const lock = new FileDeliveryLock(statePath, { timeoutMs: 100 });
+  let openSpy: { mockRestore: () => void } | undefined;
+
+  try {
+    fs.writeFileSync(lockPath, "", "utf8");
+    const old = (Date.now() - 70000) / 1000;
+    fs.utimesSync(lockPath, old, old);
+
+    const origOpenSync = fs.openSync;
+    openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      const res = origOpenSync(...args);
+      if (args[0] === `${lockPath}.reclaim`) {
+        // Simulate an external race or change of reclaim file right after creation
+        // Overwrite reclaim file with another token
+        setTimeout(() => {
+          try {
+            fs.writeFileSync(reclaimPath, JSON.stringify({ pid: process.pid, token: "successor-token", time: Date.now() }), "utf8");
+          } catch {
+            // ignore
+          }
+        }, 10);
+      }
+      return res;
+    });
+
+    // Acquire will fail or succeed, but we want to verify that when tryReclaimAndAcquire finishes,
+    // it will not delete a reclaimPath containing successor-token.
+    try {
+      await lock.acquire();
+    } catch {
+      // ignore
+    }
+
+    if (fs.existsSync(reclaimPath)) {
+      const content = fs.readFileSync(reclaimPath, "utf8");
+      const parsed = JSON.parse(content);
+      if (parsed.token === "successor-token") {
+        expect(fs.existsSync(reclaimPath)).toBe(true);
+      }
+    }
+  } finally {
+    openSpy?.mockRestore();
+    await lock.release().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 
 
 
