@@ -235,18 +235,18 @@ export function createBridgeDecisionReader(client: DecisionBridgeClient): Decisi
 
       const tasks = (await client.getTasksForSession(sessionId)).tasks;
 
-      // Verdicts are needed to continue completed plan/review work. Fetch only for the
-      // newest task of each kind; an absent result is `null`, any other failure propagates.
+      // Verdicts are needed to continue completed plan/review work. Fetch them for the
+      // completed tasks ordered by revision — not just the most recently touched one, which
+      // can be an older revision or another PR. An absent result is `null`; any other
+      // failure propagates.
+      const completed = tasks
+        .filter((task) => task.status === "completed")
+        .sort((a, b) => b.revision - a.revision || b.updatedAtMs - a.updatedAtMs || b.id.localeCompare(a.id))
+        .slice(0, 8);
       const results: DecisionObservation["results"][number][] = [];
-      for (const kind of ["plan", "review"] as const) {
-        const latest = tasks
-          .filter((task) => task.kind === kind)
-          .sort((a, b) => b.updatedAtMs - a.updatedAtMs || b.id.localeCompare(a.id))[0];
-        if (latest === undefined) {
-          continue;
-        }
+      for (const task of completed) {
         try {
-          const { result } = await client.getTaskResult(latest.id);
+          const { result } = await client.getTaskResult(task.id);
           results.push({
             taskId: result.taskId,
             revision: result.revision,
@@ -794,15 +794,7 @@ function deriveHostStageFacts(input: {
     // the **exact current target** (same repository, same PR, same HEAD) may own this stage.
     // A task for an older HEAD — or for a different PR that happens to share a commit SHA —
     // is stale and must never be continued or reused.
-    const reviewTask = latestTask(decision, "review");
-    const currentReview =
-      reviewTask !== null &&
-      reviewTask.kind === "review" &&
-      reviewTask.target.repository === pr.repository &&
-      reviewTask.target.prNumber === pr.number &&
-      reviewTask.target.headSha === pr.headSha
-        ? reviewTask
-        : null;
+    const currentReview = reviewTaskForTarget(decision, target);
 
     if (currentReview !== null && currentReview.kind === "review") {
       if (isLiveTaskStatus(currentReview.status)) {
@@ -819,7 +811,7 @@ function deriveHostStageFacts(input: {
         );
       }
       if (currentReview.status === "completed") {
-        const verdict = latestVerdict(decision, currentReview.taskId);
+        const verdict = verdictForTask(decision, currentReview);
         if (verdict?.kind === "review" && verdict.verdict === "approve") {
           return deliveryResumeFacts(currentReview.target, observedAt);
         }
@@ -860,9 +852,9 @@ function deriveHostStageFacts(input: {
   // Task status and the recorded verdict decide the next stage; a completed task is never
   // treated as if it were still running.
   const reviewTask = latestTask(decision, "review");
-  const reviewVerdict = reviewTask === null ? null : latestVerdict(decision, reviewTask.taskId);
+  const reviewVerdict = reviewTask === null ? null : verdictForTask(decision, reviewTask);
   const planTask = latestTask(decision, "plan");
-  const planVerdict = planTask === null ? null : latestVerdict(decision, planTask.taskId);
+  const planVerdict = planTask === null ? null : verdictForTask(decision, planTask);
 
   if (reviewTask !== null && reviewTask.kind === "review" && isLiveTaskStatus(reviewTask.status)) {
     return taskOwnedFacts(
@@ -1150,30 +1142,76 @@ function blockedFacts(
   };
 }
 
+type DecisionTaskSnapshot = DecisionObservation["tasks"][number];
+
+/**
+ * Picks the effective task among candidates: highest numeric revision first, then the most
+ * recently updated, then task id.
+ *
+ * `updatedAtMs` alone is not a reliable ordering: a superseded revision and its replacement
+ * can share the same timestamp, and an old task can be touched later than the current one.
+ * String task-id comparison is also wrong ("9" > "10"), so revision is compared numerically.
+ */
+function pickEffectiveTask(candidates: readonly DecisionTaskSnapshot[]): DecisionTaskSnapshot | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+  return [...candidates].sort(
+    (a, b) =>
+      b.revision - a.revision ||
+      b.updatedAtMs - a.updatedAtMs ||
+      b.taskId.localeCompare(a.taskId),
+  )[0]!;
+}
+
 function latestTask(
   decision: DecisionObservation | null,
   kind: "plan" | "review",
-): DecisionObservation["tasks"][number] | null {
+): DecisionTaskSnapshot | null {
   if (decision === null) {
     return null;
   }
-  const candidates = decision.tasks
-    .filter((task) => task.kind === kind)
-    .sort((a, b) => b.updatedAtMs - a.updatedAtMs || b.taskId.localeCompare(a.taskId));
-  return candidates[0] ?? null;
+  return pickEffectiveTask(decision.tasks.filter((task) => task.kind === kind));
 }
 
-function latestVerdict(
+/**
+ * The effective review task for one exact target.
+ *
+ * The target filter runs **before** the ordering: selecting the newest review first and
+ * discarding it when it belongs to another PR would lose a valid current task.
+ */
+function reviewTaskForTarget(
   decision: DecisionObservation | null,
-  taskId: string,
+  target: { readonly repository: string; readonly prNumber: number; readonly headSha: string },
+): DecisionTaskSnapshot | null {
+  if (decision === null) {
+    return null;
+  }
+  return pickEffectiveTask(
+    decision.tasks.filter(
+      (task) =>
+        task.kind === "review" &&
+        task.target.repository === target.repository &&
+        task.target.prNumber === target.prNumber &&
+        task.target.headSha === target.headSha,
+    ),
+  );
+}
+
+/** The verdict recorded for this exact task revision (falling back to any revision). */
+function verdictForTask(
+  decision: DecisionObservation | null,
+  task: DecisionTaskSnapshot,
 ): DecisionObservation["results"][number]["outcome"] | null {
   if (decision === null) {
     return null;
   }
-  const result = decision.results
-    .filter((entry) => entry.taskId === taskId)
+  const forTask = decision.results.filter((entry) => entry.taskId === task.taskId);
+  const exact = forTask
+    .filter((entry) => entry.revision === task.revision)
     .sort((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  return result?.outcome ?? null;
+  const fallback = forTask.sort((a, b) => b.revision - a.revision || b.createdAtMs - a.createdAtMs)[0];
+  return (exact ?? fallback)?.outcome ?? null;
 }
 
 function taskStageFacts(

@@ -404,6 +404,154 @@ describe("HostWorkObservationSource", () => {
     expect(observation.expectedAction?.description).toContain("create and claim the review task");
   });
 
+  it("selects the current PR's review task even when another PR's task was touched later", async () => {
+    const otherPr = reviewTask({
+      taskId: "task-9",
+      revision: 5,
+      status: "pending",
+      updatedAtMs: 9_000,
+      target: { repository: "owner/repo", prNumber: 9, headSha: PR.headSha },
+    });
+    const currentPr = reviewTask({
+      taskId: "task-12",
+      revision: 4,
+      status: "pending",
+      updatedAtMs: 1_000,
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: decisionObservation({ tasks: [otherPr, currentPr], results: [] }),
+      }),
+    );
+
+    expect(observation.stage).toBe("review");
+    expect(observation.expectedAction?.taskRef).toEqual({ taskId: "task-12", revision: 4 });
+    expect(observation.expectedAction?.target?.prNumber).toBe(12);
+  });
+
+  it("selects the highest numeric revision when two same-target tasks share updatedAt", async () => {
+    const previous = reviewTask({
+      taskId: "task-9",
+      revision: 9,
+      status: "superseded",
+      updatedAtMs: 2_000,
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+    const current = reviewTask({
+      taskId: "task-10",
+      revision: 10,
+      status: "pending",
+      updatedAtMs: 2_000,
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: decisionObservation({ tasks: [previous, current], results: [] }),
+      }),
+    );
+
+    expect(observation.expectedAction?.taskRef).toEqual({ taskId: "task-10", revision: 10 });
+  });
+
+  it("uses the verdict for the current revision, not an older one", async () => {
+    const task = reviewTask({
+      taskId: "task-10",
+      revision: 10,
+      status: "completed",
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: decisionObservation({
+          tasks: [task],
+          results: [
+            {
+              taskId: "task-10",
+              revision: 9,
+              createdAtMs: 3_000,
+              outcome: {
+                kind: "review",
+                verdict: "approve",
+                target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+              },
+            },
+            {
+              taskId: "task-10",
+              revision: 10,
+              createdAtMs: 2_000,
+              outcome: {
+                kind: "review",
+                verdict: "changes_requested",
+                target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+              },
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(observation.stage).toBe("repair");
+    expect(observation.expectedAction?.action).toBe("retry");
+  });
+
+  it("fetches bridge results for every completed task, not only the newest", async () => {
+    const older = {
+      id: "task-old",
+      kind: "review" as const,
+      revision: 4,
+      status: "completed" as const,
+      createdAtMs: 1_000,
+      updatedAtMs: 1_000,
+      claimGeneration: 1,
+      lease: null,
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    };
+    const newer = {
+      ...older,
+      id: "task-new",
+      revision: 5,
+      updatedAtMs: 9_000,
+      target: { repository: "owner/repo", prNumber: 9, headSha: PR.headSha },
+    };
+    const reader = createBridgeDecisionReader({
+      getSession: async () => ({
+        session: {
+          id: "session-1",
+          status: "active",
+          bindingGeneration: 1,
+          binding: { adapter: "chatgpt-web" },
+          updatedAtMs: 1_000,
+        },
+      }),
+      getTasksForSession: async () => ({ tasks: [older, newer] }),
+      getTaskResult: async (taskId: string) => ({
+        result: {
+          taskId,
+          revision: taskId === "task-old" ? 4 : 5,
+          createdAtMs: 2_000,
+          kind: "review",
+          verdict: "approve",
+          target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+        },
+      }),
+    } as unknown as Parameters<typeof createBridgeDecisionReader>[0]);
+
+    const observation = await reader.read(workKey);
+    expect(observation?.results.map((entry) => entry.taskId).sort()).toEqual([
+      "task-new",
+      "task-old",
+    ]);
+  });
+
   it("does not reuse a review task from another PR that shares the commit SHA", async () => {
     const otherPr = reviewTask({
       status: "pending",

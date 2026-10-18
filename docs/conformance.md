@@ -402,6 +402,9 @@ Provider-neutral work-level liveness evaluation, stranded-state detection, and b
 | `statusCheckRollup` projection into none / pending / passing / failing | same suite: projects statusCheckRollup into a coarse CI state |
 | CI rollup covers both CheckRun and legacy StatusContext shapes, including mixed input | same suite: projects statusCheckRollup into a coarse CI state |
 | Review continuation requires the full target identity (repository + PR + HEAD), not just the SHA | same suite: does not reuse a review task from another PR that shares the commit SHA |
+| Review task selection filters by target first and orders by numeric revision, tolerating equal timestamps and older tasks touched later | same suite: selects the current PR's review task even when another PR's task was touched later / highest numeric revision on updatedAt tie |
+| A verdict is applied to the task's exact revision, never an older revision's verdict | same suite: uses the verdict for the current revision, not an older one |
+| Bridge reader fetches results for every completed task, ordered by revision | same suite: fetches bridge results for every completed task, not only the newest |
 | Pre-action and post-action observations bypass the GitHub cache and keep the real read time | same suite: reobserve bypasses the GitHub cache and keeps the real read time; `packages/orchestrator/src/work-continuity.test.ts`: uses the cache-bypassing reobserve |
 | Cross-source observation from tracker + orchestrator runtime + Decision session/tasks/leases + workspace delivery state, with per-source availability | same suite: HostWorkObservationSource |
 | Idle coding work is owned by the orchestrator poll loop and is not re-dispatched by reconciliation | same suite: treats an idle coding item as owned by the orchestrator poll loop |
