@@ -245,39 +245,98 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     return path.join(this.ticketRoot, String(ticket));
   }
 
+  private tombstoneDir(ticket: number): string {
+    return path.join(this.ticketRoot, `released-${ticket}`);
+  }
+
   /**
-   * Takes the next free ticket via an atomic `mkdir` over the ticket numbers.
+   * Allocates a ticket that is **provably above every other visible ticket**.
    *
-   * The number itself is the total order: it is assigned by directory-creation exclusivity,
-   * so a later contender can never receive a smaller ticket than a running owner. No clocks,
-   * wall-time comparisons or cross-process time assumptions are involved.
+   * Registration is two syscalls (`mkdir` then publishing `owner.json`), so a candidate can
+   * be based on a stale directory listing, and another process can observe the directory
+   * before it is published. Both cases are handled explicitly:
+   *
+   * - the published ticket is re-read to prove the directory was not reaped meanwhile;
+   * - the candidate is compared against the whole current namespace and abandoned when any
+   *   other ticket has a number at least as large (a stale snapshot or a freed number must
+   *   never enter below a running owner);
+   * - an unpublished ticket is not skipped by `evaluateWinner`; it keeps its position and
+   *   blocks every higher ticket.
    */
   private takeTicket(): number {
     fs.mkdirSync(this.ticketRoot, { recursive: true });
-    const token = crypto.randomUUID();
     for (let attempt = 0; attempt < 1_000; attempt += 1) {
-      // Always allocate above every ticket currently visible (including stale ones), so a
-      // number freed below a running owner can never be handed to a later contender.
-      const ticket = this.highestTicket() + 1;
-      try {
-        fs.mkdirSync(this.ticketDir(ticket));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          continue;
-        }
-        throw error;
+      const candidate = this.highestTicket() + 1;
+      if (!this.publishTicket(candidate)) {
+        continue;
       }
+      if (candidate <= this.highestOtherTicket(candidate)) {
+        this.tombstone(candidate);
+        continue;
+      }
+      return candidate;
+    }
+    throw new DeliveryStateConflictError(`delivery state ticket space exhausted (${this.lockRoot})`);
+  }
+
+  /** Creates the ticket directory and publishes its owner atomically enough to verify. */
+  private publishTicket(ticket: number): boolean {
+    try {
+      fs.mkdirSync(this.ticketDir(ticket));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      throw error;
+    }
+    const token = crypto.randomUUID();
+    try {
       fs.writeFileSync(
         path.join(this.ticketDir(ticket), "owner.json"),
         JSON.stringify({ pid: process.pid, token, ticket }),
         "utf8",
       );
-      return ticket;
+    } catch {
+      this.tombstone(ticket);
+      return false;
     }
-    throw new DeliveryStateConflictError(`delivery state ticket space exhausted (${this.lockRoot})`);
+    const published = this.readOwner(ticket);
+    if (published === null || published.token !== token) {
+      // Reaped as a stale registration between mkdir and write.
+      this.tombstone(ticket);
+      return false;
+    }
+    return true;
   }
 
-  private highestTicket(): number {
+  private readOwner(ticket: number): { pid: number; token: string } | null {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(this.ticketDir(ticket), "owner.json"), "utf8"),
+      ) as { pid?: unknown; token?: unknown };
+      if (
+        typeof raw.pid !== "number" ||
+        !Number.isInteger(raw.pid) ||
+        typeof raw.token !== "string"
+      ) {
+        return null;
+      }
+      return { pid: raw.pid, token: raw.token };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Highest number ever allocated, including retained tombstones. */
+  protected highestTicket(): number {
+    return this.highestMatching(Number.POSITIVE_INFINITY);
+  }
+
+  private highestOtherTicket(exclude: number): number {
+    return this.highestMatching(exclude);
+  }
+
+  private highestMatching(exclude: number): number {
     let names: string[];
     try {
       names = fs.readdirSync(this.ticketRoot);
@@ -289,29 +348,71 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     }
     let highest = 0;
     for (const name of names) {
-      const ticket = Number(name);
-      if (Number.isInteger(ticket) && ticket > highest) {
+      const released = /^released-(\d+)$/.exec(name);
+      const ticket = released ? Number(released[1]) : Number(name);
+      if (!Number.isInteger(ticket) || ticket <= 0 || ticket === exclude) {
+        continue;
+      }
+      if (ticket > highest) {
         highest = ticket;
       }
     }
     return highest;
   }
 
-  private releaseTicket(ticket: number): void {
-    try {
-      fs.rmSync(this.ticketDir(ticket), { recursive: true, force: true });
-    } catch {
-      /* Already gone. */
+  /** Retires a ticket number without ever reusing it below a running owner. */
+  private tombstone(ticket: number): void {
+    const source = this.ticketDir(ticket);
+    const target = this.tombstoneDir(ticket);
+    if (!fs.existsSync(target)) {
+      try {
+        fs.renameSync(source, target);
+      } catch {
+        /* Already tombstoned or removed by another process. */
+      }
+    } else {
+      try {
+        fs.rmSync(source, { recursive: true, force: true });
+      } catch {
+        /* Already gone. */
+      }
     }
-    this.removeEmptyLockRoot();
+    this.pruneTombstones();
   }
 
-  private removeEmptyLockRoot(): void {
+  /** Keeps only the highest tombstone; lower ones can never affect allocation. */
+  private pruneTombstones(): void {
+    let names: string[];
     try {
-      fs.rmdirSync(this.ticketRoot);
+      names = fs.readdirSync(this.ticketRoot);
     } catch {
-      /* Other tickets are still active. */
+      return;
     }
+    const tombstones = names
+      .map((name) => {
+        const match = /^released-(\d+)$/.exec(name);
+        return match ? Number(match[1]) : null;
+      })
+      .filter((value): value is number => value !== null);
+    if (tombstones.length <= 1) {
+      return;
+    }
+    const highest = Math.max(...tombstones);
+    for (const ticket of tombstones) {
+      if (ticket === highest) {
+        continue;
+      }
+      try {
+        fs.rmSync(this.tombstoneDir(ticket), { recursive: true, force: true });
+      } catch {
+        /* Already gone. */
+      }
+    }
+  }
+
+  private releaseTicket(ticket: number): void {
+    this.tombstone(ticket);
+    // The lock root is left in place while any ticket or tombstone exists.
     try {
       fs.rmdirSync(this.lockRoot);
     } catch {
@@ -320,13 +421,16 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
   }
 
   /**
-   * Returns the live ticket with the lowest number.
+   * Returns the ticket that may enter the critical section: the lowest **live or
+   * not-yet-published** ticket.
    *
-   * Dead tickets are removed — each lives in a directory named by its own ticket number, so
-   * removing one can never affect any other owner. There is no shared path to vacate and
-   * therefore no window in which two owners can overlap.
+   * An unpublished registration is deliberately treated as a blocking contender rather than
+   * skipped — skipping it would let a higher ticket enter while the lower one is still about
+   * to publish, which is exactly how two owners could overlap. Only a registration older
+   * than the grace period is considered crashed and reaped; a live registrant detects the
+   * reaping through its post-publish verification and retries.
    */
-  private evaluateWinner(): { ticket: number; pid: number; token: string } | null {
+  private evaluateWinner(): { ticket: number; pid: number } | null {
     let names: string[];
     try {
       names = fs.readdirSync(this.ticketRoot);
@@ -337,48 +441,35 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       throw error;
     }
 
-    const live: Array<{ ticket: number; pid: number; token: string }> = [];
+    const live: Array<{ ticket: number; pid: number }> = [];
     for (const name of names) {
+      if (/^released-\d+$/.test(name)) {
+        continue;
+      }
       const ticket = Number(name);
       if (!Number.isInteger(ticket) || ticket <= 0) {
         continue;
       }
-      const dir = path.join(this.ticketRoot, name);
-      let owner: { pid?: unknown; token?: unknown } | null = null;
-      try {
-        owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8")) as {
-          pid?: unknown;
-          token?: unknown;
-        };
-      } catch {
-        // Registration is a synchronous mkdir + write; a missing file is either in progress
-        // or a crashed ticket. Give it a grace period before reclaiming.
+      const owner = this.readOwner(ticket);
+      if (owner === null) {
+        let stat: fs.Stats;
         try {
-          const stat = fs.statSync(dir);
-          if (Date.now() - stat.mtimeMs > 10_000) {
-            fs.rmSync(dir, { recursive: true, force: true });
-          }
+          stat = fs.statSync(this.ticketDir(ticket));
         } catch {
-          /* Disappeared. */
+          continue;
         }
-        continue;
-      }
-      if (
-        owner === null ||
-        typeof owner.pid !== "number" ||
-        !Number.isInteger(owner.pid) ||
-        typeof owner.token !== "string"
-      ) {
+        if (Date.now() - stat.mtimeMs > REGISTRATION_GRACE_MS) {
+          this.tombstone(ticket);
+        } else {
+          // Not published yet: keeps its place and blocks every higher ticket.
+          live.push({ ticket, pid: -1 });
+        }
         continue;
       }
       if (owner.pid === process.pid || isProcessAlive(owner.pid)) {
-        live.push({ ticket, pid: owner.pid, token: owner.token });
+        live.push({ ticket, pid: owner.pid });
       } else {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-        } catch {
-          /* Someone else already cleaned it up. */
-        }
+        this.tombstone(ticket);
       }
     }
 
@@ -397,6 +488,9 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
 }
 
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+
+/** How long an unpublished ticket blocks before it is considered a crashed registration. */
+const REGISTRATION_GRACE_MS = 5_000;
 
 /** `kill(pid, 0)` probes liveness without signalling; EPERM still means the process exists. */
 function isProcessAlive(pid: number): boolean {

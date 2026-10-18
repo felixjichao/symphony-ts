@@ -769,11 +769,77 @@ describe("Delivery state authority write guards", () => {
 
       // Three contenders and one dead ticket: the section is never held by two at once.
       expect(maxActive).toBe(1);
-      expect(fsSync.existsSync(path.join(lockRoot, "tickets"))).toBe(false);
+      const remaining = fsSync.readdirSync(path.join(lockRoot, "tickets"));
+      expect(remaining.filter((name) => /^\d+$/.test(name))).toEqual([]);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
+      await cleanup();
+    }
+  });
+
+  it("blocks higher tickets while a lower registration is unpublished", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const unpublished = path.join(lockRoot, "tickets", "1");
+      fsSync.mkdirSync(unpublished, { recursive: true });
+      // Ticket 1 exists but has not published owner.json yet (registration in flight).
+
+      const storage = new FileDeliveryStateStorage(file, 60);
+      storage.readState();
+      expect(() => storage.writeState({ ...baseState, isPaused: false })).toThrow(
+        DeliveryStateConflictError,
+      );
+
+      // The unpublished lower ticket kept its place and was not skipped or removed.
+      expect(fsSync.existsSync(unpublished)).toBe(true);
+      const live = fsSync
+        .readdirSync(path.join(lockRoot, "tickets"))
+        .filter((name) => /^\d+$/.test(name) && name !== "1");
+      expect(live).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("abandons a ticket allocated from a stale snapshot instead of entering below a live owner", async () => {
+    class StaleSnapshotStorage extends FileDeliveryStateStorage {
+      private staleCalls = 1;
+      protected override highestTicket(): number {
+        // First allocation believes the directory is empty, as a stale snapshot would.
+        if (this.staleCalls > 0) {
+          this.staleCalls -= 1;
+          return 0;
+        }
+        return super.highestTicket();
+      }
+    }
+
+    const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const ticketsRoot = path.join(lockRoot, "tickets");
+      // Ticket 1 was allocated and released (freed), and a live owner holds ticket 2.
+      fsSync.mkdirSync(path.join(ticketsRoot, "released-1"), { recursive: true });
+      const owner2 = writeTicket(lockRoot, 2, child.pid!, "live-owner");
+      // Ticket 1 is free, so a stale candidate of 1 could be created.
+
+      const storage = new StaleSnapshotStorage(file, 60);
+      storage.readState();
+      expect(() => storage.writeState({ ...baseState, isPaused: false })).toThrow(
+        DeliveryStateConflictError,
+      );
+
+      // The stale candidate must have been abandoned, never entered.
+      expect(fsSync.existsSync(path.join(ticketsRoot, "1"))).toBe(false);
+      expect(fsSync.existsSync(owner2)).toBe(true);
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
+      expect(onDisk.isPaused).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
       await cleanup();
     }
   });
