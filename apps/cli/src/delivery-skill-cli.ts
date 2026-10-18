@@ -193,12 +193,12 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     try {
       for (;;) {
         const winner = this.evaluateWinner();
-        if (winner !== null && winner.ticket === ticket) {
+        if (winner !== null && winner.ticket === ticket && winner.pid === process.pid) {
           this.lockTicket = ticket;
           this.lockDepth = 1;
           return;
         }
-        if (winner !== null && winner.pid === process.pid) {
+        if (winner !== null && winner.ticket !== ticket && winner.pid === process.pid) {
           throw new DeliveryStateConflictError(
             `delivery state is already locked by this process (${this.lockRoot})`,
           );
@@ -301,29 +301,62 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       return false;
     }
     const published = this.readOwner(ticket);
-    if (published === null || published.token !== token) {
-      // Reaped as a stale registration between mkdir and write.
+    if (published.kind !== "ok" || published.token !== token) {
+      // Reaped as a stale registration between mkdir and write, or the owner record cannot
+      // be verified. Either way this candidate must not be used.
       this.tombstone(ticket);
       return false;
     }
     return true;
   }
 
-  private readOwner(ticket: number): { pid: number; token: string } | null {
+  /**
+   * Reads a ticket's owner **without conflating absence with unreadability**.
+   *
+   * `missing` is the only state that may be treated as "not published yet". Any read or
+   * parse failure is `unreadable` — evidence is unavailable, so no caller may infer that the
+   * owner is gone or that the ticket is stale.
+   */
+  protected readOwner(ticket: number):
+    | { readonly kind: "ok"; readonly pid: number; readonly token: string }
+    | { readonly kind: "missing" }
+    | { readonly kind: "unreadable"; readonly reason: string } {
+    let text: string;
     try {
-      const raw = JSON.parse(
-        fs.readFileSync(path.join(this.ticketDir(ticket), "owner.json"), "utf8"),
-      ) as { pid?: unknown; token?: unknown };
+      text = fs.readFileSync(path.join(this.ticketDir(ticket), "owner.json"), "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT"
+        ? { kind: "missing" }
+        : { kind: "unreadable", reason: `read failed: ${String(code ?? error)}` };
+    }
+    try {
+      const raw = JSON.parse(text) as { pid?: unknown; token?: unknown };
       if (
         typeof raw.pid !== "number" ||
         !Number.isInteger(raw.pid) ||
         typeof raw.token !== "string"
       ) {
-        return null;
+        return { kind: "unreadable", reason: "invalid owner record" };
       }
-      return { pid: raw.pid, token: raw.token };
+      return { kind: "ok", pid: raw.pid, token: raw.token };
     } catch {
-      return null;
+      return { kind: "unreadable", reason: "invalid owner JSON" };
+    }
+  }
+
+  /** Ticket directory metadata, keeping "gone" distinct from "cannot tell". */
+  protected ticketStat(ticket: number):
+    | { readonly kind: "ok"; readonly mtimeMs: number }
+    | { readonly kind: "gone" }
+    | { readonly kind: "error"; readonly reason: string } {
+    try {
+      return { kind: "ok", mtimeMs: fs.statSync(this.ticketDir(ticket)).mtimeMs };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT"
+        ? { kind: "gone" }
+        : { kind: "error", reason: String(code ?? error) };
     }
   }
 
@@ -451,14 +484,24 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
         continue;
       }
       const owner = this.readOwner(ticket);
-      if (owner === null) {
-        let stat: fs.Stats;
-        try {
-          stat = fs.statSync(this.ticketDir(ticket));
-        } catch {
+      if (owner.kind === "unreadable") {
+        // Evidence is unavailable: never infer staleness from a failed read. The ticket
+        // keeps its place and blocks everyone else (fail safe).
+        live.push({ ticket, pid: -1 });
+        continue;
+      }
+      if (owner.kind === "missing") {
+        const stat = this.ticketStat(ticket);
+        if (stat.kind === "gone") {
+          continue;
+        }
+        if (stat.kind === "error") {
+          // Metadata is unavailable too: treat as an unknown blocker, not as death.
+          live.push({ ticket, pid: -1 });
           continue;
         }
         if (Date.now() - stat.mtimeMs > REGISTRATION_GRACE_MS) {
+          // Published owner never appeared and the directory is old: crashed registration.
           this.tombstone(ticket);
         } else {
           // Not published yet: keeps its place and blocks every higher ticket.

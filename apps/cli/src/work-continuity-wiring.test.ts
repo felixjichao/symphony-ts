@@ -804,6 +804,103 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
+  it("never reaps a held ticket when its owner record cannot be read", async () => {
+    class UnreadableOwnerStorage extends FileDeliveryStateStorage {
+      protected override readOwner(ticket: number) {
+        if (ticket === 1) {
+          return { kind: "unreadable" as const, reason: "EMFILE: too many open files" };
+        }
+        return super.readOwner(ticket);
+      }
+    }
+
+    const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const heldDir = writeTicket(lockRoot, 1, child.pid!, "live-owner");
+      // A real compensation can legitimately hold the lock far longer than the grace period.
+      const old = new Date(Date.now() - 6_000);
+      fsSync.utimesSync(heldDir, old, old);
+
+      const storage = new UnreadableOwnerStorage(file, 120);
+      storage.readState();
+      expect(() => storage.writeState({ ...baseState, isPaused: false })).toThrow(
+        DeliveryStateConflictError,
+      );
+
+      // A failed read is not evidence of death: the held ticket is untouched.
+      expect(fsSync.existsSync(path.join(heldDir, "owner.json"))).toBe(true);
+      expect(fsSync.existsSync(path.join(lockRoot, "tickets", "released-1"))).toBe(false);
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
+      expect(onDisk.isPaused).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+      await cleanup();
+    }
+  });
+
+  it("blocks instead of reaping when ticket metadata cannot be read", async () => {
+    class UnstattableStorage extends FileDeliveryStateStorage {
+      protected override readOwner(ticket: number) {
+        if (ticket === 1) {
+          return { kind: "missing" as const };
+        }
+        return super.readOwner(ticket);
+      }
+      protected override ticketStat(ticket: number) {
+        if (ticket === 1) {
+          return { kind: "error" as const, reason: "EACCES" };
+        }
+        return super.ticketStat(ticket);
+      }
+    }
+
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      fsSync.mkdirSync(path.join(lockRoot, "tickets", "1"), { recursive: true });
+
+      const storage = new UnstattableStorage(file, 120);
+      storage.readState();
+      expect(() => storage.writeState({ ...baseState, isPaused: false })).toThrow(
+        DeliveryStateConflictError,
+      );
+
+      expect(fsSync.existsSync(path.join(lockRoot, "tickets", "1"))).toBe(true);
+      expect(fsSync.existsSync(path.join(lockRoot, "tickets", "released-1"))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("reaps an unreadable registration only when it is provably old and genuinely absent", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const crashed = path.join(lockRoot, "tickets", "1");
+      fsSync.mkdirSync(crashed, { recursive: true });
+      const old = new Date(Date.now() - 6_000);
+      fsSync.utimesSync(crashed, old, old);
+
+      const storage = new FileDeliveryStateStorage(file, 500);
+      storage.readState();
+      storage.writeState({ ...baseState, isPaused: false });
+
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
+      expect(onDisk.isPaused).toBe(false);
+      expect(fsSync.existsSync(crashed)).toBe(false);
+      // The retired number is kept as a tombstone so it can never be reissued below a live owner.
+      expect(
+        fsSync
+          .readdirSync(path.join(lockRoot, "tickets"))
+          .some((name) => name.startsWith("released-")),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("abandons a ticket allocated from a stale snapshot instead of entering below a live owner", async () => {
     class StaleSnapshotStorage extends FileDeliveryStateStorage {
       private staleCalls = 1;
