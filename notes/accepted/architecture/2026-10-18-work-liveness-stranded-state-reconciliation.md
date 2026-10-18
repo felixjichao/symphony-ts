@@ -21,8 +21,8 @@ Add a **thin, provider-neutral reconciliation layer** in two parts.
   * A due or overdue retry stays `retry_scheduled`; it is never duplicated.
   * Missing progress evidence yields `measured: false`, not a fabricated timestamp. Process presence alone never counts as progress.
 * `deriveStageExpectation()` turns stage facts (`planning` / `coding` / `ci` / `review` / `repair` / `delivery` / `merge`) into the expected next action + owning authority, so "what must happen next" is derived rather than injected.
-* `workContinuityFingerprint()` produces a stable, time-independent fingerprint of everything a recovery decision depends on. `observedAt` is excluded so re-reading the same facts still compares equal.
-* `validateWorkContinuityObservation()` rejects observations that cannot support a safe decision.
+* `workContinuityFingerprint()` produces a stable, time-independent fingerprint of everything a recovery decision depends on: owner fence **and** the recovery's expected fence, `taskRef` (id + revision), review `target` (repository / PR / exact HEAD) and `handoffRef.handoffId`. `observedAt` is excluded so re-reading the same facts still compares equal, but a new HEAD / task revision / handoff always produces a new fingerprint and a new idempotency key.
+* `validateWorkContinuityObservation()` rejects observations that cannot support a safe decision. A source named in `requiredSources` but absent from `sources` is treated exactly like an `unavailable` read: `observation_unavailable`, no recovery.
 
 ### 2. `@symphony/orchestrator` — `work-continuity.ts` + `work-continuity-authorities.ts`
 
@@ -45,13 +45,26 @@ Boundaries that keep it thin:
 * **No second lifecycle.** The coordinator is stateless with respect to work; it only holds an in-flight set and a short repeat-suppression window.
 * **No source mutation.** Mutations go through `WorkRecoveryAuthority` adapters, and each adapter delegates to a port implemented by the state owner (`OrchestratorRecoveryPort`, `DecisionClaimRecoveryPort`, `DeliveryHandoffRecoveryPort`). A missing authority is `authority_unavailable`, never a direct write.
 * **No duplicate recovery.** `inFlight` serializes concurrent passes per key; `recentDelegations` suppresses an identical fingerprint for `repeatSuppressionMs`; the authority's own commit-time fence remains the real guarantee.
-* **Fail safe.** A failed observation (required source or thrown read) produces `observation_unavailable` / `observation_failed` and changes nothing. A failed *post-action* read reports `unverified` instead of retrying.
+* **Fail safe.** A failed observation (required source, missing required source, or thrown read) produces `observation_unavailable` / `observation_failed` and changes nothing. A failed *post-action* read reports `unverified` instead of retrying.
+* **No replay after an uncertain outcome.** The delegation is recorded **before** `recover()` is called. If the authority throws (for example the side effect committed but the response was lost), the coordinator keeps the suppression record, re-observes to report convergence honestly, and returns `unverified`; the same delegation is not re-issued before the suppression window elapses.
+* **Stop closes admission synchronously.** `WorkContinuityCoordinator.stop()` sets a closed flag before its first `await`, `OrchestratorLoop.stop()` calls it in the synchronous shutdown prefix, every work item and every delegation re-checks the flag, and `stop()` awaits in-flight delegations.
 
 `OrchestratorLoop` accepts an optional `workContinuity` runner. When wired it runs every tick **after** running-worker reconciliation and **before** candidate dispatch, so work with no live worker is still examined and not double-dispatched. A failure is isolated to a `work_continuity_failed` diagnostic.
 
-### 3. `@symphony/decision` — `DecisionService.releaseExpiredClaim`
+### 3. Production wiring (`apps/cli`)
+
+* `TrackerWorkIndex` scans the real active tracker states and re-reads one issue by id before every observation (never the scan snapshot).
+* `HostWorkObservationSource` builds the observation from tracker + orchestrator runtime (`running` / `retryAttempts`, last Codex timestamp, stall deadline) + Decision facts (`session`, latest plan/review task, lease expiry, plan verdict) + the workspace's `.symphony/delivery-state.json`.
+  * Idle coding work is owned by the orchestrator's poll loop (`owner: orchestrator`, progress `unknown`), so reconciliation never becomes a second dispatcher.
+  * A claimed/running Decision task past its lease expiry is `owner_not_observable` → `reclaim`; a paused Delivery handoff with a concrete `handoffId` is `compensate`.
+* `createHostWorkContinuity` wires only the authority ports actually backed by a real authority; `createHost()` passes the coordinator into `OrchestratorLoop`, so a real process runs it every tick before dispatch.
+* `createWorkspaceDeliveryCompensationPort` takes an atomic `mkdir` mutex in the workspace and re-validates handoff id / HEAD before calling `recoverDeliveryHandoff`; that function additionally re-reads the persisted state before each remote mutation and refuses a stale handoff.
+
+### 4. `@symphony/decision` — `DecisionService.releaseExpiredClaim` and bridge sweep
 
 Lease expiry previously only happened lazily inside `getNextTask` / `claimTask`, i.e. only when an executor happened to ask for work. `releaseExpiredClaim(taskId, { expectedRevision, expectedClaimGeneration })` lets a reconciler ask the Decision authority to release a lease it observed as expired. Inside one store transaction it re-reads and requires the same revision, the same claim generation, a `claimed`/`running` task, and a lease still expired **at commit time**. Any mismatch returns `superseded` / `not_expired` / `not_found`; the coordinator never impersonates the Web executor, and the normal executor claims the released task afterwards.
+
+`DecisionBridge` also runs its own sweep (`expirySweepIntervalMs`, default 2s, unref'd, cleared on stop) that calls `releaseExpiredClaims()`, so a dead executor is noticed even when no browser polls again. The bridge exposes `POST /v1/tasks/:id/release-expired-claim` and `DecisionBridgeClient.releaseExpiredClaim()` so a host using the remote bridge has the same commit primitive as one with a local store.
 
 ## Alternatives considered
 
@@ -70,4 +83,4 @@ Lease expiry previously only happened lazily inside `getNextTask` / `claimTask`,
 * The coordinator cannot mutate anything by itself. Every automatic recovery needs a wired authority port, and Delivery compensation additionally requires a concrete `handoffRef.handoffId`.
 * Liveness deadlines and progress-source semantics remain the owning subsystem's responsibility (Web checkpoints in #148, durable intents across restarts in #149). This change does not itself provide restart convergence: the in-memory retry timer remains in-memory, and `scheduledRecovery` reflects only what an authority can currently prove.
 * Cross-source observation is not atomic. Safety comes from re-observation before action, authority-side commit-time validation, and treating any failed read as `observation_unavailable`.
-* The CLI composition root still assembles readers and authority ports; this change ships the coordinator, adapters, and decision-side commit primitive, not a default-on production wiring for every stage.
+* `createHost()` now assembles and runs the coordinator by default. It observes the stages this process can actually see (tracker, runtime, Decision, Delivery); GitHub PR/CI facts are not read per tick, so a work item whose next stage is only visible in GitHub is reported through its owning authority rather than inferred.

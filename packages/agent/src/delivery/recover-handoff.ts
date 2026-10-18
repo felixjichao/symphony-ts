@@ -19,6 +19,16 @@ export interface RecoverDeliveryHandoffOptions {
   readonly stateStorage: DeliveryStateStorage;
   readonly runner: DeliveryGitGhRunner;
   readonly log?: (msg: string) => void;
+  /**
+   * Pins the handoff this caller observed (NEST-137).
+   *
+   * A reconciler passes this so a concurrent compensation, a newer handoff for a new HEAD,
+   * or a resolved pause cannot be compensated twice. Before every remote mutation the
+   * persisted state is re-read and compared; any mismatch aborts without writing.
+   */
+  readonly expectedHandoff?:
+    | { readonly handoffId: string; readonly expectedHeadSha?: string | undefined }
+    | undefined;
 }
 
 export interface RecoverDeliveryHandoffResult {
@@ -104,6 +114,41 @@ export async function recoverDeliveryHandoff(
     };
   }
 
+  const expectedHandoff = options.expectedHandoff;
+
+  /**
+   * Re-reads the persisted state before a remote mutation and verifies that this caller is
+   * still compensating the same paused handoff. Returns `null` when it is safe to proceed.
+   */
+  const staleHandoffReason = async (phase: string): Promise<string | null> => {
+    if (expectedHandoff === undefined) {
+      return null;
+    }
+    let fresh: PersistedDeliveryState | null;
+    try {
+      fresh = await stateStorage.readState();
+    } catch (err) {
+      return `error re-reading delivery state before ${phase}: ${String(err)}`;
+    }
+    if (!fresh) {
+      return `delivery state disappeared before ${phase}`;
+    }
+    if (!fresh.isPaused) {
+      return `delivery pause was resolved before ${phase}`;
+    }
+    const freshHandoffId = fresh.handoff?.handoffId ?? null;
+    if (freshHandoffId !== expectedHandoff.handoffId) {
+      return `handoff changed from ${expectedHandoff.handoffId} to ${freshHandoffId ?? "none"} before ${phase}`;
+    }
+    if (
+      expectedHandoff.expectedHeadSha !== undefined &&
+      fresh.handoff?.headSha !== expectedHandoff.expectedHeadSha
+    ) {
+      return `handoff HEAD changed from ${expectedHandoff.expectedHeadSha} to ${fresh.handoff?.headSha ?? "none"} before ${phase}`;
+    }
+    return null;
+  };
+
   const repo = currentState.repo || options.repo;
   const issueNumber = currentState.issueNumber || options.issueNumber;
   const effectiveReadyLabel =
@@ -117,6 +162,18 @@ export async function recoverDeliveryHandoff(
   // 2. Ready label removal compensation
   let readyLabelRemoved = currentState.readyLabelRemoved ?? false;
   if (!readyLabelRemoved) {
+    const stale = await staleHandoffReason("label removal");
+    if (stale !== null) {
+      log(`[delivery-recovery] Aborting compensation: ${stale}`);
+      return {
+        success: false,
+        error: `error: ${stale}`,
+        readyLabelRemoved: false,
+        commentPosted: currentState.commentPosted ?? false,
+        commentVerifyStatus: "unverified",
+        pendingCompensation: true,
+      };
+    }
     try {
       const editRes = await runner.gh(
         ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel],
@@ -154,6 +211,19 @@ export async function recoverDeliveryHandoff(
   let handoffToPost: DeliveryHandoff | undefined;
 
   if (!commentPosted) {
+    const stale = await staleHandoffReason("comment compensation");
+    if (stale !== null) {
+      log(`[delivery-recovery] Aborting compensation: ${stale}`);
+      return {
+        success: false,
+        error: `error: ${stale}`,
+        readyLabelRemoved,
+        commentPosted: false,
+        commentVerifyStatus: "unverified",
+        pendingCompensation: true,
+      };
+    }
+
     let querySuccess = false;
     let alreadyPosted = false;
     let canUniquelyVerify = false;

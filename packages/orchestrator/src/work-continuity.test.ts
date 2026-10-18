@@ -508,6 +508,202 @@ describe("WorkContinuityCoordinator", () => {
     expect(result.failures).toBe(1);
   });
 
+  it("closes recovery admission synchronously on stop and never starts a recovery afterwards", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let observeCall = 0;
+    let startedObserving!: () => void;
+    const observing = new Promise<void>((resolve) => {
+      startedObserving = resolve;
+    });
+    const requests: WorkRecoveryRequest[] = [];
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: {
+        observe: async (key) => {
+          observeCall += 1;
+          if (observeCall === 1) {
+            startedObserving();
+            await gate;
+          }
+          return ownerlessObservation(key);
+        },
+      },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async (request) => {
+            requests.push(request);
+            return { kind: "applied" };
+          },
+        },
+      ],
+      now: () => NOW,
+      policy: { scheduledRecoveryGraceMs: 0, progressTimeoutMs: 0, repeatSuppressionMs: 0 },
+    });
+
+    const pass = coordinator.reconcileOnce();
+    await observing;
+    const stopping = coordinator.stop();
+    release();
+
+    const [result] = await Promise.all([pass, stopping]);
+
+    expect(result.entries[0]?.action).toBe("skipped_stopped");
+    expect(requests).toHaveLength(0);
+    expect(coordinator.stopped).toBe(true);
+
+    // A later pass is a no-op as well.
+    const after = await coordinator.reconcileOnce();
+    expect(after.entries).toHaveLength(0);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("stops scanning remaining work items once stop is requested", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let observeCall = 0;
+    let startedObserving!: () => void;
+    const observing = new Promise<void>((resolve) => {
+      startedObserving = resolve;
+    });
+    const observedKeys: string[] = [];
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA, workB] },
+      observer: {
+        observe: async (key) => {
+          observeCall += 1;
+          observedKeys.push(key.key);
+          if (observeCall === 1) {
+            startedObserving();
+            await gate;
+          }
+          return observationFor(key);
+        },
+      },
+      authorities: [],
+      now: () => NOW,
+    });
+
+    const pass = coordinator.reconcileOnce();
+    await observing;
+    const stopping = coordinator.stop();
+    release();
+    await Promise.all([pass, stopping]);
+
+    expect(observedKeys).toEqual([workA.key]);
+  });
+
+  it("does not replay an uncertain recovery whose response was lost", async () => {
+    let recoverCalls = 0;
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: { observe: async (key) => ownerlessObservation(key) },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async () => {
+            recoverCalls += 1;
+            // The side effect committed but the response was lost.
+            throw new Error("socket hang up after commit");
+          },
+        },
+      ],
+      now: () => NOW,
+      policy: { scheduledRecoveryGraceMs: 0, progressTimeoutMs: 0, repeatSuppressionMs: 30_000 },
+    });
+
+    const first = await coordinator.reconcileOnce();
+    const second = await coordinator.reconcileOnce();
+
+    expect(first.entries[0]?.action).toBe("unverified");
+    expect(first.entries[0]?.detail).toContain("post-failure observation");
+    expect(second.entries[0]?.action).toBe("skipped_duplicate");
+    expect(recoverCalls).toBe(1);
+  });
+
+  it("reports convergence when the post-failure observation shows the side effect landed", async () => {
+    let observeCall = 0;
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: {
+        observe: async (key) => {
+          observeCall += 1;
+          return observeCall >= 3 ? observationFor(key) : ownerlessObservation(key);
+        },
+      },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async () => {
+            throw new Error("response lost");
+          },
+        },
+      ],
+      now: () => NOW,
+      policy: { scheduledRecoveryGraceMs: 0, progressTimeoutMs: 0, repeatSuppressionMs: 30_000 },
+    });
+
+    const result = await coordinator.reconcileOnce();
+
+    expect(result.entries[0]?.action).toBe("unverified");
+    expect(result.entries[0]?.detail).toContain("post-failure observation: healthy");
+  });
+
+  it("refuses to delegate when a required source was never observed", async () => {
+    const requests: WorkRecoveryRequest[] = [];
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: {
+        observe: async (key) =>
+          ownerlessObservation(key),
+      },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async (request) => {
+            requests.push(request);
+            return { kind: "applied" };
+          },
+        },
+      ],
+      now: () => NOW,
+    });
+
+    // Sanity: the delegated observation is valid on its own.
+    const valid = await coordinator.reconcileOnce();
+    expect(valid.entries[0]?.action).toBe("delegated");
+
+    const missing = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: {
+        observe: async (key) =>
+          observationFor(key, {
+            owner: null,
+            requiredSources: ["tracker", "decision"],
+          }),
+      },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async (request) => {
+            requests.push(request);
+            return { kind: "applied" };
+          },
+        },
+      ],
+      now: () => NOW,
+    });
+
+    const blocked = await missing.reconcileOnce();
+    expect(blocked.entries[0]?.action).toBe("observation_failed");
+    expect(requests).toHaveLength(1);
+  });
+
   it("reports a scan failure without touching any work item", async () => {
     const requests: WorkRecoveryRequest[] = [];
     const coordinator = new WorkContinuityCoordinator({

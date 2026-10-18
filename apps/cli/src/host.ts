@@ -60,6 +60,7 @@ import {
   createOrchestratorRuntimeState,
   OrchestratorAuthority,
   OrchestratorLoop,
+  type WorkContinuityCoordinator,
   type DispatchPreflightResult,
   type DispatchPreflightSource,
   type PollScheduler,
@@ -78,6 +79,21 @@ import { resolveWorkflowPath } from "./args";
 import { EffectiveRuntimeController } from "./effective-runtime";
 import { createRuntimeLogObservers } from "./logging";
 import { WorkspaceLifecycleCoordinator } from "./workspace-lifecycle";
+import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
+import {
+  HostWorkObservationSource,
+  TrackerWorkIndex,
+  createBridgeDecisionPort,
+  createBridgeDecisionReader,
+  createHostWorkContinuity,
+  createLocalDecisionReader,
+  createServiceDecisionPort,
+  createTrackerOrchestratorPort,
+  createWorkspaceDeliveryCompensationPort,
+  createWorkspaceDeliveryReader,
+  issueWorkKey,
+  type DecisionWorkReader,
+} from "./work-continuity-wiring";
 
 export interface SymphonyHost {
   readonly workflowPath: string;
@@ -88,6 +104,8 @@ export interface SymphonyHost {
   readonly workspaceCoordinator: WorkspaceLifecycleCoordinator;
   readonly tracker: TrackerAdapter;
   readonly loop: OrchestratorLoop;
+  /** Work-level liveness / stranded-state reconciliation (NEST-137). */
+  readonly workContinuity: WorkContinuityCoordinator;
   readonly logger: StructuredLogger;
   readonly clock: SnapshotClock;
   getSnapshot(): ObservabilitySnapshot;
@@ -183,6 +201,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   let planningGate: DecisionPlanningGate | null = options.planningGate ?? null;
   let ownedStore: DurableDecisionStore | null = null;
+  // NEST-137：工作级对账需要真实的 Decision 读取面与提交入口；只有实际存在的后端才接线。
+  let decisionService: DecisionService | null = null;
+  let decisionClient: DecisionBridgeClient | null = null;
 
   if (!planningGate && !isExplicitlyDisabled) {
     if (explicitStoreDir !== undefined) {
@@ -191,16 +212,16 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       }
       ownedStore = new DurableDecisionStore({ storeDir: explicitStoreDir });
       await ownedStore.open();
-      const service = new DecisionService(ownedStore);
-      planningGate = new DecisionPlanningGate(service);
+      decisionService = new DecisionService(ownedStore);
+      planningGate = new DecisionPlanningGate(decisionService);
     } else if (explicitBridgeUrl !== undefined) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
-      const client = new DecisionBridgeClient(explicitBridgeUrl, { ...(token ? { authToken: token } : {}) });
-      planningGate = new DecisionPlanningGate(client);
+      decisionClient = new DecisionBridgeClient(explicitBridgeUrl, { ...(token ? { authToken: token } : {}) });
+      planningGate = new DecisionPlanningGate(decisionClient);
     } else if (envBridgeUrl) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
-      const client = new DecisionBridgeClient(envBridgeUrl, { ...(token ? { authToken: token } : {}) });
-      planningGate = new DecisionPlanningGate(client);
+      decisionClient = new DecisionBridgeClient(envBridgeUrl, { ...(token ? { authToken: token } : {}) });
+      planningGate = new DecisionPlanningGate(decisionClient);
     } else if (envStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
       const storeDir = envStoreDir ?? defaultStoreDir;
       if (!fs.existsSync(storeDir)) {
@@ -208,8 +229,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       }
       ownedStore = new DurableDecisionStore({ storeDir });
       await ownedStore.open();
-      const service = new DecisionService(ownedStore);
-      planningGate = new DecisionPlanningGate(service);
+      decisionService = new DecisionService(ownedStore);
+      planningGate = new DecisionPlanningGate(decisionService);
     }
   }
 
@@ -349,12 +370,83 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
     controller.setAuthority(authority);
 
+    // --- NEST-137：工作级活性 / stranded 对账的真实接线 ---
+    // 扫描集合来自真实 active tracker 工作；每次观察重新读取 issue，不复用扫描快照。
+    const workIndex = new TrackerWorkIndex(
+      trackerProxy,
+      () => controller.current.scheduling.policy.activeStates,
+      (issue) => issueWorkKey(issue, getEffectiveRepo()),
+    );
+
+    const decisionReader: DecisionWorkReader | null =
+      decisionService !== null
+        ? createLocalDecisionReader(decisionService)
+        : decisionClient !== null
+          ? createBridgeDecisionReader(decisionClient)
+          : null;
+    const decisionPort =
+      decisionService !== null
+        ? createServiceDecisionPort(decisionService)
+        : decisionClient !== null
+          ? createBridgeDecisionPort(decisionClient)
+          : null;
+
+    const runtimeView = {
+      running: (issue: Issue) => {
+        const entry = state.running.get(issue.id);
+        if (entry === undefined) {
+          return null;
+        }
+        return {
+          startedAt: entry.attempt.startedAt,
+          lastCodexTimestamp: entry.session?.lastCodexTimestamp ?? null,
+        };
+      },
+      retry: (issue: Issue) => {
+        const entry = state.retryAttempts.get(issue.id);
+        return entry === undefined ? null : { attempt: entry.attempt };
+      },
+    };
+
+    const workContinuity = createHostWorkContinuity({
+      index: workIndex,
+      observer: new HostWorkObservationSource({
+        index: workIndex,
+        runtime: runtimeView,
+        decision: decisionReader,
+        delivery: createWorkspaceDeliveryReader({
+          workspacePath: (issue) => workspaceCoordinator.peekWorkspacePath(issue),
+        }),
+        now,
+        stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
+        plannedStageTimeoutMs: controller.current.scheduling.pollIntervalMs,
+      }),
+      orchestrator: createTrackerOrchestratorPort({
+        index: workIndex,
+        dispatch: (issue) => authority.dispatchIssue(issue),
+      }),
+      decision: decisionPort,
+      delivery: createWorkspaceDeliveryCompensationPort({
+        workspacePath: (issue) => workspaceCoordinator.peekWorkspacePath(issue),
+        resolveIssue: (key) => workIndex.readIssue(key),
+        runner: new DefaultDeliveryGitGhRunner(),
+      }),
+      now,
+      onDiagnostic: (diagnostic) => {
+        observers.onDiagnostic({
+          kind: "work_continuity_failed",
+          message: `${diagnostic.kind}: ${diagnostic.message}`,
+        });
+      },
+    });
+
     const loop = new OrchestratorLoop({
       authority,
       candidates: trackerProxy,
       preflight,
       ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
       onDiagnostic: observers.onDiagnostic,
+      workContinuity,
     });
 
     let stopping = false;
@@ -396,6 +488,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       workspaceCoordinator,
       tracker: trackerProxy,
       loop,
+      workContinuity,
       logger,
       clock,
       getSnapshot: () => projectObservabilitySnapshot(state, clock),

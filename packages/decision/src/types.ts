@@ -106,6 +106,14 @@ export interface DecisionBridgeConfig {
   readonly allowedOrigins?: readonly string[] | undefined;
   readonly clock?: (() => UtcTimestampMs) | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  /**
+   * Interval for the bridge's own expired-claim sweep (NEST-137).
+   *
+   * The bridge is a Decision authority process: it is the only long-lived component that
+   * can notice a dead executor when no browser ever asks for the next task again. `0`
+   * disables the sweep (callers then rely on lazy expiry or an explicit release).
+   */
+  readonly expirySweepIntervalMs?: number | undefined;
 }
 
 export interface ClaimTaskRequest {

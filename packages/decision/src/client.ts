@@ -23,6 +23,8 @@ import type {
   GetTaskContextResponse,
   PutBindingRequest,
   RebindSessionRequest,
+  ReleaseExpiredClaimRequest,
+  ReleaseExpiredClaimResult,
   BreakBindingRequest,
   StartTaskRequest,
   SubmitFailureRequest,
@@ -162,6 +164,23 @@ export class DecisionBridgeClient {
     return await this.request<HeartbeatTaskResponse>(
       "POST",
       `/v1/tasks/${encodeURIComponent(taskId)}/heartbeat`,
+      params
+    );
+  }
+
+  /**
+   * Releases one expired claim through the Decision authority (NEST-137).
+   *
+   * The bridge re-validates revision, claim generation and lease expiry in its own store
+   * transaction; a `superseded` / `not_expired` outcome is a normal race result.
+   */
+  async releaseExpiredClaim(
+    taskId: string,
+    params: ReleaseExpiredClaimRequest
+  ): Promise<ReleaseExpiredClaimResult> {
+    return await this.request<ReleaseExpiredClaimResult>(
+      "POST",
+      `/v1/tasks/${encodeURIComponent(taskId)}/release-expired-claim`,
       params
     );
   }

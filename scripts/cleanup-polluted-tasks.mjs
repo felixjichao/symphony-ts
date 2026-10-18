@@ -1494,6 +1494,33 @@ class DecisionService {
    * Any mismatch returns a discriminated non-error outcome; the reconciler must not retry
    * a `superseded` request in the same pass.
    */
+  /**
+   * Releases **all** currently expired claims in one transaction (NEST-137).
+   *
+   * Used by the Decision bridge's own sweep so a dead executor is noticed even when no
+   * browser asks for the next task. Returns the released task ids; a task whose lease was
+   * renewed before the transaction is left untouched.
+   */
+  async releaseExpiredClaims() {
+    const now = this.clock();
+    const hasExpired = this.store.getAllTasks().some(
+      (task) => (task.status === "claimed" || task.status === "running") && task.lease !== null && now >= task.lease.expiresAtMs
+    );
+    if (!hasExpired) {
+      return { released: [] };
+    }
+    return await this.store.transaction((draft) => {
+      const txNow = this.clock();
+      const released = [];
+      for (const task of Object.values(draft.tasks)) {
+        if ((task.status === "claimed" || task.status === "running") && task.lease !== null && txNow >= task.lease.expiresAtMs) {
+          draft.tasks[task.id] = releaseExpiredDecisionTask(task, txNow);
+          released.push(task.id);
+        }
+      }
+      return { released };
+    });
+  }
   async releaseExpiredClaim(taskId, params) {
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];

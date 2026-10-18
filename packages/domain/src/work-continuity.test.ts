@@ -280,6 +280,22 @@ describe("Work-level continuity contracts", () => {
     expect(verdict.strandedReason).toBeNull();
   });
 
+  it("treats a required source that was never observed as unavailable", () => {
+    const observation = baseObservation({
+      owner: null,
+      sources: [{ source: "tracker", status: "ok", observedAt: NOW }],
+      requiredSources: ["tracker", "decision"],
+    });
+
+    const validation = validateWorkContinuityObservation(observation);
+    expect(validation.valid).toBe(false);
+
+    const verdict = deriveWorkContinuity(observation);
+    expect(verdict.diagnosis).toBe("observation_unavailable");
+    expect(verdict.recovery).toBeNull();
+    expect(verdict.detail).toContain("not observed: decision");
+  });
+
   it("ignores an unavailable non-required source", () => {
     const verdict = deriveWorkContinuity(
       baseObservation({
@@ -439,6 +455,74 @@ describe("Work-level continuity contracts", () => {
       }),
     );
     expect(workContinuityFingerprint(first)).not.toBe(workContinuityFingerprint(changed));
+  });
+
+  it("fingerprints the actual recovery target, not just the owner fence", () => {
+    const ownerless = (fence: { expectedHeadSha?: string }) =>
+      deriveWorkContinuity(
+        baseObservation({ owner: null, fence: { hasLeaseToken: false, ...fence } }),
+      );
+
+    expect(workContinuityFingerprint(ownerless({ expectedHeadSha: "a".repeat(40) }))).not.toBe(
+      workContinuityFingerprint(ownerless({ expectedHeadSha: "b".repeat(40) })),
+    );
+
+    const target = (headSha: string) => ({
+      repository: "felixjichao/symphony-ts",
+      prNumber: 1,
+      headSha,
+    });
+    const withTarget = (headSha: string) =>
+      deriveWorkContinuity(
+        baseObservation({
+          stage: "delivery",
+          owner: null,
+          expectedAction: {
+            action: "compensate",
+            description: "compensate handoff h-1",
+            authority: { kind: "internal", authority: "delivery" },
+            target: target(headSha),
+            handoffRef: { handoffId: "h-1" },
+          },
+        }),
+      );
+    expect(workContinuityFingerprint(withTarget("a".repeat(40)))).not.toBe(
+      workContinuityFingerprint(withTarget("b".repeat(40))),
+    );
+
+    const withTask = (revision: number) =>
+      deriveWorkContinuity(
+        baseObservation({
+          stage: "review",
+          owner: null,
+          expectedAction: {
+            action: "dispatch",
+            description: "claim review",
+            authority: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+            taskRef: { taskId: "task-1", revision },
+            target: target("a".repeat(40)),
+          },
+        }),
+      );
+    expect(workContinuityFingerprint(withTask(1))).not.toBe(workContinuityFingerprint(withTask(2)));
+
+    const withHandoff = (handoffId: string) =>
+      deriveWorkContinuity(
+        baseObservation({
+          stage: "delivery",
+          owner: null,
+          expectedAction: {
+            action: "compensate",
+            description: `compensate handoff ${handoffId}`,
+            authority: { kind: "internal", authority: "delivery" },
+            target: target("a".repeat(40)),
+            handoffRef: { handoffId },
+          },
+        }),
+      );
+    expect(workContinuityFingerprint(withHandoff("h-1"))).not.toBe(
+      workContinuityFingerprint(withHandoff("h-2")),
+    );
   });
 
   it("is idempotent for repeated derivation over unchanged facts", () => {

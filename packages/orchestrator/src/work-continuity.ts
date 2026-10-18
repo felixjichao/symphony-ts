@@ -100,6 +100,7 @@ export type WorkContinuityEntryAction =
   | "none"
   | "delegated"
   | "skipped_concurrent"
+  | "skipped_stopped"
   | "skipped_facts_changed"
   | "skipped_duplicate"
   | "authority_unavailable"
@@ -174,7 +175,20 @@ export class WorkContinuityCoordinator {
    * running is skipped, so two passes can never both decide to recover the same work item
    * and race to create two owners.
    */
-  private readonly inFlight = new Set<string>();
+  private readonly inFlight = new Map<
+    string,
+    Promise<{
+      readonly result: WorkContinuityEntryResult;
+      readonly attempted: boolean;
+      readonly failed: boolean;
+    }>
+  >();
+
+  /**
+   * Set **synchronously** by {@link stop}. Once closed, no new work item is scanned and no
+   * delegation is started; delegations already in flight are awaited by `stop()`.
+   */
+  private closed = false;
 
   /**
    * Last delegation per work item. An identical fingerprint inside
@@ -195,6 +209,26 @@ export class WorkContinuityCoordinator {
     this.now = options.now;
     this.policy = options.policy ?? DEFAULT_WORK_CONTINUITY_POLICY;
     this.onDiagnostic = options.onDiagnostic;
+  }
+
+  /**
+   * Closes recovery admission synchronously and waits for in-flight delegations.
+   *
+   * Called from `OrchestratorLoop.stop()` before the in-flight tick is awaited, so a
+   * `stop()` racing with an in-progress reconciliation cannot start a new recovery after
+   * shutdown was requested. Idempotent.
+   */
+  public async stop(): Promise<void> {
+    this.closed = true;
+    const pending = [...this.inFlight.values()];
+    if (pending.length > 0) {
+      await Promise.allSettled(pending);
+    }
+  }
+
+  /** Whether recovery admission has been closed by {@link stop}. */
+  public get stopped(): boolean {
+    return this.closed;
   }
 
   public async reconcileOnce(): Promise<WorkContinuityReconciliationResult> {
@@ -225,6 +259,9 @@ export class WorkContinuityCoordinator {
     let failures = 0;
 
     for (const workKey of scannedWorkKeys) {
+      if (this.closed) {
+        break;
+      }
       const entry = await this.reconcileWorkKey(workKey);
       entries.push(entry.result);
       // A recovery decision only exists for genuinely stranded work, so it marks the
@@ -254,6 +291,9 @@ export class WorkContinuityCoordinator {
     readonly failed: boolean;
   }> {
     const keyId = workKeyId(workKey);
+    if (this.closed) {
+      return stoppedEntry(workKey);
+    }
     if (this.inFlight.has(keyId)) {
       return {
         result: {
@@ -270,11 +310,14 @@ export class WorkContinuityCoordinator {
       };
     }
 
-    this.inFlight.add(keyId);
+    const running = this.runWorkKey(workKey);
+    this.inFlight.set(keyId, running);
     try {
-      return await this.runWorkKey(workKey);
+      return await running;
     } finally {
-      this.inFlight.delete(keyId);
+      if (this.inFlight.get(keyId) === running) {
+        this.inFlight.delete(keyId);
+      }
     }
   }
 
@@ -365,6 +408,11 @@ export class WorkContinuityCoordinator {
 
     const recovery = second.verdict.recovery;
 
+    // `stop()` may have run while the pre-action re-observation was awaiting.
+    if (this.closed) {
+      return stoppedEntry(workKey);
+    }
+
     const now = this.now();
     const previous = this.recentDelegations.get(workKeyId(workKey));
     if (
@@ -384,6 +432,10 @@ export class WorkContinuityCoordinator {
       };
     }
 
+    // Record **before** calling: the side effect may commit while the response is lost.
+    // An uncertain outcome must never be replayed just because the promise rejected.
+    this.recentDelegations.set(workKeyId(workKey), { fingerprint: secondFingerprint, at: now });
+
     let outcome: WorkRecoveryOutcome;
     try {
       outcome = await authority.recover({
@@ -398,12 +450,21 @@ export class WorkContinuityCoordinator {
         workKey,
         message: `authority '${authority.authority}' threw: ${describeError(error)}`,
       });
+      // The mutation may have committed before the failure surfaced. Re-read the
+      // authority's facts to report honestly, but never replay the side effect here.
+      const afterThrow = await this.observeAndDerive(workKey);
+      const observed = afterThrow.ok
+        ? `post-failure observation: ${afterThrow.verdict.diagnosis}`
+        : `post-failure observation also failed: ${afterThrow.detail}`;
+      if (!afterThrow.ok) {
+        this.emit({ kind: "post_action_unverified", workKey, message: afterThrow.detail });
+      }
       return {
         result: entryResult(
           workKey,
           second.verdict,
           "unverified",
-          `authority '${authority.authority}' failed: ${describeError(error)}; result is unverified`,
+          `authority '${authority.authority}' failed: ${describeError(error)}; result is unverified; ${observed}; the same delegation will not be repeated before the suppression window elapses`,
         ),
         attempted: true,
         failed: true,
@@ -411,7 +472,6 @@ export class WorkContinuityCoordinator {
     }
 
     if (outcome.kind === "refused" || outcome.kind === "unavailable") {
-      this.recentDelegations.set(workKeyId(workKey), { fingerprint: secondFingerprint, at: now });
       this.emit({
         kind: outcome.kind === "refused" ? "recovery_refused" : "recovery_unavailable",
         workKey,
@@ -429,15 +489,12 @@ export class WorkContinuityCoordinator {
       };
     }
     if (outcome.kind === "skipped") {
-      this.recentDelegations.set(workKeyId(workKey), { fingerprint: secondFingerprint, at: now });
       return {
         result: entryResult(workKey, second.verdict, "skipped_facts_changed", outcome.reason),
         attempted: true,
         failed: false,
       };
     }
-
-    this.recentDelegations.set(workKeyId(workKey), { fingerprint: secondFingerprint, at: now });
 
     // Post-action re-observation: report convergence honestly. A failed read is
     // `unverified`; the coordinator never replays the side effect to "confirm" it.
@@ -510,6 +567,26 @@ export class WorkContinuityCoordinator {
 
 function workKeyId(workKey: WorkKey): string {
   return `${workKey.provider}:${workKey.key}`;
+}
+
+function stoppedEntry(workKey: WorkKey): {
+  readonly result: WorkContinuityEntryResult;
+  readonly attempted: boolean;
+  readonly failed: boolean;
+} {
+  return {
+    result: {
+      workKey,
+      diagnosis: "healthy",
+      strandedReason: null,
+      recoveryClass: null,
+      authority: null,
+      action: "skipped_stopped",
+      detail: "reconciliation was stopped before this work item could be recovered",
+    },
+    attempted: false,
+    failed: false,
+  };
 }
 
 function entryResult(

@@ -51,6 +51,11 @@ export class WorkspaceLifecycleCoordinator {
     return path;
   }
 
+  /** Read-only workspace path for observation; never provisions, binds, or locks. */
+  public peekWorkspacePath(issue: Issue): string {
+    return this.controller.current.workspaceManager.resolveWorkspacePath(issue.identifier);
+  }
+
   public createAttemptOptions(
     context: AttemptContext,
     extraOptions?: { readonly plan?: DecisionMaterializedPlan | null | undefined } | undefined,

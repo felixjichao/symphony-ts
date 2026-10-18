@@ -95,6 +95,12 @@ export interface CandidateIssueSource {
  */
 export interface WorkContinuityTickRunner {
   reconcileOnce(): Promise<unknown>;
+  /**
+   * Optional **synchronous-prefix** shutdown hook. It must close recovery admission before
+   * its first `await` so a `stop()` racing with an in-flight reconciliation cannot start a
+   * new recovery; the returned promise settles once in-flight delegations are done.
+   */
+  stop?(): Promise<void>;
 }
 
 /**
@@ -273,6 +279,8 @@ export class OrchestratorLoop {
     this.cancelPollTimer();
     // 同步前缀：在等待任何在途异步工作**之前**关闭调度并开始停止 workers。
     const shutdown = this.authority.shutdown();
+    // 同步关闭工作级恢复准入（协调器在首个 await 前置 closed），随后与 tick 一并等待。
+    const continuityShutdown = this.workContinuity?.stop?.();
     const startup = this.startupPromise;
     const tick = this.activeTick;
     this.stopPromise = (async () => {
@@ -288,6 +296,13 @@ export class OrchestratorLoop {
           await tick;
         } catch {
           /* tick 内部已隔离异常。 */
+        }
+      }
+      if (continuityShutdown !== undefined) {
+        try {
+          await continuityShutdown;
+        } catch {
+          /* 恢复准入已同步关闭；仅等待在途委派收尾。 */
         }
       }
       await shutdown;

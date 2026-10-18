@@ -379,6 +379,19 @@ export function unavailableSources(
 }
 
 /**
+ * Required sources that were never observed at all.
+ *
+ * A key source that was not read is not evidence that the work has no owner. Missing
+ * required sources are therefore treated exactly like an unavailable read.
+ */
+export function missingRequiredSources(
+  observation: WorkContinuityObservation,
+): readonly WorkObservationSourceKind[] {
+  const observed = new Set(observation.sources.map((source) => source.source));
+  return observation.requiredSources.filter((kind) => !observed.has(kind));
+}
+
+/**
  * Evaluates liveness without inventing evidence.
  *
  * `measured` is true only when a real progress instant exists or an explicit deadline was
@@ -527,16 +540,26 @@ export function deriveWorkContinuity(
   const requiredUnavailable = unavailable.filter((source) =>
     observation.requiredSources.includes(source.source),
   );
-  if (requiredUnavailable.length > 0) {
+  const missingRequired = missingRequiredSources(observation);
+  if (requiredUnavailable.length > 0 || missingRequired.length > 0) {
+    const parts: string[] = [];
+    if (missingRequired.length > 0) {
+      parts.push(`not observed: ${missingRequired.join(", ")}`);
+    }
+    if (requiredUnavailable.length > 0) {
+      parts.push(
+        `unavailable: ${requiredUnavailable
+          .map((source) => `${source.source}${source.reason === undefined ? "" : `(${source.reason})`}`)
+          .join(", ")}`,
+      );
+    }
     return {
       ...base,
       diagnosis: "observation_unavailable",
       strandedReason: null,
       contradictions: observation.contradictions ?? [],
       recovery: null,
-      detail: `required source(s) unavailable: ${requiredUnavailable
-        .map((source) => `${source.source}${source.reason === undefined ? "" : `(${source.reason})`}`)
-        .join(", ")}; no ownership change is safe`,
+      detail: `required source(s) ${parts.join("; ")}; no ownership change is safe`,
     };
   }
 
@@ -552,7 +575,9 @@ export function deriveWorkContinuity(
   }
 
   const derivedContradictions: WorkContradiction[] = [];
-  if (observation.expectedAction === null) {
+  // Explicitly blocked work does not need an actionable next step; its continuation is the
+  // documented unblock condition, so the missing-action invariant does not apply.
+  if (observation.expectedAction === null && observation.blocked === null) {
     derivedContradictions.push({
       code: "missing_expected_action",
       message: "active work has no derivable expected next action",
@@ -716,7 +741,14 @@ function buildRecovery(
   reason: StrandedReason,
   fence: SafeOwnershipFence | undefined,
 ): WorkRecoveryDecision {
-  const recoveryClass = recoveryClassForAction(expectedAction.action) ?? "require_human";
+  // A dead or unobservable owner is reclaimed from its own authority; a missing owner is
+  // re-dispatched. "none" is not a recovery, so it can only fall back to `reclaim` when an
+  // owner exists to reclaim from, otherwise a human must decide.
+  const fallback: WorkRecoveryClass =
+    reason === "owner_progress_timeout" || reason === "owner_not_observable"
+      ? "reclaim"
+      : "require_human";
+  const recoveryClass = recoveryClassForAction(expectedAction.action) ?? fallback;
   return {
     class: recoveryClass,
     authority,
@@ -755,7 +787,19 @@ export function workContinuityFingerprint(verdict: WorkContinuityVerdict): strin
     verdict.owner?.presence ?? "",
     verdict.recovery?.class ?? "",
     verdict.recovery?.authority ?? "",
+    verdict.recovery?.reason ?? "",
     fenceFingerprint(verdict.owner?.fence ?? { hasLeaseToken: false }),
+    fenceFingerprint(verdict.recovery?.expectedFence ?? { hasLeaseToken: false }),
+    verdict.expectedAction?.taskRef?.taskId ?? "",
+    verdict.expectedAction?.taskRef === undefined
+      ? ""
+      : String(verdict.expectedAction.taskRef.revision),
+    verdict.expectedAction?.target?.repository ?? "",
+    verdict.expectedAction?.target === undefined
+      ? ""
+      : String(verdict.expectedAction.target.prNumber),
+    verdict.expectedAction?.target?.headSha ?? "",
+    verdict.expectedAction?.handoffRef?.handoffId ?? "",
     verdict.scheduledRecovery?.kind ?? "",
     verdict.scheduledRecovery?.authority ?? "",
     verdict.scheduledRecovery?.dueAt === null || verdict.scheduledRecovery === null
@@ -826,6 +870,10 @@ export function validateWorkContinuityObservation(
       return { valid: false, reason: `duplicate source observation for ${source.source}` };
     }
     sourceKinds.add(source.source);
+  }
+  const missing = missingRequiredSources(observation);
+  if (missing.length > 0) {
+    return { valid: false, reason: `required source not observed: ${missing.join(", ")}` };
   }
   return { valid: true };
 }

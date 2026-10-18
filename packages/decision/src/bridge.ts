@@ -36,6 +36,8 @@ export class DecisionBridge {
   private server: http.Server | null = null;
   private actualPort: number | null = null;
   private activeSockets = new Set<import("node:net").Socket>();
+  private expirySweepIntervalMs: number;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(serviceOrConfig: DecisionService | DecisionBridgeConfig, config?: Partial<DecisionBridgeConfig>) {
     if (serviceOrConfig instanceof DecisionService) {
@@ -45,6 +47,7 @@ export class DecisionBridge {
       this.port = conf.port ?? 4040;
       this.authToken = conf.authToken;
       this.allowedOrigins = new Set(conf.allowedOrigins ?? []);
+      this.expirySweepIntervalMs = conf.expirySweepIntervalMs ?? 2_000;
     } else {
       const storeConfig: DecisionStoreConfig = {
         storeDir: serviceOrConfig.storeDir,
@@ -60,6 +63,7 @@ export class DecisionBridge {
       this.port = serviceOrConfig.port ?? 4040;
       this.authToken = serviceOrConfig.authToken;
       this.allowedOrigins = new Set(serviceOrConfig.allowedOrigins ?? []);
+      this.expirySweepIntervalMs = serviceOrConfig.expirySweepIntervalMs ?? 2_000;
     }
 
     if (this.host !== "127.0.0.1" && this.host !== "localhost" && this.host !== "::1") {
@@ -111,6 +115,7 @@ export class DecisionBridge {
         if (address && typeof address === "object") {
           this.actualPort = address.port;
           this.server = server;
+          this.startExpirySweep();
           resolve({ host: this.host, port: this.actualPort });
         } else {
           reject(new Error("Failed to obtain server address"));
@@ -120,6 +125,7 @@ export class DecisionBridge {
   }
 
   async stop(): Promise<void> {
+    this.stopExpirySweep();
     if (!this.server) {
       await this.service.getStore().close();
       return;
@@ -143,6 +149,41 @@ export class DecisionBridge {
     });
 
     await this.service.getStore().close();
+  }
+
+  /**
+   * The bridge is a Decision authority process: while it runs it notices claims whose lease
+   * expired without a live executor, even when no browser ever polls again. This is the
+   * same transition the lazy expiry inside `getNextTask` performs — just driven by the
+   * service owner's own lifecycle instead of an unrelated reader.
+   */
+  private startExpirySweep(): void {
+    if (this.sweepTimer !== null || this.expirySweepIntervalMs <= 0) {
+      return;
+    }
+    const timer = setInterval(() => {
+      void this.sweepExpiredClaims();
+    }, this.expirySweepIntervalMs);
+    // The sweep must never be the reason the process stays alive.
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    this.sweepTimer = timer;
+  }
+
+  private stopExpirySweep(): void {
+    if (this.sweepTimer !== null) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+  }
+
+  private async sweepExpiredClaims(): Promise<void> {
+    try {
+      await this.service.releaseExpiredClaims();
+    } catch {
+      /* A sweep failure must not kill the bridge; the next tick retries. */
+    }
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -241,6 +282,25 @@ export class DecisionBridge {
         generation: b["generation"],
       });
       this.sendJson(res, 200, { task: result });
+      return;
+    }
+
+    // POST /v1/tasks/:id/release-expired-claim (NEST-137)
+    const releaseMatch = /^\/v1\/tasks\/([^/]+)\/release-expired-claim$/.exec(pathname);
+    if (method === "POST" && releaseMatch) {
+      const id = decodeURIComponent(releaseMatch[1]!);
+      const body = await this.readJsonBody(req);
+      const b = (body ?? {}) as Record<string, unknown>;
+      if (typeof b["expectedRevision"] !== "number" || typeof b["expectedClaimGeneration"] !== "number") {
+        throw new DecisionValidationError(
+          "release-expired-claim requires expectedRevision and expectedClaimGeneration"
+        );
+      }
+      const result = await this.service.releaseExpiredClaim(id, {
+        expectedRevision: b["expectedRevision"],
+        expectedClaimGeneration: b["expectedClaimGeneration"],
+      });
+      this.sendJson(res, 200, result);
       return;
     }
 
