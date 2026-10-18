@@ -60,6 +60,14 @@ export interface WorkContinuityObservationSource {
    * failed observation (fail safe), never as "there is no owner".
    */
   observe(workKey: WorkKey): Promise<WorkContinuityObservation>;
+  /**
+   * Optional cache-bypassing read used immediately before and after a recovery.
+   *
+   * The coordinator re-observes precisely to detect facts that changed since the decision;
+   * a source-level cache would hide exactly those changes. When implemented, this method
+   * must perform real reads and stamp each source with its real read time.
+   */
+  reobserve?(workKey: WorkKey): Promise<WorkContinuityObservation>;
 }
 
 /** A recovery delegation handed to the authority that owns the mutation. */
@@ -365,7 +373,9 @@ export class WorkContinuityCoordinator {
 
     // Re-observe immediately before acting: a fact change (owner heartbeat, new retry,
     // newer generation, HEAD change) invalidates the stale plan instead of replaying it.
-    const second = await this.observeAndDerive(workKey);
+    // Pre-action and post-action reads bypass caches: their whole purpose is to detect
+    // facts that changed since the decision.
+    const second = await this.observeAndDerive(workKey, true);
     if (!second.ok) {
       this.emit({ kind: "reobserve_failed", workKey, message: second.detail });
       return {
@@ -452,7 +462,7 @@ export class WorkContinuityCoordinator {
       });
       // The mutation may have committed before the failure surfaced. Re-read the
       // authority's facts to report honestly, but never replay the side effect here.
-      const afterThrow = await this.observeAndDerive(workKey);
+      const afterThrow = await this.observeAndDerive(workKey, true);
       const observed = afterThrow.ok
         ? `post-failure observation: ${afterThrow.verdict.diagnosis}`
         : `post-failure observation also failed: ${afterThrow.detail}`;
@@ -498,7 +508,7 @@ export class WorkContinuityCoordinator {
 
     // Post-action re-observation: report convergence honestly. A failed read is
     // `unverified`; the coordinator never replays the side effect to "confirm" it.
-    const third = await this.observeAndDerive(workKey);
+    const third = await this.observeAndDerive(workKey, true);
     if (!third.ok) {
       this.emit({
         kind: "post_action_unverified",
@@ -531,13 +541,17 @@ export class WorkContinuityCoordinator {
 
   private async observeAndDerive(
     workKey: WorkKey,
+    fresh = false,
   ): Promise<
     | { readonly ok: true; readonly verdict: WorkContinuityVerdict }
     | { readonly ok: false; readonly detail: string }
   > {
     let observation: WorkContinuityObservation;
     try {
-      observation = await this.observer.observe(workKey);
+      observation =
+        fresh && this.observer.reobserve !== undefined
+          ? await this.observer.reobserve(workKey)
+          : await this.observer.observe(workKey);
     } catch (error) {
       this.emit({ kind: "observation_failed", workKey, message: describeError(error) });
       return { ok: false, detail: describeError(error) };

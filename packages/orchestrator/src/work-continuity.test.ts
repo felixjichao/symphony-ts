@@ -704,6 +704,44 @@ describe("WorkContinuityCoordinator", () => {
     expect(requests).toHaveLength(1);
   });
 
+  it("uses the cache-bypassing reobserve before and after a recovery", async () => {
+    const requests: WorkRecoveryRequest[] = [];
+    let observes = 0;
+    let reobserves = 0;
+    const coordinator = new WorkContinuityCoordinator({
+      scan: { listWorkKeys: async () => [workA] },
+      observer: {
+        observe: async () => {
+          observes += 1;
+          return ownerlessObservation(workA);
+        },
+        reobserve: async () => {
+          reobserves += 1;
+          return ownerlessObservation(workA);
+        },
+      },
+      authorities: [
+        {
+          authority: "orchestrator",
+          recover: async (request) => {
+            requests.push(request);
+            return { kind: "applied" };
+          },
+        },
+      ],
+      now: () => NOW,
+    });
+
+    const result = await coordinator.reconcileOnce();
+
+    expect(result.entries[0]?.action).toBe("delegated");
+    // Initial diagnosis uses the regular read; the pre-action and post-action reads must
+    // bypass any source cache so a fact change is actually visible.
+    expect(observes).toBe(1);
+    expect(reobserves).toBe(2);
+    expect(requests).toHaveLength(1);
+  });
+
   it("reports a scan failure without touching any work item", async () => {
     const requests: WorkRecoveryRequest[] = [];
     const coordinator = new WorkContinuityCoordinator({

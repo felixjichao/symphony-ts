@@ -333,30 +333,63 @@ export interface GitHubPullRequestFacts {
   readonly isDraft: boolean;
   readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   readonly checks: "none" | "pending" | "passing" | "failing";
+  /** When these facts were actually read from GitHub (cached reads keep their original). */
+  readonly readAt: number;
 }
 
 /** `null` = the read succeeded and there is no PR; throwing means the facts are unavailable. */
 export interface GitHubPrReader {
-  read(issue: Issue): Promise<GitHubPullRequestFacts | null>;
+  /** `fresh` bypasses the cache; the coordinator uses it immediately around a recovery. */
+  read(
+    issue: Issue,
+    options?: { readonly fresh?: boolean | undefined },
+  ): Promise<GitHubPullRequestFacts | null>;
 }
 
 interface RawCheck {
+  /** CheckRun field. */
   readonly status?: unknown;
   readonly conclusion?: unknown;
+  /** Legacy StatusContext field. */
+  readonly state?: unknown;
 }
 
-/** Maps `statusCheckRollup` to a stage-relevant CI state. */
+/**
+ * Maps `statusCheckRollup` to a stage-relevant CI state.
+ *
+ * The rollup mixes two shapes: check runs (`status` + `conclusion`) and legacy commit
+ * statuses (`state` = `EXPECTED` / `PENDING` / `SUCCESS` / `FAILURE` / `ERROR`). Both must
+ * be interpreted, otherwise a pending or failing status reads as "passing".
+ */
 export function projectCheckRollup(checks: readonly RawCheck[]): GitHubPullRequestFacts["checks"] {
   if (checks.length === 0) {
     return "none";
   }
-  const failing = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+  const failingConclusions = new Set([
+    "FAILURE",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "STALE",
+  ]);
+  const failingStates = new Set(["FAILURE", "ERROR"]);
+  const pendingStates = new Set(["EXPECTED", "PENDING"]);
   let pending = false;
   let failed = false;
   for (const check of checks) {
+    const state = typeof check.state === "string" ? check.state : null;
+    if (state !== null) {
+      if (failingStates.has(state)) {
+        failed = true;
+      } else if (pendingStates.has(state)) {
+        pending = true;
+      }
+      continue;
+    }
     const conclusion = typeof check.conclusion === "string" ? check.conclusion : null;
     const status = typeof check.status === "string" ? check.status : null;
-    if (conclusion !== null && failing.has(conclusion)) {
+    if (conclusion !== null && failingConclusions.has(conclusion)) {
       failed = true;
     }
     if (status !== null && status !== "COMPLETED") {
@@ -388,7 +421,7 @@ export function createGitHubPrReader(options: {
   const cache = new Map<string, { readonly at: number; readonly value: GitHubPullRequestFacts | null }>();
 
   return {
-    async read(issue) {
+    async read(issue, readOptions) {
       const repository = options.repository(issue);
       const branch = options.branch(issue);
       if (repository === null || branch === null) {
@@ -396,7 +429,7 @@ export function createGitHubPrReader(options: {
       }
       const key = `${repository}#${branch}`;
       const cached = cache.get(key);
-      if (cached !== undefined && now() - cached.at < ttlMs) {
+      if (readOptions?.fresh !== true && cached !== undefined && now() - cached.at < ttlMs) {
         return cached.value;
       }
 
@@ -442,10 +475,12 @@ export function createGitHubPrReader(options: {
         .sort((a, b) => (b["number"] as number) - (a["number"] as number));
 
       const latest = candidates[0];
+      const readAt = now();
       const value: GitHubPullRequestFacts | null =
         latest === undefined
           ? null
           : {
+              readAt,
               repository,
               number: latest["number"] as number,
               state: latest["state"] as "OPEN" | "CLOSED" | "MERGED",
@@ -508,6 +543,21 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
   }
 
   public async observe(workKey: WorkKey): Promise<WorkContinuityObservation> {
+    return await this.observeInternal(workKey, false);
+  }
+
+  /**
+   * Cache-bypassing read used by the coordinator immediately before and after a recovery.
+   * GitHub facts are re-read from `gh` and stamped with their real read time.
+   */
+  public async reobserve(workKey: WorkKey): Promise<WorkContinuityObservation> {
+    return await this.observeInternal(workKey, true);
+  }
+
+  private async observeInternal(
+    workKey: WorkKey,
+    fresh: boolean,
+  ): Promise<WorkContinuityObservation> {
     const observedAt = this.now();
     const issue = await this.index.readIssue(workKey);
     const sources: WorkSourceObservation[] = [
@@ -575,8 +625,14 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
     if (this.github !== null && (hasReviewEvidence || hasDeliveryEvidence)) {
       requiredSources.push("github");
       try {
-        pr = await this.github.read(issue);
-        sources.push({ source: "github", status: "ok", observedAt: this.now() });
+        pr = await this.github.read(issue, { fresh });
+        sources.push({
+          source: "github",
+          status: "ok",
+          // The real read time, not the time the observation was assembled: a cached read
+          // must not look fresher than it is.
+          observedAt: pr?.readAt ?? this.now(),
+        });
       } catch (error) {
         sources.push({
           source: "github",
@@ -735,12 +791,15 @@ function deriveHostStageFacts(input: {
     }
 
     // CI is green (or there are no checks to wait for): only a review task recorded against
-    // the **current** HEAD may own this stage. A task for an older HEAD is stale and must
-    // never be continued or reused.
+    // the **exact current target** (same repository, same PR, same HEAD) may own this stage.
+    // A task for an older HEAD — or for a different PR that happens to share a commit SHA —
+    // is stale and must never be continued or reused.
     const reviewTask = latestTask(decision, "review");
     const currentReview =
       reviewTask !== null &&
       reviewTask.kind === "review" &&
+      reviewTask.target.repository === pr.repository &&
+      reviewTask.target.prNumber === pr.number &&
       reviewTask.target.headSha === pr.headSha
         ? reviewTask
         : null;

@@ -400,6 +400,9 @@ Provider-neutral work-level liveness evaluation, stranded-state detection, and b
 | Review continuation requires the current PR HEAD; a task for an older HEAD is never reused | same suite: does not reuse a review task recorded against an older HEAD / uses the current HEAD task |
 | GitHub read failure is `unavailable` when the work item depends on it, and is not read at all for fresh coding work | same suite: fails safe when the GitHub read fails and review evidence exists / does not block coding work when nothing depends on it |
 | `statusCheckRollup` projection into none / pending / passing / failing | same suite: projects statusCheckRollup into a coarse CI state |
+| CI rollup covers both CheckRun and legacy StatusContext shapes, including mixed input | same suite: projects statusCheckRollup into a coarse CI state |
+| Review continuation requires the full target identity (repository + PR + HEAD), not just the SHA | same suite: does not reuse a review task from another PR that shares the commit SHA |
+| Pre-action and post-action observations bypass the GitHub cache and keep the real read time | same suite: reobserve bypasses the GitHub cache and keeps the real read time; `packages/orchestrator/src/work-continuity.test.ts`: uses the cache-bypassing reobserve |
 | Cross-source observation from tracker + orchestrator runtime + Decision session/tasks/leases + workspace delivery state, with per-source availability | same suite: HostWorkObservationSource |
 | Idle coding work is owned by the orchestrator poll loop and is not re-dispatched by reconciliation | same suite: treats an idle coding item as owned by the orchestrator poll loop |
 | Delivery compensation port with an atomic filesystem mutex and handoff id / HEAD re-validation before any remote mutation | same suite: Workspace delivery compensation port; `packages/agent` `recoverDeliveryHandoff` expectedHandoff guards |

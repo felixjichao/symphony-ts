@@ -29,6 +29,7 @@ import {
   HostWorkObservationSource,
   TrackerWorkIndex,
   createBridgeDecisionReader,
+  createGitHubPrReader,
   createTrackerOrchestratorPort,
   projectCheckRollup,
   createWorkspaceDeliveryCompensationPort,
@@ -157,7 +158,7 @@ describe("HostWorkObservationSource", () => {
     delivery?: PersistedDeliveryState | null;
     runtime?: RuntimeWorkView;
     deliveryThrows?: boolean;
-    now?: number;
+    now?: number | (() => number);
     stallTimeoutMs?: number;
     issue?: Issue | null;
     isActive?: (issue: Issue) => boolean;
@@ -190,7 +191,10 @@ describe("HostWorkObservationSource", () => {
                 return options.delivery ?? null;
               },
             },
-      now: () => options.now ?? 1_770_000_000_000,
+      now: (() => {
+        const option = options.now;
+        return typeof option === "function" ? option : () => option ?? 1_770_000_000_000;
+      })(),
       stallTimeoutMs: () => options.stallTimeoutMs ?? 0,
       isActive: options.isActive ?? (() => true),
       github: (options.github ?? null) as never,
@@ -334,6 +338,7 @@ describe("HostWorkObservationSource", () => {
   } as PersistedDeliveryState;
 
   const PR = {
+    readAt: 1_770_000_000_000,
     repository: "owner/repo",
     number: 12,
     state: "OPEN" as const,
@@ -399,6 +404,78 @@ describe("HostWorkObservationSource", () => {
     expect(observation.expectedAction?.description).toContain("create and claim the review task");
   });
 
+  it("does not reuse a review task from another PR that shares the commit SHA", async () => {
+    const otherPr = reviewTask({
+      status: "pending",
+      target: { repository: "owner/repo", prNumber: 9, headSha: PR.headSha },
+    });
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: decisionObservation({ tasks: [otherPr], results: [] }),
+      }),
+    );
+
+    expect(observation.stage).toBe("review");
+    expect(observation.expectedAction?.taskRef).toBeUndefined();
+    expect(observation.expectedAction?.target?.prNumber).toBe(12);
+  });
+
+  it("reobserve bypasses the GitHub cache and keeps the real read time", async () => {
+    let head = "a".repeat(40);
+    let calls = 0;
+    let clock = 1_000;
+    const reader = createGitHubPrReader({
+      runner: {
+        gh: async () => {
+          calls += 1;
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              {
+                number: 12,
+                state: "OPEN",
+                headRefOid: head,
+                isDraft: false,
+                mergeable: "MERGEABLE",
+                statusCheckRollup: [],
+              },
+            ]),
+            stderr: "",
+          };
+        },
+      },
+      repository: () => "owner/repo",
+      branch: () => "symphony/GH-7",
+      now: () => clock,
+      ttlMs: 60_000,
+    });
+    const observer = source({
+      delivery: deliveryOpen,
+      github: reader as never,
+      now: () => clock,
+    });
+
+    const first = await observer.observe(workKey);
+    expect(calls).toBe(1);
+    expect(first.sources.find((entry) => entry.source === "github")?.observedAt).toBe(1_000);
+    expect(first.expectedAction?.target?.headSha).toBe("a".repeat(40));
+
+    // Cached: still the old HEAD, and still stamped with the original read time.
+    head = "b".repeat(40);
+    clock = 2_000;
+    const cached = await observer.observe(workKey);
+    expect(calls).toBe(1);
+    expect(cached.sources.find((entry) => entry.source === "github")?.observedAt).toBe(1_000);
+
+    // Fresh: sees the new HEAD immediately.
+    const fresh = await observer.reobserve(workKey);
+    expect(calls).toBe(2);
+    expect(fresh.sources.find((entry) => entry.source === "github")?.observedAt).toBe(2_000);
+    expect(fresh.expectedAction?.target?.headSha).toBe("b".repeat(40));
+  });
+
   it("uses the review task recorded against the current HEAD", async () => {
     const current = reviewTask({
       status: "pending",
@@ -450,6 +527,7 @@ describe("HostWorkObservationSource", () => {
 
   it("projects statusCheckRollup into a coarse CI state", () => {
     expect(projectCheckRollup([])).toBe("none");
+    // CheckRun shape.
     expect(projectCheckRollup([{ status: "IN_PROGRESS", conclusion: null }])).toBe("pending");
     expect(projectCheckRollup([{ status: "COMPLETED", conclusion: "SUCCESS" }])).toBe("passing");
     expect(
@@ -464,6 +542,22 @@ describe("HostWorkObservationSource", () => {
         { status: "COMPLETED", conclusion: "FAILURE" },
       ]),
     ).toBe("failing");
+
+    // Legacy StatusContext shape.
+    expect(projectCheckRollup([{ state: "EXPECTED" }])).toBe("pending");
+    expect(projectCheckRollup([{ state: "PENDING" }])).toBe("pending");
+    expect(projectCheckRollup([{ state: "SUCCESS" }])).toBe("passing");
+    expect(projectCheckRollup([{ state: "FAILURE" }])).toBe("failing");
+    expect(projectCheckRollup([{ state: "ERROR" }])).toBe("failing");
+
+    // Mixed rollup.
+    expect(
+      projectCheckRollup([{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "PENDING" }]),
+    ).toBe("pending");
+    expect(
+      projectCheckRollup([{ state: "SUCCESS" }, { status: "COMPLETED", conclusion: "FAILURE" }]),
+    ).toBe("failing");
+    expect(projectCheckRollup([{ state: "SUCCESS" }])).toBe("passing");
   });
 
   it("reports a pending task with a bound adapter as an external wait, never a fake schedule", async () => {
