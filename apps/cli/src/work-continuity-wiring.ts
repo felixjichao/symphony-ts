@@ -37,6 +37,7 @@ import {
   type WorkExternalWaitFacts,
   type WorkKey,
   type WorkLivenessFacts,
+  type WorkObservationSourceKind,
   type WorkSourceObservation,
   type WorkOwnerFacts,
   type WorkStageFacts,
@@ -318,11 +319,162 @@ export function createWorkspaceDeliveryReader(options: {
 // Observation source
 // ---------------------------------------------------------------------------
 
+/**
+ * Authoritative GitHub PR facts for one work item (read-only).
+ *
+ * `checks` is a coarse projection of `statusCheckRollup`; `none` means the PR has no checks
+ * yet (nothing to wait for), which is different from `pending`.
+ */
+export interface GitHubPullRequestFacts {
+  readonly repository: string;
+  readonly number: number;
+  readonly state: "OPEN" | "CLOSED" | "MERGED";
+  readonly headSha: string;
+  readonly isDraft: boolean;
+  readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  readonly checks: "none" | "pending" | "passing" | "failing";
+}
+
+/** `null` = the read succeeded and there is no PR; throwing means the facts are unavailable. */
+export interface GitHubPrReader {
+  read(issue: Issue): Promise<GitHubPullRequestFacts | null>;
+}
+
+interface RawCheck {
+  readonly status?: unknown;
+  readonly conclusion?: unknown;
+}
+
+/** Maps `statusCheckRollup` to a stage-relevant CI state. */
+export function projectCheckRollup(checks: readonly RawCheck[]): GitHubPullRequestFacts["checks"] {
+  if (checks.length === 0) {
+    return "none";
+  }
+  const failing = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+  let pending = false;
+  let failed = false;
+  for (const check of checks) {
+    const conclusion = typeof check.conclusion === "string" ? check.conclusion : null;
+    const status = typeof check.status === "string" ? check.status : null;
+    if (conclusion !== null && failing.has(conclusion)) {
+      failed = true;
+    }
+    if (status !== null && status !== "COMPLETED") {
+      pending = true;
+    }
+  }
+  if (failed) {
+    return "failing";
+  }
+  return pending ? "pending" : "passing";
+}
+
+/**
+ * `gh`-backed PR reader with a short TTL cache.
+ *
+ * Every read is a real `gh pr list` call for the issue's branch; a failure propagates so the
+ * observation can mark the GitHub source unavailable instead of pretending there is no PR.
+ */
+export function createGitHubPrReader(options: {
+  readonly runner: { gh(args: readonly string[], cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> };
+  readonly cwd?: string | undefined;
+  readonly repository: (issue: Issue) => string | null;
+  readonly branch: (issue: Issue) => string | null;
+  readonly ttlMs?: number | undefined;
+  readonly now?: (() => number) | undefined;
+}): GitHubPrReader {
+  const ttlMs = options.ttlMs ?? 10_000;
+  const now = options.now ?? Date.now;
+  const cache = new Map<string, { readonly at: number; readonly value: GitHubPullRequestFacts | null }>();
+
+  return {
+    async read(issue) {
+      const repository = options.repository(issue);
+      const branch = options.branch(issue);
+      if (repository === null || branch === null) {
+        return null;
+      }
+      const key = `${repository}#${branch}`;
+      const cached = cache.get(key);
+      if (cached !== undefined && now() - cached.at < ttlMs) {
+        return cached.value;
+      }
+
+      const result = await options.runner.gh(
+        [
+          "pr",
+          "list",
+          "--repo",
+          repository,
+          "--head",
+          branch,
+          "--state",
+          "all",
+          "--limit",
+          "10",
+          "--json",
+          "number,state,headRefOid,isDraft,mergeable,statusCheckRollup",
+        ],
+        options.cwd ?? process.cwd(),
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`gh pr list failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout || "[]");
+      } catch (error) {
+        throw new Error(`gh pr list returned invalid JSON: ${String(error)}`);
+      }
+      if (!Array.isArray(parsed)) {
+        throw new Error("gh pr list returned a non-array payload");
+      }
+
+      const candidates = parsed
+        .map((entry) => entry as Record<string, unknown>)
+        .filter(
+          (entry) =>
+            typeof entry["number"] === "number" &&
+            typeof entry["state"] === "string" &&
+            typeof entry["headRefOid"] === "string",
+        )
+        .sort((a, b) => (b["number"] as number) - (a["number"] as number));
+
+      const latest = candidates[0];
+      const value: GitHubPullRequestFacts | null =
+        latest === undefined
+          ? null
+          : {
+              repository,
+              number: latest["number"] as number,
+              state: latest["state"] as "OPEN" | "CLOSED" | "MERGED",
+              headSha: latest["headRefOid"] as string,
+              isDraft: latest["isDraft"] === true,
+              mergeable:
+                latest["mergeable"] === "MERGEABLE" || latest["mergeable"] === "CONFLICTING"
+                  ? (latest["mergeable"] as "MERGEABLE" | "CONFLICTING")
+                  : "UNKNOWN",
+              checks: projectCheckRollup(
+                Array.isArray(latest["statusCheckRollup"])
+                  ? (latest["statusCheckRollup"] as RawCheck[])
+                  : [],
+              ),
+            };
+
+      cache.set(key, { at: now(), value });
+      return value;
+    },
+  };
+}
+
 export interface HostWorkObserverOptions {
   readonly index: TrackerWorkIndex;
   readonly runtime: RuntimeWorkView;
   readonly decision?: DecisionWorkReader | null | undefined;
   readonly delivery?: DeliveryWorkReader | null | undefined;
+  /** Authoritative PR / CI / merge facts; absent means the stage is not observable. */
+  readonly github?: GitHubPrReader | null | undefined;
   readonly now: () => number;
   readonly stallTimeoutMs: () => number;
   readonly plannedStageTimeoutMs?: number | undefined;
@@ -337,6 +489,7 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
   private readonly runtime: RuntimeWorkView;
   private readonly decision: DecisionWorkReader | null;
   private readonly delivery: DeliveryWorkReader | null;
+  private readonly github: GitHubPrReader | null;
   private readonly now: () => number;
   private readonly stallTimeoutMs: () => number;
   private readonly plannedStageTimeoutMs: number;
@@ -347,6 +500,7 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
     this.runtime = options.runtime;
     this.decision = options.decision ?? null;
     this.delivery = options.delivery ?? null;
+    this.github = options.github ?? null;
     this.now = options.now;
     this.stallTimeoutMs = options.stallTimeoutMs;
     this.plannedStageTimeoutMs = options.plannedStageTimeoutMs ?? DEFAULT_PLANNED_STAGE_TIMEOUT_MS;
@@ -359,7 +513,7 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
     const sources: WorkSourceObservation[] = [
       { source: "tracker", status: "ok", observedAt },
     ];
-    const requiredSources: ("tracker" | "decision" | "delivery" | "runtime")[] = ["tracker"];
+    const requiredSources: WorkObservationSourceKind[] = ["tracker"];
 
     if (issue === null) {
       // The tracker read succeeded but the work item is gone: terminal, nothing to recover.
@@ -411,9 +565,32 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
       }
     }
 
+    // PRs only exist after the Delivery skill has run, which always persists its state
+    // before any remote action. Reading GitHub only when there is review or delivery
+    // evidence keeps the tick free of external calls for planning/coding work, while still
+    // covering every work item that can legitimately be waiting on CI or a merge.
+    const hasReviewEvidence = decision?.tasks.some((task) => task.kind === "review") ?? false;
+    const hasDeliveryEvidence = delivery !== null;
+    let pr: GitHubPullRequestFacts | null = null;
+    if (this.github !== null && (hasReviewEvidence || hasDeliveryEvidence)) {
+      requiredSources.push("github");
+      try {
+        pr = await this.github.read(issue);
+        sources.push({ source: "github", status: "ok", observedAt: this.now() });
+      } catch (error) {
+        sources.push({
+          source: "github",
+          status: "unavailable",
+          observedAt: this.now(),
+          reason: describeError(error),
+        });
+      }
+    }
+
     const derived = deriveHostStageFacts({
       decision,
       delivery,
+      pr,
       runtime: this.runtime,
       issue,
       observedAt,
@@ -455,6 +632,7 @@ interface DerivedHostFacts {
 function deriveHostStageFacts(input: {
   readonly decision: DecisionObservation | null;
   readonly delivery: PersistedDeliveryState | null;
+  readonly pr: GitHubPullRequestFacts | null;
   readonly runtime: RuntimeWorkView;
   readonly issue: Issue;
   readonly observedAt: number;
@@ -493,7 +671,133 @@ function deriveHostStageFacts(input: {
     );
   }
 
-  // 2. Decision Plane stages: review, then planning, then coding.
+  // 2. GitHub-owned stages: merge, CI and exact-HEAD review gating.
+  const pr = input.pr;
+  if (pr !== null) {
+    const target = {
+      repository: pr.repository,
+      prNumber: pr.number,
+      headSha: pr.headSha,
+    };
+
+    if (pr.state === "MERGED") {
+      // The merge is authoritative; all that remains is for the tracker to reflect it.
+      const expectation = deriveStageExpectation({ kind: "merge", target });
+      return {
+        stage: expectation.stage,
+        expectedAction: expectation.expectedAction,
+        owner: null,
+        liveness: { startedAt: observedAt, lastProgressAt: "unknown" },
+        scheduledRecovery: null,
+        externalWait: {
+          authority: {
+            kind: "external",
+            system: "github",
+            condition: "merge_reflected_in_tracker",
+          },
+          since: observedAt,
+        },
+        blocked: null,
+        fence: { expectedHeadSha: pr.headSha, hasLeaseToken: false },
+      };
+    }
+
+    if (pr.state === "CLOSED") {
+      return blockedFacts(
+        "merge",
+        "decide how to continue a closed, unmerged PR",
+        `PR #${pr.number} was closed without merging`,
+        observedAt,
+      );
+    }
+
+    if (pr.checks === "pending") {
+      // A legitimate CI wait: the work is owned by GitHub Actions, not by a coding owner.
+      const expectation = deriveStageExpectation({
+        kind: "ci",
+        prNumber: pr.number,
+        headSha: pr.headSha,
+      });
+      return {
+        stage: expectation.stage,
+        expectedAction: expectation.expectedAction,
+        owner: null,
+        liveness: { startedAt: observedAt, lastProgressAt: "unknown" },
+        scheduledRecovery: null,
+        externalWait: null,
+        blocked: null,
+        fence: { expectedHeadSha: pr.headSha, hasLeaseToken: false },
+      };
+    }
+
+    if (pr.checks === "failing") {
+      return repairFacts(target, observedAt);
+    }
+
+    // CI is green (or there are no checks to wait for): only a review task recorded against
+    // the **current** HEAD may own this stage. A task for an older HEAD is stale and must
+    // never be continued or reused.
+    const reviewTask = latestTask(decision, "review");
+    const currentReview =
+      reviewTask !== null &&
+      reviewTask.kind === "review" &&
+      reviewTask.target.headSha === pr.headSha
+        ? reviewTask
+        : null;
+
+    if (currentReview !== null && currentReview.kind === "review") {
+      if (isLiveTaskStatus(currentReview.status)) {
+        return taskOwnedFacts(
+          deriveStageExpectation({
+            kind: "review",
+            task: taskStageFacts(currentReview),
+            target: currentReview.target,
+          }),
+          currentReview,
+          observedAt,
+          input.plannedStageTimeoutMs,
+          decision,
+        );
+      }
+      if (currentReview.status === "completed") {
+        const verdict = latestVerdict(decision, currentReview.taskId);
+        if (verdict?.kind === "review" && verdict.verdict === "approve") {
+          return deliveryResumeFacts(currentReview.target, observedAt);
+        }
+        if (verdict?.kind === "review" && verdict.verdict === "changes_requested") {
+          return repairFacts(currentReview.target, observedAt);
+        }
+        return blockedFacts(
+          "review",
+          "confirm the completed review result",
+          `review task ${currentReview.taskId} completed without a usable verdict (${verdict?.verdict ?? "no result observed"})`,
+          currentReview.updatedAtMs,
+        );
+      }
+    }
+
+    // Green CI with no review task for this exact HEAD: the review task must be created or
+    // claimed by the Decision authority. No task reference exists yet, so the recovery
+    // adapter reports `unavailable` rather than guessing one.
+    return {
+      stage: "review",
+      expectedAction: {
+        action: "dispatch",
+        description: `create and claim the review task for PR #${pr.number} at ${pr.headSha.slice(0, 10)}`,
+        authority: { kind: "internal", authority: "decision", executor: "chatgpt-web" },
+        target,
+        requiredEvidence: ["ci_green", "exact_head", "review_task_created"],
+      },
+      owner: null,
+      liveness: { startedAt: observedAt, lastProgressAt: "unknown" },
+      scheduledRecovery: null,
+      externalWait: null,
+      blocked: null,
+      fence: { expectedHeadSha: pr.headSha, hasLeaseToken: false },
+    };
+  }
+
+  // 3. Decision Plane stages: review, then planning, then coding.
   // Task status and the recorded verdict decide the next stage; a completed task is never
   // treated as if it were still running.
   const reviewTask = latestTask(decision, "review");

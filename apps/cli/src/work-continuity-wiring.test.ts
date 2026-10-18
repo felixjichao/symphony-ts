@@ -30,6 +30,7 @@ import {
   TrackerWorkIndex,
   createBridgeDecisionReader,
   createTrackerOrchestratorPort,
+  projectCheckRollup,
   createWorkspaceDeliveryCompensationPort,
   issueWorkKey,
   type RuntimeWorkView,
@@ -160,6 +161,7 @@ describe("HostWorkObservationSource", () => {
     stallTimeoutMs?: number;
     issue?: Issue | null;
     isActive?: (issue: Issue) => boolean;
+    github?: { read(issue: Issue): Promise<unknown> } | null;
   }): HostWorkObservationSource {
     const refreshed = options.issue === undefined ? makeIssue() : options.issue;
     const index = new TrackerWorkIndex(
@@ -191,6 +193,7 @@ describe("HostWorkObservationSource", () => {
       now: () => options.now ?? 1_770_000_000_000,
       stallTimeoutMs: () => options.stallTimeoutMs ?? 0,
       isActive: options.isActive ?? (() => true),
+      github: (options.github ?? null) as never,
     });
   }
 
@@ -318,6 +321,149 @@ describe("HostWorkObservationSource", () => {
     expect(observation.blocked?.unblockCondition).toContain("budget_exhausted");
     expect(verdict.diagnosis).toBe("blocked");
     expect(verdict.recovery).toBeNull();
+  });
+
+  const deliveryOpen = {
+    repo: "owner/repo",
+    issueNumber: 7,
+    workspaceKey: "GH-7",
+    spentRepairs: 0,
+    spentWaitSeconds: 0,
+    isPaused: false,
+    lastUpdated: "2026-10-18T00:00:00.000Z",
+  } as PersistedDeliveryState;
+
+  const PR = {
+    repository: "owner/repo",
+    number: 12,
+    state: "OPEN" as const,
+    headSha: "a".repeat(40),
+    isDraft: false,
+    mergeable: "MERGEABLE" as const,
+    checks: "passing" as const,
+  };
+
+  it("reports a merged PR as waiting for the tracker to reflect the merge", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => ({ ...PR, state: "MERGED" }) },
+      }),
+    );
+    expect(observation.stage).toBe("merge");
+    expect(verdict.diagnosis).toBe("awaiting_external");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("treats pending CI as a legitimate external wait, not a coding owner", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => ({ ...PR, checks: "pending" }) },
+      }),
+    );
+    expect(observation.stage).toBe("ci");
+    expect(observation.expectedAction?.authority.kind).toBe("external");
+    expect(verdict.diagnosis).toBe("awaiting_external");
+    expect(verdict.owner).toBeNull();
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("routes failing CI into repair under the Delivery authority", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => ({ ...PR, checks: "failing" }) },
+      }),
+    );
+    expect(observation.stage).toBe("repair");
+    expect(verdict.recovery?.authority).toBe("delivery");
+  });
+
+  it("does not reuse a review task recorded against an older HEAD", async () => {
+    const stale = reviewTask({
+      status: "pending",
+      target: { repository: "owner/repo", prNumber: 12, headSha: "b".repeat(40) },
+    });
+    const { observation } = await observe(
+      source({
+        github: { read: async () => PR },
+        decision: decisionObservation({ tasks: [stale], results: [] }),
+      }),
+    );
+
+    expect(observation.stage).toBe("review");
+    // The stale task must not be offered as the continuation target.
+    expect(observation.expectedAction?.taskRef).toBeUndefined();
+    expect(observation.expectedAction?.target?.headSha).toBe(PR.headSha);
+    expect(observation.expectedAction?.description).toContain("create and claim the review task");
+  });
+
+  it("uses the review task recorded against the current HEAD", async () => {
+    const current = reviewTask({
+      status: "pending",
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+    const { observation } = await observe(
+      source({
+        github: { read: async () => PR },
+        decision: decisionObservation({ tasks: [current], results: [] }),
+      }),
+    );
+
+    expect(observation.stage).toBe("review");
+    expect(observation.expectedAction?.taskRef).toEqual({ taskId: "review-1", revision: 4 });
+  });
+
+  it("fails safe when the GitHub read fails and review evidence exists", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        github: {
+          read: async () => {
+            throw new Error("gh: 503");
+          },
+        },
+        decision: decisionObservation({ tasks: [reviewTask()], results: [] }),
+      }),
+    );
+
+    expect(observation.sources.some((s) => s.source === "github" && s.status === "unavailable")).toBe(
+      true,
+    );
+    expect(verdict.diagnosis).toBe("observation_unavailable");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("does not block coding work when the GitHub read fails and nothing depends on it", async () => {
+    const { verdict } = await observe(
+      source({
+        github: {
+          read: async () => {
+            throw new Error("gh: not installed");
+          },
+        },
+      }),
+    );
+    expect(verdict.diagnosis).toBe("healthy");
+    expect(verdict.owner?.authority).toBe("orchestrator");
+  });
+
+  it("projects statusCheckRollup into a coarse CI state", () => {
+    expect(projectCheckRollup([])).toBe("none");
+    expect(projectCheckRollup([{ status: "IN_PROGRESS", conclusion: null }])).toBe("pending");
+    expect(projectCheckRollup([{ status: "COMPLETED", conclusion: "SUCCESS" }])).toBe("passing");
+    expect(
+      projectCheckRollup([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "COMPLETED", conclusion: "FAILURE" },
+      ]),
+    ).toBe("failing");
+    expect(
+      projectCheckRollup([
+        { status: "IN_PROGRESS", conclusion: null },
+        { status: "COMPLETED", conclusion: "FAILURE" },
+      ]),
+    ).toBe("failing");
   });
 
   it("reports a pending task with a bound adapter as an external wait, never a fake schedule", async () => {
@@ -1374,6 +1520,13 @@ describe("createHost work-level reconciliation (NEST-137)", () => {
         trackerProfiles: [fixtureProfile([makeIssue()])],
         decisionStoreDir: storeDir,
         scheduler,
+        // The host wires the GitHub reader; the test supplies deterministic facts.
+        // No delivery/review evidence on this work item, so the host must not call GitHub.
+        githubPrReader: {
+          read: async () => {
+            throw new Error("GitHub must not be read for fresh coding work");
+          },
+        },
       });
 
       await host.start();

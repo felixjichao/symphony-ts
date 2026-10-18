@@ -86,6 +86,7 @@ import {
   TrackerWorkIndex,
   createBridgeDecisionPort,
   createBridgeDecisionReader,
+  createGitHubPrReader,
   createHostWorkContinuity,
   createLocalDecisionReader,
   createServiceDecisionPort,
@@ -94,6 +95,7 @@ import {
   createWorkspaceDeliveryReader,
   issueWorkKey,
   type DecisionWorkReader,
+  type GitHubPrReader,
 } from "./work-continuity-wiring";
 
 export interface SymphonyHost {
@@ -135,6 +137,11 @@ export interface CreateHostOptions {
   readonly decisionBridgeUrl?: string | undefined;
   readonly decisionBridgeToken?: string | undefined;
   readonly planningGate?: DecisionPlanningGate | undefined;
+  /**
+   * Overrides the authoritative GitHub PR/CI reader. `null` disables GitHub stage
+   * observation (used when the tracker is not GitHub or in tests).
+   */
+  readonly githubPrReader?: GitHubPrReader | null | undefined;
 }
 
 export async function createHost(options: CreateHostOptions = {}): Promise<SymphonyHost> {
@@ -402,6 +409,28 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       },
     };
 
+    // Authoritative PR / CI / current-HEAD / merge facts. A failed read marks the source
+    // unavailable rather than looking like "no PR".
+    const githubPrReader: GitHubPrReader | null =
+      options.githubPrReader === undefined
+        ? createGitHubPrReader({
+            runner: new DefaultDeliveryGitGhRunner(),
+            repository: (issue) => {
+              const repo = issue.nativeRef?.["repo"];
+              return typeof repo === "string" ? repo : getEffectiveRepo();
+            },
+            branch: (issue) => {
+              if (issue.branchName !== null && issue.branchName.trim() !== "") {
+                return issue.branchName;
+              }
+              const workspaceKey = controller.current.workspaceManager.deriveWorkspaceKey(
+                issue.identifier,
+              );
+              return `symphony/${workspaceKey}`;
+            },
+          })
+        : options.githubPrReader;
+
     const workContinuity = createHostWorkContinuity({
       index: workIndex,
       observer: new HostWorkObservationSource({
@@ -411,6 +440,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         delivery: createWorkspaceDeliveryReader({
           workspacePath: (issue) => workspaceCoordinator.peekWorkspacePath(issue),
         }),
+        github: githubPrReader,
         now,
         stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
         plannedStageTimeoutMs: controller.current.scheduling.pollIntervalMs,
