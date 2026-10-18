@@ -552,6 +552,107 @@ describe("HostWorkObservationSource", () => {
     ]);
   });
 
+  it("covers the current target even when many older reviews finished later", async () => {
+    const current = {
+      id: "task-12",
+      kind: "review" as const,
+      revision: 4,
+      status: "completed" as const,
+      createdAtMs: 1_000,
+      updatedAtMs: 1_000,
+      claimGeneration: 1,
+      lease: null,
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    };
+    const older = Array.from({ length: 8 }, (_, index) => ({
+      id: `task-old-${index}`,
+      kind: "review" as const,
+      revision: 10 + index,
+      status: "completed" as const,
+      createdAtMs: 2_000,
+      updatedAtMs: 9_000 + index,
+      claimGeneration: 1,
+      lease: null,
+      target: { repository: "owner/repo", prNumber: 90 + index, headSha: PR.headSha },
+    }));
+    const tasks = [current, ...older];
+    const fetched: string[] = [];
+    const reader = createBridgeDecisionReader({
+      getSession: async () => ({
+        session: {
+          id: "session-1",
+          status: "active",
+          bindingGeneration: 1,
+          binding: { adapter: "chatgpt-web" },
+          updatedAtMs: 1_000,
+        },
+      }),
+      getTasksForSession: async () => ({ tasks }),
+      getTaskResult: async (taskId: string) => {
+        fetched.push(taskId);
+        return {
+          result: {
+            taskId,
+            revision: tasks.find((task) => task.id === taskId)!.revision,
+            createdAtMs: 3_000,
+            kind: "review",
+            verdict: "approve",
+            target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+          },
+        };
+      },
+    } as unknown as Parameters<typeof createBridgeDecisionReader>[0]);
+
+    const bridgeObservation = await reader.read(workKey);
+    // Every distinct target is covered — nine targets, nine reads, no global cap.
+    expect(fetched).toHaveLength(9);
+    expect(bridgeObservation?.results.map((entry) => entry.taskId)).toContain("task-12");
+
+    // And the bridge-derived observation must reach the same stage as the local reader.
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: bridgeObservation,
+      }),
+    );
+    expect(observation.stage).toBe("delivery");
+    expect(observation.expectedAction?.action).toBe("resume");
+  });
+
+  it("reports no usable verdict when the result is for a different revision", async () => {
+    const task = reviewTask({
+      taskId: "task-10",
+      revision: 10,
+      status: "completed",
+      target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+    });
+    const { observation } = await observe(
+      source({
+        delivery: deliveryOpen,
+        github: { read: async () => PR },
+        decision: decisionObservation({
+          tasks: [task],
+          results: [
+            {
+              taskId: "task-10",
+              revision: 9,
+              createdAtMs: 3_000,
+              outcome: {
+                kind: "review",
+                verdict: "approve",
+                target: { repository: "owner/repo", prNumber: 12, headSha: PR.headSha },
+              },
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(observation.blocked).not.toBeNull();
+    expect(observation.expectedAction).toBeNull();
+  });
+
   it("does not reuse a review task from another PR that shares the commit SHA", async () => {
     const otherPr = reviewTask({
       status: "pending",

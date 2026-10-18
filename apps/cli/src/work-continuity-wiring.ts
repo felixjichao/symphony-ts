@@ -235,16 +235,31 @@ export function createBridgeDecisionReader(client: DecisionBridgeClient): Decisi
 
       const tasks = (await client.getTasksForSession(sessionId)).tasks;
 
-      // Verdicts are needed to continue completed plan/review work. Fetch them for the
-      // completed tasks ordered by revision — not just the most recently touched one, which
-      // can be an older revision or another PR. An absent result is `null`; any other
-      // failure propagates.
-      const completed = tasks
-        .filter((task) => task.status === "completed")
-        .sort((a, b) => b.revision - a.revision || b.updatedAtMs - a.updatedAtMs || b.id.localeCompare(a.id))
-        .slice(0, 8);
+      // Verdicts are needed to continue completed plan/review work. Fetch them for exactly
+      // the tasks the observer can select: the effective plan task plus, per review target
+      // (repository + PR + HEAD), the effective review task. A global cap would silently
+      // drop the current target when it finished before several unrelated older reviews.
+      const effective = new Map<string, (typeof tasks)[number]>();
+      for (const task of tasks) {
+        if (task.status !== "completed") {
+          continue;
+        }
+        const key =
+          task.kind === "review"
+            ? `review:${task.target.repository}#${task.target.prNumber}@${task.target.headSha}`
+            : "plan";
+        const previous = effective.get(key);
+        if (
+          previous === undefined ||
+          task.revision > previous.revision ||
+          (task.revision === previous.revision && task.updatedAtMs > previous.updatedAtMs)
+        ) {
+          effective.set(key, task);
+        }
+      }
+
       const results: DecisionObservation["results"][number][] = [];
-      for (const task of completed) {
+      for (const task of effective.values()) {
         try {
           const { result } = await client.getTaskResult(task.id);
           results.push({
@@ -1198,7 +1213,13 @@ function reviewTaskForTarget(
   );
 }
 
-/** The verdict recorded for this exact task revision (falling back to any revision). */
+/**
+ * The verdict recorded for this exact task revision.
+ *
+ * No cross-revision fallback: a snapshot whose result does not match the task revision is
+ * untrustworthy, and the store already enforces revision matching. Returning `null` makes
+ * the caller report "no usable verdict" instead of acting on an older decision.
+ */
 function verdictForTask(
   decision: DecisionObservation | null,
   task: DecisionTaskSnapshot,
@@ -1206,12 +1227,11 @@ function verdictForTask(
   if (decision === null) {
     return null;
   }
-  const forTask = decision.results.filter((entry) => entry.taskId === task.taskId);
-  const exact = forTask
-    .filter((entry) => entry.revision === task.revision)
-    .sort((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  const fallback = forTask.sort((a, b) => b.revision - a.revision || b.createdAtMs - a.createdAtMs)[0];
-  return (exact ?? fallback)?.outcome ?? null;
+  return (
+    decision.results
+      .filter((entry) => entry.taskId === task.taskId && entry.revision === task.revision)
+      .sort((a, b) => b.createdAtMs - a.createdAtMs)[0]?.outcome ?? null
+  );
 }
 
 function taskStageFacts(
