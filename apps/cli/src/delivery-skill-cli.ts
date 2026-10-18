@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -38,8 +39,13 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
    */
   private observedRaw: string | null | undefined = undefined;
   private lockDepth = 0;
+  /** Token written into the owner file; release only removes a lock still carrying it. */
+  private lockToken: string | null = null;
 
-  constructor(private readonly filePath: string) {
+  constructor(
+    private readonly filePath: string,
+    private readonly lockTimeoutMs = 10_000,
+  ) {
     this.lockPath = path.join(path.dirname(filePath), ".delivery-state.lock");
   }
 
@@ -137,35 +143,29 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + this.lockTimeoutMs;
     for (;;) {
-      try {
-        await fs.promises.mkdir(this.lockPath);
-        fs.writeFileSync(path.join(this.lockPath, "owner"), String(process.pid), "utf8");
+      const token = this.tryCreateLockSync();
+      if (token !== null) {
+        this.lockToken = token;
         this.lockDepth = 1;
         return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          throw error;
-        }
-        this.assertNotOwnedByThisProcess();
-        await this.breakStaleLock();
-        if (Date.now() > deadline) {
-          throw new DeliveryStateConflictError(
-            `timed out waiting for the delivery state lock (${this.lockPath})`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      this.reclaimIfOwnerDead();
+      if (Date.now() > deadline) {
+        throw new DeliveryStateConflictError(
+          `timed out waiting for the delivery state lock (${this.lockPath})`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
   /**
    * Synchronous variant used by `writeState`, whose contract is `void`.
    *
-   * Contention only happens with another process; the wait is bounded and the process is
-   * about to fail or succeed a single write, so blocking briefly is preferable to silently
-   * skipping the guard.
+   * A lock held by a live owner is never stolen: the wait is bounded and the process is
+   * about to perform one write, so blocking briefly is preferable to violating the mutex.
    */
   private acquireSync(): void {
     if (this.lockDepth > 0) {
@@ -176,28 +176,21 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + this.lockTimeoutMs;
     for (;;) {
-      try {
-        fs.mkdirSync(this.lockPath);
-        fs.writeFileSync(path.join(this.lockPath, "owner"), String(process.pid), "utf8");
+      const token = this.tryCreateLockSync();
+      if (token !== null) {
+        this.lockToken = token;
         this.lockDepth = 1;
         return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          throw error;
-        }
-        // A synchronous wait on a lock held by the same process would deadlock the event
-        // loop; report a conflict so the caller re-reads and re-decides instead.
-        this.assertNotOwnedByThisProcess();
-        this.breakStaleLockSync();
-        if (Date.now() > deadline) {
-          throw new DeliveryStateConflictError(
-            `timed out waiting for the delivery state lock (${this.lockPath})`,
-          );
-        }
-        sleepSync(10);
       }
+      this.reclaimIfOwnerDead();
+      if (Date.now() > deadline) {
+        throw new DeliveryStateConflictError(
+          `timed out waiting for the delivery state lock (${this.lockPath})`,
+        );
+      }
+      sleepSync(10);
     }
   }
 
@@ -207,7 +200,7 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     }
     this.lockDepth -= 1;
     if (this.lockDepth === 0) {
-      await fs.promises.rm(this.lockPath, { recursive: true, force: true });
+      this.releaseLockIfOwned();
     }
   }
 
@@ -217,51 +210,120 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     }
     this.lockDepth -= 1;
     if (this.lockDepth === 0) {
-      fs.rmSync(this.lockPath, { recursive: true, force: true });
+      this.releaseLockIfOwned();
     }
   }
 
-  /** A lock older than 60s belongs to a dead process; reclaim it instead of hanging. */
-  private async breakStaleLock(): Promise<void> {
+  /** Creates the lock directory and records `{pid, token}`; `null` when already held. */
+  private tryCreateLockSync(): string | null {
+    const token = crypto.randomUUID();
     try {
-      const stat = await fs.promises.stat(this.lockPath);
-      if (Date.now() - stat.mtimeMs > 60_000) {
-        await fs.promises.rm(this.lockPath, { recursive: true, force: true });
+      fs.mkdirSync(this.lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return null;
       }
+      throw error;
+    }
+    fs.writeFileSync(
+      path.join(this.lockPath, "owner"),
+      JSON.stringify({ pid: process.pid, token, acquiredAt: Date.now() }),
+      "utf8",
+    );
+    return token;
+  }
+
+  private readLockOwner(): { pid: number; token: string; acquiredAt: number } | null {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.lockPath, "owner"), "utf8")) as {
+        pid?: unknown;
+        token?: unknown;
+        acquiredAt?: unknown;
+      };
+      if (
+        typeof raw.pid !== "number" ||
+        !Number.isInteger(raw.pid) ||
+        typeof raw.token !== "string" ||
+        typeof raw.acquiredAt !== "number"
+      ) {
+        return null;
+      }
+      return { pid: raw.pid, token: raw.token, acquiredAt: raw.acquiredAt };
     } catch {
-      /* The lock disappeared while probing; retry acquisition. */
+      return null;
     }
   }
 
-  private assertNotOwnedByThisProcess(): void {
-    try {
-      const owner = Number(fs.readFileSync(path.join(this.lockPath, "owner"), "utf8").trim());
-      if (Number.isInteger(owner) && owner === process.pid) {
+  /**
+   * Reclaims the lock **only when the recorded owner is provably gone**.
+   *
+   * Age is not evidence of death: a real compensation performs several remote calls and may
+   * legitimately hold the lock for minutes. A lock whose owner file is missing is treated as
+   * unreadable and only reclaimed after a conservative age bound.
+   */
+  private reclaimIfOwnerDead(): void {
+    const owner = this.readLockOwner();
+    if (owner !== null) {
+      if (owner.pid === process.pid) {
         throw new DeliveryStateConflictError(
           `delivery state is already locked by this process (${this.lockPath})`,
         );
       }
-    } catch (error) {
-      if (error instanceof DeliveryStateConflictError) {
-        throw error;
+      if (isProcessAlive(owner.pid)) {
+        return;
       }
-      /* No owner file: an older or foreign lock, handled by the stale-lock probe. */
+      this.removeLockIfToken(owner.token);
+      return;
     }
-  }
-
-  private breakStaleLockSync(): void {
+    // No readable owner: only a legacy lock older than the conservative bound is reclaimed.
     try {
       const stat = fs.statSync(this.lockPath);
       if (Date.now() - stat.mtimeMs > 60_000) {
-        fs.rmSync(this.lockPath, { recursive: true, force: true });
+        this.removeLockIfToken(null);
       }
     } catch {
       /* The lock disappeared while probing; retry acquisition. */
     }
   }
+
+  /** Removes the lock only when it still belongs to `expectedToken`. */
+  private removeLockIfToken(expectedToken: string | null): void {
+    const owner = this.readLockOwner();
+    if (expectedToken !== null) {
+      if (owner === null || owner.token !== expectedToken) {
+        return;
+      }
+    } else if (owner !== null) {
+      return;
+    }
+    try {
+      fs.rmSync(this.lockPath, { recursive: true, force: true });
+    } catch {
+      /* Someone else already released it. */
+    }
+  }
+
+  private releaseLockIfOwned(): void {
+    const token = this.lockToken;
+    this.lockToken = null;
+    if (token === null) {
+      return;
+    }
+    this.removeLockIfToken(token);
+  }
 }
 
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+
+/** `kill(pid, 0)` probes liveness without signalling; EPERM still means the process exists. */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 /** Bounded synchronous sleep for the file lock only. */
 function sleepSync(ms: number): void {
@@ -418,6 +480,10 @@ export async function runDeliverySkillCli(
     return 1;
   }
 
+  // Narrowed once so the value survives into the Delivery critical-section callback.
+  const repo = parsed.repo;
+  const issueNumber = parsed.issueNumber;
+
   if (parsed.action === "recover-handoff") {
     const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
     const result = await recoverDeliveryHandoff({
@@ -450,10 +516,14 @@ export async function runDeliverySkillCli(
 
   if (parsed.action === "halt") {
     // 显式停止派发命令（例如预算耗尽或 operator 触发）
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    // The whole halt handoff — read → remove label → post report → final write — is one
+    // Delivery authority critical section. A compensator can therefore never observe the
+    // pending handoff and post a second report for the same handoff id.
+    return await stateStorage.withExclusive(async () => {
     const reason = (parsed.reason ?? "budget_exhausted") as DeliveryHandoff["reason"];
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
     let existingState: PersistedDeliveryState | null = null;
     try {
       existingState = stateStorage.readState();
@@ -463,14 +533,14 @@ export async function runDeliverySkillCli(
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
     const spentWaitSeconds = existingState?.spentWaitSeconds ?? (parsed.maxWait ?? 300);
-    const handoffId = `handoff-${parsed.repo.replace("/", "-")}-${parsed.issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const handoffId = `handoff-${repo.replace("/", "-")}-${issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const handoff: DeliveryHandoff = {
       reason,
       details,
-      repo: parsed.repo,
-      issueNumber: parsed.issueNumber,
-      headBranch: parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
+      repo: repo,
+      issueNumber: issueNumber,
+      headBranch: parsed.headBranch ?? `symphony/GH-${issueNumber}`,
       prNumber: null,
       prUrl: null,
       headSha: null,
@@ -486,9 +556,9 @@ export async function runDeliverySkillCli(
 
     // 先持久化 paused 状态和待补偿事实
     await stateStorage.writeState({
-      repo: parsed.repo,
-      issueNumber: parsed.issueNumber,
-      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      repo: repo,
+      issueNumber: issueNumber,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${issueNumber}`),
       spentRepairs,
       spentWaitSeconds,
       deadlineTimestampMs: existingState?.deadlineTimestampMs,
@@ -506,7 +576,7 @@ export async function runDeliverySkillCli(
     let labelCheckError: string | null = null;
     try {
       const editRes = await runner.gh(
-        ["issue", "edit", String(parsed.issueNumber), "--repo", parsed.repo, "--remove-label", readyLabel],
+        ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", readyLabel],
         cwd,
       );
       if (editRes.exitCode !== 0) {
@@ -514,7 +584,7 @@ export async function runDeliverySkillCli(
       } else {
         // 检查标签事实
         const labelCheck = await runner.gh(
-          ["issue", "view", String(parsed.issueNumber), "--repo", parsed.repo, "--json", "labels"],
+          ["issue", "view", String(issueNumber), "--repo", repo, "--json", "labels"],
           cwd,
         );
         if (labelCheck.exitCode !== 0) {
@@ -527,7 +597,7 @@ export async function runDeliverySkillCli(
             } else {
               const labels: Array<{ name: string } | string> = parsedLabels.labels;
               if (labels.some((l) => (typeof l === "string" ? l : l.name) === readyLabel)) {
-                labelCheckError = `Label '${readyLabel}' is still present on issue #${parsed.issueNumber}`;
+                labelCheckError = `Label '${readyLabel}' is still present on issue #${issueNumber}`;
               } else {
                 readyLabelRemoved = true;
               }
@@ -543,9 +613,9 @@ export async function runDeliverySkillCli(
 
     const handoffAfterLabel = { ...handoff, readyLabelRemoved };
     await stateStorage.writeState({
-      repo: parsed.repo,
-      issueNumber: parsed.issueNumber,
-      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      repo: repo,
+      issueNumber: issueNumber,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${issueNumber}`),
       spentRepairs,
       spentWaitSeconds,
       deadlineTimestampMs: existingState?.deadlineTimestampMs,
@@ -565,7 +635,7 @@ export async function runDeliverySkillCli(
 
     try {
       const commentRes = await runner.gh(
-        ["issue", "comment", String(parsed.issueNumber), "--repo", parsed.repo, "--body", handoffMarkdown],
+        ["issue", "comment", String(issueNumber), "--repo", repo, "--body", handoffMarkdown],
         cwd,
       );
       if (commentRes.exitCode === 0) {
@@ -587,9 +657,9 @@ export async function runDeliverySkillCli(
 
     const pendingCompensation = !(readyLabelRemoved && commentPosted);
     await stateStorage.writeState({
-      repo: parsed.repo,
-      issueNumber: parsed.issueNumber,
-      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
+      repo: repo,
+      issueNumber: issueNumber,
+      workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${issueNumber}`),
       spentRepairs,
       spentWaitSeconds,
       deadlineTimestampMs: existingState?.deadlineTimestampMs,
@@ -605,7 +675,7 @@ export async function runDeliverySkillCli(
 
     if (!readyLabelRemoved) {
       io.stderr.write(
-        `symphony delivery-skill: halt failed: could not remove label '${readyLabel}' from issue #${parsed.issueNumber} (${labelCheckError ?? "unverified"}). Dispatch not halted.\n`,
+        `symphony delivery-skill: halt failed: could not remove label '${readyLabel}' from issue #${issueNumber} (${labelCheckError ?? "unverified"}). Dispatch not halted.\n`,
       );
       return 1;
     }
@@ -618,6 +688,7 @@ export async function runDeliverySkillCli(
     }
 
     return 0;
+    });
   }
 
   const headBranch = parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`;

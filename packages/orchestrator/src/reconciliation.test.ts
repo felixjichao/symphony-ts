@@ -363,12 +363,13 @@ describe("reconciliation 纯判定", () => {
     expect(isWorkerStalled(entry, UNKNOWN_TELEMETRY, 1_501, 0)).toBe(false); // 禁用
   });
 
-  it("有 agent event 时以最近事件时间戳为基准（含身份未齐的暂存时间戳）", () => {
+  it("以稳定进展时间为基准；普通事件与心跳不推迟 stall", () => {
     const entry = entryWithStartedAt(1_000);
-    const telemetry: AgentTelemetryState = { ...UNKNOWN_TELEMETRY, pendingLastTimestamp: 1_900 };
-    // startedAt 距今 1000ms，但事件时间戳距今 100ms → 不 stall。
-    expect(stallElapsedMs(entry, telemetry, 2_000)).toBe(100);
-    expect(isWorkerStalled(entry, telemetry, 2_000, 500)).toBe(false);
+
+    // Any-event timestamps (pending last event / LiveSession lastCodexTimestamp) are no
+    // longer progress evidence: a worker that only emits notifications still stalls.
+    const eventOnly: AgentTelemetryState = { ...UNKNOWN_TELEMETRY, pendingLastTimestamp: 1_900 };
+    expect(stallElapsedMs(entry, eventOnly, 2_000)).toBe(1_000);
 
     const withSession: RunningEntry = {
       ...entry,
@@ -377,7 +378,7 @@ describe("reconciliation 纯判定", () => {
         threadId: "t",
         turnId: "u",
         codexAppServerPid: null,
-        lastCodexEvent: "turn_started",
+        lastCodexEvent: "notification",
         lastCodexTimestamp: 1_990,
         lastCodexMessage: null,
         codexInputTokens: 0,
@@ -389,7 +390,12 @@ describe("reconciliation 纯判定", () => {
         turnCount: 1,
       },
     };
-    expect(stallElapsedMs(withSession, UNKNOWN_TELEMETRY, 2_000)).toBe(10);
+    expect(stallElapsedMs(withSession, UNKNOWN_TELEMETRY, 2_000)).toBe(1_000);
+
+    // A real progress instant is the baseline.
+    const progressed: AgentTelemetryState = { ...UNKNOWN_TELEMETRY, lastProgressAt: 1_900 };
+    expect(stallElapsedMs(entry, progressed, 2_000)).toBe(100);
+    expect(isWorkerStalled(entry, progressed, 2_000, 500)).toBe(false);
   });
 });
 
@@ -539,24 +545,67 @@ describe("stall detection — 验收 07 / 08", () => {
     expect(h.state.claimed.has(issue.id)).toBe(true);
   });
 
-  it("stall 基准用 agent event 时间戳（含身份未齐的暂存时间戳）", async () => {
+  it("reclaimStalledAttempt 校验 attempt token 并复用既有 stop → retry 归约", async () => {
+    const h = makeHarness();
+    h.setStall(500);
+    const issue = makeIssue({ state: "Todo" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+
+    const progress = h.authority.runningProgress(issue.id);
+    expect(progress?.attemptToken).toBeTruthy();
+
+    const stale = await h.authority.reclaimStalledAttempt({
+      issueId: issue.id,
+      expectedAttemptToken: "not-the-current-token",
+    });
+    expect(stale).toBe("stale");
+    expect(h.state.running.has(issue.id)).toBe(true);
+
+    const stopped = await h.authority.reclaimStalledAttempt({
+      issueId: issue.id,
+      expectedAttemptToken: progress!.attemptToken,
+    });
+    expect(stopped).toBe("stopped");
+    expect(h.state.running.has(issue.id)).toBe(false);
+    expect(h.outcomes[0]?.stopReason).toEqual({ kind: "stall" });
+    expect(h.state.retryAttempts.get(issue.id)?.attempt).toBe(1);
+  });
+
+  it("stall 基准只认稳定进展：notification 不阻止 stall，turn 完成才推进", async () => {
     const h = makeHarness();
     h.setStall(500);
     const issue = makeIssue({ state: "Todo" });
     h.tracker.issues.set(issue.id, issue);
     h.authority.dispatchIssue(issue); // attempt.startedAt = 1_000_000
 
-    // 身份未齐事件也推进活动时间：事件时间戳距 now 仅 100ms，虽 startedAt 已过 1s，
-    // 仍不 stall。
+    // A notification right before the deadline is not progress: the worker still stalls.
     h.contexts[0]?.onEvent({
       event: "notification",
       timestamp: 1_999_900,
       codexAppServerPid: null,
     });
     h.setUtc(2_000_000);
-    const result = await h.authority.reconcileRunningIssues();
-    expect(result.stalledIssueIds).toEqual([]);
-    expect(h.state.running.has(issue.id)).toBe(true);
+    const stalled = await h.authority.reconcileRunningIssues();
+    expect(stalled.stalledIssueIds).toEqual([issue.id]);
+
+    // A real turn transition does advance the baseline and prevents the stall.
+    const h2 = makeHarness();
+    h2.setStall(500);
+    const issue2 = makeIssue({ state: "Todo" });
+    h2.tracker.issues.set(issue2.id, issue2);
+    h2.authority.dispatchIssue(issue2);
+    h2.contexts[0]?.onEvent({
+      event: "turn_completed",
+      timestamp: 1_999_900,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      codexAppServerPid: null,
+    });
+    h2.setUtc(2_000_000);
+    const healthy = await h2.authority.reconcileRunningIssues();
+    expect(healthy.stalledIssueIds).toEqual([]);
+    expect(h2.state.running.has(issue2.id)).toBe(true);
   });
 });
 

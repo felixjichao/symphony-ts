@@ -61,23 +61,23 @@ export async function recoverDeliveryHandoff(
   }
   const exclusive: <T>(fn: () => Promise<T>) => Promise<T> =
     withExclusive.bind(options.stateStorage);
-  return await exclusive(async () => {
-    try {
-      return await recoverDeliveryHandoffInner(options);
-    } catch (error) {
-      if (error instanceof DeliveryStateConflictError) {
-        return {
-          success: false,
-          error: `error: ${error.message}`,
-          readyLabelRemoved: false,
-          commentPosted: false,
-          commentVerifyStatus: "unverified" as const,
-          pendingCompensation: true,
-        };
-      }
-      throw error;
+  try {
+    return await exclusive(async () => await recoverDeliveryHandoffInner(options));
+  } catch (error) {
+    // A stale-version write or a lock held by another writer is a normal race outcome:
+    // report it as an unverified compensation instead of retrying or overwriting.
+    if (error instanceof DeliveryStateConflictError) {
+      return {
+        success: false,
+        error: `error: ${error.message}`,
+        readyLabelRemoved: false,
+        commentPosted: false,
+        commentVerifyStatus: "unverified" as const,
+        pendingCompensation: true,
+      };
     }
-  });
+    throw error;
+  }
 }
 
 async function recoverDeliveryHandoffInner(

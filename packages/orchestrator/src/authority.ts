@@ -403,9 +403,12 @@ export class OrchestratorAuthority {
    * token delta), never the last arbitrary event timestamp. `null` means no progress has been
    * observed yet; callers must treat that as "unknown", not as failure.
    */
-  public runningProgress(
-    issueId: string,
-  ): { readonly startedAt: UtcTimestampMs; readonly lastProgressAt: UtcTimestampMs | null } | null {
+  public runningProgress(issueId: string): {
+    readonly startedAt: UtcTimestampMs;
+    readonly lastProgressAt: UtcTimestampMs | null;
+    /** Attempt identity; required to reclaim a dead owner without racing a newer attempt. */
+    readonly attemptToken: string;
+  } | null {
     const record = this.active.get(issueId);
     if (record === undefined) {
       return null;
@@ -413,7 +416,38 @@ export class OrchestratorAuthority {
     return {
       startedAt: record.entry.attempt.startedAt,
       lastProgressAt: record.telemetry.lastProgressAt,
+      attemptToken: record.token,
     };
+  }
+
+  /**
+   * Bounded takeover of a **stalled** attempt (NEST-137).
+   *
+   * The caller must present the attempt token it observed. A token mismatch means a newer
+   * attempt owns the issue (`stale`); no worker means `skipped`. On success this uses the
+   * same stop → outcome reduction as native reconciliation, so the attempt is classified and
+   * retried by the existing retry policy rather than being re-dispatched while still running.
+   */
+  public async reclaimStalledAttempt(input: {
+    readonly issueId: string;
+    readonly expectedAttemptToken: string;
+  }): Promise<"stopped" | "skipped" | "stale" | "stopping"> {
+    if (this.stopping) {
+      return "stopping";
+    }
+    const record = this.active.get(input.issueId);
+    if (record === undefined) {
+      return "skipped";
+    }
+    if (record.token !== input.expectedAttemptToken) {
+      return "stale";
+    }
+    // Re-check after the synchronous prefix: `stop` is idempotent and bounded.
+    if (record.worker.stopped) {
+      return "stopped";
+    }
+    await record.worker.stop({ kind: "stall" });
+    return "stopped";
   }
 
   /**

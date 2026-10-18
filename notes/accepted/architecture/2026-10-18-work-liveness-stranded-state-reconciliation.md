@@ -56,6 +56,7 @@ Boundaries that keep it thin:
 * `TrackerWorkIndex` scans the real active tracker states and re-reads one issue by id before every observation (never the scan snapshot).
 * `HostWorkObservationSource` builds the observation from tracker + orchestrator runtime (`running` / `retryAttempts`, **stable progress instant**, stall deadline) + Decision facts (`session`, latest plan/review task and its **verdict**, lease expiry) + the workspace's `.symphony/delivery-state.json`.
   * Activity is judged from the **refreshed** issue against the current active/terminal configuration, not from the fact that the scan saw it.
+  * Activity means **work is active**, not "dispatch-eligible". Removing `symphony-ready` is the normal pause step: the issue is still active work and a pending handoff can still be compensated. Dispatch eligibility stays with the authority.
   * Idle coding work is owned by the orchestrator's poll loop (`owner: orchestrator`, progress `unknown`), so reconciliation never becomes a second dispatcher.
   * A claimed/running Decision task past its lease expiry is `owner_not_observable` → `reclaim`; a paused Delivery handoff with a concrete `handoffId` is `compensate`.
   * A pending Decision task is `awaiting_external` only when the session has a **bound adapter** (a real external executor), never a fabricated scheduled recovery from a binding generation; with no bound adapter it is `blocked`.
@@ -67,10 +68,11 @@ Boundaries that keep it thin:
 
 The filesystem mutex lives in the **Delivery authority**, not in the coordinator caller:
 
-* `DeliveryStateStorage` gains an optional `withExclusive()` critical section; `recoverDeliveryHandoff` runs its entire read → validate → remote-write → final-write sequence inside it, so `delivery-skill run/halt` cannot commit a newer handoff mid-recovery.
-* `FileDeliveryStateStorage.writeState()` takes the same atomic `mkdir` lock (with a PID owner file so a same-process contention reports a conflict instead of deadlocking) and performs **compare‑and‑set** against the raw content it last read. A write based on a stale version throws `DeliveryStateConflictError` instead of overwriting the newer handoff / HEAD.
+* `DeliveryStateStorage` gains an optional `withExclusive()` critical section. **Every Delivery handoff mutation** uses it: `recoverDeliveryHandoff` (whole recovery), `delivery-skill halt` (state read → label removal → comment → final write) and the runner's `haltDispatch`. A concurrent compensator either waits or receives a conflict — it never observes the same pending handoff and posts a second report.
+* `FileDeliveryStateStorage.writeState()` takes the same atomic `mkdir` lock and performs **compare‑and‑set** against the raw content it last read. A write based on a stale version throws `DeliveryStateConflictError` instead of overwriting the newer handoff / HEAD.
+* The lock is **owner-verified, not age-based**: the owner file records `{pid, token, acquiredAt}`. A lock is reclaimed only when `kill(pid, 0)` proves the owner gone (or, for a legacy lock with no readable owner, after a conservative age bound). A live owner is never preempted, however long the remote calls take, and release only removes the lock when it still carries this instance's token — a former holder cannot delete the new holder's lock.
 * Before each remote mutation `recoverDeliveryHandoff` still re-reads and compares the handoff id / HEAD (`expectedHandoff`), so a change between validation and the remote call aborts without writing.
-* The compensation port re-checks that the refreshed issue is still active before touching the workspace.
+* The compensation port re-checks that the refreshed issue is still **active work** before touching the workspace.
 
 ### 5. `@symphony/decision` — `DecisionService.releaseExpiredClaim` and bridge sweep
 
@@ -99,3 +101,5 @@ Bridge observation failures are **not** absence: only an explicit 404 / `not_fou
 * Cross-source observation is not atomic. Safety comes from re-observation before action, authority-side commit-time validation, and treating any failed read as `observation_unavailable`.
 * `createHost()` assembles and runs the coordinator by default. It observes the stages this process can actually see (tracker, runtime, Decision, Delivery); GitHub PR/CI facts are not read per tick, so a work item whose next stage is only visible in GitHub is reported through its owning authority rather than inferred.
 * Progress evidence comes from `AgentTelemetryState.lastProgressAt`, which advances only on reliable turn/session lifecycle events and positive token deltas. Notifications, repeated usage snapshots and process existence never advance it.
+* The **same** evidence drives native stall detection (`stallActivityBaselineMs`), so a worker that only emits telemetry actually stalls and is stopped by the existing stall → outcome → retry path.
+* A work-level `reclaim` is executed by `OrchestratorAuthority.reclaimStalledAttempt({issueId, expectedAttemptToken})`: it rejects a stale attempt token and otherwise uses the same bounded `worker.stop({kind:"stall"})` reduction. Reconciliation never dispatches on top of a live attempt.

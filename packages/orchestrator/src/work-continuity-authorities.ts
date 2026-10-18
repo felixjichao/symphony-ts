@@ -26,6 +26,8 @@ export interface OrchestratorRecoveryPort {
     readonly workKey: WorkKey;
     readonly expectedFence: SafeOwnershipFence;
     readonly idempotencyKey: string;
+    /** `reclaim` means "stop the dead owner"; `dispatch` means "start a new attempt". */
+    readonly recoveryClass: string;
   }): Promise<WorkRecoveryOutcome>;
 }
 
@@ -69,6 +71,7 @@ export function createOrchestratorRecoveryAuthority(
         workKey: request.workKey,
         expectedFence: request.recovery.expectedFence,
         idempotencyKey: request.idempotencyKey,
+        recoveryClass: request.recovery.class,
       });
     },
   };

@@ -186,9 +186,11 @@ export interface RuntimeWorkView {
    * `lastProgressAt` must be stable progress evidence (lifecycle transition or a positive
    * token delta), never the last arbitrary Codex event.
    */
-  running(
-    issue: Issue,
-  ): { readonly startedAt: number; readonly lastProgressAt: number | null } | null;
+  running(issue: Issue): {
+    readonly startedAt: number;
+    readonly lastProgressAt: number | null;
+    readonly attemptToken: string;
+  } | null;
   retry(issue: Issue): { readonly attempt: number } | null;
 }
 
@@ -631,7 +633,9 @@ function codingFacts(
         executor: "codex-agent",
         presence: "present",
         fence: {
-          retryToken: `attempt:${issue.id}`,
+          // Real attempt identity: a reclaim must present this token and is rejected when a
+          // newer attempt has taken over.
+          retryToken: running.attemptToken,
           hasLeaseToken: false,
         },
       },
@@ -847,6 +851,14 @@ function handoffTarget(handoff: DeliveryHandoff | null): {
 export function createTrackerOrchestratorPort(options: {
   readonly index: TrackerWorkIndex;
   readonly dispatch: (issue: Issue) => { kind: string; error?: string | undefined };
+  /**
+   * Bounded takeover of a stalled attempt owned by the orchestrator authority. Receives the
+   * attempt token observed in the fence; the authority rejects a stale token.
+   */
+  readonly reclaim?: (input: {
+    readonly issueId: string;
+    readonly expectedAttemptToken: string;
+  }) => Promise<"stopped" | "skipped" | "stale" | "stopping">;
 }): OrchestratorRecoveryPort {
   return {
     async dispatchWork(input) {
@@ -854,6 +866,33 @@ export function createTrackerOrchestratorPort(options: {
       if (issue === null) {
         return { kind: "unavailable", reason: "issue is no longer readable from the tracker" };
       }
+
+      // A dead owner is reclaimed through the authority's bounded stop path, never by
+      // dispatching on top of a still-running attempt.
+      if (options.reclaim !== undefined && input.recoveryClass === "reclaim") {
+        const attemptToken = input.expectedFence.retryToken;
+        if (attemptToken === undefined) {
+          return {
+            kind: "unavailable",
+            reason: "reclaim requires the observed attempt token; none was available",
+          };
+        }
+        const outcome = await options.reclaim({
+          issueId: issue.id,
+          expectedAttemptToken: attemptToken,
+        });
+        switch (outcome) {
+          case "stopped":
+            return { kind: "applied", detail: "orchestrator stopped the stalled attempt" };
+          case "stale":
+            return { kind: "refused", reason: "a newer attempt owns this issue" };
+          case "stopping":
+            return { kind: "skipped", reason: "orchestrator is shutting down" };
+          case "skipped":
+            break;
+        }
+      }
+
       const result = options.dispatch(issue);
       switch (result.kind) {
         case "dispatched":

@@ -59,7 +59,6 @@ import {
 import {
   createOrchestratorRuntimeState,
   isActiveState,
-  issueRoutable,
   OrchestratorAuthority,
   OrchestratorLoop,
   type WorkContinuityCoordinator,
@@ -415,24 +414,21 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         now,
         stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
         plannedStageTimeoutMs: controller.current.scheduling.pollIntervalMs,
-        // Activity is re-judged from the refreshed issue against the current configuration.
-        isActive: (issue) => {
-          const policy = controller.current.scheduling.policy;
-          return isActiveState(issue.state, policy) && issueRoutable(issue, policy);
-        },
+        // Work activity only: an open issue whose ready label was removed is still active
+        // work (its paused handoff may still need compensation), it is merely not
+        // dispatch-eligible. Eligibility is enforced by the authority at dispatch time.
+        isActive: (issue) => isActiveState(issue.state, controller.current.scheduling.policy),
       }),
       orchestrator: createTrackerOrchestratorPort({
         index: workIndex,
         dispatch: (issue) => authority.dispatchIssue(issue),
+        reclaim: (input) => authority.reclaimStalledAttempt(input),
       }),
       decision: decisionPort,
       delivery: createWorkspaceDeliveryCompensationPort({
         workspacePath: (issue) => workspaceCoordinator.peekWorkspacePath(issue),
         resolveIssue: (key) => workIndex.readIssue(key),
-        isActive: (issue) => {
-          const policy = controller.current.scheduling.policy;
-          return isActiveState(issue.state, policy) && issueRoutable(issue, policy);
-        },
+        isActive: (issue) => isActiveState(issue.state, controller.current.scheduling.policy),
         runner: new DefaultDeliveryGitGhRunner(),
       }),
       now,

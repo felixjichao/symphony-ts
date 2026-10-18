@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
@@ -17,16 +19,17 @@ import {
   DecisionStoreError,
   DurableDecisionStore,
 } from "@symphony/decision";
-import type { PollScheduler } from "@symphony/orchestrator";
+import { isActiveState, type PollScheduler } from "@symphony/orchestrator";
 import type { TrackerAdapterProfile } from "@symphony/tracker";
 
 import { createHost } from "./host";
 import { DeliveryStateConflictError, recoverDeliveryHandoff } from "@symphony/agent";
-import { FileDeliveryStateStorage } from "./delivery-skill-cli";
+import { FileDeliveryStateStorage, runDeliverySkillCli } from "./delivery-skill-cli";
 import {
   HostWorkObservationSource,
   TrackerWorkIndex,
   createBridgeDecisionReader,
+  createTrackerOrchestratorPort,
   createWorkspaceDeliveryCompensationPort,
   issueWorkKey,
   type RuntimeWorkView,
@@ -517,6 +520,54 @@ describe("HostWorkObservationSource", () => {
     expect(await reader.read(workKey)).toBeNull();
   });
 
+  it("keeps open label-less work active so a paused handoff can still be compensated", async () => {
+    const policy = {
+      activeStates: ["open"],
+      terminalStates: ["closed"],
+      requiredLabels: ["symphony-ready"],
+      maxConcurrentAgentsByState: {},
+    };
+    const labelLess = makeIssue({ labels: [] });
+    const { observation, verdict } = await observe(
+      source({
+        issue: labelLess,
+        // The production predicate: work activity only, no dispatch eligibility.
+        isActive: (issue) => isActiveState(issue.state, policy),
+        delivery: {
+          repo: "owner/repo",
+          issueNumber: 7,
+          workspaceKey: "GH-7",
+          spentRepairs: 1,
+          spentWaitSeconds: 0,
+          isPaused: true,
+          pauseReason: "budget_exhausted",
+          lastUpdated: "2026-10-18T00:00:00.000Z",
+          handoff: {
+            reason: "budget_exhausted",
+            details: "budget",
+            repo: "owner/repo",
+            issueNumber: 7,
+            headBranch: "symphony/GH-7",
+            prNumber: 12,
+            prUrl: null,
+            headSha: "b".repeat(40),
+            spentRepairs: 1,
+            maxRepairs: 1,
+            spentWaitSeconds: 0,
+            maxWaitSeconds: 0,
+            readyLabel: "symphony-ready",
+            readyLabelRemoved: true,
+            handoffId: "handoff-1",
+          },
+        } as PersistedDeliveryState,
+      }),
+    );
+
+    expect(observation.active).toBe(true);
+    expect(verdict.diagnosis).toBe("stranded");
+    expect(verdict.recovery?.class).toBe("compensate");
+  });
+
   it("treats an idle coding item as owned by the orchestrator poll loop", async () => {
     const { verdict } = await observe(source({}));
     expect(verdict.diagnosis).toBe("healthy");
@@ -531,7 +582,11 @@ describe("HostWorkObservationSource", () => {
         now,
         stallTimeoutMs: 10_000,
         runtime: runtimeView({
-          running: () => ({ startedAt: now - 60_000, lastProgressAt: now - 30_000 }),
+          running: () => ({
+            startedAt: now - 60_000,
+            lastProgressAt: now - 30_000,
+            attemptToken: "attempt-1",
+          }),
         }),
       }),
     );
@@ -621,6 +676,88 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
+  it("never steals a lock held by a live owner, even when the lock is old", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
+      fsSync.mkdirSync(lockDir);
+      fsSync.writeFileSync(
+        path.join(lockDir, "owner"),
+        JSON.stringify({ pid: child.pid, token: "child-token", acquiredAt: Date.now() - 120_000 }),
+        "utf8",
+      );
+      // A lock that merely looks old must not be reclaimed while its owner is alive.
+      const old = new Date(Date.now() - 61_000);
+      fsSync.utimesSync(lockDir, old, old);
+
+      const storage = new FileDeliveryStateStorage(file, 50);
+      storage.readState();
+      expect(() => storage.writeState({ ...baseState, isPaused: false })).toThrow(
+        DeliveryStateConflictError,
+      );
+
+      expect(fsSync.existsSync(lockDir)).toBe(true);
+      const owner = JSON.parse(fsSync.readFileSync(path.join(lockDir, "owner"), "utf8")) as {
+        token: string;
+      };
+      expect(owner.token).toBe("child-token");
+    } finally {
+      child.kill("SIGKILL");
+      await cleanup();
+    }
+  });
+
+  it("reclaims a lock whose recorded owner process is gone", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
+      fsSync.mkdirSync(lockDir);
+      fsSync.writeFileSync(
+        path.join(lockDir, "owner"),
+        JSON.stringify({ pid: child.pid, token: "dead-token", acquiredAt: Date.now() - 120_000 }),
+        "utf8",
+      );
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      child.kill("SIGKILL");
+      await exited;
+
+      const storage = new FileDeliveryStateStorage(file, 500);
+      storage.readState();
+      storage.writeState({ ...baseState, isPaused: false });
+
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
+      expect(onDisk.isPaused).toBe(false);
+      expect(fsSync.existsSync(lockDir)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await cleanup();
+    }
+  });
+
+  it("does not release a lock that now belongs to another owner token", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const storage = new FileDeliveryStateStorage(file);
+      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
+      await storage.withExclusive(async () => {
+        // Simulate a takeover: the owner file no longer carries our token.
+        fsSync.writeFileSync(
+          path.join(lockDir, "owner"),
+          JSON.stringify({ pid: 999_999, token: "other-token", acquiredAt: Date.now() }),
+          "utf8",
+        );
+      });
+      expect(fsSync.existsSync(lockDir)).toBe(true);
+      fsSync.rmSync(lockDir, { recursive: true, force: true });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("holds the Delivery authority lock for the whole compensationso a mid-flight writer cannot commit", async () => {
     const handoff = {
       reason: "budget_exhausted",
@@ -684,6 +821,136 @@ describe("Delivery state authority write guards", () => {
       expect(onDisk.lastUpdated).not.toBe("2026-10-21T00:00:00.000Z");
     } finally {
       await cleanup();
+    }
+  });
+});
+
+describe("Orchestrator recovery port", () => {
+  function port(calls: string[], reclaimOutcome: "stopped" | "skipped" | "stale" | "stopping" = "stopped") {
+    const index = new TrackerWorkIndex(
+      {
+        fetchIssuesByStates: async () => [makeIssue()],
+        fetchIssuesByIds: async () => [makeIssue()],
+      },
+      () => ["open"],
+      (issue) => issueWorkKey(issue, "owner/repo"),
+    );
+    return createTrackerOrchestratorPort({
+      index,
+      dispatch: () => {
+        calls.push("dispatch");
+        return { kind: "dispatched" };
+      },
+      reclaim: async (input) => {
+        calls.push(`reclaim:${input.expectedAttemptToken}`);
+        return reclaimOutcome;
+      },
+    });
+  }
+
+  it("reclaims a dead owner through the authority instead of dispatching over it", async () => {
+    const calls: string[] = [];
+    const outcome = await port(calls).dispatchWork({
+      workKey,
+      expectedFence: { retryToken: "attempt-9", hasLeaseToken: false },
+      idempotencyKey: "k",
+      recoveryClass: "reclaim",
+    });
+    expect(outcome.kind).toBe("applied");
+    expect(calls).toEqual(["reclaim:attempt-9"]);
+  });
+
+  it("refuses reclaim without the observed attempt token", async () => {
+    const calls: string[] = [];
+    const outcome = await port(calls).dispatchWork({
+      workKey,
+      expectedFence: { hasLeaseToken: false },
+      idempotencyKey: "k",
+      recoveryClass: "reclaim",
+    });
+    expect(outcome.kind).toBe("unavailable");
+    expect(calls).toEqual([]);
+  });
+
+  it("reports a stale attempt as refused", async () => {
+    const calls: string[] = [];
+    const outcome = await port(calls, "stale").dispatchWork({
+      workKey,
+      expectedFence: { retryToken: "attempt-old", hasLeaseToken: false },
+      idempotencyKey: "k",
+      recoveryClass: "reclaim",
+    });
+    expect(outcome.kind).toBe("refused");
+  });
+
+  it("dispatches for a non-reclaim recovery class", async () => {
+    const calls: string[] = [];
+    const outcome = await port(calls).dispatchWork({
+      workKey,
+      expectedFence: { hasLeaseToken: false },
+      idempotencyKey: "k",
+      recoveryClass: "dispatch",
+    });
+    expect(outcome.kind).toBe("applied");
+    expect(calls).toEqual(["dispatch"]);
+  });
+});
+
+describe("Delivery halt / compensation concurrency", () => {
+  it("posts exactly one handoff report when a compensation races a halt", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "delivery-halt-race-"));
+    await fs.mkdir(path.join(workspace, ".symphony"), { recursive: true });
+    let commentCalls = 0;
+    const runner = {
+      git: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      gh: async (args: readonly string[]) => {
+        const command = args.slice(0, 2).join(" ");
+        if (command === "issue edit") {
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (command === "issue view") {
+          return { exitCode: 0, stdout: JSON.stringify({ labels: [] }), stderr: "" };
+        }
+        if (command === "issue comment") {
+          commentCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "{}", stderr: "" };
+      },
+    };
+    try {
+      const halt = runDeliverySkillCli(
+        ["halt", "--repo", "owner/repo", "--issue", "7", "--cwd", workspace, "--ready-label", "symphony-ready"],
+        { stdout: { write: () => {} }, stderr: { write: () => {} } },
+        runner,
+      );
+
+      // Wait until the halt has begun its remote comment submission.
+      const deadline = Date.now() + 2_000;
+      while (commentCalls === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(commentCalls).toBe(1);
+
+      const competing = new FileDeliveryStateStorage(
+        path.join(workspace, ".symphony", "delivery-state.json"),
+        50,
+      );
+      const racing = await recoverDeliveryHandoff({
+        cwd: workspace,
+        repo: "owner/repo",
+        issueNumber: 7,
+        stateStorage: competing,
+        runner,
+      });
+      expect(racing.success).toBe(false);
+
+      await halt;
+      expect(commentCalls).toBe(1);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
     }
   });
 });

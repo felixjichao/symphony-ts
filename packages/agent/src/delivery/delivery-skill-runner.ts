@@ -483,6 +483,7 @@ export async function runDeliverySkill(
     reason: DeliveryHandoff["reason"],
     details: string,
   ): Promise<DeliverySkillResult> => {
+    const runHalt = async (): Promise<DeliverySkillResult> => {
     log(`[delivery-skill] Blocker/budget reached: ${reason}. Halting dispatch...`);
     const spentWaitSeconds = getElapsedWaitSeconds();
 
@@ -642,6 +643,15 @@ export async function runDeliverySkill(
       reason,
       handoffMarkdown,
     };
+    };
+
+    // The handoff read → label removal → comment → final write is one Delivery authority
+    // critical section, so a concurrent compensation cannot see the same pending handoff
+    // and post a second report.
+    if (stateStorage?.withExclusive === undefined) {
+      return await runHalt();
+    }
+    return await stateStorage.withExclusive(runHalt);
   };
 
   // 必须在开始任何 delivery 动作或前置检查前立即持久化初始状态与绝对 deadline
