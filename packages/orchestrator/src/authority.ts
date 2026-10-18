@@ -442,6 +442,19 @@ export class OrchestratorAuthority {
     if (record.token !== input.expectedAttemptToken) {
       return "stale";
     }
+
+    // Commit-time re-verification, in the same synchronous section as the stop decision:
+    // the coordinator observed the facts before an `await`, and the worker may have made
+    // progress (or stall detection may have been disabled) since. A healthy owner must not
+    // be stopped.
+    const stallTimeoutMs = this.stallTimeoutMs();
+    if (!isStallDetectionEnabled(stallTimeoutMs)) {
+      return "skipped";
+    }
+    if (!isWorkerStalled(record.entry, record.telemetry, this.now(), stallTimeoutMs)) {
+      return "skipped";
+    }
+
     // Re-check after the synchronous prefix: `stop` is idempotent and bounded.
     if (record.worker.stopped) {
       return "stopped";

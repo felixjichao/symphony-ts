@@ -738,6 +738,48 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
+  it("keeps a single owner when two storages race to reclaim the same dead lock", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
+      fsSync.mkdirSync(lockDir);
+      fsSync.writeFileSync(
+        path.join(lockDir, "owner"),
+        JSON.stringify({ pid: child.pid, token: "dead-token", acquiredAt: Date.now() - 120_000 }),
+        "utf8",
+      );
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      child.kill("SIGKILL");
+      await exited;
+
+      const a = new FileDeliveryStateStorage(file, 5_000);
+      const b = new FileDeliveryStateStorage(file, 5_000);
+      let active = 0;
+      let maxActive = 0;
+      const enter = async (storage: FileDeliveryStateStorage): Promise<void> => {
+        await storage.withExclusive(async () => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          active -= 1;
+        });
+      };
+
+      await Promise.all([enter(a), enter(b)]);
+
+      // Both reclaimers raced for the same dead owner, but only one may hold the section.
+      expect(maxActive).toBe(1);
+      // Both sections completed, so the lock was released by its final owner.
+      expect(fsSync.existsSync(lockDir)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await cleanup();
+    }
+  });
+
   it("does not release a lock that now belongs to another owner token", async () => {
     const { file, cleanup } = await tempStateFile(baseState);
     try {
@@ -936,7 +978,7 @@ describe("Delivery halt / compensation concurrency", () => {
 
       const competing = new FileDeliveryStateStorage(
         path.join(workspace, ".symphony", "delivery-state.json"),
-        50,
+        2_000,
       );
       const racing = await recoverDeliveryHandoff({
         cwd: workspace,
@@ -945,10 +987,12 @@ describe("Delivery halt / compensation concurrency", () => {
         stateStorage: competing,
         runner,
       });
-      expect(racing.success).toBe(false);
+      // Whatever the outcome, the racing compensation must not post a second report.
+      expect(commentCalls).toBe(1);
 
       await halt;
       expect(commentCalls).toBe(1);
+      expect(racing.success).toBe(true);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }

@@ -13,7 +13,7 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
-- **Execution Continuity extension（GitHub #145 / NEST-129）进行中**：NEST-130 / GitHub #146 完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-137 / GitHub #147 完成工作级活性判定、stranded 检测、有界恢复委派、Decision 过期 claim 释放入口与 bridge 自驱过期清扫，并在 `createHost()` 中默认接线（tracker / runtime / Decision / Delivery 跨源观测 + 三个 authority port）；Delivery 的所有写入口（run / halt / recover-handoff）共享同一个 owner-verified 文件锁与 compare-and-set，Codex 活性只认稳定进展事件，stalled owner 由 authority 以 attempt token 围栏回收。浏览器侧自动恢复、跨重启收敛与多轮预算仍为后续任务（#148–#150）。
+- **Execution Continuity extension（GitHub #145 / NEST-129）进行中**：NEST-130 / GitHub #146 完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-137 / GitHub #147 完成工作级活性判定、stranded 检测、有界恢复委派、Decision 过期 claim 释放入口与 bridge 自驱过期清扫，并在 `createHost()` 中默认接线（tracker / runtime / Decision / Delivery 跨源观测 + 三个 authority port）；Delivery 的所有写入口（run / halt / recover-handoff）共享同一个 owner-verified 文件锁与 compare-and-set，Codex 活性只认稳定进展事件，stalled owner 由 authority 在提交段内复核 token + 实时活性后回收，锁回收与身份校验通过 rename 原子化。浏览器侧自动恢复、跨重启收敛与多轮预算仍为后续任务（#148–#150）。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。

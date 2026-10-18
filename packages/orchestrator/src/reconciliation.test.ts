@@ -555,6 +555,9 @@ describe("stall detection — 验收 07 / 08", () => {
     const progress = h.authority.runningProgress(issue.id);
     expect(progress?.attemptToken).toBeTruthy();
 
+    // No progress since start and past the stall deadline.
+    h.setUtc(1_000_000 + 10_000);
+
     const stale = await h.authority.reclaimStalledAttempt({
       issueId: issue.id,
       expectedAttemptToken: "not-the-current-token",
@@ -570,6 +573,59 @@ describe("stall detection — 验收 07 / 08", () => {
     expect(h.state.running.has(issue.id)).toBe(false);
     expect(h.outcomes[0]?.stopReason).toEqual({ kind: "stall" });
     expect(h.state.retryAttempts.get(issue.id)?.attempt).toBe(1);
+  });
+
+  it("reclaim 在提交时重新校验活性：恢复进展或未超时都不停止 worker", async () => {
+    const h = makeHarness();
+    h.setStall(500);
+    const issue = makeIssue({ state: "Todo" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue); // startedAt = 1_000_000
+    const token = h.authority.runningProgress(issue.id)!.attemptToken;
+
+    // Boundary: elapsed == timeout is not a stall, so reclaim must be a no-op.
+    h.setUtc(1_000_000 + 500);
+    expect(
+      await h.authority.reclaimStalledAttempt({ issueId: issue.id, expectedAttemptToken: token }),
+    ).toBe("skipped");
+    expect(h.state.running.has(issue.id)).toBe(true);
+
+    // The worker made real progress right before the commit: not stalled any more.
+    h.setUtc(1_000_000 + 10_000);
+    h.contexts[0]?.onEvent({
+      event: "turn_completed",
+      timestamp: 1_000_000 + 10_000,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      codexAppServerPid: null,
+    });
+    expect(
+      await h.authority.reclaimStalledAttempt({ issueId: issue.id, expectedAttemptToken: token }),
+    ).toBe("skipped");
+    expect(h.state.running.has(issue.id)).toBe(true);
+
+    // No further progress: the same attempt is now genuinely stalled.
+    h.setUtc(1_000_000 + 20_000);
+    expect(
+      await h.authority.reclaimStalledAttempt({ issueId: issue.id, expectedAttemptToken: token }),
+    ).toBe("stopped");
+    expect(h.state.running.has(issue.id)).toBe(false);
+  });
+
+  it("reclaim 在 stall 检测被禁用时不做任何事", async () => {
+    const h = makeHarness();
+    h.setStall(500);
+    const issue = makeIssue({ state: "Todo" });
+    h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+    const token = h.authority.runningProgress(issue.id)!.attemptToken;
+    h.setUtc(1_000_000 + 60_000);
+    h.setStall(0);
+
+    expect(
+      await h.authority.reclaimStalledAttempt({ issueId: issue.id, expectedAttemptToken: token }),
+    ).toBe("skipped");
+    expect(h.state.running.has(issue.id)).toBe(true);
   });
 
   it("stall 基准只认稳定进展：notification 不阻止 stall，turn 完成才推进", async () => {

@@ -151,7 +151,7 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
         this.lockDepth = 1;
         return;
       }
-      this.reclaimIfOwnerDead();
+      this.reclaimIfOwnerDead("wait");
       if (Date.now() > deadline) {
         throw new DeliveryStateConflictError(
           `timed out waiting for the delivery state lock (${this.lockPath})`,
@@ -184,7 +184,7 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
         this.lockDepth = 1;
         return;
       }
-      this.reclaimIfOwnerDead();
+      this.reclaimIfOwnerDead("throw");
       if (Date.now() > deadline) {
         throw new DeliveryStateConflictError(
           `timed out waiting for the delivery state lock (${this.lockPath})`,
@@ -234,8 +234,12 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
   }
 
   private readLockOwner(): { pid: number; token: string; acquiredAt: number } | null {
+    return this.readOwnerFrom(this.lockPath);
+  }
+
+  private readOwnerFrom(dir: string): { pid: number; token: string; acquiredAt: number } | null {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(this.lockPath, "owner"), "utf8")) as {
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, "owner"), "utf8")) as {
         pid?: unknown;
         token?: unknown;
         acquiredAt?: unknown;
@@ -261,13 +265,16 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
    * legitimately hold the lock for minutes. A lock whose owner file is missing is treated as
    * unreadable and only reclaimed after a conservative age bound.
    */
-  private reclaimIfOwnerDead(): void {
+  private reclaimIfOwnerDead(selfPolicy: "throw" | "wait"): void {
     const owner = this.readLockOwner();
     if (owner !== null) {
       if (owner.pid === process.pid) {
-        throw new DeliveryStateConflictError(
-          `delivery state is already locked by this process (${this.lockPath})`,
-        );
+        if (selfPolicy === "throw") {
+          throw new DeliveryStateConflictError(
+            `delivery state is already locked by this process (${this.lockPath})`,
+          );
+        }
+        return;
       }
       if (isProcessAlive(owner.pid)) {
         return;
@@ -286,21 +293,45 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     }
   }
 
-  /** Removes the lock only when it still belongs to `expectedToken`. */
-  private removeLockIfToken(expectedToken: string | null): void {
-    const owner = this.readLockOwner();
-    if (expectedToken !== null) {
-      if (owner === null || owner.token !== expectedToken) {
-        return;
-      }
-    } else if (owner !== null) {
-      return;
-    }
+  /**
+   * Removes the lock only when it still belongs to `expectedToken`.
+   *
+   * The check and the delete are made atomic by **renaming the directory first**: the
+   * rename takes whatever is at the path at that instant, so no other reclaimer can slip a
+   * new owner's lock between the identity check and the delete. If the moved directory turns
+   * out to belong to a newer owner it is moved back (when the slot is still free) instead of
+   * being destroyed.
+   */
+  private removeLockIfToken(expectedToken: string | null): boolean {
+    const trash = `${this.lockPath}.trash.${crypto.randomUUID()}`;
     try {
-      fs.rmSync(this.lockPath, { recursive: true, force: true });
-    } catch {
-      /* Someone else already released it. */
+      fs.renameSync(this.lockPath, trash);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
     }
+
+    const moved = this.readOwnerFrom(trash);
+    const matches =
+      expectedToken === null ? moved === null : moved !== null && moved.token === expectedToken;
+    if (!matches) {
+      // A newer owner had already replaced the lock: restore it, never destroy it.
+      try {
+        fs.renameSync(trash, this.lockPath);
+      } catch {
+        /* The slot was taken again; leave the newer lock in place. */
+      }
+      return false;
+    }
+
+    try {
+      fs.rmSync(trash, { recursive: true, force: true });
+    } catch {
+      /* Best effort: the quarantined directory is already unreachable. */
+    }
+    return true;
   }
 
   private releaseLockIfOwned(): void {
