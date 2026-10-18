@@ -47,6 +47,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Work-level liveness and stranded-state reconciliation](accepted/architecture/2026-10-18-work-liveness-stranded-state-reconciliation.md) — 工作级活性与 stranded 对账契约：provider-neutral 观察事实与诊断分类（healthy / awaiting_external / blocked / retry_scheduled / stranded / contradictory / observation_unavailable / terminal）、阶段→expected action 派生、协调器固定协议（observe → derive → re-observe → 委派 authority → re-observe）与单飞/重复抑制，Decision 过期 claim 释放入口（事务内 revision + claimGeneration 复核）（NEST-137 / #147）。
 - [Execution continuity, ownership, and failure contracts](accepted/architecture/2026-10-17-execution-continuity-contracts.md) — 跨阶段执行连续性、所有权防御与故障分类契约：四类作用域（work/task/attempt/binding）、一等非终态 `blocked`、重试重观测（re-observe + re-decide）语义、多维原生 fencing 与凭据脱敏、有效进展判定、五类故障分类（transient/recoverable/blocked_external/superseded/invariant_violation）及 Decision/Delivery/Web/Orchestrator 故障映射与显式 unmapped 缺口记录（NEST-130 / #146）。
 - [Decision environment isolation and handoff reconciliation](accepted/architecture/2026-10-16-decision-environment-isolation-and-handoff-reconciliation.md) — 决策环境隔离与交接取消竞态排查契约：测试套件环境变量隔离、CLI/Host 选项冲突 fail-fast 与 store 覆盖、交付中断前先写持久化状态、交接补偿与评论幂等去重（`recover-handoff`），以及针对 #99 泄漏计划任务的定向清理工具（NEST-128）。
 - [Operational query service and integration acceptance](accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md) — 进程内只读查询服务契约：公共查询接口（`getOperationalSnapshot`、`listWork`、`getWork`、`listExecutors`）、一轮有界装配、部分失败与多 work 隔离、显式 WorkKey 作用域边界、确定性排序与无后台轮询/持久缓存（NEST-117 / #113，闭环父任务 #108）。

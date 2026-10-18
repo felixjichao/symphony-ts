@@ -162,6 +162,8 @@ export interface ExpectedNextAction {
   readonly authority: ActionAuthority;
   readonly target?: DecisionReviewTarget | undefined;
   readonly taskRef?: { readonly taskId: string; readonly revision: number } | undefined;
+  /** Pending delivery handoff this action must compensate (delivery stages only). */
+  readonly handoffRef?: { readonly handoffId: string } | undefined;
   readonly requiredEvidence?: readonly string[] | undefined;
 }
 

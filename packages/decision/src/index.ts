@@ -25,6 +25,8 @@ export {
   type GetTaskReceiptResponse,
   type PutBindingRequest,
   type RebindSessionRequest,
+  type ReleaseExpiredClaimRequest,
+  type ReleaseExpiredClaimResult,
   type CreateSessionRequest,
   type CreateTaskRequest,
   type BridgeErrorEnvelope,

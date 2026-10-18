@@ -151,6 +151,34 @@ export type {
   LoopDiagnostic,
   OrchestratorLoopOptions,
   PollScheduler,
+  WorkContinuityTickRunner,
 } from "./loop";
 
 export type { OrchestratorEvent, RetryEventReason } from "./events";
+
+// --- NEST-137：work-level liveness / stranded-state reconciliation（GitHub #147）---
+
+export { WorkContinuityCoordinator } from "./work-continuity";
+export type {
+  WorkContinuityCoordinatorOptions,
+  WorkContinuityDiagnostic,
+  WorkContinuityEntryAction,
+  WorkContinuityEntryResult,
+  WorkContinuityObservationSource,
+  WorkContinuityReconciliationResult,
+  WorkContinuityScanSource,
+  WorkRecoveryAuthority,
+  WorkRecoveryOutcome,
+  WorkRecoveryRequest,
+} from "./work-continuity";
+
+export {
+  createDecisionRecoveryAuthority,
+  createDeliveryRecoveryAuthority,
+  createOrchestratorRecoveryAuthority,
+} from "./work-continuity-authorities";
+export type {
+  DecisionClaimRecoveryPort,
+  DeliveryHandoffRecoveryPort,
+  OrchestratorRecoveryPort,
+} from "./work-continuity-authorities";

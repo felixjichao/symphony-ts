@@ -112,3 +112,7 @@ export * from "./operations";
 // (NEST-130 / GitHub #146). Provider-neutral shared vocabulary.
 export * from "./execution-continuity";
 
+// Work-level liveness and stranded-state derivation (NEST-137 / GitHub #147).
+// Pure classification over authoritative facts; never mutates a source authority.
+export * from "./work-continuity";
+

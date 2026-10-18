@@ -88,6 +88,16 @@ export interface CandidateIssueSource {
 }
 
 /**
+ * Per-tick work-level reconciliation entry point (NEST-137).
+ *
+ * `WorkContinuityCoordinator` satisfies this structurally; the loop only needs the single
+ * `reconcileOnce()` call so it stays decoupled from the coordinator's ports.
+ */
+export interface WorkContinuityTickRunner {
+  reconcileOnce(): Promise<unknown>;
+}
+
+/**
  * 一次性 poll timer 端口（与 {@link RetryScheduler} 同形）。测试注入手动 scheduler，
  * 不依赖真实等待。
  */
@@ -102,6 +112,7 @@ export interface LoopDiagnostic {
     | "tick_validation_failed"
     | "candidate_fetch_failed"
     | "reconciliation_failed"
+    | "work_continuity_failed"
     | "tick_failed";
   readonly message: string;
 }
@@ -127,6 +138,13 @@ export interface OrchestratorLoopOptions {
   /** dispatch preflight 端口（§6.3；启动 + 每 tick 调用）。 */
   readonly preflight: DispatchPreflightSource;
   /**
+   * Work-level liveness / stranded-state reconciliation（NEST-137）。Optional: when wired,
+   * it runs on every tick **after** running-worker reconciliation and **before** dispatch,
+   * so work with no live worker is still examined. Failures are isolated to a diagnostic
+   * and never break the tick chain.
+   */
+  readonly workContinuity?: WorkContinuityTickRunner | undefined;
+  /**
    * 一次性 poll timer 端口；缺省用 `createRetryScheduler()`（分段 `setTimeout`）。
    * 注入手动实现即可确定性复跑，不产生真实等待。
    */
@@ -149,6 +167,7 @@ export class OrchestratorLoop {
   private readonly preflight: DispatchPreflightSource;
   private readonly scheduler: PollScheduler;
   private readonly onDiagnostic: ((diagnostic: LoopDiagnostic) => void) | undefined;
+  private readonly workContinuity: WorkContinuityTickRunner | undefined;
 
   private status: LoopStatus = "idle";
   private pollTimer: TimerHandle | null = null;
@@ -162,6 +181,7 @@ export class OrchestratorLoop {
     this.preflight = options.preflight;
     this.scheduler = options.scheduler ?? createRetryScheduler();
     this.onDiagnostic = options.onDiagnostic;
+    this.workContinuity = options.workContinuity;
   }
 
   /** 是否正在调度（已通过 startup，且未 stop）。 */
@@ -325,6 +345,19 @@ export class OrchestratorLoop {
       }
       if (this.status !== "running") {
         return;
+      }
+
+      // 1b. work-level reconciliation（NEST-137）：覆盖没有 running worker 的跨阶段工作；
+      //     在候选分派之前执行，避免同一 work item 被重复 dispatch。失败只记诊断。
+      if (this.workContinuity !== undefined) {
+        try {
+          await this.workContinuity.reconcileOnce();
+        } catch (error) {
+          this.emit({ kind: "work_continuity_failed", message: describeError(error) });
+        }
+        if (this.status !== "running") {
+          return;
+        }
       }
 
       // 2. per-tick dispatch preflight（§6.3）；失败跳过本 tick dispatch。

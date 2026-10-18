@@ -87,3 +87,13 @@ Operational source acquisition uses injected read-only ports. GitHub delivery su
 2. **状态与重试语义**：`ContinuityState`（`running`, `retry_queued`, `recovering`, `blocked`, `completed`, `released`）将 `blocked` 作为一等非终态（区别于 terminal failure 或 retry queued），解除后走重观测再决策。重试语义固定为 **re-observe + re-decide**，禁止盲目重放。
 3. **多维所有权防护（Fencing）**：保留 retry token、lifecycle generation、reconciliation epoch、Decision lease generation、binding generation 与 expected HEAD SHA 等多维原生证据，旧续体仅允许观察、禁止跨作用域突变当前工作。
 4. **子系统映射与缺口记录**：五类故障分类（`transient`, `recoverable`, `blocked_external`, `superseded`, `invariant_violation`）为现有错误提供显式归一；无充分上下文的错误（如裸 `execution_failed`）显式返回 `unmapped`，不隐式默认成可重试故障。详见 [Execution Continuity Note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md)。
+
+### Work-level liveness and stranded-state reconciliation（NEST-137 / #147）
+
+工作级对账把上面的契约变成可执行的判定与有界委派（`packages/domain/src/work-continuity.ts` + `packages/orchestrator/src/work-continuity.ts`）：
+
+1. **诊断而非第二生命周期**：`WorkContinuityObservation` 只承载权威事实快照，`deriveWorkContinuity` 纯函数产出 `healthy` / `awaiting_external` / `blocked` / `retry_scheduled` / `stranded` / `contradictory` / `observation_unavailable` / `terminal`。`blocked`、合法外部等待、已排恢复与 stranded 互不混同；只有 `stranded` 允许自动委派。
+2. **固定协调协议**：observe → derive → **动作前重新观测并比对指纹**（事实变化即放弃旧计划）→ 委派单一 bounded recovery class → 动作后重新观测确认收敛；动作后读取失败报 `unverified`，不重放副作用。
+3. **委派而非直写**：`WorkContinuityCoordinator` 只依赖注入的 `WorkRecoveryAuthority` 端口；orchestrator / decision / delivery 适配器分别调用各自 authority 的提交入口（Decision 的 `releaseExpiredClaim` 在 store transaction 内复核 revision、claim generation 与租约是否仍过期）。未接线的 authority 报 `authority_unavailable`，不做 fallback 写入。
+4. **单飞与幂等**：同一 WorkKey 的并发对账只允许一次委派；相同指纹在抑制窗口内不重复下发；authority 自身的提交时 fence 仍是最终保证。
+5. **tick 接线**：`OrchestratorLoop` 在 running-worker reconciliation 之后、候选 dispatch 之前执行工作级对账，因此没有 worker 的跨阶段工作同样会被检查，且不会与同 tick 的 dispatch 竞争。详见 [Reconciliation Note](../notes/accepted/architecture/2026-10-18-work-liveness-stranded-state-reconciliation.md)。

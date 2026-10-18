@@ -370,3 +370,30 @@ Provider-neutral execution continuity, ownership fencing, and failure taxonomy c
 Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
 
 
+
+## Work-level liveness and stranded-state reconciliation (NEST-137 / #147)
+
+Provider-neutral work-level liveness evaluation, stranded-state detection, and bounded recovery delegation building on the NEST-130 continuity contracts. Adds a thin coordinator that re-observes authoritative facts before acting and delegates every mutation to the authority that owns it. [Reconciliation note](../notes/accepted/architecture/2026-10-18-work-liveness-stranded-state-reconciliation.md).
+
+| Capability | Evidence |
+|---|---|
+| Provider-neutral diagnosis separating `healthy`, `awaiting_external`, `blocked`, `retry_scheduled`, `stranded`, `contradictory`, `observation_unavailable`, and `terminal` | `packages/domain/src/work-continuity.test.ts`: Work-level continuity contracts |
+| Stage → expected next action and owning authority derivation for planning, coding, CI, review, repair, delivery, and merge | same suite: Work stage expectation derivation |
+| Meaningful liveness evaluation (explicit deadline, opt-in progress timeout, `unknown` progress never fabricated from heartbeats or process presence) | same suite: does not treat heartbeat-only ownership as measured progress / supports an opt-in progress timeout |
+| Valid active owner is not reclaimed; missing or unobservable owner is stranded | same suite: healthy / missing owner / unobservable owner cases |
+| Explicit external wait, human-owned next action, and blocked work are not stranded and never auto-retried | same suite: external wait / human next action / blocked cases |
+| Already-scheduled or overdue retry is reported `retry_scheduled` instead of enqueued twice | same suite: does not duplicate an already scheduled retry |
+| Required-source unavailability fails safe without changing ownership | same suite: fails safe when a required source is unavailable |
+| Conflicting facts are reported as `contradictory` without selecting an owner | same suite: reports contradictory facts without selecting an owner |
+| Deterministic fingerprint and repeated derivation idempotence over unchanged facts | same suite: stable fingerprint / idempotent repeated derivation |
+| Observation validation before derivation (required sources, monotonic timestamps, non-empty scheduler credential) | same suite: validates observations before derivation |
+| Coordinator protocol: observe → derive → re-observe → delegate → re-observe, abandoning a stale plan when facts change | `packages/orchestrator/src/work-continuity.test.ts`: abandons a stale plan when facts change |
+| Idempotent repeated passes and single-flight concurrent passes per work item | same suite: is idempotent across repeated passes / fences concurrent reconciliations |
+| Failed pre-action or post-action observation reports `unverified` without replaying side effects | same suite: pre-action / post-action re-observation failure |
+| Authority refusal (stale generation, renewed lease) is a normal outcome and is not retried in the same pass | same suite: reports a refused recovery as a normal race outcome |
+| Recovery adapters delegate to orchestrator / Decision / Delivery ports; missing port or missing task/handoff reference is `unavailable` | `packages/orchestrator/src/work-continuity-authorities.test.ts`: Recovery authority adapters |
+| Per-tick work reconciliation runs after running-worker reconciliation and before candidate dispatch; failures are isolated | `packages/orchestrator/src/work-continuity-loop.test.ts`: OrchestratorLoop work-level reconciliation |
+| Decision expired-claim release with transactional revision + claim-generation re-check, live-lease protection, and heartbeat renewal protection | `packages/decision/src/release-expired-claim.test.ts`: DecisionService.releaseExpiredClaim |
+| Domain purity and boundary invariants (no source mutation, no second lifecycle, no Decision/Delivery imports from the coordinator) | same domain and orchestrator suites; `npm run gate` |
+
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/orchestrator`, `npm test -w @symphony/decision`, `npm run typecheck`, `npm run gate`. Browser-side automatic recovery (#148), durable intent and restart convergence (#149), and multi-round budgets / durable incidents (#150) remain in subsequent issues; the production composition root still has to wire stage observers and the three authority ports.

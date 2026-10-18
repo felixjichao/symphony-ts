@@ -25,6 +25,7 @@ import {
   type RetryDiagnostic,
   type RetryWorkspaceCleanup,
   type TrackerRefreshSource,
+  type WorkContinuityTickRunner,
 } from "./index";
 
 export const ACTIVE_STATES = ["Todo", "In Progress"] as const;
@@ -271,6 +272,8 @@ export interface LoopHarnessOptions {
   readonly withCleanup?: boolean;
   /** tracker 是否具备 `fetchIssuesByStates`（默认 true）；false 同样触发能力缺失。 */
   readonly withTrackerStates?: boolean;
+  /** work-level reconciliation（NEST-137）；缺省不接线的行为保持不变。 */
+  readonly workContinuity?: WorkContinuityTickRunner | undefined;
 }
 
 /**
@@ -355,6 +358,7 @@ export function createLoopHarness(options: LoopHarnessOptions = {}): LoopHarness
     preflight,
     scheduler: pollScheduler,
     onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    ...(options.workContinuity !== undefined ? { workContinuity: options.workContinuity } : {}),
   });
 
   return {

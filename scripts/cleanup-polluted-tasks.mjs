@@ -1474,6 +1474,60 @@ class DecisionService {
       return { expiresAtMs: newExpiry, ttlMs: ttl };
     });
   }
+  /**
+   * Release one **expired** claim as an explicitly triggered authority action
+   * (NEST-137 / GitHub #147).
+   *
+   * The existing lazy expiry runs inside `getNextTask` / `claimTask`, which means a work
+   * item can keep a dead claim until some executor happens to ask for work. This entry
+   * point lets a reconciler ask the Decision authority to release a lease it already
+   * observed as expired — without pretending to be the Web executor and without
+   * bypassing store transactions.
+   *
+   * Commit-time re-validation (all inside one store transaction):
+   *
+   * - task revision must still match the caller's observation;
+   * - claim generation must still match (a renew / re-claim supersedes the request);
+   * - the task must still be `claimed` / `running` with a lease;
+   * - the lease must still be expired **at transaction time**.
+   *
+   * Any mismatch returns a discriminated non-error outcome; the reconciler must not retry
+   * a `superseded` request in the same pass.
+   */
+  async releaseExpiredClaim(taskId, params) {
+    return await this.store.transaction((draft) => {
+      const task = draft.tasks[taskId];
+      if (!task) {
+        return { kind: "not_found" };
+      }
+      if (task.revision !== params.expectedRevision) {
+        return {
+          kind: "superseded",
+          reason: `task revision changed from ${params.expectedRevision} to ${task.revision}`
+        };
+      }
+      if (task.claimGeneration !== params.expectedClaimGeneration) {
+        return {
+          kind: "superseded",
+          reason: `claim generation changed from ${params.expectedClaimGeneration} to ${task.claimGeneration}`
+        };
+      }
+      if (task.status !== "claimed" && task.status !== "running" || task.lease === null) {
+        return { kind: "not_expired" };
+      }
+      const now = this.clock();
+      if (now < task.lease.expiresAtMs) {
+        return { kind: "not_expired" };
+      }
+      const session = draft.sessions[task.sessionId];
+      if (!session) {
+        return { kind: "not_found" };
+      }
+      const released = releaseExpiredDecisionTask(task, now);
+      draft.tasks[taskId] = released;
+      return { kind: "released", task: released, session };
+    });
+  }
   async submitResult(taskId, params) {
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];

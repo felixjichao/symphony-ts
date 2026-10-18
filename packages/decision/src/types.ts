@@ -178,6 +178,28 @@ export interface GetTaskReceiptResponse {
   readonly receipt: SubmissionReceipt;
 }
 
+/**
+ * Request to release one expired Decision claim (NEST-137 / GitHub #147).
+ *
+ * Both credentials are mandatory: the caller must prove which task revision and claim
+ * generation it observed, so a lease that was renewed or a task that was superseded
+ * between observation and commit is never released by a stale reconciliation.
+ */
+export interface ReleaseExpiredClaimRequest {
+  readonly expectedRevision: number;
+  readonly expectedClaimGeneration: number;
+}
+
+/**
+ * Discriminated outcome of {@link ReleaseExpiredClaimRequest}. `not_expired` and
+ * `superseded` are normal race outcomes, not errors; only a real release mutates.
+ */
+export type ReleaseExpiredClaimResult =
+  | { readonly kind: "released"; readonly task: DecisionTask; readonly session: DecisionSession }
+  | { readonly kind: "not_expired" }
+  | { readonly kind: "superseded"; readonly reason: string }
+  | { readonly kind: "not_found" };
+
 export interface PutTaskContextRequest {
   readonly context: DecisionContextBundle;
 }
