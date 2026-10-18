@@ -31,22 +31,36 @@ export interface DeliveryCliIo {
   readonly stderr: { write(text: string): unknown };
 }
 
+/**
+ * File-backed Delivery state storage with a **ticket-directory** mutex.
+ *
+ * Every acquirer creates a ticket directory named by a number strictly greater than any
+ * ticket currently visible, and the live ticket with the **lowest number** owns the critical
+ * section. The number is a total order established by directory-creation exclusivity, not by
+ * clocks, so a later contender can never outrank a running owner.
+ *
+ * Crucially, ownership is never "taken over": a live owner's ticket is never removed and the
+ * shared namespace is never vacated. Only a ticket whose recorded process is provably gone is
+ * deleted, and each ticket lives at its own unique path, so deleting one cannot affect any
+ * other owner. There is therefore no window in which two processes both believe they own the
+ * section — the failure mode that check-then-delete and rename-then-verify both still had.
+ */
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  private readonly lockPath: string;
+  private readonly lockRoot: string;
   /**
    * Raw file content this instance last read (or wrote). A write whose base content changed
    * is rejected instead of overwriting a newer handoff / HEAD.
    */
   private observedRaw: string | null | undefined = undefined;
   private lockDepth = 0;
-  /** Token written into the owner file; release only removes a lock still carrying it. */
-  private lockToken: string | null = null;
+  /** This instance's ticket number; release removes only this exact ticket. */
+  private lockTicket: number | null = null;
 
   constructor(
     private readonly filePath: string,
     private readonly lockTimeoutMs = 10_000,
   ) {
-    this.lockPath = path.join(path.dirname(filePath), ".delivery-state.lock");
+    this.lockRoot = path.join(path.dirname(filePath), ".delivery-state.lock");
   }
 
   readState(): PersistedDeliveryState | null {
@@ -139,58 +153,67 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       this.lockDepth += 1;
       return;
     }
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    const ticket = this.takeTicket();
     const deadline = Date.now() + this.lockTimeoutMs;
-    for (;;) {
-      const token = this.tryCreateLockSync();
-      if (token !== null) {
-        this.lockToken = token;
-        this.lockDepth = 1;
-        return;
+    try {
+      for (;;) {
+        const winner = this.evaluateWinner();
+        if (winner !== null && winner.ticket === ticket) {
+          this.lockTicket = ticket;
+          this.lockDepth = 1;
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new DeliveryStateConflictError(
+            `timed out waiting for the delivery state lock (${this.lockRoot})`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      this.reclaimIfOwnerDead("wait");
-      if (Date.now() > deadline) {
-        throw new DeliveryStateConflictError(
-          `timed out waiting for the delivery state lock (${this.lockPath})`,
-        );
+    } finally {
+      if (this.lockDepth === 0) {
+        this.releaseTicket(ticket);
       }
-      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
   /**
    * Synchronous variant used by `writeState`, whose contract is `void`.
    *
-   * A lock held by a live owner is never stolen: the wait is bounded and the process is
-   * about to perform one write, so blocking briefly is preferable to violating the mutex.
+   * Waiting on a same-process owner would deadlock the event loop, so that case reports a
+   * conflict instead; a foreign live owner is never preempted.
    */
   private acquireSync(): void {
     if (this.lockDepth > 0) {
       this.lockDepth += 1;
       return;
     }
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    const ticket = this.takeTicket();
     const deadline = Date.now() + this.lockTimeoutMs;
-    for (;;) {
-      const token = this.tryCreateLockSync();
-      if (token !== null) {
-        this.lockToken = token;
-        this.lockDepth = 1;
-        return;
+    try {
+      for (;;) {
+        const winner = this.evaluateWinner();
+        if (winner !== null && winner.ticket === ticket) {
+          this.lockTicket = ticket;
+          this.lockDepth = 1;
+          return;
+        }
+        if (winner !== null && winner.pid === process.pid) {
+          throw new DeliveryStateConflictError(
+            `delivery state is already locked by this process (${this.lockRoot})`,
+          );
+        }
+        if (Date.now() > deadline) {
+          throw new DeliveryStateConflictError(
+            `timed out waiting for the delivery state lock (${this.lockRoot})`,
+          );
+        }
+        sleepSync(10);
       }
-      this.reclaimIfOwnerDead("throw");
-      if (Date.now() > deadline) {
-        throw new DeliveryStateConflictError(
-          `timed out waiting for the delivery state lock (${this.lockPath})`,
-        );
+    } finally {
+      if (this.lockDepth === 0) {
+        this.releaseTicket(ticket);
       }
-      sleepSync(10);
     }
   }
 
@@ -214,133 +237,162 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     }
   }
 
-  /** Creates the lock directory and records `{pid, token}`; `null` when already held. */
-  private tryCreateLockSync(): string | null {
+  private get ticketRoot(): string {
+    return path.join(this.lockRoot, "tickets");
+  }
+
+  private ticketDir(ticket: number): string {
+    return path.join(this.ticketRoot, String(ticket));
+  }
+
+  /**
+   * Takes the next free ticket via an atomic `mkdir` over the ticket numbers.
+   *
+   * The number itself is the total order: it is assigned by directory-creation exclusivity,
+   * so a later contender can never receive a smaller ticket than a running owner. No clocks,
+   * wall-time comparisons or cross-process time assumptions are involved.
+   */
+  private takeTicket(): number {
+    fs.mkdirSync(this.ticketRoot, { recursive: true });
     const token = crypto.randomUUID();
-    try {
-      fs.mkdirSync(this.lockPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        return null;
-      }
-      throw error;
-    }
-    fs.writeFileSync(
-      path.join(this.lockPath, "owner"),
-      JSON.stringify({ pid: process.pid, token, acquiredAt: Date.now() }),
-      "utf8",
-    );
-    return token;
-  }
-
-  private readLockOwner(): { pid: number; token: string; acquiredAt: number } | null {
-    return this.readOwnerFrom(this.lockPath);
-  }
-
-  private readOwnerFrom(dir: string): { pid: number; token: string; acquiredAt: number } | null {
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, "owner"), "utf8")) as {
-        pid?: unknown;
-        token?: unknown;
-        acquiredAt?: unknown;
-      };
-      if (
-        typeof raw.pid !== "number" ||
-        !Number.isInteger(raw.pid) ||
-        typeof raw.token !== "string" ||
-        typeof raw.acquiredAt !== "number"
-      ) {
-        return null;
-      }
-      return { pid: raw.pid, token: raw.token, acquiredAt: raw.acquiredAt };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Reclaims the lock **only when the recorded owner is provably gone**.
-   *
-   * Age is not evidence of death: a real compensation performs several remote calls and may
-   * legitimately hold the lock for minutes. A lock whose owner file is missing is treated as
-   * unreadable and only reclaimed after a conservative age bound.
-   */
-  private reclaimIfOwnerDead(selfPolicy: "throw" | "wait"): void {
-    const owner = this.readLockOwner();
-    if (owner !== null) {
-      if (owner.pid === process.pid) {
-        if (selfPolicy === "throw") {
-          throw new DeliveryStateConflictError(
-            `delivery state is already locked by this process (${this.lockPath})`,
-          );
+    for (let attempt = 0; attempt < 1_000; attempt += 1) {
+      // Always allocate above every ticket currently visible (including stale ones), so a
+      // number freed below a running owner can never be handed to a later contender.
+      const ticket = this.highestTicket() + 1;
+      try {
+        fs.mkdirSync(this.ticketDir(ticket));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          continue;
         }
-        return;
+        throw error;
       }
-      if (isProcessAlive(owner.pid)) {
-        return;
-      }
-      this.removeLockIfToken(owner.token);
-      return;
+      fs.writeFileSync(
+        path.join(this.ticketDir(ticket), "owner.json"),
+        JSON.stringify({ pid: process.pid, token, ticket }),
+        "utf8",
+      );
+      return ticket;
     }
-    // No readable owner: only a legacy lock older than the conservative bound is reclaimed.
-    try {
-      const stat = fs.statSync(this.lockPath);
-      if (Date.now() - stat.mtimeMs > 60_000) {
-        this.removeLockIfToken(null);
-      }
-    } catch {
-      /* The lock disappeared while probing; retry acquisition. */
-    }
+    throw new DeliveryStateConflictError(`delivery state ticket space exhausted (${this.lockRoot})`);
   }
 
-  /**
-   * Removes the lock only when it still belongs to `expectedToken`.
-   *
-   * The check and the delete are made atomic by **renaming the directory first**: the
-   * rename takes whatever is at the path at that instant, so no other reclaimer can slip a
-   * new owner's lock between the identity check and the delete. If the moved directory turns
-   * out to belong to a newer owner it is moved back (when the slot is still free) instead of
-   * being destroyed.
-   */
-  private removeLockIfToken(expectedToken: string | null): boolean {
-    const trash = `${this.lockPath}.trash.${crypto.randomUUID()}`;
+  private highestTicket(): number {
+    let names: string[];
     try {
-      fs.renameSync(this.lockPath, trash);
+      names = fs.readdirSync(this.ticketRoot);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return false;
+        return 0;
+      }
+      throw error;
+    }
+    let highest = 0;
+    for (const name of names) {
+      const ticket = Number(name);
+      if (Number.isInteger(ticket) && ticket > highest) {
+        highest = ticket;
+      }
+    }
+    return highest;
+  }
+
+  private releaseTicket(ticket: number): void {
+    try {
+      fs.rmSync(this.ticketDir(ticket), { recursive: true, force: true });
+    } catch {
+      /* Already gone. */
+    }
+    this.removeEmptyLockRoot();
+  }
+
+  private removeEmptyLockRoot(): void {
+    try {
+      fs.rmdirSync(this.ticketRoot);
+    } catch {
+      /* Other tickets are still active. */
+    }
+    try {
+      fs.rmdirSync(this.lockRoot);
+    } catch {
+      /* Still in use. */
+    }
+  }
+
+  /**
+   * Returns the live ticket with the lowest number.
+   *
+   * Dead tickets are removed — each lives in a directory named by its own ticket number, so
+   * removing one can never affect any other owner. There is no shared path to vacate and
+   * therefore no window in which two owners can overlap.
+   */
+  private evaluateWinner(): { ticket: number; pid: number; token: string } | null {
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.ticketRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
       }
       throw error;
     }
 
-    const moved = this.readOwnerFrom(trash);
-    const matches =
-      expectedToken === null ? moved === null : moved !== null && moved.token === expectedToken;
-    if (!matches) {
-      // A newer owner had already replaced the lock: restore it, never destroy it.
-      try {
-        fs.renameSync(trash, this.lockPath);
-      } catch {
-        /* The slot was taken again; leave the newer lock in place. */
+    const live: Array<{ ticket: number; pid: number; token: string }> = [];
+    for (const name of names) {
+      const ticket = Number(name);
+      if (!Number.isInteger(ticket) || ticket <= 0) {
+        continue;
       }
-      return false;
+      const dir = path.join(this.ticketRoot, name);
+      let owner: { pid?: unknown; token?: unknown } | null = null;
+      try {
+        owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8")) as {
+          pid?: unknown;
+          token?: unknown;
+        };
+      } catch {
+        // Registration is a synchronous mkdir + write; a missing file is either in progress
+        // or a crashed ticket. Give it a grace period before reclaiming.
+        try {
+          const stat = fs.statSync(dir);
+          if (Date.now() - stat.mtimeMs > 10_000) {
+            fs.rmSync(dir, { recursive: true, force: true });
+          }
+        } catch {
+          /* Disappeared. */
+        }
+        continue;
+      }
+      if (
+        owner === null ||
+        typeof owner.pid !== "number" ||
+        !Number.isInteger(owner.pid) ||
+        typeof owner.token !== "string"
+      ) {
+        continue;
+      }
+      if (owner.pid === process.pid || isProcessAlive(owner.pid)) {
+        live.push({ ticket, pid: owner.pid, token: owner.token });
+      } else {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+        } catch {
+          /* Someone else already cleaned it up. */
+        }
+      }
     }
 
-    try {
-      fs.rmSync(trash, { recursive: true, force: true });
-    } catch {
-      /* Best effort: the quarantined directory is already unreachable. */
-    }
-    return true;
+    live.sort((a, b) => a.ticket - b.ticket);
+    return live[0] ?? null;
   }
 
   private releaseLockIfOwned(): void {
-    const token = this.lockToken;
-    this.lockToken = null;
-    if (token === null) {
+    const ticket = this.lockTicket;
+    this.lockTicket = null;
+    if (ticket === null) {
       return;
     }
-    this.removeLockIfToken(token);
+    this.releaseTicket(ticket);
   }
 }
 

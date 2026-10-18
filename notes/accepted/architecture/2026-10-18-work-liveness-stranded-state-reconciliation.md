@@ -70,8 +70,12 @@ The filesystem mutex lives in the **Delivery authority**, not in the coordinator
 
 * `DeliveryStateStorage` gains an optional `withExclusive()` critical section. **Every Delivery handoff mutation** uses it: `recoverDeliveryHandoff` (whole recovery), `delivery-skill halt` (state read → label removal → comment → final write) and the runner's `haltDispatch`. A concurrent compensator either waits or receives a conflict — it never observes the same pending handoff and posts a second report.
 * `FileDeliveryStateStorage.writeState()` takes the same atomic `mkdir` lock and performs **compare‑and‑set** against the raw content it last read. A write based on a stale version throws `DeliveryStateConflictError` instead of overwriting the newer handoff / HEAD.
-* The lock is **owner-verified, not age-based**: the owner file records `{pid, token, acquiredAt}`. A lock is reclaimed only when `kill(pid, 0)` proves the owner gone (or, for a legacy lock with no readable owner, after a conservative age bound). A live owner is never preempted, however long the remote calls take.
-* Removal is **atomic with the identity check**: the lock directory is first `rename`d to a unique quarantine path, then inspected. The rename captures whatever occupied the path at that instant, so a concurrent reclaimer cannot slip a newer owner's lock between the check and the delete; if the moved directory belongs to a newer owner it is moved back rather than destroyed. Release uses the same path with this instance's token, so a former holder can never delete the new holder's lock.
+* The lock is a **ticket-directory** mutex, not a single shared lock path:
+  * each acquirer creates `lockRoot/tickets/<n>/` where `n` is strictly greater than every ticket currently visible, using atomic `mkdir` exclusivity;
+  * the live ticket with the **lowest number** owns the critical section;
+  * a ticket is removed only when its recorded pid is provably gone (`kill(pid, 0)`), and every ticket has its own path, so removing a dead ticket can never touch a live one;
+  * release removes this instance's own ticket only.
+* Because ownership is never taken over and the shared namespace is never vacated, there is no window in which two processes both believe they own the section. `acquiredAt` is diagnostic only — ordering comes from the ticket number, so cross-process clock skew and same-millisecond registrations cannot reorder owners. This replaces both the earlier age-based reclaim and the rename-then-verify attempt, which still left a gap where a live owner's directory was momentarily out of the checked namespace.
 * Before each remote mutation `recoverDeliveryHandoff` still re-reads and compares the handoff id / HEAD (`expectedHandoff`), so a change between validation and the remote call aborts without writing.
 * The compensation port re-checks that the refreshed issue is still **active work** before touching the workspace.
 

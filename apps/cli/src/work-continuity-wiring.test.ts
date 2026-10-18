@@ -676,20 +676,29 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
-  it("never steals a lock held by a live owner, even when the lock is old", async () => {
+  /** Publishes a live ticket in the Delivery lock directory. */
+  function writeTicket(
+    lockRoot: string,
+    ticket: number,
+    pid: number,
+    token: string,
+  ): string {
+    const dir = path.join(lockRoot, "tickets", String(ticket));
+    fsSync.mkdirSync(dir, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(dir, "owner.json"),
+      JSON.stringify({ pid, token, ticket }),
+      "utf8",
+    );
+    return dir;
+  }
+
+  it("never preempts a live ticket, however old it is", async () => {
     const { file, cleanup } = await tempStateFile(baseState);
     const child = spawn("sleep", ["30"], { stdio: "ignore" });
     try {
-      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
-      fsSync.mkdirSync(lockDir);
-      fsSync.writeFileSync(
-        path.join(lockDir, "owner"),
-        JSON.stringify({ pid: child.pid, token: "child-token", acquiredAt: Date.now() - 120_000 }),
-        "utf8",
-      );
-      // A lock that merely looks old must not be reclaimed while its owner is alive.
-      const old = new Date(Date.now() - 61_000);
-      fsSync.utimesSync(lockDir, old, old);
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const liveDir = writeTicket(lockRoot, 1, child.pid!, "live-child");
 
       const storage = new FileDeliveryStateStorage(file, 50);
       storage.readState();
@@ -697,28 +706,20 @@ describe("Delivery state authority write guards", () => {
         DeliveryStateConflictError,
       );
 
-      expect(fsSync.existsSync(lockDir)).toBe(true);
-      const owner = JSON.parse(fsSync.readFileSync(path.join(lockDir, "owner"), "utf8")) as {
-        token: string;
-      };
-      expect(owner.token).toBe("child-token");
+      // A non-owner never touches a live ticket.
+      expect(fsSync.existsSync(liveDir)).toBe(true);
     } finally {
       child.kill("SIGKILL");
       await cleanup();
     }
   });
 
-  it("reclaims a lock whose recorded owner process is gone", async () => {
+  it("ignores and cleans up a ticket whose process is gone", async () => {
     const { file, cleanup } = await tempStateFile(baseState);
     const child = spawn("sleep", ["30"], { stdio: "ignore" });
     try {
-      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
-      fsSync.mkdirSync(lockDir);
-      fsSync.writeFileSync(
-        path.join(lockDir, "owner"),
-        JSON.stringify({ pid: child.pid, token: "dead-token", acquiredAt: Date.now() - 120_000 }),
-        "utf8",
-      );
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const deadDir = writeTicket(lockRoot, 1, child.pid!, "dead-child");
       const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
       child.kill("SIGKILL");
       await exited;
@@ -729,7 +730,7 @@ describe("Delivery state authority write guards", () => {
 
       const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
       expect(onDisk.isPaused).toBe(false);
-      expect(fsSync.existsSync(lockDir)).toBe(false);
+      expect(fsSync.existsSync(deadDir)).toBe(false);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
@@ -738,40 +739,37 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
-  it("keeps a single owner when two storages race to reclaim the same dead lock", async () => {
+  it("keeps exactly one owner when several storages contend for the same dead ticket", async () => {
     const { file, cleanup } = await tempStateFile(baseState);
     const child = spawn("sleep", ["30"], { stdio: "ignore" });
     try {
-      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
-      fsSync.mkdirSync(lockDir);
-      fsSync.writeFileSync(
-        path.join(lockDir, "owner"),
-        JSON.stringify({ pid: child.pid, token: "dead-token", acquiredAt: Date.now() - 120_000 }),
-        "utf8",
-      );
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      writeTicket(lockRoot, 1, child.pid!, "dead-child");
       const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
       child.kill("SIGKILL");
       await exited;
 
-      const a = new FileDeliveryStateStorage(file, 5_000);
-      const b = new FileDeliveryStateStorage(file, 5_000);
+      const storages = [
+        new FileDeliveryStateStorage(file, 5_000),
+        new FileDeliveryStateStorage(file, 5_000),
+        new FileDeliveryStateStorage(file, 5_000),
+      ];
       let active = 0;
       let maxActive = 0;
       const enter = async (storage: FileDeliveryStateStorage): Promise<void> => {
         await storage.withExclusive(async () => {
           active += 1;
           maxActive = Math.max(maxActive, active);
-          await new Promise((resolve) => setTimeout(resolve, 60));
+          await new Promise((resolve) => setTimeout(resolve, 40));
           active -= 1;
         });
       };
 
-      await Promise.all([enter(a), enter(b)]);
+      await Promise.all(storages.map(enter));
 
-      // Both reclaimers raced for the same dead owner, but only one may hold the section.
+      // Three contenders and one dead ticket: the section is never held by two at once.
       expect(maxActive).toBe(1);
-      // Both sections completed, so the lock was released by its final owner.
-      expect(fsSync.existsSync(lockDir)).toBe(false);
+      expect(fsSync.existsSync(path.join(lockRoot, "tickets"))).toBe(false);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
@@ -780,22 +778,21 @@ describe("Delivery state authority write guards", () => {
     }
   });
 
-  it("does not release a lock that now belongs to another owner token", async () => {
+  it("does not remove another live ticket when releasing", async () => {
     const { file, cleanup } = await tempStateFile(baseState);
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
     try {
-      const storage = new FileDeliveryStateStorage(file);
-      const lockDir = path.join(path.dirname(file), ".delivery-state.lock");
+      const lockRoot = path.join(path.dirname(file), ".delivery-state.lock");
+      const storage = new FileDeliveryStateStorage(file, 2_000);
+      let foreignDir = "";
       await storage.withExclusive(async () => {
-        // Simulate a takeover: the owner file no longer carries our token.
-        fsSync.writeFileSync(
-          path.join(lockDir, "owner"),
-          JSON.stringify({ pid: 999_999, token: "other-token", acquiredAt: Date.now() }),
-          "utf8",
-        );
+        // A foreign live contender takes the next ticket while we hold ours.
+        foreignDir = writeTicket(lockRoot, 2, child.pid!, "foreign-live");
       });
-      expect(fsSync.existsSync(lockDir)).toBe(true);
-      fsSync.rmSync(lockDir, { recursive: true, force: true });
+
+      expect(fsSync.existsSync(foreignDir)).toBe(true);
     } finally {
+      child.kill("SIGKILL");
       await cleanup();
     }
   });
