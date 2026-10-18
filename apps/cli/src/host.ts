@@ -58,6 +58,8 @@ import {
 } from "@symphony/observability";
 import {
   createOrchestratorRuntimeState,
+  isActiveState,
+  issueRoutable,
   OrchestratorAuthority,
   OrchestratorLoop,
   type WorkContinuityCoordinator,
@@ -392,16 +394,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
           : null;
 
     const runtimeView = {
-      running: (issue: Issue) => {
-        const entry = state.running.get(issue.id);
-        if (entry === undefined) {
-          return null;
-        }
-        return {
-          startedAt: entry.attempt.startedAt,
-          lastCodexTimestamp: entry.session?.lastCodexTimestamp ?? null,
-        };
-      },
+      // Stable progress evidence only (lifecycle transition / positive token delta); the
+      // last arbitrary Codex event is not progress.
+      running: (issue: Issue) => authority.runningProgress(issue.id),
       retry: (issue: Issue) => {
         const entry = state.retryAttempts.get(issue.id);
         return entry === undefined ? null : { attempt: entry.attempt };
@@ -420,6 +415,11 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         now,
         stallTimeoutMs: () => controller.current.serviceConfig.codex.stallTimeoutMs,
         plannedStageTimeoutMs: controller.current.scheduling.pollIntervalMs,
+        // Activity is re-judged from the refreshed issue against the current configuration.
+        isActive: (issue) => {
+          const policy = controller.current.scheduling.policy;
+          return isActiveState(issue.state, policy) && issueRoutable(issue, policy);
+        },
       }),
       orchestrator: createTrackerOrchestratorPort({
         index: workIndex,
@@ -429,6 +429,10 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       delivery: createWorkspaceDeliveryCompensationPort({
         workspacePath: (issue) => workspaceCoordinator.peekWorkspacePath(issue),
         resolveIssue: (key) => workIndex.readIssue(key),
+        isActive: (issue) => {
+          const policy = controller.current.scheduling.policy;
+          return isActiveState(issue.state, policy) && issueRoutable(issue, policy);
+        },
         runner: new DefaultDeliveryGitGhRunner(),
       }),
       now,

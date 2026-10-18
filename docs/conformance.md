@@ -404,6 +404,12 @@ Provider-neutral work-level liveness evaluation, stranded-state detection, and b
 | Uncertain authority outcome (side effect committed, response lost) is not replayed before the suppression window | `packages/orchestrator/src/work-continuity.test.ts`: does not replay an uncertain recovery whose response was lost |
 | Fingerprint covers recovery expected fence, task ref/revision, review target HEAD and handoff id | `packages/domain/src/work-continuity.test.ts`: fingerprints the actual recovery target |
 | A required source that was never observed fails safe and never delegates | same suite: treats a required source that was never observed as unavailable |
+| Delivery authority write guard: every writer (run/halt/recover-handoff) shares one lock and compare-and-set, so a stale compensation cannot overwrite a newer handoff / HEAD | `apps/cli/src/work-continuity-wiring.test.ts`: Delivery state authority write guards |
+| Decision bridge failures other than explicit not-found mark the source unavailable and block recovery | same suite: treats a Decision bridge read failure other than not-found as unavailable |
+| Pending Decision tasks are an external wait only with a bound adapter; no recovery is fabricated from a binding generation | same suite: pending task with a bound adapter / without a bound executor |
+| Completed plan/review tasks consume their verdict (approve → Delivery, changes_requested → repair, needs_human / missing → blocked, ready plan → coding) | same suite: approved review, changes_requested review, plan needs_human |
+| Activity is re-judged from the refreshed issue against the current configuration | same suite: refreshed issue left the active states |
+| Codex liveness uses stable progress evidence (lifecycle transition / positive token delta), not the last arbitrary event | `packages/orchestrator/src/agent-events.test.ts`: stable progress evidence |
 
 
 Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/orchestrator`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`, `npm run typecheck`, `npm run gate`. Browser-side automatic recovery (#148), durable intent and restart convergence (#149), and multi-round budgets / durable incidents (#150) remain in subsequent issues.

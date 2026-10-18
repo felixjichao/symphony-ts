@@ -124,6 +124,21 @@ export function createDeliveryRecoveryAuthority(
   return {
     authority: "delivery",
     async recover(request: WorkRecoveryRequest): Promise<WorkRecoveryOutcome> {
+      if (request.recovery.class === "retry") {
+        return {
+          kind: "unavailable",
+          reason:
+            "repair requires a new coding attempt; this reconciliation layer has no safe repair primitive and will not start one",
+        };
+      }
+      if (request.recovery.class === "resume") {
+        return {
+          kind: "unavailable",
+          reason:
+            "delivery resume requires the delivery pipeline to be re-entered by its owning skill; no automatic resume primitive is wired",
+        };
+      }
+
       const handoffId = request.verdict.expectedAction?.handoffRef?.handoffId ?? null;
       if (handoffId === null) {
         return {

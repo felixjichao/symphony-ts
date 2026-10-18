@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  DeliveryStateConflictError,
   recoverDeliveryHandoff,
   runDeliverySkill,
   type DeliveryGitGhRunner,
@@ -30,13 +31,24 @@ export interface DeliveryCliIo {
 }
 
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  constructor(private readonly filePath: string) {}
+  private readonly lockPath: string;
+  /**
+   * Raw file content this instance last read (or wrote). A write whose base content changed
+   * is rejected instead of overwriting a newer handoff / HEAD.
+   */
+  private observedRaw: string | null | undefined = undefined;
+  private lockDepth = 0;
+
+  constructor(private readonly filePath: string) {
+    this.lockPath = path.join(path.dirname(filePath), ".delivery-state.lock");
+  }
 
   readState(): PersistedDeliveryState | null {
-    if (!fs.existsSync(this.filePath)) {
+    const raw = this.readRaw();
+    this.observedRaw = raw;
+    if (raw === null) {
       return null;
     }
-    const raw = fs.readFileSync(this.filePath, "utf8");
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -65,17 +77,195 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
   }
 
   writeState(state: PersistedDeliveryState): void {
+    const nested = this.lockDepth > 0;
+    if (!nested) {
+      this.acquireSync();
+    }
+    try {
+      const current = this.readRaw();
+      if (this.observedRaw !== undefined && current !== this.observedRaw) {
+        throw new DeliveryStateConflictError(
+          `delivery state changed since it was read (${this.filePath}); re-read before writing`,
+        );
+      }
+      this.writeRaw(state);
+    } finally {
+      if (!nested) {
+        this.releaseSync();
+      }
+    }
+  }
+
+  /**
+   * Exclusive read → validate → write section, serialized across processes with an atomic
+   * lock directory. Reentrant per instance so `writeState` inside a section is a no-op lock.
+   */
+  async withExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      await this.release();
+    }
+  }
+
+  private readRaw(): string | null {
+    return fs.existsSync(this.filePath) ? fs.readFileSync(this.filePath, "utf8") : null;
+  }
+
+  private writeRaw(state: PersistedDeliveryState): void {
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    const serialized = JSON.stringify(state, null, 2);
     const tmpFile = path.join(
       dir,
       `.delivery-state.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
     );
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), "utf8");
+    fs.writeFileSync(tmpFile, serialized, "utf8");
     fs.renameSync(tmpFile, this.filePath);
+    this.observedRaw = serialized;
   }
+
+  private async acquire(): Promise<void> {
+    if (this.lockDepth > 0) {
+      this.lockDepth += 1;
+      return;
+    }
+    const dir = path.dirname(this.filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        await fs.promises.mkdir(this.lockPath);
+        fs.writeFileSync(path.join(this.lockPath, "owner"), String(process.pid), "utf8");
+        this.lockDepth = 1;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+        this.assertNotOwnedByThisProcess();
+        await this.breakStaleLock();
+        if (Date.now() > deadline) {
+          throw new DeliveryStateConflictError(
+            `timed out waiting for the delivery state lock (${this.lockPath})`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  }
+
+  /**
+   * Synchronous variant used by `writeState`, whose contract is `void`.
+   *
+   * Contention only happens with another process; the wait is bounded and the process is
+   * about to fail or succeed a single write, so blocking briefly is preferable to silently
+   * skipping the guard.
+   */
+  private acquireSync(): void {
+    if (this.lockDepth > 0) {
+      this.lockDepth += 1;
+      return;
+    }
+    const dir = path.dirname(this.filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        fs.mkdirSync(this.lockPath);
+        fs.writeFileSync(path.join(this.lockPath, "owner"), String(process.pid), "utf8");
+        this.lockDepth = 1;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+        // A synchronous wait on a lock held by the same process would deadlock the event
+        // loop; report a conflict so the caller re-reads and re-decides instead.
+        this.assertNotOwnedByThisProcess();
+        this.breakStaleLockSync();
+        if (Date.now() > deadline) {
+          throw new DeliveryStateConflictError(
+            `timed out waiting for the delivery state lock (${this.lockPath})`,
+          );
+        }
+        sleepSync(10);
+      }
+    }
+  }
+
+  private async release(): Promise<void> {
+    if (this.lockDepth === 0) {
+      return;
+    }
+    this.lockDepth -= 1;
+    if (this.lockDepth === 0) {
+      await fs.promises.rm(this.lockPath, { recursive: true, force: true });
+    }
+  }
+
+  private releaseSync(): void {
+    if (this.lockDepth === 0) {
+      return;
+    }
+    this.lockDepth -= 1;
+    if (this.lockDepth === 0) {
+      fs.rmSync(this.lockPath, { recursive: true, force: true });
+    }
+  }
+
+  /** A lock older than 60s belongs to a dead process; reclaim it instead of hanging. */
+  private async breakStaleLock(): Promise<void> {
+    try {
+      const stat = await fs.promises.stat(this.lockPath);
+      if (Date.now() - stat.mtimeMs > 60_000) {
+        await fs.promises.rm(this.lockPath, { recursive: true, force: true });
+      }
+    } catch {
+      /* The lock disappeared while probing; retry acquisition. */
+    }
+  }
+
+  private assertNotOwnedByThisProcess(): void {
+    try {
+      const owner = Number(fs.readFileSync(path.join(this.lockPath, "owner"), "utf8").trim());
+      if (Number.isInteger(owner) && owner === process.pid) {
+        throw new DeliveryStateConflictError(
+          `delivery state is already locked by this process (${this.lockPath})`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof DeliveryStateConflictError) {
+        throw error;
+      }
+      /* No owner file: an older or foreign lock, handled by the stale-lock probe. */
+    }
+  }
+
+  private breakStaleLockSync(): void {
+    try {
+      const stat = fs.statSync(this.lockPath);
+      if (Date.now() - stat.mtimeMs > 60_000) {
+        fs.rmSync(this.lockPath, { recursive: true, force: true });
+      }
+    } catch {
+      /* The lock disappeared while probing; retry acquisition. */
+    }
+  }
+}
+
+const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+
+/** Bounded synchronous sleep for the file lock only. */
+function sleepSync(ms: number): void {
+  Atomics.wait(SLEEP_BUFFER, 0, 0, ms);
 }
 
 function parseSafeNonNegativeInteger(val: string, flagName: string): number {
@@ -295,7 +485,7 @@ export async function runDeliverySkillCli(
     };
 
     // 先持久化 paused 状态和待补偿事实
-    stateStorage.writeState({
+    await stateStorage.writeState({
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -352,7 +542,7 @@ export async function runDeliverySkillCli(
     }
 
     const handoffAfterLabel = { ...handoff, readyLabelRemoved };
-    stateStorage.writeState({
+    await stateStorage.writeState({
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -396,7 +586,7 @@ export async function runDeliverySkillCli(
     io.stdout.write(handoffMarkdown + "\n");
 
     const pendingCompensation = !(readyLabelRemoved && commentPosted);
-    stateStorage.writeState({
+    await stateStorage.writeState({
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),

@@ -315,6 +315,7 @@ const UNKNOWN_TELEMETRY: AgentTelemetryState = {
   threadId: null,
   turnId: null,
   turnCount: 0,
+  lastProgressAt: null,
   baselines: new Map(),
   pendingLastEvent: null,
   pendingLastTimestamp: null,

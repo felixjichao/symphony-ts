@@ -26,6 +26,28 @@ import type { DeliveryGitGhRunner } from "./git-gh-runner";
 export interface DeliveryStateStorage {
   readState(): Promise<PersistedDeliveryState | null> | PersistedDeliveryState | null;
   writeState(state: PersistedDeliveryState): Promise<void> | void;
+  /**
+   * Optional exclusive critical section covering a read → validate → write sequence.
+   *
+   * A file-backed implementation MUST serialize across processes (for example with an
+   * atomic lock directory) and MUST reject a write whose base version changed while the
+   * section was held. Compensators wrap the whole recovery in it so no other Delivery
+   * writer can slip between validation and the final write.
+   */
+  withExclusive?<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Raised when a Delivery state write is based on a version that changed since it was read.
+ *
+ * The correct reaction is to re-read and re-decide; silently overwriting a newer handoff or
+ * HEAD is exactly the race this guard prevents.
+ */
+export class DeliveryStateConflictError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "DeliveryStateConflictError";
+  }
 }
 
 export interface RunDeliverySkillOptions extends DeliverySkillConfig {

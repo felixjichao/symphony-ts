@@ -403,4 +403,65 @@ describe("applyAgentEvent — 审查 blocker 2：身份隔离与 turn 计数", (
     expect(ctx.entry.session?.threadId).toBe("t1");
     expect(ctx.telemetry.turnCount).toBe(1);
   });
+
+  describe("stable progress evidence (NEST-137)", () => {
+    it("does not treat notifications or repeated usage snapshots as progress", () => {
+      const state = createOrchestratorRuntimeState({ pollIntervalMs: 1000, maxConcurrentAgents: 1 });
+      const entry = makeEntry();
+      const telemetry = createAgentTelemetryState();
+
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "session_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timestamp: 1_000,
+      }));
+      expect(telemetry.lastProgressAt).toBe(1_000);
+
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "notification",
+        threadId: "thread-1",
+        timestamp: 2_000,
+        usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+      }));
+      expect(telemetry.lastProgressAt).toBe(2_000);
+
+      // Repeated absolute snapshot and a plain notification are not progress.
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "notification",
+        threadId: "thread-1",
+        timestamp: 3_000,
+        usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+      }));
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "notification",
+        threadId: "thread-1",
+        timestamp: 4_000,
+      }));
+      expect(telemetry.lastProgressAt).toBe(2_000);
+      expect(entry.session?.lastCodexTimestamp).toBe(4_000);
+    });
+
+    it("treats a turn lifecycle transition as progress", () => {
+      const state = createOrchestratorRuntimeState({ pollIntervalMs: 1000, maxConcurrentAgents: 1 });
+      const entry = makeEntry();
+      const telemetry = createAgentTelemetryState();
+
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "session_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timestamp: 1_000,
+      }));
+      applyAgentEvent(state, entry, telemetry, event({
+        event: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timestamp: 5_000,
+      }));
+
+      expect(telemetry.lastProgressAt).toBe(5_000);
+      expect(entry.session?.lastCodexTimestamp).toBe(5_000);
+    });
+  });
 });

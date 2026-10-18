@@ -14,15 +14,19 @@ import {
 } from "@symphony/domain";
 import {
   DecisionService,
+  DecisionStoreError,
   DurableDecisionStore,
 } from "@symphony/decision";
 import type { PollScheduler } from "@symphony/orchestrator";
 import type { TrackerAdapterProfile } from "@symphony/tracker";
 
 import { createHost } from "./host";
+import { DeliveryStateConflictError, recoverDeliveryHandoff } from "@symphony/agent";
+import { FileDeliveryStateStorage } from "./delivery-skill-cli";
 import {
   HostWorkObservationSource,
   TrackerWorkIndex,
+  createBridgeDecisionReader,
   createWorkspaceDeliveryCompensationPort,
   issueWorkKey,
   type RuntimeWorkView,
@@ -76,6 +80,36 @@ function decisionObservation(
   };
 }
 
+function reviewTask(overrides: Partial<DecisionObservation["tasks"][number]> = {}) {
+  return {
+    kind: "review" as const,
+    taskId: "review-1",
+    revision: 4,
+    status: "completed" as const,
+    createdAtMs: 1_000,
+    updatedAtMs: 2_000,
+    claimGeneration: 1,
+    lease: null,
+    target: { repository: "owner/repo", prNumber: 9, headSha: "a".repeat(40) },
+    ...overrides,
+  };
+}
+
+function reviewResult(
+  verdict: "approve" | "changes_requested" | "needs_human",
+): DecisionObservation["results"][number] {
+  return {
+    taskId: "review-1",
+    revision: 4,
+    createdAtMs: 2_000,
+    outcome: {
+      kind: "review",
+      verdict,
+      target: { repository: "owner/repo", prNumber: 9, headSha: "a".repeat(40) },
+    },
+  };
+}
+
 describe("TrackerWorkIndex", () => {
   it("scans active work and re-reads one issue through the tracker", async () => {
     const calls: string[] = [];
@@ -121,11 +155,14 @@ describe("HostWorkObservationSource", () => {
     deliveryThrows?: boolean;
     now?: number;
     stallTimeoutMs?: number;
+    issue?: Issue | null;
+    isActive?: (issue: Issue) => boolean;
   }): HostWorkObservationSource {
+    const refreshed = options.issue === undefined ? makeIssue() : options.issue;
     const index = new TrackerWorkIndex(
       {
         fetchIssuesByStates: async () => [makeIssue()],
-        fetchIssuesByIds: async () => [makeIssue()],
+        fetchIssuesByIds: async () => (refreshed === null ? [] : [refreshed]),
       },
       () => ["open"],
       (issue) => issueWorkKey(issue, "owner/repo"),
@@ -150,6 +187,7 @@ describe("HostWorkObservationSource", () => {
             },
       now: () => options.now ?? 1_770_000_000_000,
       stallTimeoutMs: () => options.stallTimeoutMs ?? 0,
+      isActive: options.isActive ?? (() => true),
     });
   }
 
@@ -279,6 +317,206 @@ describe("HostWorkObservationSource", () => {
     expect(verdict.recovery).toBeNull();
   });
 
+  it("reports a pending task with a bound adapter as an external wait, never a fake schedule", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        decision: decisionObservation({
+          session: {
+            sessionId: decisionSessionId(workKey),
+            status: "active",
+            bindingGeneration: 3,
+            adapter: "chatgpt-web",
+            updatedAtMs: 1_000,
+          },
+          tasks: [
+            {
+              kind: "plan",
+              taskId: "task-1",
+              revision: 1,
+              status: "pending",
+              createdAtMs: 1_000,
+              updatedAtMs: 1_000,
+              claimGeneration: 0,
+              lease: null,
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(observation.scheduledRecovery).toBeNull();
+    expect(observation.externalWait?.authority).toMatchObject({ kind: "external", system: "chatgpt-web" });
+    expect(verdict.diagnosis).toBe("awaiting_external");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("blocks a pending task whose session has no bound executor", async () => {
+    const { verdict } = await observe(
+      source({
+        decision: decisionObservation({
+          session: {
+            sessionId: decisionSessionId(workKey),
+            status: "active",
+            bindingGeneration: 3,
+            adapter: null,
+            updatedAtMs: 1_000,
+          },
+          tasks: [
+            {
+              kind: "plan",
+              taskId: "task-1",
+              revision: 1,
+              status: "pending",
+              createdAtMs: 1_000,
+              updatedAtMs: 1_000,
+              claimGeneration: 0,
+              lease: null,
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(verdict.diagnosis).toBe("blocked");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("continues an approved review into Delivery", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        decision: decisionObservation({
+          tasks: [reviewTask()],
+          results: [reviewResult("approve")],
+        }),
+      }),
+    );
+
+    expect(observation.stage).toBe("delivery");
+    expect(observation.expectedAction?.action).toBe("resume");
+    expect(verdict.recovery?.authority).toBe("delivery");
+    expect(verdict.expectedAction?.target?.headSha).toBe("a".repeat(40));
+  });
+
+  it("routes a changes_requested review into repair", async () => {
+    const { observation, verdict } = await observe(
+      source({
+        decision: decisionObservation({
+          tasks: [reviewTask()],
+          results: [reviewResult("changes_requested")],
+        }),
+      }),
+    );
+
+    expect(observation.stage).toBe("repair");
+    expect(observation.expectedAction?.action).toBe("retry");
+    expect(verdict.recovery?.authority).toBe("delivery");
+  });
+
+  it("blocks a review that completed without a usable verdict", async () => {
+    const { verdict } = await observe(
+      source({
+        decision: decisionObservation({ tasks: [reviewTask()], results: [] }),
+      }),
+    );
+
+    expect(verdict.diagnosis).toBe("blocked");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("blocks a plan whose verdict is needs_human instead of delegating", async () => {
+    const { verdict } = await observe(
+      source({
+        decision: decisionObservation({
+          tasks: [
+            {
+              kind: "plan",
+              taskId: "plan-1",
+              revision: 2,
+              status: "completed",
+              createdAtMs: 1_000,
+              updatedAtMs: 2_000,
+              claimGeneration: 1,
+              lease: null,
+            },
+          ],
+          results: [
+            {
+              taskId: "plan-1",
+              revision: 2,
+              createdAtMs: 2_000,
+              outcome: { kind: "plan", verdict: "needs_human" },
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(verdict.diagnosis).toBe("blocked");
+    expect(verdict.recovery).toBeNull();
+    expect(verdict.owner).toBeNull();
+  });
+
+  it("treats active work as terminal once the refreshed issue left the active states", async () => {
+    const closed = makeIssue({ state: "closed", dispatchable: false });
+    const { observation, verdict } = await observe(
+      source({
+        issue: closed,
+        isActive: (issue) => issue.state !== "closed",
+        delivery: {
+          repo: "owner/repo",
+          issueNumber: 7,
+          workspaceKey: "GH-7",
+          spentRepairs: 1,
+          spentWaitSeconds: 0,
+          isPaused: true,
+          pauseReason: "budget_exhausted",
+          lastUpdated: "2026-10-18T00:00:00.000Z",
+          handoff: {
+            reason: "budget_exhausted",
+            details: "budget",
+            repo: "owner/repo",
+            issueNumber: 7,
+            headBranch: "symphony/GH-7",
+            prNumber: 12,
+            prUrl: null,
+            headSha: "b".repeat(40),
+            spentRepairs: 1,
+            maxRepairs: 1,
+            spentWaitSeconds: 0,
+            maxWaitSeconds: 0,
+            readyLabel: "symphony-ready",
+            readyLabelRemoved: false,
+            handoffId: "handoff-1",
+          },
+        } as PersistedDeliveryState,
+      }),
+    );
+
+    expect(observation.active).toBe(false);
+    expect(verdict.diagnosis).toBe("terminal");
+    expect(verdict.recovery).toBeNull();
+  });
+
+  it("treats a Decision bridge read failure other than not-found as unavailable", async () => {
+    const reader = createBridgeDecisionReader({
+      getSession: async () => {
+        throw new DecisionStoreError("service unavailable", "unavailable", 503);
+      },
+    } as unknown as Parameters<typeof createBridgeDecisionReader>[0]);
+
+    await expect(reader.read(workKey)).rejects.toThrow();
+  });
+
+  it("treats a not-found Decision session as absent work", async () => {
+    const reader = createBridgeDecisionReader({
+      getSession: async () => {
+        throw new DecisionStoreError("not found", "not_found", 404);
+      },
+    } as unknown as Parameters<typeof createBridgeDecisionReader>[0]);
+
+    expect(await reader.read(workKey)).toBeNull();
+  });
+
   it("treats an idle coding item as owned by the orchestrator poll loop", async () => {
     const { verdict } = await observe(source({}));
     expect(verdict.diagnosis).toBe("healthy");
@@ -293,7 +531,7 @@ describe("HostWorkObservationSource", () => {
         now,
         stallTimeoutMs: 10_000,
         runtime: runtimeView({
-          running: () => ({ startedAt: now - 60_000, lastCodexTimestamp: now - 30_000 }),
+          running: () => ({ startedAt: now - 60_000, lastProgressAt: now - 30_000 }),
         }),
       }),
     );
@@ -317,6 +555,136 @@ describe("HostWorkObservationSource", () => {
     expect(observation.sources.some((s) => s.source === "delivery" && s.status === "unavailable")).toBe(true);
     expect(verdict.diagnosis).toBe("observation_unavailable");
     expect(verdict.recovery).toBeNull();
+  });
+});
+
+describe("Delivery state authority write guards", () => {
+  async function tempStateFile(state: unknown): Promise<{ file: string; cleanup: () => Promise<void> }> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "delivery-guard-"));
+    const file = path.join(dir, ".symphony", "delivery-state.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify(state));
+    return { file, cleanup: async () => fs.rm(dir, { recursive: true, force: true }) };
+  }
+
+  const baseState = {
+    repo: "owner/repo",
+    issueNumber: 7,
+    workspaceKey: "GH-7",
+    spentRepairs: 0,
+    spentWaitSeconds: 0,
+    isPaused: true,
+    pauseReason: "budget_exhausted",
+    lastUpdated: "2026-10-18T00:00:00.000Z",
+  };
+
+  it("rejects a write whose base version changed instead of overwriting a newer handoff", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const reader = new FileDeliveryStateStorage(file);
+      const first = reader.readState();
+      expect(first).not.toBeNull();
+
+      const newer = new FileDeliveryStateStorage(file);
+      newer.readState();
+      newer.writeState({ ...baseState, lastUpdated: "2026-10-19T00:00:00.000Z" });
+
+      expect(() =>
+        reader.writeState({ ...baseState, lastUpdated: "2026-10-20T00:00:00.000Z" }),
+      ).toThrow(DeliveryStateConflictError);
+
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { lastUpdated: string };
+      expect(onDisk.lastUpdated).toBe("2026-10-19T00:00:00.000Z");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("serializes writers: a same-process write during an exclusive section conflicts", async () => {
+    const { file, cleanup } = await tempStateFile(baseState);
+    try {
+      const holder = new FileDeliveryStateStorage(file);
+      const intruder = new FileDeliveryStateStorage(file);
+
+      await holder.withExclusive(async () => {
+        holder.readState();
+        intruder.readState();
+        expect(() => intruder.writeState({ ...baseState, isPaused: false })).toThrow(
+          DeliveryStateConflictError,
+        );
+      });
+
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { isPaused: boolean };
+      expect(onDisk.isPaused).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("holds the Delivery authority lock for the whole compensationso a mid-flight writer cannot commit", async () => {
+    const handoff = {
+      reason: "budget_exhausted",
+      details: "budget",
+      repo: "owner/repo",
+      issueNumber: 7,
+      headBranch: "symphony/GH-7",
+      prNumber: 12,
+      prUrl: null,
+      headSha: "b".repeat(40),
+      spentRepairs: 1,
+      maxRepairs: 1,
+      spentWaitSeconds: 0,
+      maxWaitSeconds: 0,
+      readyLabel: "symphony-ready",
+      readyLabelRemoved: false,
+      handoffId: "handoff-1",
+    };
+    const { file, cleanup } = await tempStateFile({
+      ...baseState,
+      handoff,
+      readyLabelRemoved: false,
+      commentPosted: false,
+      commentVerifyStatus: "pending",
+      pendingCompensation: true,
+    });
+    try {
+      const storage = new FileDeliveryStateStorage(file);
+      const intruder = new FileDeliveryStateStorage(file);
+      let conflict: unknown = null;
+
+      const result = await recoverDeliveryHandoff({
+        cwd: path.dirname(path.dirname(file)),
+        repo: "owner/repo",
+        issueNumber: 7,
+        stateStorage: storage,
+        expectedHandoff: { handoffId: "handoff-1" },
+        runner: {
+          git: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          gh: async () => {
+            // A concurrent Delivery writer tries to commit a newer handoff mid-recovery.
+            intruder.readState();
+            try {
+              intruder.writeState({ ...baseState, lastUpdated: "2026-10-21T00:00:00.000Z" });
+            } catch (error) {
+              conflict = error;
+            }
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ comments: [{ body: "<!-- symphony:handoff-id: handoff-1 -->" }] }),
+              stderr: "",
+            };
+          },
+        },
+      });
+
+      expect(conflict).toBeInstanceOf(DeliveryStateConflictError);
+      expect(result.success).toBe(true);
+      const onDisk = JSON.parse(await fs.readFile(file, "utf8")) as { lastUpdated: string };
+      expect(onDisk.lastUpdated).not.toBe("2026-10-21T00:00:00.000Z");
+    } finally {
+      await cleanup();
+    }
   });
 });
 
@@ -379,6 +747,7 @@ describe("Workspace delivery compensation port", () => {
     return createWorkspaceDeliveryCompensationPort({
       workspacePath: () => workspace,
       resolveIssue: async () => issue,
+      isActive: () => true,
       runner: {
         git: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
         gh: async (args: readonly string[]) => {

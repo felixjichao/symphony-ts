@@ -5,7 +5,10 @@ import {
 } from "@symphony/domain";
 
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
-import type { DeliveryStateStorage } from "./delivery-skill-runner";
+import {
+  DeliveryStateConflictError,
+  type DeliveryStateStorage,
+} from "./delivery-skill-runner";
 
 export interface RecoverDeliveryHandoffOptions {
   readonly cwd: string;
@@ -41,7 +44,43 @@ export interface RecoverDeliveryHandoffResult {
   readonly pendingCompensation: boolean;
 }
 
+/**
+ * Compensates a pending Delivery handoff.
+ *
+ * The whole read → validate → write sequence runs inside the storage's exclusive section so
+ * a concurrent `delivery-skill run/halt` writer cannot commit a newer handoff between our
+ * validation and our remote writes. A conflicting write surfaces as a failed (unverified)
+ * result rather than overwriting the newer state.
+ */
 export async function recoverDeliveryHandoff(
+  options: RecoverDeliveryHandoffOptions,
+): Promise<RecoverDeliveryHandoffResult> {
+  const withExclusive = options.stateStorage.withExclusive;
+  if (withExclusive === undefined) {
+    return await recoverDeliveryHandoffInner(options);
+  }
+  const exclusive: <T>(fn: () => Promise<T>) => Promise<T> =
+    withExclusive.bind(options.stateStorage);
+  return await exclusive(async () => {
+    try {
+      return await recoverDeliveryHandoffInner(options);
+    } catch (error) {
+      if (error instanceof DeliveryStateConflictError) {
+        return {
+          success: false,
+          error: `error: ${error.message}`,
+          readyLabelRemoved: false,
+          commentPosted: false,
+          commentVerifyStatus: "unverified" as const,
+          pendingCompensation: true,
+        };
+      }
+      throw error;
+    }
+  });
+}
+
+async function recoverDeliveryHandoffInner(
   options: RecoverDeliveryHandoffOptions,
 ): Promise<RecoverDeliveryHandoffResult> {
   const { cwd, stateStorage, runner, log = () => {} } = options;

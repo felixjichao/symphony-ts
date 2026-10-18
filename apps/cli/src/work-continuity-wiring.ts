@@ -41,7 +41,11 @@ import {
   type WorkOwnerFacts,
   type WorkStageFacts,
 } from "@symphony/domain";
-import type { DecisionBridgeClient, DecisionService } from "@symphony/decision";
+import {
+  DecisionStoreError,
+  type DecisionBridgeClient,
+  type DecisionService,
+} from "@symphony/decision";
 import {
   WorkContinuityCoordinator,
   createDecisionRecoveryAuthority,
@@ -178,9 +182,13 @@ function workKeyId(workKey: WorkKey): string {
 
 /** Runtime facts needed for liveness (read-only). */
 export interface RuntimeWorkView {
+  /**
+   * `lastProgressAt` must be stable progress evidence (lifecycle transition or a positive
+   * token delta), never the last arbitrary Codex event.
+   */
   running(
     issue: Issue,
-  ): { readonly startedAt: number; readonly lastCodexTimestamp: number | null } | null;
+  ): { readonly startedAt: number; readonly lastProgressAt: number | null } | null;
   retry(issue: Issue): { readonly attempt: number } | null;
 }
 
@@ -203,9 +211,10 @@ export function createLocalDecisionReader(service: DecisionService): DecisionWor
 /**
  * Bridge-backed Decision reader.
  *
- * The bridge exposes tasks and session state but not bulk verdicts; a missing verdict is
- * reported as absent rather than guessed, so review outcomes degrade to "completed" and
- * never authorize anything by themselves.
+ * Only an explicit "session not found" means the Decision Plane has no work for this key.
+ * Every other failure (503, timeout, auth) propagates so the observer records the source as
+ * `unavailable`; treating it as "no session" would authorize ownership changes on a blind
+ * read.
  */
 export function createBridgeDecisionReader(client: DecisionBridgeClient): DecisionWorkReader {
   return {
@@ -214,10 +223,43 @@ export function createBridgeDecisionReader(client: DecisionBridgeClient): Decisi
       let session;
       try {
         session = (await client.getSession(sessionId)).session;
-      } catch {
-        return null;
+      } catch (error) {
+        if (isDecisionNotFound(error)) {
+          return null;
+        }
+        throw error;
       }
+
       const tasks = (await client.getTasksForSession(sessionId)).tasks;
+
+      // Verdicts are needed to continue completed plan/review work. Fetch only for the
+      // newest task of each kind; an absent result is `null`, any other failure propagates.
+      const results: DecisionObservation["results"][number][] = [];
+      for (const kind of ["plan", "review"] as const) {
+        const latest = tasks
+          .filter((task) => task.kind === kind)
+          .sort((a, b) => b.updatedAtMs - a.updatedAtMs || b.id.localeCompare(a.id))[0];
+        if (latest === undefined) {
+          continue;
+        }
+        try {
+          const { result } = await client.getTaskResult(latest.id);
+          results.push({
+            taskId: result.taskId,
+            revision: result.revision,
+            createdAtMs: result.createdAtMs,
+            outcome:
+              result.kind === "plan"
+                ? { kind: "plan", verdict: result.verdict }
+                : { kind: "review", verdict: result.verdict, target: result.target },
+          });
+        } catch (error) {
+          if (!isDecisionNotFound(error)) {
+            throw error;
+          }
+        }
+      }
+
       return {
         workKey,
         session: {
@@ -244,10 +286,17 @@ export function createBridgeDecisionReader(client: DecisionBridgeClient): Decisi
                 },
           ...(task.kind === "review" ? { kind: "review" as const, target: task.target } : { kind: "plan" as const }),
         })),
-        results: [],
+        results,
       };
     },
   };
+}
+
+function isDecisionNotFound(error: unknown): boolean {
+  return (
+    error instanceof DecisionStoreError &&
+    (error.status === 404 || error.code === "not_found" || error.code === "task_not_found")
+  );
 }
 
 export function createWorkspaceDeliveryReader(options: {
@@ -275,6 +324,8 @@ export interface HostWorkObserverOptions {
   readonly now: () => number;
   readonly stallTimeoutMs: () => number;
   readonly plannedStageTimeoutMs?: number | undefined;
+  /** Activity predicate applied to the **refreshed** issue, using current config. */
+  readonly isActive: (issue: Issue) => boolean;
 }
 
 const DEFAULT_PLANNED_STAGE_TIMEOUT_MS = 30_000;
@@ -287,6 +338,7 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
   private readonly now: () => number;
   private readonly stallTimeoutMs: () => number;
   private readonly plannedStageTimeoutMs: number;
+  private readonly isActiveIssue: (issue: Issue) => boolean;
 
   public constructor(options: HostWorkObserverOptions) {
     this.index = options.index;
@@ -296,6 +348,7 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
     this.now = options.now;
     this.stallTimeoutMs = options.stallTimeoutMs;
     this.plannedStageTimeoutMs = options.plannedStageTimeoutMs ?? DEFAULT_PLANNED_STAGE_TIMEOUT_MS;
+    this.isActiveIssue = options.isActive;
   }
 
   public async observe(workKey: WorkKey): Promise<WorkContinuityObservation> {
@@ -369,7 +422,9 @@ export class HostWorkObservationSource implements WorkContinuityObservationSourc
     return {
       workKey,
       observedAt,
-      active: true,
+      // Activity is judged from the refreshed issue against the current configuration, not
+      // from the fact that the scan saw it a moment ago.
+      active: this.isActiveIssue(issue),
       stage: derived.stage,
       expectedAction: derived.expectedAction,
       owner: derived.owner,
@@ -428,37 +483,112 @@ function deriveHostStageFacts(input: {
         fence: { expectedHeadSha: target.headSha, hasLeaseToken: false },
       };
     }
-    return blockedFacts("delivery", delivery.pauseReason ?? "delivery paused without a recoverable handoff");
+    return blockedFacts(
+      "delivery",
+      "inspect the paused delivery state",
+      delivery.pauseReason ?? "delivery paused without a recoverable handoff",
+      Date.parse(delivery.lastUpdated) || observedAt,
+    );
   }
 
   // 2. Decision Plane stages: review, then planning, then coding.
+  // Task status and the recorded verdict decide the next stage; a completed task is never
+  // treated as if it were still running.
   const reviewTask = latestTask(decision, "review");
+  const reviewVerdict = reviewTask === null ? null : latestVerdict(decision, reviewTask.taskId);
   const planTask = latestTask(decision, "plan");
   const planVerdict = planTask === null ? null : latestVerdict(decision, planTask.taskId);
 
-  if (reviewTask !== null && reviewTask.kind === "review") {
-    const stageFacts: WorkStageFacts = {
-      kind: "review",
-      task: taskStageFacts(reviewTask),
-      target: reviewTask.target,
-    };
-    const expectation = deriveStageExpectation(stageFacts);
-    return taskOwnedFacts(expectation, reviewTask, observedAt, input.plannedStageTimeoutMs, decision);
+  if (reviewTask !== null && reviewTask.kind === "review" && isLiveTaskStatus(reviewTask.status)) {
+    return taskOwnedFacts(
+      deriveStageExpectation({
+        kind: "review",
+        task: taskStageFacts(reviewTask),
+        target: reviewTask.target,
+      }),
+      reviewTask,
+      observedAt,
+      input.plannedStageTimeoutMs,
+      decision,
+    );
   }
 
-  if (reviewTask === null && planTask !== null && planTask.kind === "plan") {
-    if (planVerdict === "ready") {
+  if (reviewTask !== null && reviewTask.kind === "review" && reviewTask.status === "completed") {
+    if (reviewVerdict?.kind === "review" && reviewVerdict.verdict === "approve") {
+      return deliveryResumeFacts(reviewTask.target, observedAt);
+    }
+    if (reviewVerdict?.kind === "review" && reviewVerdict.verdict === "changes_requested") {
+      return repairFacts(reviewTask.target, observedAt);
+    }
+    return blockedFacts(
+      "review",
+      "confirm the completed review result",
+      `review task ${reviewTask.taskId} completed without a usable verdict (${reviewVerdict?.verdict ?? "no result observed"})`,
+      reviewTask.updatedAtMs,
+    );
+  }
+
+  if (planTask !== null && planTask.kind === "plan" && isLiveTaskStatus(planTask.status)) {
+    return taskOwnedFacts(
+      deriveStageExpectation({ kind: "planning", task: taskStageFacts(planTask) }),
+      planTask,
+      observedAt,
+      input.plannedStageTimeoutMs,
+      decision,
+    );
+  }
+
+  if (planTask !== null && planTask.kind === "plan" && planTask.status === "completed") {
+    if (planVerdict?.kind === "plan" && planVerdict.verdict === "ready") {
       return codingFacts(runtime, issue, observedAt, input.stallTimeoutMs);
     }
-    const stageFacts: WorkStageFacts = {
-      kind: "planning",
-      task: taskStageFacts(planTask),
-    };
-    const expectation = deriveStageExpectation(stageFacts);
-    return taskOwnedFacts(expectation, planTask, observedAt, input.plannedStageTimeoutMs, decision);
+    return blockedFacts(
+      "planning",
+      "resolve the planning verdict before coding continues",
+      `plan task ${planTask.taskId} completed with verdict "${planVerdict?.verdict ?? "unknown"}"`,
+      planTask.updatedAtMs,
+    );
   }
 
   return codingFacts(runtime, issue, observedAt, input.stallTimeoutMs);
+}
+
+function isLiveTaskStatus(status: string): boolean {
+  return status === "pending" || status === "claimed" || status === "running";
+}
+
+function deliveryResumeFacts(
+  target: { repository: string; prNumber: number; headSha: string },
+  observedAt: number,
+): DerivedHostFacts {
+  const expectation = deriveStageExpectation({ kind: "delivery", handoffId: null, target });
+  return {
+    stage: expectation.stage,
+    expectedAction: expectation.expectedAction,
+    owner: null,
+    liveness: { startedAt: observedAt, lastProgressAt: "unknown" },
+    scheduledRecovery: null,
+    externalWait: null,
+    blocked: null,
+    fence: { expectedHeadSha: target.headSha, hasLeaseToken: false },
+  };
+}
+
+function repairFacts(
+  target: { repository: string; prNumber: number; headSha: string },
+  observedAt: number,
+): DerivedHostFacts {
+  const expectation = deriveStageExpectation({ kind: "repair", target });
+  return {
+    stage: expectation.stage,
+    expectedAction: expectation.expectedAction,
+    owner: null,
+    liveness: { startedAt: observedAt, lastProgressAt: "unknown" },
+    scheduledRecovery: null,
+    externalWait: null,
+    blocked: null,
+    fence: { expectedHeadSha: target.headSha, hasLeaseToken: false },
+  };
 }
 
 function codingFacts(
@@ -490,7 +620,9 @@ function codingFacts(
   }
 
   if (running !== null) {
-    const lastProgressAt = running.lastCodexTimestamp ?? "unknown";
+    // `lastProgressAt` is stable progress evidence (lifecycle transition / positive token
+    // delta). Notifications and repeated usage snapshots never advance it.
+    const lastProgressAt = running.lastProgressAt ?? "unknown";
     return {
       stage: "coding",
       expectedAction: expectation.expectedAction,
@@ -506,6 +638,7 @@ function codingFacts(
       liveness: {
         startedAt: running.startedAt,
         lastProgressAt,
+        ...(lastProgressAt !== "unknown" ? { progressSource: "agent_lifecycle_or_usage_delta" } : {}),
         ...(stallTimeoutMs > 0
           ? {
               deadlineAt:
@@ -546,44 +679,36 @@ function taskOwnedFacts(
   decision: DecisionObservation | null,
 ): DerivedHostFacts {
   const lease = task.lease ?? null;
-  const bindingGeneration = decision?.session?.bindingGeneration ?? 0;
+  // A binding generation is fencing history, not proof that an executor is alive. Only the
+  // presence of an actual bound adapter supports "waiting for the executor to claim"; no
+  // scheduled-recovery credential is invented because no scheduler entry can be observed.
+  const boundAdapter = decision?.session?.adapter ?? null;
 
-  // A task that is merely waiting for its executor is owned by the bridge's poll loop and
-  // is an armed schedule, not a stranded work item.
   if (task.status === "pending") {
-    if (bindingGeneration > 0) {
+    if (boundAdapter !== null) {
       return {
         stage: expectation.stage,
         expectedAction: expectation.expectedAction,
         owner: null,
         liveness: { startedAt: task.updatedAtMs, lastProgressAt: "unknown" },
-        scheduledRecovery: {
-          kind: "recovery",
-          authority: "decision",
-          scheduledAt: task.updatedAtMs,
-          dueAt: null,
-          credential: `bridge-poll:${task.taskId}:${task.revision}`,
+        scheduledRecovery: null,
+        externalWait: {
+          authority: {
+            kind: "external",
+            system: boundAdapter,
+            condition: "executor_claim",
+          },
+          since: task.updatedAtMs,
         },
-        externalWait: null,
         blocked: null,
       };
     }
-    return {
-      stage: expectation.stage,
-      expectedAction: expectation.expectedAction,
-      owner: null,
-      liveness: { startedAt: task.updatedAtMs, lastProgressAt: "unknown" },
-      scheduledRecovery: null,
-      externalWait: {
-        authority: {
-          kind: "human",
-          role: "operator",
-          instruction: "bind an executor to the Decision session",
-        },
-        since: task.updatedAtMs,
-      },
-      blocked: null,
-    };
+    return blockedFacts(
+      expectation.stage,
+      "bind an executor to the Decision session",
+      `task ${task.taskId} is pending and the session has no bound executor`,
+      task.updatedAtMs,
+    );
   }
 
   if (lease !== null) {
@@ -636,23 +761,24 @@ function pausedDeliveryLiveness(
   };
 }
 
-function blockedFacts(stage: WorkContinuityObservation["stage"], reason: string): DerivedHostFacts {
+function blockedFacts(
+  stage: WorkContinuityObservation["stage"],
+  instruction: string,
+  reason: string,
+  since: number,
+): DerivedHostFacts {
   return {
     stage,
     expectedAction: null,
     owner: null,
-    liveness: { startedAt: 0, lastProgressAt: "unknown" },
+    liveness: { startedAt: since, lastProgressAt: "unknown" },
     scheduledRecovery: null,
     externalWait: null,
     blocked: {
       reason: "human_required",
-      waitingOn: {
-        kind: "human",
-        role: "operator",
-        instruction: "inspect the paused delivery state",
-      },
+      waitingOn: { kind: "human", role: "operator", instruction },
       unblockCondition: reason,
-      blockedAt: 0,
+      blockedAt: since,
     },
   };
 }
@@ -673,17 +799,14 @@ function latestTask(
 function latestVerdict(
   decision: DecisionObservation | null,
   taskId: string,
-): "ready" | "needs_clarification" | "needs_human" | null {
+): DecisionObservation["results"][number]["outcome"] | null {
   if (decision === null) {
     return null;
   }
   const result = decision.results
     .filter((entry) => entry.taskId === taskId)
     .sort((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  if (result === undefined || result.outcome.kind !== "plan") {
-    return null;
-  }
-  return result.outcome.verdict;
+  return result?.outcome ?? null;
 }
 
 function taskStageFacts(
@@ -800,6 +923,7 @@ export function createWorkspaceDeliveryCompensationPort(options: {
   readonly workspacePath: (issue: Issue) => string;
   readonly resolveIssue: (workKey: WorkKey) => Promise<Issue | null>;
   readonly runner: Parameters<typeof recoverDeliveryHandoff>[0]["runner"];
+  readonly isActive: (issue: Issue) => boolean;
   readonly mkdir?: typeof fs.mkdirSync | undefined;
   readonly rm?: typeof fs.rmSync | undefined;
 }): DeliveryHandoffRecoveryPort {
@@ -811,6 +935,11 @@ export function createWorkspaceDeliveryCompensationPort(options: {
       const issue = await options.resolveIssue(input.workKey);
       if (issue === null) {
         return { kind: "unavailable", reason: "issue is no longer readable from the tracker" };
+      }
+      // Admission re-check at commit time: a refreshed issue that left the active states no
+      // longer needs compensation, and acting would touch a closed work item.
+      if (!options.isActive(issue)) {
+        return { kind: "skipped", reason: "work item is no longer active" };
       }
       const workspace = options.workspacePath(issue);
       const lockDir = path.join(workspace, ".symphony", "delivery-compensation.lock");
@@ -854,20 +983,28 @@ export function createWorkspaceDeliveryCompensationPort(options: {
           };
         }
 
-        const result = await recoverDeliveryHandoff({
-          cwd: workspace,
-          repo: state.repo,
-          issueNumber: state.issueNumber,
-          workspaceKey: state.workspaceKey,
-          stateStorage: storage,
-          runner: options.runner,
-          expectedHandoff: {
-            handoffId: input.handoffId,
-            ...(input.expectedHeadSha !== undefined
-              ? { expectedHeadSha: input.expectedHeadSha }
-              : {}),
-          },
-        });
+        let result;
+        try {
+          result = await recoverDeliveryHandoff({
+            cwd: workspace,
+            repo: state.repo,
+            issueNumber: state.issueNumber,
+            workspaceKey: state.workspaceKey,
+            stateStorage: storage,
+            runner: options.runner,
+            expectedHandoff: {
+              handoffId: input.handoffId,
+              ...(input.expectedHeadSha !== undefined
+                ? { expectedHeadSha: input.expectedHeadSha }
+                : {}),
+            },
+          });
+        } catch (error) {
+          return {
+            kind: "unavailable",
+            reason: `delivery compensation failed: ${describeError(error)}`,
+          };
+        }
 
         if (result.success) {
           return { kind: "applied", detail: "delivery handoff compensation completed" };

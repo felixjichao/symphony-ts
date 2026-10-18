@@ -104,7 +104,7 @@ export type {
   DeliverySubprocessResult,
 } from "./delivery/git-gh-runner";
 
-export { runDeliverySkill } from "./delivery/delivery-skill-runner";
+export { DeliveryStateConflictError, runDeliverySkill } from "./delivery/delivery-skill-runner";
 export type { DeliveryStateStorage, RunDeliverySkillOptions } from "./delivery/delivery-skill-runner";
 
 export { recoverDeliveryHandoff } from "./delivery/recover-handoff";

@@ -397,6 +397,26 @@ export class OrchestratorAuthority {
   }
 
   /**
+   * Progress facts for one running attempt (NEST-137).
+   *
+   * `lastProgressAt` is the last **stable progress event** (lifecycle transition or positive
+   * token delta), never the last arbitrary event timestamp. `null` means no progress has been
+   * observed yet; callers must treat that as "unknown", not as failure.
+   */
+  public runningProgress(
+    issueId: string,
+  ): { readonly startedAt: UtcTimestampMs; readonly lastProgressAt: UtcTimestampMs | null } | null {
+    const record = this.active.get(issueId);
+    if (record === undefined) {
+      return null;
+    }
+    return {
+      startedAt: record.entry.attempt.startedAt,
+      lastProgressAt: record.telemetry.lastProgressAt,
+    };
+  }
+
+  /**
    * 派发一个 issue（§7.4 dispatch）。
    *
    * 1. 再次检查 `claimed` + `running`（防 duplicate dispatch）；

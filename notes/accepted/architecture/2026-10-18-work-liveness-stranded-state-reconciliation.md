@@ -54,17 +54,31 @@ Boundaries that keep it thin:
 ### 3. Production wiring (`apps/cli`)
 
 * `TrackerWorkIndex` scans the real active tracker states and re-reads one issue by id before every observation (never the scan snapshot).
-* `HostWorkObservationSource` builds the observation from tracker + orchestrator runtime (`running` / `retryAttempts`, last Codex timestamp, stall deadline) + Decision facts (`session`, latest plan/review task, lease expiry, plan verdict) + the workspace's `.symphony/delivery-state.json`.
+* `HostWorkObservationSource` builds the observation from tracker + orchestrator runtime (`running` / `retryAttempts`, **stable progress instant**, stall deadline) + Decision facts (`session`, latest plan/review task and its **verdict**, lease expiry) + the workspace's `.symphony/delivery-state.json`.
+  * Activity is judged from the **refreshed** issue against the current active/terminal configuration, not from the fact that the scan saw it.
   * Idle coding work is owned by the orchestrator's poll loop (`owner: orchestrator`, progress `unknown`), so reconciliation never becomes a second dispatcher.
   * A claimed/running Decision task past its lease expiry is `owner_not_observable` → `reclaim`; a paused Delivery handoff with a concrete `handoffId` is `compensate`.
+  * A pending Decision task is `awaiting_external` only when the session has a **bound adapter** (a real external executor), never a fabricated scheduled recovery from a binding generation; with no bound adapter it is `blocked`.
+  * Completed tasks consume their verdict: approved review → Delivery resume, `changes_requested` → repair, `needs_human` / missing verdict → `blocked`; a ready plan → coding. A failed/cancelled/superseded task falls back to the earlier stage instead of holding the current one.
 * `createHostWorkContinuity` wires only the authority ports actually backed by a real authority; `createHost()` passes the coordinator into `OrchestratorLoop`, so a real process runs it every tick before dispatch.
 * `createWorkspaceDeliveryCompensationPort` takes an atomic `mkdir` mutex in the workspace and re-validates handoff id / HEAD before calling `recoverDeliveryHandoff`; that function additionally re-reads the persisted state before each remote mutation and refuses a stale handoff.
 
-### 4. `@symphony/decision` — `DecisionService.releaseExpiredClaim` and bridge sweep
+### 4. Delivery authority: one mutex and one version check for every writer
+
+The filesystem mutex lives in the **Delivery authority**, not in the coordinator caller:
+
+* `DeliveryStateStorage` gains an optional `withExclusive()` critical section; `recoverDeliveryHandoff` runs its entire read → validate → remote-write → final-write sequence inside it, so `delivery-skill run/halt` cannot commit a newer handoff mid-recovery.
+* `FileDeliveryStateStorage.writeState()` takes the same atomic `mkdir` lock (with a PID owner file so a same-process contention reports a conflict instead of deadlocking) and performs **compare‑and‑set** against the raw content it last read. A write based on a stale version throws `DeliveryStateConflictError` instead of overwriting the newer handoff / HEAD.
+* Before each remote mutation `recoverDeliveryHandoff` still re-reads and compares the handoff id / HEAD (`expectedHandoff`), so a change between validation and the remote call aborts without writing.
+* The compensation port re-checks that the refreshed issue is still active before touching the workspace.
+
+### 5. `@symphony/decision` — `DecisionService.releaseExpiredClaim` and bridge sweep
 
 Lease expiry previously only happened lazily inside `getNextTask` / `claimTask`, i.e. only when an executor happened to ask for work. `releaseExpiredClaim(taskId, { expectedRevision, expectedClaimGeneration })` lets a reconciler ask the Decision authority to release a lease it observed as expired. Inside one store transaction it re-reads and requires the same revision, the same claim generation, a `claimed`/`running` task, and a lease still expired **at commit time**. Any mismatch returns `superseded` / `not_expired` / `not_found`; the coordinator never impersonates the Web executor, and the normal executor claims the released task afterwards.
 
 `DecisionBridge` also runs its own sweep (`expirySweepIntervalMs`, default 2s, unref'd, cleared on stop) that calls `releaseExpiredClaims()`, so a dead executor is noticed even when no browser polls again. The bridge exposes `POST /v1/tasks/:id/release-expired-claim` and `DecisionBridgeClient.releaseExpiredClaim()` so a host using the remote bridge has the same commit primitive as one with a local store.
+
+Bridge observation failures are **not** absence: only an explicit 404 / `not_found` means "no session". A 503, timeout or auth failure propagates and the observer records the Decision source as `unavailable`, which blocks every ownership change for that work item.
 
 ## Alternatives considered
 
@@ -83,4 +97,5 @@ Lease expiry previously only happened lazily inside `getNextTask` / `claimTask`,
 * The coordinator cannot mutate anything by itself. Every automatic recovery needs a wired authority port, and Delivery compensation additionally requires a concrete `handoffRef.handoffId`.
 * Liveness deadlines and progress-source semantics remain the owning subsystem's responsibility (Web checkpoints in #148, durable intents across restarts in #149). This change does not itself provide restart convergence: the in-memory retry timer remains in-memory, and `scheduledRecovery` reflects only what an authority can currently prove.
 * Cross-source observation is not atomic. Safety comes from re-observation before action, authority-side commit-time validation, and treating any failed read as `observation_unavailable`.
-* `createHost()` now assembles and runs the coordinator by default. It observes the stages this process can actually see (tracker, runtime, Decision, Delivery); GitHub PR/CI facts are not read per tick, so a work item whose next stage is only visible in GitHub is reported through its owning authority rather than inferred.
+* `createHost()` assembles and runs the coordinator by default. It observes the stages this process can actually see (tracker, runtime, Decision, Delivery); GitHub PR/CI facts are not read per tick, so a work item whose next stage is only visible in GitHub is reported through its owning authority rather than inferred.
+* Progress evidence comes from `AgentTelemetryState.lastProgressAt`, which advances only on reliable turn/session lifecycle events and positive token deltas. Notifications, repeated usage snapshots and process existence never advance it.

@@ -59,6 +59,15 @@ export interface AgentTelemetryState {
   turnCount: number;
   /** threadId（或身份未齐时的占位 key）→ 该 thread 的 token 基线。 */
   baselines: Map<string, ThreadUsageBaseline>;
+  /**
+   * Last instant at which a **stable progress event** was observed (NEST-137).
+   *
+   * Deliberately distinct from `LiveSession.lastCodexTimestamp`: that field advances on any
+   * event (notifications, repeated usage snapshots), while this one only advances on
+   * lifecycle transitions and positive usage deltas. Process existence, heartbeats and
+   * repeated telemetry are not progress.
+   */
+  lastProgressAt: UtcTimestampMs | null;
   /** 身份未齐时暂存的 last event / timestamp / message / pid。 */
   pendingLastEvent: CodexEventName | null;
   pendingLastTimestamp: UtcTimestampMs | null;
@@ -75,6 +84,7 @@ export function createAgentTelemetryState(): AgentTelemetryState {
     threadId: null,
     turnId: null,
     turnCount: 0,
+    lastProgressAt: null,
     baselines: new Map(),
     pendingLastEvent: null,
     pendingLastTimestamp: null,
@@ -152,9 +162,20 @@ export function applyAgentEvent(
 
   recordLastEvent(entry, telemetry, event);
 
+  // Stable progress evidence, in order of reliability:
+  // - a reliable turn/session lifecycle transition;
+  // - a positive token delta (a repeated absolute snapshot is not progress).
+  let progressed = reliableLifecycle;
+
   // usage 入账与 session 是否建立无关：到达即按所属 thread 的基线入账，避免漏账。
   if (event.usage !== undefined) {
-    accountUsage(state, entry, telemetry, eventThreadId ?? UNKNOWN_THREAD_KEY, event.usage);
+    progressed =
+      accountUsage(state, entry, telemetry, eventThreadId ?? UNKNOWN_THREAD_KEY, event.usage) ||
+      progressed;
+  }
+
+  if (progressed) {
+    telemetry.lastProgressAt = event.timestamp;
   }
 
   // turn 身份 / 计数只由可靠生命周期事件推进。
@@ -254,7 +275,7 @@ function accountUsage(
   telemetry: AgentTelemetryState,
   threadKey: string,
   usage: AgentTokenUsage,
-): void {
+): boolean {
   const reportedInput = nonNegative(usage.inputTokens);
   const reportedOutput = nonNegative(usage.outputTokens);
   const reportedTotal = nonNegative(usage.totalTokens);
@@ -269,6 +290,7 @@ function accountUsage(
   const deltaInput = Math.max(reportedInput - baseline.reportedInputTokens, 0);
   const deltaOutput = Math.max(reportedOutput - baseline.reportedOutputTokens, 0);
   const deltaTotal = Math.max(reportedTotal - baseline.reportedTotalTokens, 0);
+  const advanced = deltaInput > 0 || deltaOutput > 0 || deltaTotal > 0;
 
   state.codexTotals.inputTokens += deltaInput;
   state.codexTotals.outputTokens += deltaOutput;
@@ -293,6 +315,8 @@ function accountUsage(
     session.lastReportedOutputTokens = baseline.reportedOutputTokens;
     session.lastReportedTotalTokens = baseline.reportedTotalTokens;
   }
+
+  return advanced;
 }
 
 function nonNegative(value: number): number {
