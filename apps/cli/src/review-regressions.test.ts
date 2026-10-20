@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { DecisionPlanningGate, DecisionService, DurableDecisionStore } from '@symphony/decision';
-import { githubDecisionRoot } from '@symphony/domain';
+import { githubDecisionRoot, normalizeIssueState } from '@symphony/domain';
 import type { Issue } from '@symphony/domain';
 import type { TrackerAdapterProfile } from '@symphony/tracker';
 import { createStructuredLogger } from '@symphony/observability';
@@ -15,18 +16,19 @@ const issue: Issue = { id: '42', identifier: 'GH-42', title: 'work', description
   url: 'https://github.com/owner/repo/issues/42', assigneeId: null, labels: [], blockedBy: [],
   dispatchable: true, createdAt: 0, updatedAt: 0 };
 
-async function fixture(options: CreateHostOptions = {}, failSecondList: boolean | number = false) {
+async function fixture(options: CreateHostOptions = {}, failSecondList: boolean | number = false,
+  activeStates: readonly string[] = ['open'], currentIssue: Issue = issue, command = 'echo unused') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-continuity-'));
   let activeLists = 0;
   const profile: TrackerAdapterProfile = { kind: 'fixture', documentation: 'fixture', secretProviderKeys: [], secretEnvVars: [],
     defaultActiveStates: ['open'], defaultTerminalStates: ['closed'], createAdapter: () => ({ kind: 'fixture',
       fetchIssuesByStates: async states => {
-        if (!states.includes('open')) return [];
+        if (!states.some(state => normalizeIssueState(state) === normalizeIssueState(currentIssue.state))) return [];
         if (++activeLists === (typeof failSecondList === "number" ? failSecondList : 2) && failSecondList) throw new Error('temporary outage during continuity scan');
-        return [issue];
-      }, fetchIssuesByIds: async () => [issue] }) };
+        return [currentIssue];
+      }, fetchIssuesByIds: async () => [currentIssue] }) };
   const workflowPath = path.join(dir, 'WORKFLOW.md');
-  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: echo unused\n---\nPrompt\n`);
+  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\n  active_states: ${JSON.stringify(activeStates)}\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: ${JSON.stringify(command)}\n---\nPrompt\n`);
   let tick: (() => void) | undefined;
   const host = await createHost({ workflowPath, trackerProfiles: [profile], env: {}, enablePlanning: false,
     logger: createStructuredLogger({ sinks: [{ write() {} }] }),
@@ -181,4 +183,34 @@ it('observes a new Decision lease before the retry commit without reclaiming tha
     expect(f.host.state.running.size).toBe(0);
     expect(service.getTask(review.id)?.lease).toEqual(owner.task.lease);
   } finally { await f.cleanup(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+it.each([
+  { configured: ' open ', observed: 'open' },
+  { configured: ' OpEn ', observed: 'oPeN' },
+  { configured: 'open', observed: ' OPEN ' },
+])('normalizes "$configured" / "$observed" through real host poll and retry dispatch', async ({ configured, observed }) => {
+  const appServer = fileURLToPath(new URL('../../../packages/agent/test-fixtures/app-server.mjs', import.meta.url));
+  let retry: (() => void) | undefined;
+  const f = await fixture({ retryScheduler: { schedule: (_delay, cb) => { retry = cb; return cb; }, cancel() {} } },
+    false, [configured], { ...issue, state: observed }, `${JSON.stringify(process.execPath)} ${JSON.stringify(appServer)} --record-world world.json`);
+  try {
+    // The consumer normalizes; it must not depend on config parsing rewriting the values.
+    expect(f.host.effective.serviceConfig.tracker.activeStates).toEqual([configured]);
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('stranded');
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    await f.host.authority.waitForIdle();
+    const worldFile = path.join(f.dir, 'workspaces', issue.identifier, 'world.json');
+    const first = JSON.parse(await fs.readFile(worldFile, 'utf8')) as { pid: number; cwd: string };
+    expect(first.cwd).toBe(path.dirname(worldFile));
+    expect(() => process.kill(first.pid, 0)).toThrow();
+    f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+      attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+    retry!(); await new Promise(resolve => setImmediate(resolve));
+    await f.host.authority.waitForIdle();
+    const second = JSON.parse(await fs.readFile(worldFile, 'utf8')) as { pid: number; cwd: string };
+    expect(second.pid).not.toBe(first.pid);
+    expect(second.cwd).toBe(first.cwd);
+    expect(() => process.kill(second.pid, 0)).toThrow();
+  } finally { await f.cleanup(); }
 });

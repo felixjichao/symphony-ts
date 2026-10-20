@@ -7,7 +7,7 @@ import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId,
 } from "@symphony/domain";
 import { GitHubDeliveryService } from "@symphony/tracker";
 import type { DecisionPlanningGate } from "@symphony/decision";
-import { WorkContinuityCoordinator, issueRoutable, type OrchestratorAuthority } from "@symphony/orchestrator";
+import { WorkContinuityCoordinator, isActiveState, issueRoutable, type OrchestratorAuthority } from "@symphony/orchestrator";
 import type { EffectiveRuntimeController } from "./effective-runtime";
 import { FileDeliveryStateStorage, withDeliveryAuthority } from "./delivery-skill-cli";
 import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
@@ -46,7 +46,7 @@ export function createHostWorkContinuity(options: {
     const decision = planningGate ? (await planningGate.continuityWork()).find(work => decisionSessionId(work.workKey) === decisionSessionId(key)) : undefined;
     const runtime = authority.continuityOwner(issue.id);
     // The original scheduler retains actual timer ownership (including due/in-flight refresh).
-    let facts: WorkContinuityObservation = { ...base, active: controller.current.scheduling.policy.activeStates.some(s => s.toLowerCase() === issue.state.toLowerCase()), owner: runtime,
+    let facts: WorkContinuityObservation = { ...base, active: isActiveState(issue.state, controller.current.scheduling.policy), owner: runtime,
       expectedFence: runtime?.fence ?? {}, scheduled: authority.continuitySchedule(issue.id),
       blocked: delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null };
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
