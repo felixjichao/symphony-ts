@@ -370,3 +370,18 @@ Provider-neutral execution continuity, ownership fencing, and failure taxonomy c
 Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
 
 
+
+## Work-level liveness and reconciliation (NEST-138 / #147)
+
+§4 adjacent contracts, §7/§8 ownership and reconciliation, §14 retry safety.
+
+| Behavior | Evidence |
+|---|---|
+| Missing/valid/stale owner, meaningful progress boundaries, blocked/external wait/scheduled separation | `packages/orchestrator/src/work-continuity.test.ts` |
+| Re-observe before/after bounded delegation, changing admission/HEAD version cancellation, idempotence, unavailable source/readback, stop fencing | `packages/orchestrator/src/work-continuity.test.ts` |
+| Atomic expired claim reclaim, concurrent attempts, renewed lease, revision/binding fences, authenticated bridge and safe observation | `packages/decision/src/continuity.test.ts` |
+| Real host tick scans without running workers, native store readback after reclaim, temporary tracker outage preserves owner | `apps/cli/src/work-continuity.test.ts` |
+| File-backed run/halt/manual/library compensation share mutation authority lock | `apps/cli/src/work-continuity.test.ts`; existing Delivery recovery regressions |
+| Stable Codex progress replaces raw event activity while retaining timeout disable/boundary semantics | `packages/orchestrator/src/reconciliation.test.ts`; agent event/regression suites |
+
+The host uses the existing marker/HEAD-bound Delivery observer and does not weaken merge checks. Browser automation, durable retry reconstruction and incident policy are deferred (#148–#150). Fixture checks are not real GitHub/Codex verification. [Design note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).

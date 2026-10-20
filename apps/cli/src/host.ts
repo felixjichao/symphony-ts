@@ -1,3 +1,4 @@
+import { createHostWorkContinuity } from "./work-continuity";
 import fs from "node:fs";
 import path from "node:path";
 import { runAgentAttempt } from "@symphony/agent";
@@ -88,6 +89,7 @@ export interface SymphonyHost {
   readonly workspaceCoordinator: WorkspaceLifecycleCoordinator;
   readonly tracker: TrackerAdapter;
   readonly loop: OrchestratorLoop;
+  readonly workContinuity: ReturnType<typeof createHostWorkContinuity>;
   readonly logger: StructuredLogger;
   readonly clock: SnapshotClock;
   getSnapshot(): ObservabilitySnapshot;
@@ -111,6 +113,7 @@ export interface CreateHostOptions {
   readonly watcherIntervalMs?: number | undefined;
   readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
   readonly getPlanForIssue?: ((issue: Issue) => DecisionMaterializedPlan | null | undefined) | undefined;
+  readonly continuityGitHub?: Parameters<typeof createHostWorkContinuity>[0]["github"] | undefined;
   readonly enablePlanning?: boolean | undefined;
   readonly decisionStoreDir?: string | undefined;
   readonly decisionBridgeUrl?: string | undefined;
@@ -302,7 +305,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       return null;
     };
 
+    const continuityAdmission = new Map<string, boolean>();
     const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
+      if (continuityAdmission.get(issue.id) === false) return false;
       if (options.canDispatch && !options.canDispatch(issue, context)) {
         return false;
       }
@@ -349,8 +354,12 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
     controller.setAuthority(authority);
 
+    const workContinuity = createHostWorkContinuity({ controller, authority, planningGate,
+      resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now,
+      admission: continuityAdmission, github: options.continuityGitHub });
     const loop = new OrchestratorLoop({
       authority,
+      workContinuity,
       candidates: trackerProxy,
       preflight,
       ...(options.scheduler !== undefined ? { scheduler: options.scheduler } : {}),
@@ -396,6 +405,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       workspaceCoordinator,
       tracker: trackerProxy,
       loop,
+      workContinuity,
       logger,
       clock,
       getSnapshot: () => projectObservabilitySnapshot(state, clock),

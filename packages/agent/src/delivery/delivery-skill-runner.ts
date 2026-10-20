@@ -24,6 +24,7 @@ import {
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
 
 export interface DeliveryStateStorage {
+  withExclusive?<T>(action: (storage: DeliveryStateStorage) => Promise<T>): Promise<T>;
   readState(): Promise<PersistedDeliveryState | null> | PersistedDeliveryState | null;
   writeState(state: PersistedDeliveryState): Promise<void> | void;
 }
@@ -351,7 +352,13 @@ export function parsePrCheckRollup(
  *    - 尝试移除 ready 标签，重新核对标签状态，诚实记录移除与评论结果。
  *    - 持久化 paused 状态，阻止未显式 --resume 的重入。
  */
-export async function runDeliverySkill(
+export async function runDeliverySkill(options: RunDeliverySkillOptions): Promise<DeliverySkillResult> {
+  const storage = options.stateStorage;
+  if (storage?.withExclusive) return storage.withExclusive(locked => runDeliverySkillLocked({ ...options, stateStorage: locked }));
+  return runDeliverySkillLocked(options);
+}
+
+async function runDeliverySkillLocked(
   options: RunDeliverySkillOptions,
 ): Promise<DeliverySkillResult> {
   const runner = options.runner;

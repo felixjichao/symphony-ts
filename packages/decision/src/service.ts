@@ -1,3 +1,4 @@
+import type { DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";
 import crypto from "node:crypto";
 import {
   decisionSessionId,
@@ -68,6 +69,52 @@ export class DecisionService {
   /** Read-only operational view from the already-open store. */
   observeWork(root: DecisionWorkItemRef) {
     return this.store.observeWork(root);
+  }
+
+  /** Read current tasks from the already-open authoritative store; never expose lease tokens. */
+  continuityWork(): readonly DecisionContinuityWork[] {
+    const claimBindings = this.store.getState().claimBindingGenerations;
+    return this.store.getAllSessions().map(session => ({
+      workKey: session.root, sessionId: session.id, bindingGeneration: session.bindingGeneration,
+      tasks: this.getTasksForSession(session.id).map(task => ({
+        id: task.id, revision: task.revision, kind: task.kind, status: task.status,
+        claimBindingGeneration: claimBindings[task.id] ?? null,
+        claimGeneration: task.claimGeneration, createdAtMs: task.createdAtMs,
+        owner: task.lease?.owner ?? null, leaseExpiresAtMs: task.lease?.expiresAtMs ?? null,
+        verdict: this.getResult(task.id)?.verdict ?? null,
+        target: task.kind === "review" ? task.target : null,
+      })),
+    }));
+  }
+
+  /** Authority commit: renewal, completion, rebinding and competing reclaim all win over stale callers. */
+  async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
+    return this.store.transaction(draft => {
+      const task = draft.tasks[expected.taskId];
+      const session = task ? draft.sessions[task.sessionId] : undefined;
+      const now = this.clock();
+      if (!task || !session || session.status === "completed"
+        || task.revision !== expected.revision || task.claimGeneration !== expected.claimGeneration
+        || session.bindingGeneration !== expected.bindingGeneration
+        || (task.status !== "claimed" && task.status !== "running") || !task.lease
+        || task.lease.expiresAtMs !== expected.leaseExpiresAtMs || now < task.lease.expiresAtMs) return false;
+      draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
+      delete draft.claimBindingGenerations?.[task.id];
+      return true;
+    });
+  }
+
+  /** Independent bridge lifecycle sweep, bounded to one attempt per observed expired claim. */
+  async reconcileExpiredClaims(): Promise<void> {
+    for (const work of this.continuityWork()) {
+      for (const task of work.tasks) {
+        if ((task.status === "claimed" || task.status === "running") && task.leaseExpiresAtMs !== null && this.clock() >= task.leaseExpiresAtMs) {
+          await this.reclaimExpiredClaim({ taskId: task.id, revision: task.revision,
+            claimGeneration: task.claimGeneration, bindingGeneration: work.bindingGeneration,
+            leaseExpiresAtMs: task.leaseExpiresAtMs });
+        }
+      }
+    }
   }
 
   getStore(): DurableDecisionStore {

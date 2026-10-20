@@ -13,7 +13,7 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
-- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；跨阶段 expected-action 派生、启动对账扫描与自动恢复循环为后续任务。
+- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；跨重启 durable intent 和浏览器自动恢复仍属后续任务。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
@@ -137,3 +137,9 @@
 - 开发环境与工程命令： [development.md](development.md)；
 - 测试策略与可复跑入口： [testing.md](testing.md)；
 - Agent / 贡献者规则： [AGENTS.md](../AGENTS.md)。
+
+## NEST-138 work-level liveness
+
+Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`.
+
+Unsupported native browser/repair/merge recovery is reported without command replay. Durable restart retry restoration (#149), Web progress/recovery (#148) and multi-round escalation (#150) remain deferred. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).

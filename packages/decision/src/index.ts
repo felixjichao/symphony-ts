@@ -80,3 +80,5 @@ export {
   type TaskExecutionOutcome,
 } from "./adapter/index.js";
 
+
+export type { DecisionContinuityTask, DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";

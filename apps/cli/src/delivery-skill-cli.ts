@@ -30,7 +30,13 @@ export interface DeliveryCliIo {
 }
 
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly filePath: string, private readonly lockHeld = false) {}
+
+  async withExclusive<T>(action: (storage: DeliveryStateStorage) => Promise<T>): Promise<T> {
+    if (this.lockHeld) return action(this);
+    return withDeliveryAuthority(path.dirname(path.dirname(this.filePath)),
+      () => action(new FileDeliveryStateStorage(this.filePath, true)));
+  }
 
   readState(): PersistedDeliveryState | null {
     if (!fs.existsSync(this.filePath)) {
@@ -205,7 +211,37 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   };
 }
 
+/** One filesystem authority lock shared by run, halt, and automatic/manual compensation.
+ * Never steal a lock by age: an old process may still be executing a GitHub mutation.
+ */
+export async function withDeliveryAuthority<T>(cwd: string, action: () => Promise<T>): Promise<T> {
+  const directory = path.join(cwd, ".symphony");
+  fs.mkdirSync(directory, { recursive: true });
+  const lockPath = path.join(directory, "delivery-authority.lock");
+  const fd = fs.openSync(lockPath, "wx");
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    return await action();
+  } finally {
+    fs.closeSync(fd);
+    fs.unlinkSync(lockPath);
+  }
+}
+
 export async function runDeliverySkillCli(
+  argv: readonly string[], io: DeliveryCliIo, customRunner?: DeliveryGitGhRunner,
+  customReviewGate?: DeliveryReviewGate,
+): Promise<number> {
+  try {
+    const parsed = parseDeliverySkillArgs(argv);
+    return await withDeliveryAuthority(parsed.cwd ?? process.cwd(), () => runDeliverySkillCliLocked(argv, io, customRunner, customReviewGate));
+  } catch (error) {
+    io.stderr.write(`symphony delivery-skill: ${String(error)}\n`);
+    return 1;
+  }
+}
+
+async function runDeliverySkillCliLocked(
   argv: readonly string[],
   io: DeliveryCliIo,
   customRunner?: DeliveryGitGhRunner,
@@ -229,7 +265,7 @@ export async function runDeliverySkillCli(
   }
 
   if (parsed.action === "recover-handoff") {
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
     const result = await recoverDeliveryHandoff({
       cwd,
       repo: parsed.repo,
@@ -263,7 +299,7 @@ export async function runDeliverySkillCli(
     const reason = (parsed.reason ?? "budget_exhausted") as DeliveryHandoff["reason"];
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
     let existingState: PersistedDeliveryState | null = null;
     try {
       existingState = stateStorage.readState();
@@ -434,7 +470,7 @@ export async function runDeliverySkillCli(
   const baseBranch = parsed.baseBranch ?? "main";
   const workspaceKey = parsed.workspaceKey ?? `GH-${parsed.issueNumber}`;
 
-  const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
 
   let reviewGate = customReviewGate;
   let plan: DecisionMaterializedPlan | null | undefined = undefined;

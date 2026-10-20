@@ -35,6 +35,12 @@ export class DecisionBridge {
   private readonly allowedOrigins: Set<string>;
   private server: http.Server | null = null;
   private actualPort: number | null = null;
+  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private expiryRun: Promise<void> | null = null;
+  private closing = false;
+  private fullyStopped = false;
+  private startup: Promise<{ host: string; port: number }> | null = null;
+  private shutdown: Promise<void> | null = null;
   private activeSockets = new Set<import("node:net").Socket>();
 
   constructor(serviceOrConfig: DecisionService | DecisionBridgeConfig, config?: Partial<DecisionBridgeConfig>) {
@@ -81,12 +87,27 @@ export class DecisionBridge {
     return this.host;
   }
 
-  async start(): Promise<{ host: string; port: number }> {
+  start(): Promise<{ host: string; port: number }> {
+    if (this.fullyStopped) {
+      this.fullyStopped = false;
+      this.closing = false;
+      this.startup = null;
+      this.shutdown = null;
+    }
+    if (this.closing) return Promise.reject(new Error("Decision bridge is stopping"));
+    if (!this.startup) this.startup = this.startInternal();
+    return this.startup;
+  }
+
+  private async startInternal(): Promise<{ host: string; port: number }> {
     if (this.server) {
       return { host: this.host, port: this.actualPort! };
     }
 
     await this.service.getStore().open();
+    if (this.closing) throw new Error("Decision bridge stopped during startup");
+    await this.service.reconcileExpiredClaims();
+    if (this.closing) throw new Error("Decision bridge stopped during startup");
 
     return new Promise<{ host: string; port: number }>((resolve, reject) => {
       const server = http.createServer((req, res) => {
@@ -111,6 +132,7 @@ export class DecisionBridge {
         if (address && typeof address === "object") {
           this.actualPort = address.port;
           this.server = server;
+          this.scheduleExpiry();
           resolve({ host: this.host, port: this.actualPort });
         } else {
           reject(new Error("Failed to obtain server address"));
@@ -119,9 +141,30 @@ export class DecisionBridge {
     });
   }
 
-  async stop(): Promise<void> {
+  private scheduleExpiry(): void {
+    if (this.closing) return;
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = null;
+      this.expiryRun = this.service.reconcileExpiredClaims().catch(() => { /* next sweep re-observes */ });
+      void this.expiryRun.finally(() => { this.expiryRun = null; this.scheduleExpiry(); });
+    }, 1000);
+    this.expiryTimer.unref();
+  }
+
+  stop(): Promise<void> {
+    this.closing = true;
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    if (!this.shutdown) this.shutdown = this.stopInternal();
+    return this.shutdown;
+  }
+
+  private async stopInternal(): Promise<void> {
+    try { await this.startup; } catch { /* startup failure still owns its store cleanup */ }
+    await this.expiryRun;
     if (!this.server) {
       await this.service.getStore().close();
+      this.fullyStopped = true;
       return;
     }
 
@@ -143,6 +186,7 @@ export class DecisionBridge {
     });
 
     await this.service.getStore().close();
+    this.fullyStopped = true;
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -191,6 +235,23 @@ export class DecisionBridge {
     const url = new URL(req.url ?? "/", `http://${this.host}`);
     const pathname = url.pathname;
     const method = req.method?.toUpperCase();
+
+    if (method === "GET" && pathname === "/v1/continuity") {
+      this.sendJson(res, 200, { work: this.service.continuityWork() });
+      return;
+    }
+    if (method === "POST" && pathname === "/v1/continuity/reclaim") {
+      const body = await this.readJsonBody(req) as Record<string, unknown> | null;
+      if (!body || typeof body["taskId"] !== "string" ||
+        !["revision", "claimGeneration", "bindingGeneration", "leaseExpiresAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0)) {
+        throw new DecisionValidationError("Invalid expired claim fence");
+      }
+      const reclaimed = await this.service.reclaimExpiredClaim({ taskId: body["taskId"],
+        revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
+        bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: body["leaseExpiresAtMs"] as number });
+      this.sendJson(res, 200, { reclaimed });
+      return;
+    }
 
     // Route matching
     // GET /v1/tasks/next

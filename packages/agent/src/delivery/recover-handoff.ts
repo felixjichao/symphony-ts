@@ -31,7 +31,14 @@ export interface RecoverDeliveryHandoffResult {
   readonly pendingCompensation: boolean;
 }
 
-export async function recoverDeliveryHandoff(
+export async function recoverDeliveryHandoff(options: RecoverDeliveryHandoffOptions): Promise<RecoverDeliveryHandoffResult> {
+  if (options.stateStorage.withExclusive) {
+    return options.stateStorage.withExclusive(locked => recoverDeliveryHandoffLocked({ ...options, stateStorage: locked }));
+  }
+  return recoverDeliveryHandoffLocked(options);
+}
+
+async function recoverDeliveryHandoffLocked(
   options: RecoverDeliveryHandoffOptions,
 ): Promise<RecoverDeliveryHandoffResult> {
   const { cwd, stateStorage, runner, log = () => {} } = options;

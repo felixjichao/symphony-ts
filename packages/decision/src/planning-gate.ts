@@ -1,3 +1,4 @@
+import type { ReclaimDecisionClaim } from "./continuity";
 import {
   parseDecisionSessionRootFromId,
   formatPlanCommentMarkdown,
@@ -36,6 +37,17 @@ export class DecisionPlanningGate {
     } else {
       this.service = clientOrService;
     }
+  }
+
+  async continuityWork() {
+    if (this.service) return this.service.continuityWork();
+    if (this.client) return this.client.continuityWork();
+    throw new Error("Decision backend unavailable");
+  }
+  async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
+    if (this.service) return this.service.reclaimExpiredClaim(expected);
+    if (this.client) return this.client.reclaimExpiredClaim(expected);
+    return false;
   }
 
   async ensurePlanTask(sessionId: string, options: EnsurePlanTaskOptions = {}): Promise<DecisionTask> {

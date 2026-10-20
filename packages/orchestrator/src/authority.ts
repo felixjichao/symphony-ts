@@ -298,6 +298,37 @@ export class OrchestratorAuthority {
     this.canDispatch = options.canDispatch;
   }
 
+  /** Real scheduling evidence, including retry refresh after its timer was consumed. */
+  public continuitySchedule(issueId: string) {
+    const token = this.retryOwners.get(issueId);
+    if (!token) return null;
+    const retry = this.state.retryAttempts.get(issueId);
+    return { id: token, kind: "retry" as const,
+      due: retry === undefined || retry.dueAtMs <= this.monotonicNow() };
+  }
+
+  public continuityRetryReferences() {
+    return [...this.state.retryAttempts.values()].map(retry => ({ issueId: retry.issueId,
+      url: retry.issueUrl ?? null }));
+  }
+
+  public continuityIssues(): readonly Issue[] {
+    return [...this.state.running.values()].map(entry => entry.issue);
+  }
+
+  /** Current authority-owned progress and generation, never inferred from a process ID. */
+  public continuityOwner(issueId: string) {
+    const record = this.active.get(issueId);
+    if (!record) return null;
+    return { id: record.token,
+      fence: { lifecycleGeneration: this.lifecycleGeneration.get(issueId) ?? 0 },
+      liveness: { startedAt: record.entry.attempt.startedAt,
+        lastProgressAt: record.telemetry.lastProgressAt ?? "unknown" as const,
+        lastObservedAt: this.now(),
+        stallPolicy: { timeoutMs: this.stallTimeoutMs(), policy: "mark_stalled" as const } },
+    };
+  }
+
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
   public get activeWorkerCount(): number {
     return this.active.size;

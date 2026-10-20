@@ -1,3 +1,4 @@
+import type { DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";
 import { execFileSync } from "node:child_process";
 import type {
   DecisionSession,
@@ -64,6 +65,13 @@ export class DecisionBridgeClient {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.authToken = options.authToken;
     this.syncTransport = options.syncTransport;
+  }
+
+  async continuityWork(): Promise<readonly DecisionContinuityWork[]> {
+    return (await this.request<{ work: DecisionContinuityWork[] }>("GET", "/v1/continuity")).work;
+  }
+  async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
+    return (await this.request<{ reclaimed: boolean }>("POST", "/v1/continuity/reclaim", expected)).reclaimed;
   }
 
   private syncRequest(method: "GET" | "POST", path: string, body: unknown): unknown {

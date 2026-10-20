@@ -112,3 +112,5 @@ export * from "./operations";
 // (NEST-130 / GitHub #146). Provider-neutral shared vocabulary.
 export * from "./execution-continuity";
 
+export * from "./work-continuity";
+export * from "./decision-continuity";

@@ -36,6 +36,7 @@
  */
 import type { Issue, TimerHandle } from "@symphony/domain";
 
+import type { WorkContinuityCoordinator } from "./work-continuity";
 import type { OrchestratorAuthority } from "./authority";
 import type { DispatchPolicy } from "./eligibility";
 import type { StartupCleanupResult } from "./reconciliation";
@@ -124,6 +125,7 @@ export interface OrchestratorLoopOptions {
   readonly authority: OrchestratorAuthority;
   /** candidate issue 读取端口（active states 拉取）。 */
   readonly candidates: CandidateIssueSource;
+  readonly workContinuity?: WorkContinuityCoordinator | undefined;
   /** dispatch preflight 端口（§6.3；启动 + 每 tick 调用）。 */
   readonly preflight: DispatchPreflightSource;
   /**
@@ -144,6 +146,7 @@ type LoopStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
  * `start()` 只可调用一次；`stop()` 幂等且可在任意阶段调用。
  */
 export class OrchestratorLoop {
+  private readonly workContinuity: WorkContinuityCoordinator | undefined;
   private readonly authority: OrchestratorAuthority;
   private readonly candidates: CandidateIssueSource;
   private readonly preflight: DispatchPreflightSource;
@@ -157,6 +160,7 @@ export class OrchestratorLoop {
   private stopPromise: Promise<void> | null = null;
 
   public constructor(options: OrchestratorLoopOptions) {
+    this.workContinuity = options.workContinuity;
     this.authority = options.authority;
     this.candidates = options.candidates;
     this.preflight = options.preflight;
@@ -252,6 +256,7 @@ export class OrchestratorLoop {
     this.status = "stopping";
     this.cancelPollTimer();
     // 同步前缀：在等待任何在途异步工作**之前**关闭调度并开始停止 workers。
+    const continuityShutdown = this.workContinuity?.stop();
     const shutdown = this.authority.shutdown();
     const startup = this.startupPromise;
     const tick = this.activeTick;
@@ -270,6 +275,7 @@ export class OrchestratorLoop {
           /* tick 内部已隔离异常。 */
         }
       }
+      await continuityShutdown;
       await shutdown;
       this.status = "stopped";
     })();
@@ -349,6 +355,13 @@ export class OrchestratorLoop {
       if (this.status !== "running") {
         return;
       }
+
+      // Work-level scan also runs with zero running workers. Per-item failures are isolated.
+      if (this.workContinuity) {
+        try { await this.workContinuity.reconcile(); }
+        catch (error) { this.emit({ kind: "reconciliation_failed", message: describeError(error) }); }
+      }
+      if (this.status !== "running") return;
 
       // 5. sort + dispatch until global slots exhausted（per-state / claim 由 authority
       //    的 eligibility 复核；某 state 满额时跳过该候选继续扫描其他 state）。
