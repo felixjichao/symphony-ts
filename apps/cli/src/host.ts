@@ -89,7 +89,7 @@ export interface SymphonyHost {
   readonly workspaceCoordinator: WorkspaceLifecycleCoordinator;
   readonly tracker: TrackerAdapter;
   readonly loop: OrchestratorLoop;
-  readonly workContinuity: ReturnType<typeof createHostWorkContinuity>;
+  readonly workContinuity: ReturnType<typeof createHostWorkContinuity>["coordinator"];
   readonly logger: StructuredLogger;
   readonly clock: SnapshotClock;
   getSnapshot(): ObservabilitySnapshot;
@@ -305,9 +305,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       return null;
     };
 
-    const continuityAdmission = new Map<string, boolean>();
+    let continuity: ReturnType<typeof createHostWorkContinuity> | null = null;
     const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
-      if (continuityAdmission.get(issue.id) === false) return false;
       if (options.canDispatch && !options.canDispatch(issue, context)) {
         return false;
       }
@@ -350,13 +349,15 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       now,
       monotonicNow,
       canDispatch,
+      refreshDispatch: issue => continuity ? continuity.refreshDispatch(issue) : Promise.resolve(null),
     });
 
     controller.setAuthority(authority);
 
-    const workContinuity = createHostWorkContinuity({ controller, authority, planningGate,
+    continuity = createHostWorkContinuity({ controller, authority, planningGate,
       resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now,
-      admission: continuityAdmission, github: options.continuityGitHub });
+      github: options.continuityGitHub });
+    const workContinuity = continuity.coordinator;
     const loop = new OrchestratorLoop({
       authority,
       workContinuity,

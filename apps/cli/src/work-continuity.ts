@@ -18,10 +18,9 @@ export function createHostWorkContinuity(options: {
   planningGate: DecisionPlanningGate | null;
   resolveSession: (issue: Issue) => string | null;
   now: () => number;
-  admission: Map<string, boolean>;
   github?: Pick<GitHubDeliveryService, "observeWork"> | undefined;
   onObservation?: ((observation: WorkContinuityObservation) => void) | undefined;
-}): WorkContinuityCoordinator {
+}) {
   const { controller, authority, planningGate, resolveSession, now } = options;
   const identities = new Map<string, { key: WorkKey; issueId: string | null; workspace: string | null }>();
   const runner = new DefaultDeliveryGitGhRunner();
@@ -30,7 +29,7 @@ export function createHostWorkContinuity(options: {
     const old = identities.get(id);
     identities.set(id, { key, issueId: issueId ?? old?.issueId ?? null, workspace: workspace ?? old?.workspace ?? null });
   };
-  const observe = async (key: WorkKey): Promise<WorkContinuityObservation> => {
+  const read = async (key: WorkKey): Promise<{ observation: WorkContinuityObservation; issue: Issue | null }> => {
     const identity = identities.get(decisionSessionId(key));
     // Every union-only key still requires a current tracker observation. No cache-based ownership changes.
     const candidates = identity?.issueId
@@ -38,11 +37,10 @@ export function createHostWorkContinuity(options: {
       : await controller.current.adapter.fetchIssuesByStates(controller.current.scheduling.policy.activeStates);
     const issue = candidates.find(item => resolveSession(item) === decisionSessionId(key));
     const observedAt = now();
-    if (issue) options.admission.set(issue.id, false);
     const base: WorkContinuityObservation = { workKey: key, observedAt, version: "", active: false, stage: "coding",
       available: true, unavailableSources: [], expectedFence: {}, owner: null, blocked: null,
       externalWait: null, scheduled: null, contradictions: [] };
-    if (!issue) return { ...base, available: false, unavailableSources: ["tracker_work_not_visible"] };
+    if (!issue) return { observation: { ...base, available: false, unavailableSources: ["tracker_work_not_visible"] }, issue: null };
     const workspace = identity?.workspace ?? controller.current.workspaceManager.resolveWorkspacePath(issue.identifier);
     const delivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
     const decision = planningGate ? (await planningGate.continuityWork()).find(work => decisionSessionId(work.workKey) === decisionSessionId(key)) : undefined;
@@ -54,7 +52,7 @@ export function createHostWorkContinuity(options: {
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
     let task = [...pendingTasks].sort((a, b) => b.revision - a.revision || a.id.localeCompare(b.id))[0];
     let github: Awaited<ReturnType<GitHubDeliveryService["observeWork"]>> | null = null;
-    if (key.provider === "github" && fs.existsSync(path.join(workspace, ".git"))) {
+    if (key.provider === "github") {
       const split = key.key.lastIndexOf("#");
       github = await (options.github ?? new GitHubDeliveryService()).observeWork({ repo: key.key.slice(0, split),
         issueNumber: Number(key.key.slice(split + 1)), workspaceKey: delivery?.workspaceKey ?? issue.identifier,
@@ -99,22 +97,32 @@ export function createHostWorkContinuity(options: {
       contradictions: [...facts.contradictions, "runtime_retry_conflicts_with_next_stage"] };
     if (pendingTasks.length > 1) facts = { ...facts, contradictions: [...facts.contradictions, "multiple_active_decision_tasks"] };
     if (!issueRoutable(issue, controller.current.scheduling.policy) && !facts.blocked) facts = { ...facts, blocked: "tracker_admission_denied" };
-    // Only coding candidates enter the original authority dispatch path. No second dispatcher.
-    options.admission.set(issue.id, facts.available && facts.active && facts.stage === "coding" && !facts.blocked && !facts.externalWait && facts.contradictions.length === 0);
+    // Remote reads may take time. Reject a mixed snapshot if native ownership or
+    // pause state changed while HEAD/CI/planning facts were being collected.
+    if (planningGate) {
+      const latestDecision = (await planningGate.continuityWork()).find(work => decisionSessionId(work.workKey) === decisionSessionId(key));
+      if (JSON.stringify(latestDecision) !== JSON.stringify(decision)) {
+        facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "decision_changed_during_observation"] };
+      }
+    }
+    const latestDelivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
+    if (JSON.stringify(latestDelivery) !== JSON.stringify(delivery)) {
+      facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "delivery_changed_during_observation"] };
+    }
     const version = JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
       github, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
       policy: controller.current.scheduling.policy, config: controller.current.serviceConfig });
     const observation = { ...facts, version };
     options.onObservation?.(observation);
-    return observation;
+    return { observation, issue };
   };
-  return new WorkContinuityCoordinator({
+  const observe = async (key: WorkKey) => (await read(key)).observation;
+  const coordinator = new WorkContinuityCoordinator({
     async listWork() {
       const issues = await controller.current.adapter.fetchIssuesByStates(controller.current.scheduling.policy.activeStates);
       for (const issue of issues) {
         const id = resolveSession(issue);
         if (id) {
-          options.admission.set(issue.id, false);
           add(parseDecisionSessionRootFromId(id), issue.id, controller.current.workspaceManager.resolveWorkspacePath(issue.identifier));
         }
       }
@@ -177,4 +185,19 @@ export function createHostWorkContinuity(options: {
       return "unsupported";
     },
   });
+  return {
+    coordinator,
+    /** A launch reads the sources itself; observations from a previous scan never grant admission. */
+    async refreshDispatch(issue: Issue): Promise<Issue | null> {
+      const id = resolveSession(issue);
+      if (!id) return issue; // continuity currently supports mapped work roots only
+      const key = parseDecisionSessionRootFromId(id);
+      add(key, issue.id, controller.current.workspaceManager.resolveWorkspacePath(issue.identifier));
+      const current = await read(key);
+      const f = current.observation;
+      if (!f.available) throw new Error("Continuity dispatch observation unavailable");
+      return f.active && f.stage === "coding" && !f.blocked && !f.externalWait
+        && !f.owner && f.contradictions.length === 0 ? current.issue : null;
+    },
+  };
 }

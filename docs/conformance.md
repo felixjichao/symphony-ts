@@ -382,6 +382,8 @@ Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`.
 | Atomic expired claim reclaim, concurrent attempts, renewed lease, revision/binding fences, authenticated bridge and safe observation | `packages/decision/src/continuity.test.ts` |
 | Real host tick scans without running workers, native store readback after reclaim, temporary tracker outage preserves owner | `apps/cli/src/work-continuity.test.ts` |
 | File-backed run/halt/manual/library compensation share mutation authority lock | `apps/cli/src/work-continuity.test.ts`; existing Delivery recovery regressions |
+| Inventory failure after successful candidates or earlier admission cannot dispatch; retry sees new Delivery pause, Decision owner, CI stage and temporary outage; remote CI is observed without local workspace | `apps/cli/src/review-regressions.test.ts` (B1–B3 regressions) |
+| Retry admission readback preserves reservation on outage, rejects pauses during observation and fences stop/replacement; refreshed Issue is used and concurrent admissions commit one owner | `apps/cli/src/review-regressions.test.ts`; `packages/orchestrator/src/retry-queue.test.ts` |
 | Stable Codex progress replaces raw event activity while retaining timeout disable/boundary semantics | `packages/orchestrator/src/reconciliation.test.ts`; agent event/regression suites |
 
 The host uses the existing marker/HEAD-bound Delivery observer and does not weaken merge checks. Browser automation, durable retry reconstruction and incident policy are deferred (#148–#150). Fixture checks are not real GitHub/Codex verification. [Design note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).

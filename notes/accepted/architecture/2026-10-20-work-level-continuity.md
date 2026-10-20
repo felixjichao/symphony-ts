@@ -7,9 +7,13 @@ Locally valid task, retry and Delivery records can leave active work without an 
 
 ## Decision
 
-Keep observation contracts in domain (§4 adjacent) and a thin coordinator in orchestrator (§7/§8/§14). A scan unions active tracker identities with known runtime, Decision and managed Delivery references. Every identity still requires refreshed tracker facts. CLI composition reads native sources, never Operations projections. Stage derivation uses planning admission, pending/leased tasks, marker-validated PR HEAD/CI, completed current-HEAD review verdicts and paused handoff state. Managed GitHub repositories use the existing Delivery observer; unprovisioned work has no local Delivery stage yet.
+Keep observation contracts in domain (§4 adjacent) and a thin coordinator in orchestrator (§7/§8/§14). A scan unions active tracker identities with known runtime, Decision and managed Delivery references. Every identity still requires refreshed tracker facts. CLI composition reads native sources, never Operations projections. Stage derivation uses planning admission, pending/leased tasks, marker-validated PR HEAD/CI, completed current-HEAD review verdicts and paused handoff state. GitHub work uses the existing marker-validated Delivery observer regardless of local workspace or `.git` existence. Missing observation context or failed remote reads are unavailable, never evidence that the remote PR/stage is absent.
 
 The protocol is observe, derive, re-observe/version-check, delegate once, then re-observe. A failed post-action read is unverified; it never triggers immediate replay. Diagnoses remain derived memory, available through `host.workContinuity.observations`, with no capability lease token or new persisted lifecycle. Admission prevents the normal candidate loop from dispatching coding into a different stage or after observation failure. The existing authority remains the only dispatcher and retry scheduler.
+
+Poll and retry launches use the authority's asynchronous `refreshDispatch` port immediately before the existing synchronous eligibility/commit segment. The port returns the newly observed Issue, not a reusable permission bit; the host no longer maintains an admission cache. Poll inventory failure ends candidate dispatch for that tick. A per-work source failure refuses candidate dispatch; a retry source failure retains its reservation through bounded backoff (`admission_refresh_failed`). An explicitly blocked or non-coding stage rejects execution without automatically retrying it. Decision and local Delivery are checked again after slow remote reads, so a mixed snapshot cannot grant coding admission.
+
+The authority rechecks shutdown and lifecycle generation after poll admission, and retry-token ownership after retry admission. Native slot, claim, state and planning eligibility remain synchronous commit checks. Shutdown waits for in-flight admission reads. A superseded retry cannot consume a newer reservation or start a worker when its remote read eventually finishes.
 
 Decision reclaims only an expired lease, transactionally checking task revision, claim generation, binding generation and exact observed expiry. Renewals and competing reclaims fence stale requests. Local service and authenticated bridge share this primitive. The bridge performs an initial sweep and a non-overlapping lifecycle-owned periodic sweep without reopening another store. Pending tasks still need an executor; a service name alone does not establish liveness. A valid lease with no business progress is unknown, not reclaimable.
 
@@ -20,6 +24,7 @@ File-backed Delivery run, halt and compensation share an exclusive filesystem au
 ## Alternatives considered
 
 - Put recovery in Operations: rejected because read-model anomalies do not authorize mutations.
+- Reuse a prior scan's boolean admission: rejected because a pause, Decision claim, remote HEAD or stage change can occur before a retry timer fires. Launch reads its own authoritative facts.
 - Replay the last CLI command: rejected because task revision, HEAD, binding, admission and pause state may have changed.
 - Rely on coordinator single-flight or atomic file rename: rejected because separate coordinators/processes can still race. Decision checks inside its transaction; Delivery locks the mutation authority across all supported entry points.
 - Claim unknown Web progress is stale: rejected because heartbeat only establishes execution permission. Browser progress/deadline policy belongs to #148.

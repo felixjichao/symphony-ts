@@ -359,7 +359,10 @@ export class OrchestratorLoop {
       // Work-level scan also runs with zero running workers. Per-item failures are isolated.
       if (this.workContinuity) {
         try { await this.workContinuity.reconcile(); }
-        catch (error) { this.emit({ kind: "reconciliation_failed", message: describeError(error) }); }
+        catch (error) {
+          this.emit({ kind: "reconciliation_failed", message: describeError(error) });
+          return; // no successful inventory: no candidate dispatch in this tick
+        }
       }
       if (this.status !== "running") return;
 
@@ -369,7 +372,7 @@ export class OrchestratorLoop {
         if (!this.authority.hasAvailableGlobalSlot()) {
           break;
         }
-        this.authority.dispatchIssue(issue);
+        await this.authority.dispatchIssueWithRefresh(issue);
       }
     } catch (error) {
       // 兜底：任何未预期异常都不得让 tick 链断裂。

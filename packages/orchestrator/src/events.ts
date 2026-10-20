@@ -5,7 +5,7 @@ interface EventIdentity {
   readonly issueUrl?: string | null;
 }
 export type RetryEventReason = "worker_failure" | "continuation" | "tracker_refresh_failed" |
-  "no_available_slots" | "dispatch_failed" | "manual_retry";
+  "admission_refresh_failed" | "no_available_slots" | "dispatch_failed" | "manual_retry";
 export type OrchestratorEvent = Readonly<EventIdentity & (
   | { event: "dispatch_committed" | "worker_started"; attempt: number | null }
   | { event: "dispatch_failed" }

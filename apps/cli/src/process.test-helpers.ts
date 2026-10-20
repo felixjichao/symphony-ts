@@ -60,8 +60,8 @@ export async function httpsTracker() {
 }
 
 export interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
-export function startProcess(args: string[], cwd?: string, executable = binPath) {
-  const child = spawn(executable, args, { cwd, env: { ...process.env, NODE_EXTRA_CA_CERTS: cert }, stdio: ["ignore", "pipe", "pipe"] });
+export function startProcess(args: string[], cwd?: string, executable = binPath, env: NodeJS.ProcessEnv = {}) {
+  const child = spawn(executable, args, { cwd, env: { ...process.env, NODE_EXTRA_CA_CERTS: cert, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   let closed = false;

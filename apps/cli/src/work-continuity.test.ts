@@ -31,7 +31,8 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
   await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: echo unused\n---\nPrompt\n`);
   let tick: (() => void) | undefined;
   const host = await createHost({ workflowPath, trackerProfiles: [profile], planningGate: new DecisionPlanningGate(service), now: () => now,
-    logger: createStructuredLogger({ sinks: [{ write() {} }] }), scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} } });
+    logger: createStructuredLogger({ sinks: [{ write() {} }] }),
+    continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: "open", url: issue.url! }, pullRequest: null, ci: null }) }, scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} } });
   try {
     await host.start();
     tick!(); await host.loop.settled();
