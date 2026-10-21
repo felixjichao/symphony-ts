@@ -1061,27 +1061,7 @@ export class DecisionService {
   }
 
   async getNextTask(): Promise<NextTaskResponse | null> {
-    // Perform lazy expiry cleanup in a lightweight transaction if needed
-    const now = this.clock();
-    let hasExpired = false;
-    for (const t of this.store.getAllTasks()) {
-      if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-        hasExpired = true;
-        break;
-      }
-    }
-
-    if (hasExpired) {
-      await this.store.transaction((draft) => {
-        const txNow = this.clock();
-        for (const t of Object.values(draft.tasks)) {
-          if ((t.status === "claimed" || t.status === "running") && t.lease && txNow >= t.lease.expiresAtMs) {
-            draft.tasks[t.id] = releaseExpiredDecisionTask(t, txNow);
-          }
-        }
-      });
-    }
-
+    // Selection is read-only. Only the work-aware coordinator delegates fenced reclaim.
     // Stable selection: pending task in active session, sorted by createdAtMs ascending, then ID
     const candidates = this.store
       .getAllTasks()
@@ -1108,7 +1088,7 @@ export class DecisionService {
     }
 
     return await this.store.transaction((draft) => {
-      let task = draft.tasks[taskId];
+      const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
 
       const session = draft.sessions[task.sessionId];
@@ -1119,22 +1099,13 @@ export class DecisionService {
 
       const now = this.clock();
 
-      // Lazy release all expired leased tasks in the store
-      for (const t of Object.values(draft.tasks)) {
-        if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-          draft.tasks[t.id] = releaseExpiredDecisionTask(t, now);
-        }
-      }
-      task = draft.tasks[taskId]!;
-
-      // Session execution mutual exclusion: no concurrent active execution within the same session
+      // An unsettled lease remains owned until explicit fenced reclaim/cancellation, even after expiry.
       for (const otherTask of Object.values(draft.tasks)) {
         if (
           otherTask.sessionId === task.sessionId &&
           otherTask.id !== taskId &&
           (otherTask.status === "claimed" || otherTask.status === "running") &&
-          otherTask.lease &&
-          now < otherTask.lease.expiresAtMs
+          otherTask.lease
         ) {
           throw new DecisionConflictError(
             `Session "${task.sessionId}" already has an actively executing task "${otherTask.id}" under lease`

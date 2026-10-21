@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
-import { DecisionBridge, DecisionPlanningGate, DecisionService, DurableDecisionStore } from '@symphony/decision';
+import { DecisionBridge, DecisionBridgeClient, DecisionPlanningGate, DecisionService, DurableDecisionStore } from '@symphony/decision';
 import { githubDecisionRoot, normalizeIssueState } from '@symphony/domain';
 import type { Issue } from '@symphony/domain';
 import type { TrackerAdapterProfile } from '@symphony/tracker';
@@ -396,7 +396,7 @@ it('does not treat a bound pending Decision adapter as executor liveness or exte
 });
 
 
-it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked', 'expired-bridge-startup', 'expired-bridge-timer'] as const)(
+it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked', 'expired-bridge-startup', 'expired-bridge-timer', 'expired-bridge-poll', 'expired-bridge-unrelated-claim', 'expired-bridge-direct-claim'] as const)(
   'preserves merged tracker wait and native lease protection with a single %s review', async state => {
     const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-merged-review-'));
     const store = new DurableDecisionStore({ storeDir });
@@ -417,7 +417,7 @@ it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked', 'exp
     if (state !== 'pending') await service.claimTask(review.id, { owner: 'reviewer', ttlMs: 1000 });
     if (state.startsWith('expired') && state !== 'expired-bridge-timer') now = 2000;
     const before = service.getTask(review.id);
-    const bridge = state.includes('bridge') ? new DecisionBridge(service, { port: 0 }) : null;
+    const bridge = state.includes('bridge') ? new DecisionBridge(service, { port: 0, authToken: 'merged-policy-test' }) : null;
     let admissions = 0;
     let retry: (() => void) | undefined;
     const f = await fixture({ now: () => now, planningGate: new DecisionPlanningGate(service),
@@ -444,6 +444,21 @@ it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked', 'exp
         if (!state.endsWith('blocked')) expect(result.diagnosis?.next.authority).toEqual({
           kind: 'external', system: 'tracker', condition: 'merged_pull_request_waiting_for_tracker_sync' });
         expect(service.getTask(review.id)).toEqual(before);
+      }
+      if (bridge && state.includes('bridge-')) {
+        const client = new DecisionBridgeClient(`http://127.0.0.1:${bridge.getPort()}`, { authToken: 'merged-policy-test' });
+        if (state === 'expired-bridge-poll') {
+          expect(await client.getNextTask()).toBeNull();
+        } else if (state === 'expired-bridge-unrelated-claim') {
+          const otherSession = await service.createSession(githubDecisionRoot('owner', 'repo', 43));
+          const otherTask = await service.createPlanTask(otherSession.id);
+          await client.claimTask(otherTask.id, { owner: 'other-planner' });
+          expect(service.getTask(otherTask.id)?.status).toBe('claimed');
+        } else if (state === 'expired-bridge-direct-claim') {
+          await expect(client.claimTask(review.id, { owner: 'replacement-reviewer' })).rejects.toThrow();
+        }
+        expect(service.getTask(review.id)).toEqual(before);
+        expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('external_wait');
       }
       f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
         attempt: 1, kind: 'continuation', reason: 'continuation', error: null });

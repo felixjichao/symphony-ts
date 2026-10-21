@@ -1376,24 +1376,6 @@ class DecisionService {
     return this.store.getContext(taskId);
   }
   async getNextTask() {
-    const now = this.clock();
-    let hasExpired = false;
-    for (const t of this.store.getAllTasks()) {
-      if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-        hasExpired = true;
-        break;
-      }
-    }
-    if (hasExpired) {
-      await this.store.transaction((draft) => {
-        const txNow = this.clock();
-        for (const t of Object.values(draft.tasks)) {
-          if ((t.status === "claimed" || t.status === "running") && t.lease && txNow >= t.lease.expiresAtMs) {
-            draft.tasks[t.id] = releaseExpiredDecisionTask(t, txNow);
-          }
-        }
-      });
-    }
     const candidates = this.store.getAllTasks().filter((t) => {
       if (t.status !== "pending") return false;
       const s = this.store.getSession(t.sessionId);
@@ -1412,7 +1394,7 @@ class DecisionService {
       throw new DecisionValidationError("Claim owner must be a nonempty string");
     }
     return await this.store.transaction((draft) => {
-      let task = draft.tasks[taskId];
+      const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
       const session = draft.sessions[task.sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${task.sessionId}" not found`);
@@ -1420,14 +1402,8 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot claim task for session in status "${session.status}"`);
       }
       const now = this.clock();
-      for (const t of Object.values(draft.tasks)) {
-        if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-          draft.tasks[t.id] = releaseExpiredDecisionTask(t, now);
-        }
-      }
-      task = draft.tasks[taskId];
       for (const otherTask of Object.values(draft.tasks)) {
-        if (otherTask.sessionId === task.sessionId && otherTask.id !== taskId && (otherTask.status === "claimed" || otherTask.status === "running") && otherTask.lease && now < otherTask.lease.expiresAtMs) {
+        if (otherTask.sessionId === task.sessionId && otherTask.id !== taskId && (otherTask.status === "claimed" || otherTask.status === "running") && otherTask.lease) {
           throw new DecisionConflictError(
             `Session "${task.sessionId}" already has an actively executing task "${otherTask.id}" under lease`
           );

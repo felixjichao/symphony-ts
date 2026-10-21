@@ -263,10 +263,14 @@ describe("DecisionService", () => {
         })
       ).rejects.toThrow(DecisionConflictError);
 
-      // getNextTask lazily reclaims expired task to pending
-      const nextAfterExpiry = await service.getNextTask();
-      expect(nextAfterExpiry?.task.id).toBe(task.id);
-      expect(nextAfterExpiry?.task.status).toBe("pending");
+      // Polling and claiming cannot choose expired-claim recovery policy.
+      const expired = service.getTask(task.id)!;
+      expect(await service.getNextTask()).toBeNull();
+      await expect(service.claimTask(task.id, { owner: "worker-2" })).rejects.toThrow(DecisionConflictError);
+      expect(service.getTask(task.id)).toEqual(expired);
+      expect(await service.reclaimExpiredClaim({ taskId: task.id, revision: task.revision,
+        claimGeneration: expired.claimGeneration, bindingGeneration: service.getSession(session.id)!.bindingGeneration,
+        leaseExpiresAtMs: expired.lease!.expiresAtMs })).toBe(true);
 
       // Claiming again increments claim generation to 2
       const claim2 = await service.claimTask(task.id, { owner: "worker-2", ttlMs: 120_000 });
@@ -516,8 +520,14 @@ describe("DecisionService", () => {
       });
       expect(bound.bindingGeneration).toBe(1);
 
-      // After task1 lease expires, task2 can be claimed
+      // Expiry alone must not transfer session ownership; explicit fenced recovery does.
       clock.advance(70_000);
+      const expired = service.getTask(task1.id)!;
+      await expect(service.claimTask(task2.id, { owner: "worker-2" })).rejects.toThrow(DecisionConflictError);
+      expect(service.getTask(task1.id)).toEqual(expired);
+      expect(await service.reclaimExpiredClaim({ taskId: task1.id, revision: task1.revision,
+        claimGeneration: expired.claimGeneration, bindingGeneration: bound.bindingGeneration,
+        leaseExpiresAtMs: expired.lease!.expiresAtMs })).toBe(true);
       const claim2 = await service.claimTask(task2.id, { owner: "worker-2", ttlMs: 60_000 });
       expect(claim2.task.id).toBe(task2.id);
 
@@ -550,7 +560,7 @@ describe("DecisionService", () => {
     }
   });
 
-  it("strictly rejects binding mutations when lease has expired and been lazily cleared", async () => {
+  it("strictly rejects stale binding credentials after explicit fenced expired-claim recovery", async () => {
     const { service, clock, cleanup } = await createFixture();
     try {
       const root = githubDecisionRoot("felixjichao", "symphony-ts", 95);
@@ -559,8 +569,13 @@ describe("DecisionService", () => {
 
       const claim = await service.claimTask(task.id, { owner: "worker-1", ttlMs: 60_000 });
 
-      // Expire lease and trigger getNextTask to clear task lease back to pending
+      // Polling keeps the expired owner intact; only explicit fenced recovery releases it.
       clock.advance(70_000);
+      expect(await service.getNextTask()).toBeNull();
+      expect(service.getTask(task.id)?.lease).toEqual(claim.lease);
+      expect(await service.reclaimExpiredClaim({ taskId: task.id, revision: task.revision,
+        claimGeneration: claim.task.claimGeneration, bindingGeneration: session.bindingGeneration,
+        leaseExpiresAtMs: claim.lease.expiresAtMs })).toBe(true);
       const reclaimed = await service.getNextTask();
       expect(reclaimed?.task.id).toBe(task.id);
       expect(reclaimed?.task.status).toBe("pending");
