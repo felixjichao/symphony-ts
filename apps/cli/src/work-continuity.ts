@@ -35,7 +35,8 @@ export function createHostWorkContinuity(options: {
     const candidates = identity?.issueId
       ? await controller.current.adapter.fetchIssuesByIds([identity.issueId])
       : await controller.current.adapter.fetchIssuesByStates(controller.current.scheduling.policy.activeStates);
-    const issue = candidates.find(item => resolveSession(item) === decisionSessionId(key));
+    const candidate = candidates.find(item => resolveSession(item) === decisionSessionId(key));
+    const issue = candidate ? structuredClone(candidate) : undefined;
     const observedAt = now();
     const base: WorkContinuityObservation = { workKey: key, observedAt, version: "", active: false, stage: "coding",
       available: true, unavailableSources: [], expectedFence: {}, owner: null, blocked: null,
@@ -83,16 +84,18 @@ export function createHostWorkContinuity(options: {
       const eligible = await planningGate.verifyPlanEligibility(decisionSessionId(key), { title: issue.title, body: issue.description ?? "" });
       if (!eligible.eligible) facts = { ...facts, stage: "plan", blocked: eligible.reason ?? "planning_admission_denied" };
     }
-    // A matching review cannot restart work for an already merged PR. Keep its
-    // native owner/fences intact; contradiction and blocked checks still win.
-    if (!delivery?.isPaused && !runtime && github?.pullRequest
-      && (!task || github.pullRequest.state === "merged" && task.kind === "review")) {
+    // Merged is an authoritative stage boundary even while local executors remain.
+    if (github?.pullRequest?.state === "merged" && facts.stage !== "handoff") {
+      facts = { ...facts, stage: "merge",
+        target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: github.pullRequest.number, headSha: github.pullRequest.headSha },
+        externalWait: { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" },
+        contradictions: runtime || pendingTasks.some(t => t.kind === "plan")
+          ? [...facts.contradictions, "merged_pull_request_has_conflicting_executor"] : facts.contradictions };
+    } else if (!delivery?.isPaused && !runtime && github?.pullRequest && !task) {
       const pr = github.pullRequest;
       facts = { ...facts, stage: "delivery", target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: pr.number, headSha: pr.headSha },
-        expectedFence: task ? facts.expectedFence : { expectedHeadSha: pr.headSha } };
-      if (pr.state === "merged") facts = { ...facts, stage: "merge",
-        externalWait: { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" } };
-      else if (pr.state === "closed") facts = { ...facts, blocked: "pull_request_closed_unmerged" };
+        expectedFence: { expectedHeadSha: pr.headSha } };
+      if (pr.state === "closed") facts = { ...facts, blocked: "pull_request_closed_unmerged" };
       else if (pr.isDraft) facts = { ...facts, externalWait: { system: "human", condition: "publish_draft_pull_request" } };
       else if (!github.ci || github.ci.headSha !== pr.headSha) facts = { ...facts, available: false, unavailableSources: ["current_head_ci"] };
       else if (github.ci.status === "pending") facts = { ...facts, stage: "ci", externalWait: { system: "ci", condition: `checks_for_${pr.headSha}` } };
@@ -104,12 +107,19 @@ export function createHostWorkContinuity(options: {
           blocked: review?.verdict === "needs_human" ? "review_requires_human" : facts.blocked };
       }
     }
+    if (github?.issue.state === "closed" && facts.active) facts = { ...facts, available: false,
+      unavailableSources: [...facts.unavailableSources, "remote_issue_closed_tracker_active"] };
     if (facts.stage !== "coding" && facts.scheduled?.kind === "retry") facts = { ...facts, scheduled: null,
       contradictions: [...facts.contradictions, "runtime_retry_conflicts_with_next_stage"] };
     if (pendingTasks.length > 1) facts = { ...facts, contradictions: [...facts.contradictions, "multiple_active_decision_tasks"] };
     if (facts.stage === "handoff" && (runtime || pendingTasks.length)) facts = { ...facts,
       contradictions: [...facts.contradictions, "delivery_and_execution_ownership_overlap"] };
     if (!issueRoutable(issue, controller.current.scheduling.policy) && !facts.blocked) facts = { ...facts, blocked: "tracker_admission_denied" };
+    // Pin the initial snapshot and refresh the keyed tracker admission after remote I/O.
+    const latestIssue = (await controller.current.adapter.fetchIssuesByIds([issue.id]))
+      .find(item => item.id === issue.id && resolveSession(item) === decisionSessionId(key));
+    if (!latestIssue || JSON.stringify(latestIssue) !== JSON.stringify(issue)) facts = { ...facts, available: false,
+      unavailableSources: [...facts.unavailableSources, "tracker_changed_during_observation"] };
     // Remote reads may take time. Reject a mixed snapshot if native ownership or
     // pause state changed while HEAD/CI/planning facts were being collected.
     if (planningGate) {
@@ -185,35 +195,43 @@ export function createHostWorkContinuity(options: {
     },
     observe,
     async recover(request: WorkRecoveryRequest, canCommit): Promise<WorkRecoveryResult> {
-      const fresh = await observe(request.workKey);
-      if (!canCommit()) return "stopped";
-      if (fresh.version !== request.version || !fresh.available) return "stale";
-      if (request.action === "reclaim" && request.taskRef && planningGate) {
-        const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
-        const task = work?.tasks.find(t => t.id === request.taskRef?.taskId);
+      let mutationMayHaveStarted = false;
+      try {
+        const fresh = await observe(request.workKey);
         if (!canCommit()) return "stopped";
-        if (!work || !task || task.leaseExpiresAtMs === null) return "stale";
-        return await planningGate.reclaimExpiredClaim({ taskId: request.taskRef.taskId, revision: request.taskRef.revision,
-          claimGeneration: request.fence.leaseGeneration ?? -1, bindingGeneration: request.fence.bindingGeneration ?? -1,
-          leaseExpiresAtMs: fresh.owner?.leaseExpiresAt ?? -1 }) ? "applied" : "stale";
-      }
-      const identity = identities.get(decisionSessionId(request.workKey));
-      if (request.action === "compensate" && identity?.workspace) {
-        return withDeliveryAuthority(identity.workspace, async () => {
-          const locked = await observe(request.workKey);
+        if (fresh.version !== request.version || !fresh.available) return "stale";
+        if (request.action === "reclaim" && request.taskRef && planningGate) {
+          const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
+          const task = work?.tasks.find(t => t.id === request.taskRef?.taskId);
           if (!canCommit()) return "stopped";
-          if (locked.version !== request.version) return "stale";
-          const storage = new FileDeliveryStateStorage(path.join(identity.workspace!, ".symphony", "delivery-state.json"), true);
-          const delivery = storage.readState();
-          if (!delivery?.handoff?.handoffId || !delivery.isPaused || !delivery.pendingCompensation) return "unsupported";
-          const result = await recoverDeliveryHandoff({ cwd: identity.workspace!, repo: delivery.repo,
-            issueNumber: delivery.issueNumber, workspaceKey: delivery.workspaceKey, stateStorage: storage, runner });
-          return result.success ? "applied" : "unverified";
-        });
+          if (!work || !task || task.leaseExpiresAtMs === null) return "stale";
+          mutationMayHaveStarted = true;
+          return await planningGate.reclaimExpiredClaim({ taskId: request.taskRef.taskId, revision: request.taskRef.revision,
+            claimGeneration: request.fence.leaseGeneration ?? -1, bindingGeneration: request.fence.bindingGeneration ?? -1,
+            leaseExpiresAtMs: fresh.owner?.leaseExpiresAt ?? -1 }) ? "applied" : "stale";
+        }
+        const identity = identities.get(decisionSessionId(request.workKey));
+        if (request.action === "compensate" && identity?.workspace) {
+          return await withDeliveryAuthority(identity.workspace, async () => {
+            const locked = await observe(request.workKey);
+            if (!canCommit()) return "stopped";
+            if (locked.version !== request.version) return "stale";
+            const storage = new FileDeliveryStateStorage(path.join(identity.workspace!, ".symphony", "delivery-state.json"), true);
+            const delivery = storage.readState();
+            if (!delivery?.handoff?.handoffId || !delivery.isPaused || !delivery.pendingCompensation) return "unsupported";
+            mutationMayHaveStarted = true;
+            const result = await recoverDeliveryHandoff({ cwd: identity.workspace!, repo: delivery.repo,
+              issueNumber: delivery.issueNumber, workspaceKey: delivery.workspaceKey, stateStorage: storage, runner });
+            return result.success ? "applied" : "unverified";
+          });
+        }
+        // Coding is admitted by the normal dispatch loop; browser/repair/merge recovery
+        // requires a safe native primitive. Diagnosis must not substitute replaying a command.
+        return "unsupported";
+      } catch (error) {
+        if (!mutationMayHaveStarted) return "stale"; // certified no commit, including lock acquisition failure
+        throw error;
       }
-      // Coding is admitted by the normal dispatch loop; browser/repair/merge recovery
-      // requires a safe native primitive. Diagnosis must not substitute replaying a command.
-      return "unsupported";
     },
   });
   return {

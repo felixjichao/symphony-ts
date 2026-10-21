@@ -2,13 +2,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
-import { DecisionPlanningGate, DecisionService, DurableDecisionStore } from '@symphony/decision';
+import { expect, it, vi } from 'vitest';
+import { DecisionBridge, DecisionPlanningGate, DecisionService, DurableDecisionStore } from '@symphony/decision';
 import { githubDecisionRoot, normalizeIssueState } from '@symphony/domain';
 import type { Issue } from '@symphony/domain';
 import type { TrackerAdapterProfile } from '@symphony/tracker';
 import { createStructuredLogger } from '@symphony/observability';
 import { createHost, type CreateHostOptions } from './host';
+import { DefaultDeliveryGitGhRunner } from './git-gh-runner';
 import { FileDeliveryStateStorage, withDeliveryAuthority } from './delivery-skill-cli';
 
 const issue: Issue = { id: '42', identifier: 'GH-42', title: 'work', description: '', state: 'open',
@@ -17,7 +18,7 @@ const issue: Issue = { id: '42', identifier: 'GH-42', title: 'work', description
   dispatchable: true, createdAt: 0, updatedAt: 0 };
 
 async function fixture(options: CreateHostOptions = {}, failSecondList: boolean | number = false,
-  activeStates: readonly string[] = ['open'], currentIssue: Issue = issue, command = 'echo unused') {
+  activeStates: readonly string[] = ['open'], currentIssue: Issue = issue, command = 'echo unused', requiredLabels: readonly string[] = []) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-continuity-'));
   let activeLists = 0;
   const profile: TrackerAdapterProfile = { kind: 'fixture', documentation: 'fixture', secretProviderKeys: [], secretEnvVars: [],
@@ -25,10 +26,10 @@ async function fixture(options: CreateHostOptions = {}, failSecondList: boolean 
       fetchIssuesByStates: async states => {
         if (!states.some(state => normalizeIssueState(state) === normalizeIssueState(currentIssue.state))) return [];
         if (++activeLists === (typeof failSecondList === "number" ? failSecondList : 2) && failSecondList) throw new Error('temporary outage during continuity scan');
-        return [currentIssue];
-      }, fetchIssuesByIds: async () => [currentIssue] }) };
+        return [structuredClone(currentIssue)];
+      }, fetchIssuesByIds: async () => [structuredClone(currentIssue)] }) };
   const workflowPath = path.join(dir, 'WORKFLOW.md');
-  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\n  active_states: ${JSON.stringify(activeStates)}\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: ${JSON.stringify(command)}\n---\nPrompt\n`);
+  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\n  active_states: ${JSON.stringify(activeStates)}\n  required_labels: ${JSON.stringify(requiredLabels)}\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: ${JSON.stringify(command)}\n---\nPrompt\n`);
   let tick: (() => void) | undefined;
   const host = await createHost({ workflowPath, trackerProfiles: [profile], env: {}, enablePlanning: false,
     logger: createStructuredLogger({ sinks: [{ write() {} }] }),
@@ -347,34 +348,34 @@ it('keeps a file-backed uncertain handoff suppressed until native completion evi
   storage.writeState({ repo: 'owner/repo', issueNumber: 42, workspaceKey: 'GH-42', spentRepairs: 0, spentWaitSeconds: 0,
     isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: true, lastUpdated: 'first',
     handoff: { handoffId: 'handoff-1', headSha: 'a'.repeat(40), reason: 'manual_intervention_required', details: 'paused',
-      repo: 'owner/repo', issueNumber: 42, headBranch: 'symphony/GH-42', prNumber: 7, prUrl: '',
-      spentRepairs: 0, maxRepairs: 1, spentWaitSeconds: 0, readyLabel: 'ready' } });
+    repo: 'owner/repo', issueNumber: 42, headBranch: 'symphony/GH-42', prNumber: 7, prUrl: '',
+    spentRepairs: 0, maxRepairs: 1, spentWaitSeconds: 0, readyLabel: 'ready' } });
+  // A failure from inside the native recovery must remain uncertain, even with EEXIST.
+  const gh = vi.spyOn(DefaultDeliveryGitGhRunner.prototype, 'gh').mockRejectedValue(Object.assign(new Error('response lost'), { code: 'EEXIST' }));
   try {
-    // Another authority holds the real filesystem lock. No GitHub/Codex command can run.
-    await withDeliveryAuthority(workspace, async () => {
-      expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
-      storage.writeState({ ...storage.readState()!, lastUpdated: 'unrelated-change' });
-      const pending = (await f.host.workContinuity.reconcile())[0]!;
-      expect(pending.result).toBe('unverified');
-      expect(pending.diagnosis?.next.action).toBe('require_human');
-      expect(storage.readState()?.pendingCompensation).toBe(true);
-      const snapshot = storage.readState()!;
-      await fs.unlink(path.join(workspace, '.symphony', 'delivery-state.json'));
-      expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
-      storage.writeState(snapshot);
-      storage.writeState({ ...storage.readState()!, isPaused: false });
-      await f.host.start(); f.tick(); await f.host.loop.settled();
-      f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
-        attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
-      retry!(); await new Promise(resolve => setImmediate(resolve));
-      expect(admissions).toBe(0);
-      expect(f.host.state.running.size).toBe(0);
-      storage.writeState({ ...storage.readState()!, isPaused: true, pendingCompensation: false });
-      expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
-      expect(storage.readState()?.isPaused).toBe(true);
-    });
-  } finally { await f.cleanup(); }
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+    storage.writeState({ ...storage.readState()!, lastUpdated: 'unrelated-change' });
+    const pending = (await f.host.workContinuity.reconcile())[0]!;
+    expect(pending.result).toBe('unverified');
+    expect(pending.diagnosis?.next.action).toBe('require_human');
+    expect(storage.readState()?.pendingCompensation).toBe(true);
+    const snapshot = storage.readState()!;
+    await fs.unlink(path.join(workspace, '.symphony', 'delivery-state.json'));
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+    storage.writeState(snapshot);
+    storage.writeState({ ...storage.readState()!, isPaused: false });
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+      attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+    retry!(); await new Promise(resolve => setImmediate(resolve));
+    expect(admissions).toBe(0);
+    expect(f.host.state.running.size).toBe(0);
+    storage.writeState({ ...storage.readState()!, isPaused: true, pendingCompensation: false });
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
+    expect(storage.readState()?.isPaused).toBe(true);
+  } finally { gh.mockRestore(); await f.cleanup(); }
 });
+
 
 
 it('does not treat a bound pending Decision adapter as executor liveness or external wait', async () => {
@@ -395,7 +396,7 @@ it('does not treat a bound pending Decision adapter as executor liveness or exte
 });
 
 
-it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked'] as const)(
+it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked', 'expired-bridge-startup', 'expired-bridge-timer'] as const)(
   'preserves merged tracker wait and native lease protection with a single %s review', async state => {
     const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-merged-review-'));
     const store = new DurableDecisionStore({ storeDir });
@@ -414,8 +415,9 @@ it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked'] as c
     const target = { repository: 'owner/repo', prNumber: 7, headSha: 'a'.repeat(40) };
     const review = await service.createReviewTask(session.id, { target });
     if (state !== 'pending') await service.claimTask(review.id, { owner: 'reviewer', ttlMs: 1000 });
-    if (state.startsWith('expired')) now = 2000;
+    if (state.startsWith('expired') && state !== 'expired-bridge-timer') now = 2000;
     const before = service.getTask(review.id);
+    const bridge = state.includes('bridge') ? new DecisionBridge(service, { port: 0 }) : null;
     let admissions = 0;
     let retry: (() => void) | undefined;
     const f = await fixture({ now: () => now, planningGate: new DecisionPlanningGate(service),
@@ -424,6 +426,12 @@ it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked'] as c
       continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: 'open', url: issue.url! },
         pullRequest: { number: 7, state: 'merged', url: '', headSha: target.headSha, isDraft: false }, ci: null }) } });
     try {
+      if (bridge) {
+        await bridge.start();
+        now = 2000;
+        if (state === 'expired-bridge-timer') await new Promise(resolve => setTimeout(resolve, 1100));
+        expect(service.getTask(review.id)).toEqual(before);
+      }
       if (state.endsWith('blocked')) new FileDeliveryStateStorage(path.join(f.dir, 'workspaces', 'GH-42', '.symphony', 'delivery-state.json')).writeState({
         repo: 'owner/repo', issueNumber: 42, workspaceKey: 'GH-42', spentRepairs: 0, spentWaitSeconds: 0,
         isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: false, lastUpdated: 'now' });
@@ -443,5 +451,144 @@ it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked'] as c
       expect(admissions).toBe(0);
       expect(f.host.state.running.size).toBe(0);
       expect(service.getTask(review.id)).toEqual(before);
-    } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+    } finally { await f.cleanup(); await bridge?.stop(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
   });
+
+
+it.each([['poll', 'closed'], ['poll', 'routing'], ['poll', 'labels'], ['retry', 'closed'], ['retry', 'routing'], ['retry', 'labels']] as const)('refuses %s admission when tracker %s changes during remote observation', async (entry, change) => {
+  const current = { ...issue, labels: ['ready'] };
+  let changed = false;
+  let admissions = 0;
+  let retry: (() => void) | undefined;
+  const f = await fixture({ canDispatch: () => { admissions++; return false; },
+    retryScheduler: { schedule: (_delay, cb) => { retry = cb; return cb; }, cancel() {} },
+    continuityGitHub: { observeWork: async () => {
+      if (changed) {
+        if (change === 'closed') current.state = 'closed';
+        else if (change === 'routing') current.dispatchable = false;
+        else current.labels = [];
+      }
+      return { workKey: githubDecisionRoot('owner', 'repo', 42), issue: { state: 'open', url: issue.url! }, pullRequest: null, ci: null };
+    } } }, false, ['open'], current, 'echo unused', ['ready']);
+  try {
+    await f.host.workContinuity.reconcile();
+    changed = true;
+    if (entry === 'poll') await f.host.authority.dispatchIssueWithRefresh(issue);
+    else {
+      f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+      attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+      retry!(); await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(admissions).toBe(0);
+    expect(f.host.state.running.size).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+it('refuses poll and retry when remote issue is closed but tracker still reports active', async () => {
+  let admissions = 0;
+  let retry: (() => void) | undefined;
+  const f = await fixture({ canDispatch: () => { admissions++; return false; },
+    retryScheduler: { schedule: (_delay, cb) => { retry = cb; return cb; }, cancel() {} },
+    continuityGitHub: { observeWork: async () => ({ workKey: githubDecisionRoot('owner', 'repo', 42),
+      issue: { state: 'closed', url: issue.url! }, pullRequest: null, ci: null }) } });
+  try {
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    expect(admissions).toBe(0);
+    f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+      attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+    retry!(); await new Promise(resolve => setImmediate(resolve));
+    expect(admissions).toBe(0);
+    expect(f.host.state.running.size).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+
+it('retries compensation after certified lock contention without suppressing an unattempted commit', async () => {
+  const f = await fixture();
+  const workspace = path.join(f.dir, 'workspaces', 'GH-42');
+  const storage = new FileDeliveryStateStorage(path.join(workspace, '.symphony', 'delivery-state.json'));
+  storage.writeState({ repo: 'owner/repo', issueNumber: 42, workspaceKey: 'GH-42', spentRepairs: 0, spentWaitSeconds: 0,
+    isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: true, lastUpdated: 'first',
+    handoff: { handoffId: 'handoff-lock', headSha: 'a'.repeat(40), reason: 'manual_intervention_required', details: 'paused',
+      repo: 'owner/repo', issueNumber: 42, headBranch: 'symphony/GH-42', prNumber: 7, prUrl: '',
+      spentRepairs: 0, maxRepairs: 1, spentWaitSeconds: 0, readyLabel: 'ready' } });
+  const before = storage.readState();
+  const remote = { labels: ['ready'], comments: [] as string[] };
+  const gh = vi.spyOn(DefaultDeliveryGitGhRunner.prototype, 'gh').mockImplementation(async args => {
+    if (args[1] === 'edit') remote.labels = [];
+    else if (args[1] === 'view') return { exitCode: 0, stderr: '', stdout: JSON.stringify({ comments: remote.comments.map(body => ({ body })) }) };
+    else if (args[1] === 'comment') remote.comments.push(args[args.length - 1]!);
+    else throw new Error('unexpected GitHub command');
+    return { exitCode: 0, stderr: '', stdout: '' };
+  });
+  try {
+    await withDeliveryAuthority(workspace, async () => {
+      for (let round = 0; round < 2; round++) {
+        expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('stale');
+        expect(gh).not.toHaveBeenCalled();
+        expect(storage.readState()).toEqual(before);
+      }
+    });
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('applied');
+    expect(storage.readState()?.pendingCompensation).toBe(false);
+    expect(storage.readState()?.isPaused).toBe(true);
+    expect(remote.labels).toEqual([]);
+    expect(remote.comments).toHaveLength(1);
+    expect(remote.comments[0]).toContain('handoff-lock');
+    await f.host.workContinuity.reconcile();
+    expect(remote.comments).toHaveLength(1);
+  } finally { gh.mockRestore(); await f.cleanup(); }
+});
+
+
+it.each(['pending', 'valid', 'expired'] as const)('reports merged with %s plan ownership as a contradiction without reclaim', async state => {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-merged-plan-'));
+  const store = new DurableDecisionStore({ storeDir });
+  await store.open();
+  let now = 1000;
+  const service = new DecisionService(store, { clock: () => now });
+  const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+  const plan = await service.createPlanTask(session.id);
+  if (state !== 'pending') await service.claimTask(plan.id, { owner: 'planner', ttlMs: 1000 });
+  if (state === 'expired') now = 2000;
+  const before = service.getTask(plan.id);
+  let admissions = 0;
+  const f = await fixture({ now: () => now, planningGate: new DecisionPlanningGate(service),
+    canDispatch: () => { admissions++; return false; },
+    continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: 'open', url: issue.url! },
+      pullRequest: { number: 7, state: 'merged', url: '', headSha: 'a'.repeat(40), isDraft: false }, ci: null }) } });
+  try {
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    const result = (await f.host.workContinuity.reconcile())[0]!;
+    expect(result.diagnosis?.status).toBe('contradictory');
+    expect(result.diagnosis?.next.description).toContain('merge:');
+    expect(result.diagnosis?.recovery).toBe('none');
+    expect(service.getTask(plan.id)).toEqual(before);
+    expect(admissions).toBe(0);
+  } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+});
+
+it('reports a live Codex worker conflicting with merged without replacing or stopping its owner', async () => {
+  const appServer = fileURLToPath(new URL('../../../packages/agent/test-fixtures/app-server.mjs', import.meta.url));
+  let merged = false;
+  const f = await fixture({ continuityGitHub: { observeWork: async () => ({ workKey: githubDecisionRoot('owner', 'repo', 42),
+    issue: { state: 'open', url: issue.url! }, pullRequest: merged ? { number: 7, state: 'merged', url: '', headSha: 'a'.repeat(40), isDraft: false } : null, ci: null }) } },
+    false, ['open'], issue, `${JSON.stringify(process.execPath)} ${JSON.stringify(appServer)} --record-world world.json --wait-file release.flag`);
+  let pid: number | undefined;
+  try {
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    await vi.waitFor(async () => {
+      const world = JSON.parse(await fs.readFile(path.join(f.dir, 'workspaces', 'GH-42', 'world.json'), 'utf8')) as { pid: number };
+      pid = world.pid;
+    });
+    const worker = f.host.authority.getWorker(issue.id);
+    merged = true;
+    const result = (await f.host.workContinuity.reconcile())[0]!;
+    expect(result.diagnosis?.status).toBe('contradictory');
+    expect(result.diagnosis?.next.description).toContain('merge:');
+    expect(result.diagnosis?.recovery).toBe('none');
+    expect(f.host.authority.getWorker(issue.id)).toBe(worker);
+    expect(process.kill(pid!, 0)).toBe(true);
+  } finally { await f.cleanup(); }
+  expect(() => process.kill(pid!, 0)).toThrow();
+});

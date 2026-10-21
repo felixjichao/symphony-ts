@@ -35,8 +35,6 @@ export class DecisionBridge {
   private readonly allowedOrigins: Set<string>;
   private server: http.Server | null = null;
   private actualPort: number | null = null;
-  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
-  private expiryRun: Promise<void> | null = null;
   private closing = false;
   private fullyStopped = false;
   private startup: Promise<{ host: string; port: number }> | null = null;
@@ -106,8 +104,6 @@ export class DecisionBridge {
 
     await this.service.getStore().open();
     if (this.closing) throw new Error("Decision bridge stopped during startup");
-    await this.service.reconcileExpiredClaims();
-    if (this.closing) throw new Error("Decision bridge stopped during startup");
 
     return new Promise<{ host: string; port: number }>((resolve, reject) => {
       const server = http.createServer((req, res) => {
@@ -132,7 +128,6 @@ export class DecisionBridge {
         if (address && typeof address === "object") {
           this.actualPort = address.port;
           this.server = server;
-          this.scheduleExpiry();
           resolve({ host: this.host, port: this.actualPort });
         } else {
           reject(new Error("Failed to obtain server address"));
@@ -141,27 +136,14 @@ export class DecisionBridge {
     });
   }
 
-  private scheduleExpiry(): void {
-    if (this.closing) return;
-    this.expiryTimer = setTimeout(() => {
-      this.expiryTimer = null;
-      this.expiryRun = this.service.reconcileExpiredClaims().catch(() => { /* next sweep re-observes */ });
-      void this.expiryRun.finally(() => { this.expiryRun = null; this.scheduleExpiry(); });
-    }, 1000);
-    this.expiryTimer.unref();
-  }
-
   stop(): Promise<void> {
     this.closing = true;
-    if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    this.expiryTimer = null;
     if (!this.shutdown) this.shutdown = this.stopInternal();
     return this.shutdown;
   }
 
   private async stopInternal(): Promise<void> {
     try { await this.startup; } catch { /* startup failure still owns its store cleanup */ }
-    await this.expiryRun;
     if (!this.server) {
       await this.service.getStore().close();
       this.fullyStopped = true;

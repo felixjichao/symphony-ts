@@ -49,7 +49,7 @@ describe("Decision continuity authority", () => {
       expect(await f.service.reclaimExpiredClaim({ ...f.expected, leaseExpiresAtMs: 3500, revision: f.expected.revision + 1 })).toBe(false);
     } finally { await f.cleanup(); }
   });
-  it("supports authenticated remote observation/reclaim and autonomous bridge sweeps", async () => {
+  it("supports authenticated remote observation and explicit fenced reclaim", async () => {
     const f = await fixture();
     const bridge = new DecisionBridge(f.service, { port: 0, authToken: "continuity-test" });
     try {
@@ -61,8 +61,8 @@ describe("Decision continuity authority", () => {
       expect((await client.continuityWork())[0]?.tasks[0]?.status).toBe("pending");
       const again = await f.service.claimTask(f.expected.taskId, { owner: "web", ttlMs: 1000 });
       f.setTime(again.task.lease!.expiresAtMs);
-      // Autonomous sweep uses the same service authority; no browser getNextTask request.
-      await f.service.reconcileExpiredClaims();
+      expect(await client.reclaimExpiredClaim({ ...f.expected, claimGeneration: again.task.claimGeneration,
+        leaseExpiresAtMs: again.task.lease!.expiresAtMs })).toBe(true);
       expect((await client.continuityWork())[0]?.tasks[0]?.status).toBe("pending");
       const denied = await fetch(`http://127.0.0.1:${port}/v1/continuity/reclaim`, { method: "POST", body: "{}" });
       expect(denied.status).toBe(401);
@@ -70,14 +70,15 @@ describe("Decision continuity authority", () => {
   });
 });
 
-it("bridge startup reclaims expired durable claims without an executor polling", async () => {
+it("bridge startup preserves expired claims until work-level policy delegates reclaim", async () => {
   const f = await fixture();
   const bridge = new DecisionBridge(f.service, { port: 0 });
   try {
     f.setTime(f.expected.leaseExpiresAtMs);
     const { port } = await bridge.start();
     const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`);
-    expect((await client.continuityWork())[0]?.tasks[0]?.status).toBe("pending");
+    expect((await client.continuityWork())[0]?.tasks[0]?.status).toBe("claimed");
+    expect(f.service.getTask(f.expected.taskId)?.lease).toEqual(f.claimed.task.lease);
   } finally { await bridge.stop(); await f.cleanup(); }
 });
 

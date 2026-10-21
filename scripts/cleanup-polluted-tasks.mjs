@@ -671,22 +671,6 @@ class DecisionService {
       return true;
     });
   }
-  /** Independent bridge lifecycle sweep, bounded to one attempt per observed expired claim. */
-  async reconcileExpiredClaims() {
-    for (const work of this.continuityWork()) {
-      for (const task of work.tasks) {
-        if ((task.status === "claimed" || task.status === "running") && task.leaseExpiresAtMs !== null && this.clock() >= task.leaseExpiresAtMs) {
-          await this.reclaimExpiredClaim({
-            taskId: task.id,
-            revision: task.revision,
-            claimGeneration: task.claimGeneration,
-            bindingGeneration: work.bindingGeneration,
-            leaseExpiresAtMs: task.leaseExpiresAtMs
-          });
-        }
-      }
-    }
-  }
   getStore() {
     return this.store;
   }
