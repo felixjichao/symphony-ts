@@ -566,6 +566,14 @@ export class DecisionTabDriver implements DecisionTaskController {
       owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration,
       ttlMs: this.defaultClaimTtlMs, progress: this.executionProgress(phase),
     });
+    // Re-read the durable run intent after the authorization round trip. Another tab may have
+    // written a persisted Stop while this request was in flight; that Stop does not abort this
+    // page's signal, so the pre-request check alone would still allow the Send or navigation
+    // the adapter performs once this listener resolves.
+    if (this.shouldRun && !this.shouldRun()) {
+      this.stop();
+      throw new Error("Driver disabled while authorizing the page action");
+    }
   }
 
   startHeartbeat(task: DecisionTask, lease: DecisionLease, onExpired?: () => void): void {
@@ -730,8 +738,21 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
 
     if (taskRes?.execution?.blocked && (currentTask.status === "claimed" || currentTask.status === "running")) {
+      const blockedReason = taskRes.execution.blocked.reason;
+      if (cp.candidateResult) {
+        // The block may have been recorded after an ambiguous result submission. The extracted
+        // candidate is the only copy of what this tab tried to submit, so it outlives the polling
+        // cycle: only an authoritative receipt or an explicit operator resolution may retire it.
+        // Repeated polls and page rebuilds keep re-checking the receipt and keep the evidence.
+        const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (verified.state === "confirmed") {
+          this.checkpointStore.delete();
+          return verified.outcome;
+        }
+        return { status: "blocked", session: sessionRes!.session, reason: blockedReason };
+      }
       this.checkpointStore.delete();
-      return { status: "blocked", session: sessionRes!.session, reason: taskRes.execution.blocked.reason };
+      return { status: "blocked", session: sessionRes!.session, reason: blockedReason };
     }
 
     if (cp.step === "rebind_submitting") {

@@ -206,7 +206,9 @@ describe("candidate result recovery budget", () => {
       const settled = await driver.runOnce();
       expect(settled?.status).toBe("blocked");
       expect(submissions).toBe(DECISION_MAX_TRANSPORT_RECOVERIES);
-      expect(cp.get()).toBeNull();
+      // A later poll must not retire the evidence: the block is still unresolved and the
+      // receipt still does not confirm acceptance, so the candidate stays for the operator.
+      expect(cp.get()?.candidateResult).toEqual(result);
     } finally { await f.cleanup(); }
   });
 
