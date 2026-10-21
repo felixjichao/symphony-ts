@@ -163,6 +163,8 @@ export interface OrchestratorAuthorityOptions {
    * 派发普通任务或 retry 前同步校验；返回 false 则拒绝派发。
    */
   readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
+  /** Fresh native-source admission for poll/retry launches. null denies; rejection means unavailable. */
+  readonly refreshDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => Promise<Issue | null>) | undefined;
 }
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
@@ -228,6 +230,8 @@ export class OrchestratorAuthority {
   private readonly stallTimeoutMs: () => number;
   private readonly cleanupPort: RetryWorkspaceCleanup | undefined;
   private readonly cleanupDiagnostic: ((diagnostic: RetryDiagnostic) => void) | undefined;
+  private readonly refreshDispatch: OrchestratorAuthorityOptions["refreshDispatch"];
+  private readonly inFlightAdmissions = new Set<Promise<Issue | null>>();
   private readonly canDispatch: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
 
   private readonly active = new Map<string, ActiveWorkerRecord>();
@@ -296,6 +300,38 @@ export class OrchestratorAuthority {
     this.cleanupPort = options.cleanupWorkspace ?? options.retry?.cleanupWorkspace;
     this.cleanupDiagnostic = options.onCleanupDiagnostic ?? options.retry?.onDiagnostic;
     this.canDispatch = options.canDispatch;
+    this.refreshDispatch = options.refreshDispatch;
+  }
+
+  /** Real scheduling evidence, including retry refresh after its timer was consumed. */
+  public continuitySchedule(issueId: string) {
+    const token = this.retryOwners.get(issueId);
+    if (!token) return null;
+    const retry = this.state.retryAttempts.get(issueId);
+    return { id: token, kind: "retry" as const,
+      due: retry === undefined || retry.dueAtMs <= this.monotonicNow() };
+  }
+
+  public continuityRetryReferences() {
+    return [...this.state.retryAttempts.values()].map(retry => ({ issueId: retry.issueId,
+      url: retry.issueUrl ?? null }));
+  }
+
+  public continuityIssues(): readonly Issue[] {
+    return [...this.state.running.values()].map(entry => entry.issue);
+  }
+
+  /** Current authority-owned progress and generation, never inferred from a process ID. */
+  public continuityOwner(issueId: string) {
+    const record = this.active.get(issueId);
+    if (!record) return null;
+    return { id: record.token,
+      fence: { lifecycleGeneration: this.lifecycleGeneration.get(issueId) ?? 0 },
+      liveness: { startedAt: record.entry.attempt.startedAt,
+        lastProgressAt: record.telemetry.lastProgressAt ?? "unknown" as const,
+        lastObservedAt: this.now(),
+        stallPolicy: { timeoutMs: this.stallTimeoutMs(), policy: "mark_stalled" as const } },
+    };
   }
 
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
@@ -392,6 +428,7 @@ export class OrchestratorAuthority {
       );
       await this.waitForIdle();
       await this.waitForCleanups();
+      await Promise.allSettled([...this.inFlightAdmissions]);
     })();
     return this.shutdownPromise;
   }
@@ -444,6 +481,33 @@ export class OrchestratorAuthority {
         attemptToken: null,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  /** Poll admission performs I/O before the authority's existing synchronous commit. */
+  public async dispatchIssueWithRefresh(issue: Issue): Promise<DispatchResult> {
+    if (!this.refreshDispatch) return this.dispatchIssue(issue);
+    const generation = this.lifecycleGeneration.get(issue.id);
+    if (this.stopping) return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    let fresh: Issue | null;
+    try { fresh = await this.refreshIssueForDispatch(issue, false); }
+    catch { return { kind: "not_eligible", issueId: issue.id, attemptToken: null }; }
+    if (this.stopping || generation !== this.lifecycleGeneration.get(issue.id)) {
+      return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    }
+    if (!fresh) return { kind: "not_eligible", issueId: issue.id, attemptToken: null };
+    return this.dispatchIssue(fresh);
+  }
+
+  private async refreshIssueForDispatch(issue: Issue, isRetry: boolean): Promise<Issue | null> {
+    if (!this.refreshDispatch) return issue;
+    const read = this.refreshDispatch(issue, { isRetry });
+    this.inFlightAdmissions.add(read);
+    try {
+      const fresh = await read;
+      return fresh?.id === issue.id ? fresh : null;
+    } finally {
+      this.inFlightAdmissions.delete(read);
     }
   }
 
@@ -1132,7 +1196,7 @@ export class OrchestratorAuthority {
       return; // 迟到结果：ownership 已变。
     }
 
-    const issue = refreshed.find((candidate) => candidate.id === issueId);
+    let issue = refreshed.find((candidate) => candidate.id === issueId);
     if (issue === undefined) {
       // 5. missing → 只释放 claim，不清理 workspace。
       this.releaseRetry(issueId);
@@ -1150,6 +1214,29 @@ export class OrchestratorAuthority {
       return;
     }
 
+    if (!isRetryDispatchAllowed(issue, this.state, this.policy, issueId)) {
+      this.releaseRetry(issueId);
+      return;
+    }
+    let fresh: Issue | null;
+    try {
+      fresh = await this.refreshIssueForDispatch(issue, true);
+    } catch {
+      if (!this.stopping && this.retryOwners.get(issueId) === token) {
+        this.scheduleRetry({ issueId, identifier: entry.identifier, issueUrl: entry.issueUrl ?? null,
+          attempt: entry.attempt + 1, kind: "failure", reason: "admission_refresh_failed",
+          error: "dispatch admission refresh failed" });
+      }
+      return; // observation failure preserves the reservation through bounded backoff
+    }
+    // Source reads may overlap replacement, cancellation, shutdown or another lifecycle.
+    // Never consume a newer retry's reservation with an old admission result.
+    if (this.stopping || this.retryOwners.get(issueId) !== token) return;
+    if (!fresh) {
+      this.releaseRetry(issueId);
+      return;
+    }
+    issue = fresh;
     if (
       !isRetryDispatchAllowed(issue, this.state, this.policy, issueId) ||
       (this.canDispatch !== undefined && !this.canDispatch(issue, { isRetry: true }))

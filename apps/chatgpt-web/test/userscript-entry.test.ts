@@ -175,7 +175,7 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
 
       // Poll until checkpoint is consumed and task completes
       const startMs = Date.now();
-      while (service.getTask(task.id)?.status !== "completed") {
+      while (service.getTask(task.id)?.status !== "completed" || cpStore.get() !== null) {
         if (Date.now() - startMs > 5000) {
           throw new Error("Timeout waiting for userscript auto-start to complete recovered task");
         }

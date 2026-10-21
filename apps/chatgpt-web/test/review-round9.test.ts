@@ -72,6 +72,10 @@ describe("bootstrap recovery preflight", () => {
       const old = await e.service.claimTask(task.id, { owner: "old-tab", ttlMs: 1000 });
       s = await e.service.putBinding(s.id, { adapter: "chatgpt-web", externalSessionRef: "first", resumeUri: "https://chatgpt.com/c/first" });
       e.advance(1001);
+      // The recovery authority, not an ordinary claim, settles the expired generation.
+      expect(await e.service.reclaimExpiredClaim({ taskId: task.id, revision: task.revision,
+        claimGeneration: old.task.claimGeneration, bindingGeneration: s.bindingGeneration,
+        leaseExpiresAtMs: old.lease.expiresAtMs })).toBe(true);
       const newer = await e.service.claimTask(task.id, { owner: "new-tab" });
       expect(newer.lease.generation).toBe(old.lease.generation + 1);
       s = await e.service.breakBinding(s.id);

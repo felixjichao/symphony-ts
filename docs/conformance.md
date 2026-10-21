@@ -370,3 +370,29 @@ Provider-neutral execution continuity, ownership fencing, and failure taxonomy c
 Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
 
 
+
+## Work-level liveness and reconciliation (NEST-138 / #147)
+
+§4 adjacent contracts, §7/§8 ownership and reconciliation, §14 retry safety.
+
+| Behavior | Evidence |
+|---|---|
+| Missing/valid/stale owner, meaningful progress boundaries, blocked/external wait/scheduled separation | `packages/orchestrator/src/work-continuity.test.ts` |
+| Re-observe before/after bounded delegation, changing admission/HEAD version cancellation, idempotence, unavailable source/readback, stop fencing | `packages/orchestrator/src/work-continuity.test.ts` |
+| Cross-scan response-loss/readback suppression, unrelated version/heartbeat changes, native resolution and delayed-proof stop fencing | `packages/orchestrator/src/work-continuity.test.ts`; `apps/cli/src/review-regressions.test.ts` (real Decision store and Delivery file readback) |
+| Merged PR with a single exact-target pending/expired/valid review waits for tracker sync without reclaim; explicit block and other-target conflicts win; poll/retry deny coding and native task/lease remains unchanged | `apps/cli/src/review-regressions.test.ts` (B5, real host and Decision store) |
+| Exact target/revision 9–10, same SHA on different PR, active cross-PR conflicts, terminal history, bound pending adapter, merged tracker wait and terminal/outage transitions | `apps/cli/src/review-regressions.test.ts` |
+| Authenticated ordinary Bridge poll, unrelated-WorkKey claim and direct expired-review claim preserve merged task/lease snapshots; explicit fenced recovery still renews generation and rejects stale credentials | `apps/cli/src/review-regressions.test.ts` (B6); `packages/decision/src/service.test.ts` |
+| Bridge startup and former timer period preserve merged review leases; fenced reclaim remains explicit and authenticated | `apps/cli/src/review-regressions.test.ts`; `packages/decision/src/continuity.test.ts` |
+| Certified pre-entry lock contention permits later compensation; post-entry response loss stays uncertain; native files and remote label/comment fixture confirm one completion | `apps/cli/src/review-regressions.test.ts` |
+| Final keyed tracker read rejects state/routing/required-label changes during remote I/O; remote CLOSED versus stale active tracker denies poll/retry | `apps/cli/src/review-regressions.test.ts` |
+| Merged with active plan or live Codex is contradictory; native plan leases and real worker PID remain intact | `apps/cli/src/review-regressions.test.ts` |
+| Atomic expired claim reclaim, concurrent attempts, renewed lease, revision/binding fences, authenticated bridge and safe observation | `packages/decision/src/continuity.test.ts` |
+| Real host tick scans without running workers, native store readback after reclaim, temporary tracker outage preserves owner | `apps/cli/src/work-continuity.test.ts` |
+| File-backed run/halt/manual/library compensation share mutation authority lock | `apps/cli/src/work-continuity.test.ts`; existing Delivery recovery regressions |
+| Continuity uses the canonical trim/lowercase active-state semantics; raw config values remain intact and whitespace/case variants launch real workers through both poll and retry | `apps/cli/src/review-regressions.test.ts` (B4, real app-server fixture subprocess and filesystem/PID readback) |
+| Inventory failure after successful candidates or earlier admission cannot dispatch; retry sees new Delivery pause, Decision owner, CI stage and temporary outage; remote CI is observed without local workspace | `apps/cli/src/review-regressions.test.ts` (B1–B3 regressions) |
+| Retry admission readback preserves reservation on outage, rejects pauses during observation and fences stop/replacement; refreshed Issue is used and concurrent admissions commit one owner | `apps/cli/src/review-regressions.test.ts`; `packages/orchestrator/src/retry-queue.test.ts` |
+| Stable Codex progress replaces raw event activity while retaining timeout disable/boundary semantics | `packages/orchestrator/src/reconciliation.test.ts`; agent event/regression suites |
+
+The host uses the existing marker/HEAD-bound Delivery observer and does not weaken merge checks. Browser automation, durable retry reconstruction and incident policy are deferred (#148–#150). Fixture checks are not real GitHub/Codex verification. [Design note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).

@@ -51,6 +51,16 @@ No heartbeat or expiry scheduler exists here. The future store must compare curr
 state, generation/token and lease expiry **atomically** with result insertion and
 transition to completed. Passing a pure helper does not prove concurrency safety.
 
+Decision service recovery policy: ordinary `getNextTask()` polling is read-only, and
+`claimTask()` only transitions its pending target. Neither request releases expired
+leases elsewhere (or implicitly releases its own expired target). An unsettled leased
+task still excludes another claim in the same session. Work-aware policy or explicit
+operator action must first use fenced reclaim/cancel/supersede as appropriate; only
+then may a new pending claim acquire fresh credentials. The native reclaim checks
+revision, claim generation, binding generation and the exact observed expiry in one
+transaction. This preserves merged/external-wait and blocked work across normal
+Bridge requests without moving tracker/GitHub policy into Decision.
+
 ## Results and approval
 
 `DecisionResult` is a discriminated Plan/Review envelope containing version,

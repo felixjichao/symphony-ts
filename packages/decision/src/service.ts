@@ -1,3 +1,4 @@
+import type { DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";
 import crypto from "node:crypto";
 import {
   decisionSessionId,
@@ -68,6 +69,39 @@ export class DecisionService {
   /** Read-only operational view from the already-open store. */
   observeWork(root: DecisionWorkItemRef) {
     return this.store.observeWork(root);
+  }
+
+  /** Read current tasks from the already-open authoritative store; never expose lease tokens. */
+  continuityWork(): readonly DecisionContinuityWork[] {
+    const claimBindings = this.store.getState().claimBindingGenerations;
+    return this.store.getAllSessions().map(session => ({
+      workKey: session.root, sessionId: session.id, bindingGeneration: session.bindingGeneration,
+      tasks: this.getTasksForSession(session.id).map(task => ({
+        id: task.id, revision: task.revision, kind: task.kind, status: task.status,
+        claimBindingGeneration: claimBindings[task.id] ?? null,
+        claimGeneration: task.claimGeneration, createdAtMs: task.createdAtMs,
+        owner: task.lease?.owner ?? null, leaseExpiresAtMs: task.lease?.expiresAtMs ?? null,
+        verdict: this.getResult(task.id)?.verdict ?? null,
+        target: task.kind === "review" ? task.target : null,
+      })),
+    }));
+  }
+
+  /** Authority commit: renewal, completion, rebinding and competing reclaim all win over stale callers. */
+  async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
+    return this.store.transaction(draft => {
+      const task = draft.tasks[expected.taskId];
+      const session = task ? draft.sessions[task.sessionId] : undefined;
+      const now = this.clock();
+      if (!task || !session || session.status === "completed"
+        || task.revision !== expected.revision || task.claimGeneration !== expected.claimGeneration
+        || session.bindingGeneration !== expected.bindingGeneration
+        || (task.status !== "claimed" && task.status !== "running") || !task.lease
+        || task.lease.expiresAtMs !== expected.leaseExpiresAtMs || now < task.lease.expiresAtMs) return false;
+      draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
+      delete draft.claimBindingGenerations?.[task.id];
+      return true;
+    });
   }
 
   getStore(): DurableDecisionStore {
@@ -1027,27 +1061,7 @@ export class DecisionService {
   }
 
   async getNextTask(): Promise<NextTaskResponse | null> {
-    // Perform lazy expiry cleanup in a lightweight transaction if needed
-    const now = this.clock();
-    let hasExpired = false;
-    for (const t of this.store.getAllTasks()) {
-      if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-        hasExpired = true;
-        break;
-      }
-    }
-
-    if (hasExpired) {
-      await this.store.transaction((draft) => {
-        const txNow = this.clock();
-        for (const t of Object.values(draft.tasks)) {
-          if ((t.status === "claimed" || t.status === "running") && t.lease && txNow >= t.lease.expiresAtMs) {
-            draft.tasks[t.id] = releaseExpiredDecisionTask(t, txNow);
-          }
-        }
-      });
-    }
-
+    // Selection is read-only. Only the work-aware coordinator delegates fenced reclaim.
     // Stable selection: pending task in active session, sorted by createdAtMs ascending, then ID
     const candidates = this.store
       .getAllTasks()
@@ -1074,7 +1088,7 @@ export class DecisionService {
     }
 
     return await this.store.transaction((draft) => {
-      let task = draft.tasks[taskId];
+      const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
 
       const session = draft.sessions[task.sessionId];
@@ -1085,22 +1099,13 @@ export class DecisionService {
 
       const now = this.clock();
 
-      // Lazy release all expired leased tasks in the store
-      for (const t of Object.values(draft.tasks)) {
-        if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-          draft.tasks[t.id] = releaseExpiredDecisionTask(t, now);
-        }
-      }
-      task = draft.tasks[taskId]!;
-
-      // Session execution mutual exclusion: no concurrent active execution within the same session
+      // An unsettled lease remains owned until explicit fenced reclaim/cancellation, even after expiry.
       for (const otherTask of Object.values(draft.tasks)) {
         if (
           otherTask.sessionId === task.sessionId &&
           otherTask.id !== taskId &&
           (otherTask.status === "claimed" || otherTask.status === "running") &&
-          otherTask.lease &&
-          now < otherTask.lease.expiresAtMs
+          otherTask.lease
         ) {
           throw new DecisionConflictError(
             `Session "${task.sessionId}" already has an actively executing task "${otherTask.id}" under lease`
