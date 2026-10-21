@@ -212,11 +212,11 @@ describe("approved bootstrap navigation recovery", () => {
       const outcome = await driver.runOnce();
 
       expect(sends).toBe(0);
-      expect(outcome?.status).toBe("failed");
-      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect(outcome?.status).toBe("blocked");
+      expect(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
       expect(service.getSession(session.id)?.binding).toBeNull();
       expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
-      expect(service.getReceipt(task.id)?.payload as { error?: string } | undefined).toMatchObject({ error: "human_required" });
+      expect(service.getReceipt(task.id)).toBeNull();
       expect(cp.get()).toBeNull();
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });
@@ -269,11 +269,11 @@ describe("approved bootstrap navigation recovery", () => {
       const outcome = await driver.runOnce();
 
       expect(sends).toBe(0);
-      expect(outcome?.status).toBe("failed");
+      expect(outcome?.status).toBe("blocked");
       const currentTask = service.getTask(task.id);
-      expect(currentTask?.status).toBe("failed");
-      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
-      expect((service.getReceipt(task.id)?.payload as { error?: string })?.error).toBe("human_required");
+      expect(currentTask?.status).toBe("claimed");
+      expect(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
+      expect(service.getReceipt(task.id)).toBeNull();
       expect(cp.get()).toBeNull();
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });
@@ -402,8 +402,8 @@ describe("approved bootstrap navigation recovery", () => {
       const outcome = await driver.runOnce();
 
       expect(sends).toBe(0);
-      expect(outcome?.status).toBe("failed");
-      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect(outcome?.status).toBe("blocked");
+      expect(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
       expect(service.getSession(session.id)?.binding).toBeNull();
       expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
       expect(cp.get()).toBeNull();
@@ -467,13 +467,9 @@ describe("approved bootstrap navigation recovery", () => {
         const outcome = await driver.runOnce();
 
         expect(sends).toBe(0);
-        expect(outcome?.status).toBe("failed");
-        expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe(expectedError);
-        expect(service.getReceipt(task.id)?.payload).toMatchObject({ error: expectedError });
-        expect((service.getReceipt(task.id)?.payload as { retryable?: boolean })?.retryable).toBe(false);
-        expect((service.getReceipt(task.id)?.payload as { details?: { suggestedAction?: string } })?.details?.suggestedAction).toBe(
-          expectedError === "human_required" ? "human_intervention" : "rebind"
-        );
+        expect(outcome?.status).toBe("blocked");
+        expect(service.getExecution(task.id)?.blocked?.reason).toBe(expectedError === "human_required" ? "human_required" : "recovery_exhausted");
+        expect(service.getReceipt(task.id)).toBeNull();
         expect(service.getSession(session.id)?.binding).toBeNull();
         expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
         expect(cp.get()).toBeNull();
@@ -537,8 +533,8 @@ describe("approved bootstrap navigation recovery", () => {
       const outcome = await driver.runOnce();
 
       expect(sends).toBe(0);
-      expect(outcome?.status).toBe("failed");
-      expect((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect(outcome?.status).toBe("blocked");
+      expect(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
       expect(service.getSession(session.id)?.binding).toBeNull();
       expect(service.getSession(session.id)?.bindingGeneration).toBe(1);
       expect(cp.get()).toBeNull();

@@ -1,4 +1,5 @@
 import type {
+  DecisionExecution,
   DecisionSession,
   DecisionTask,
   DecisionResult,
@@ -90,12 +91,14 @@ export interface DecisionStoreRecord {
   readonly contexts: Record<string, DecisionContextBundle>;
   readonly plans: Record<string, DecisionPlanRecord>;
   readonly claimBindingGenerations: Record<string, number>;
+  readonly executions?: Record<string, DecisionExecution>;
 }
 
 export interface DecisionStoreConfig {
   readonly storeDir: string;
   readonly clock?: (() => UtcTimestampMs) | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  readonly authorizeExecution?: ((task: DecisionTask) => Promise<boolean>) | undefined;
 }
 
 export interface DecisionBridgeConfig {
@@ -106,6 +109,7 @@ export interface DecisionBridgeConfig {
   readonly allowedOrigins?: readonly string[] | undefined;
   readonly clock?: (() => UtcTimestampMs) | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  readonly authorizeExecution?: ((task: DecisionTask) => Promise<boolean>) | undefined;
 }
 
 export interface ClaimTaskRequest {

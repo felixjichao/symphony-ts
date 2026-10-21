@@ -622,7 +622,7 @@ describe("DecisionTabDriver", () => {
         if (method === "GET" && path.includes("/sessions/")) {
           return { session: sampleSession } as unknown as T;
         }
-        if (method === "POST" && path.includes("/fail")) {
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
           submittedFailure = body;
           return {
             receipt: {
@@ -669,9 +669,9 @@ describe("DecisionTabDriver", () => {
     });
 
     const outcome = await driver.resumeCheckpointIfAvailable();
-    expect(outcome?.status).toBe("failed");
+    expect(outcome?.status).toBe("blocked");
     expect(mockAdapter.executeTask).not.toHaveBeenCalled();
-    expect((submittedFailure as { error?: string } | null)?.error).toBe("human_required");
+    expect((submittedFailure as { reason?: string } | null)?.reason).toBe("human_required");
     expect(cpStore.get()).toBeNull();
   });
 
@@ -736,7 +736,7 @@ describe("DecisionTabDriver", () => {
         if (method === "GET" && path.includes("/receipt")) {
           throw new Error("Network offline during receipt check");
         }
-        if (method === "POST" && path.includes("/fail")) {
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
           failCallSpy();
           return {} as unknown as T;
         }
@@ -1392,7 +1392,7 @@ describe("DecisionTabDriver", () => {
         if (method === "POST" && path.includes("/start")) {
           return {} as unknown as T;
         }
-        if (method === "POST" && path.includes("/fail")) {
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
           return await failureSubmission();
         }
         if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
@@ -1456,7 +1456,7 @@ describe("DecisionTabDriver", () => {
         if (method === "POST" && path.includes("/start")) {
           return {} as unknown as T;
         }
-        if (method === "POST" && path.includes("/fail")) {
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
           throw new BridgeHttpError("Claim lease has already expired", "conflict", 409);
         }
         if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {

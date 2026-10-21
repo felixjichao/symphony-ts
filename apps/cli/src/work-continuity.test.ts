@@ -43,7 +43,14 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
     tick!(); await host.loop.settled();
     expect(service.getTask(task.id)?.status).toBe("pending");
     expect(host.workContinuity.observations[0]?.result).toBe("applied");
-    await service.claimTask(task.id, { owner: "new-web", ttlMs: 1000 });
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("external_wait");
+    const replacement = await service.claimTask(task.id, { owner: "new-web", ttlMs: 1000 });
+    now = 2500;
+    await service.blockExecution(task.id, { owner: replacement.lease.owner, token: replacement.lease.token,
+      generation: replacement.lease.generation, reason: "auth_required" });
+    tick!(); await host.loop.settled();
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("blocked");
+    expect(host.state.running.size).toBe(0);
     now = 4000; offline = true;
     tick!(); await host.loop.settled();
     expect(service.getTask(task.id)?.lease?.owner).toBe("new-web");

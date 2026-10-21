@@ -46,6 +46,7 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
     mockWin = new MockWindow() as MockWindow & { sessionStorage: MockSessionStorage };
     sessionStorage = new MockSessionStorage();
     mockWin.sessionStorage = sessionStorage;
+    Object.assign(mockWin, { localStorage: sessionStorage });
 
     // Attach to global scope for userscript execution
     (globalThis as unknown as { window: unknown }).window = mockWin;
@@ -62,7 +63,7 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
   });
 
   it("initializes in Idle state without auto-starting when sessionStorage is empty", () => {
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBeNull();
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBeNull();
 
     activeController = initSymphonyUserscript({ bridgeBaseUrl: "http://127.0.0.1:4040" });
 
@@ -73,7 +74,7 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
   });
 
   it("automatically starts driver across page reconstruction when symphony_driver_enabled is true", async () => {
-    sessionStorage.setItem("symphony_driver_enabled", "true");
+    sessionStorage.setItem("symphony_driver_enabled:http://127.0.0.1:4040", "true");
 
     activeController = initSymphonyUserscript({ bridgeBaseUrl: "http://127.0.0.1:4040" });
 
@@ -87,29 +88,44 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
     activeController = initSymphonyUserscript({ bridgeBaseUrl: "http://127.0.0.1:4040" });
 
     const toggleBtn = mockDoc.getElementById("symphony-toggle-btn");
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBeNull();
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBeNull();
 
     // Click to start
     toggleBtn?.click();
 
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBe("true");
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBe("true");
     const statusPill = mockDoc.getElementById("symphony-status-pill");
     expect(statusPill?.textContent).toContain("Running");
   });
 
   it("clicking Stop Driver clears symphony_driver_enabled to false", () => {
-    sessionStorage.setItem("symphony_driver_enabled", "true");
+    sessionStorage.setItem("symphony_driver_enabled:http://127.0.0.1:4040", "true");
     activeController = initSymphonyUserscript({ bridgeBaseUrl: "http://127.0.0.1:4040" });
 
     const toggleBtn = mockDoc.getElementById("symphony-toggle-btn");
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBe("true");
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBe("true");
 
     // Click to stop
     toggleBtn?.click();
 
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBeNull();
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBe("false");
     const statusPill = mockDoc.getElementById("symphony-status-pill");
     expect(statusPill?.textContent).toContain("Idle");
+  });
+
+  it("reopens with a new tab identity and honors persistent Stop across pages", async () => {
+    activeController = initSymphonyUserscript({ autoStart: true });
+    activeController.getDriver()?.stop(); // Page loss, not the user's durable Stop.
+    mockDoc = new MockDocument();
+    (globalThis as unknown as { document: unknown }).document = mockDoc;
+    mockWin.sessionStorage = new MockSessionStorage();
+    activeController = initSymphonyUserscript();
+    expect(activeController.isRunning()).toBe(true);
+    activeController.stop();
+    mockDoc = new MockDocument();
+    (globalThis as unknown as { document: unknown }).document = mockDoc;
+    activeController = initSymphonyUserscript();
+    expect(activeController.isRunning()).toBe(false);
   });
 
   it("auto-starts across reconstruction, consumes checkpoint, and completes work against controlled bridge", async () => {
@@ -163,7 +179,7 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
         win: mockWin as unknown as Window,
       });
 
-      sessionStorage.setItem("symphony_driver_enabled", "true");
+      sessionStorage.setItem("symphony_driver_enabled:http://127.0.0.1:4040", "true");
       const transport = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${bridge.getPort()}` });
 
       activeController = initSymphonyUserscript({
@@ -193,8 +209,8 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
     }
   });
 
-  it("stops driver and clears enabled flag upon fatal 401/403 authorization error", async () => {
-    sessionStorage.setItem("symphony_driver_enabled", "true");
+  it("stops mutations but retains persistent intent on 401/403 for read-only authorization recovery", async () => {
+    sessionStorage.setItem("symphony_driver_enabled:http://127.0.0.1:4040", "true");
 
     const rejectingTransport = {
       baseUrl: "http://127.0.0.1:4040",
@@ -208,16 +224,12 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
       pollIntervalMs: 20,
     });
 
-    // Wait briefly for driver loop to hit 401
     const startMs = Date.now();
-    while (sessionStorage.getItem("symphony_driver_enabled") !== null) {
-      if (Date.now() - startMs > 2000) {
-        throw new Error("Timeout waiting for 401 error to clear driver enabled state");
-      }
-      await new Promise((r) => setTimeout(r, 50));
+    while (activeController.isRunning()) {
+      if (Date.now() - startMs > 2000) throw new Error("Timeout waiting for authorization block");
+      await new Promise((r) => setTimeout(r, 20));
     }
-
-    expect(sessionStorage.getItem("symphony_driver_enabled")).toBeNull();
+    expect(sessionStorage.getItem("symphony_driver_enabled:http://127.0.0.1:4040")).toBe("true");
     const statusPill = mockDoc.getElementById("symphony-status-pill");
     expect(statusPill?.textContent).toContain("Error");
   });

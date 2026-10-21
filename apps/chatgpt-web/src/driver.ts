@@ -42,7 +42,12 @@ import {
   detectAuthRequired,
   isConversationAssociatedWithBootstrap,
 } from "./probes";
+import { DECISION_MAX_TRANSPORT_RECOVERIES, mapDecisionAdapterFailure, type DecisionExecution } from "@symphony/domain/decision";
 import { canonicalJsonEqual } from "./canonical-json";
+
+class ExecutionBlocked extends Error {
+  constructor(readonly session: DecisionSession, readonly reason: string) { super(reason); }
+}
 
 function isValidMatchingResultReceipt(
   receipt: SubmissionReceipt,
@@ -70,6 +75,7 @@ export interface DecisionTabDriverOptions {
   readonly defaultClaimTtlMs?: number | undefined;
   readonly navigationTimeoutMs?: number | undefined;
   readonly maxNavigationAttempts?: number | undefined;
+  readonly shouldRun?: (() => boolean) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 }
 
@@ -83,6 +89,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   readonly defaultClaimTtlMs: number;
   readonly navigationTimeoutMs: number;
   readonly maxNavigationAttempts: number;
+  readonly shouldRun?: (() => boolean) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 
   private isRunning = false;
@@ -103,10 +110,14 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.navigationTimeoutMs = options.navigationTimeoutMs ?? 180_000;
     this.maxNavigationAttempts = options.maxNavigationAttempts ?? 3;
     this.onError = options.onError;
+    this.shouldRun = options.shouldRun;
 
     if (this.adapter instanceof ChatGptWebAdapter) {
       this.adapter.setStepListener((step, meta) => {
         this.updateCheckpointStep(step, meta);
+        // Persist the possible side effect before clicking Send, so a lost tab cannot replay it.
+        if (step === "prompt_submitting" || step === "bootstrap_submitting" || step === "navigating") return this.publishProgress(step);
+
       });
     }
   }
@@ -139,7 +150,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       // If error is 409 and task is already running under the same lease credentials, treat as idempotent success
       const taskRes = await this.transport
         .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`)
-        .catch(() => null);
+        .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
       if (
         taskRes?.task?.status === "running" &&
         taskRes.task.lease?.owner === params.owner &&
@@ -223,6 +234,21 @@ export class DecisionTabDriver implements DecisionTaskController {
       retryable?: boolean;
     }
   ): Promise<{ receipt: SubmissionReceipt; failure: DecisionTaskFailure; superseded: boolean }> {
+    const details = params.details && typeof params.details === "object" ? params.details as Record<string, unknown> : {};
+    const mapping = mapDecisionAdapterFailure({ code: params.error as DecisionAdapterErrorCode,
+      message: params.error, retryable: params.retryable,
+      suggestedAction: details["suggestedAction"] as "retry" | "rebind" | "human_intervention" | "fail_closed" | undefined });
+    const blockedError = params.error === "binding_broken" ? "recovery_exhausted" : params.error === "recovery_exhausted" ? "recovery_exhausted" : !mapping.mapped || mapping.diagnostic.category === "invariant_violation"
+      ? "human_required" : mapping.diagnostic.category === "blocked_external" ? "human_required" : params.error;
+    if (blockedError === "human_required" || blockedError === "auth_required" || blockedError === "recovery_exhausted") {
+      await this.transport.request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/block`, {
+        owner: params.owner, token: params.token, generation: params.generation, reason: blockedError,
+      });
+      const session = this.activeSession ?? (await this.transport.request<{ session: DecisionSession }>("GET", `/v1/sessions/${encodeURIComponent(this.checkpointStore.get()?.sessionId ?? "")}`)).session;
+      this.checkpointStore.delete();
+      this.stopHeartbeat();
+      throw new ExecutionBlocked(session, blockedError);
+    }
     const res = await this.transport.request<{
       receipt: SubmissionReceipt;
       failure: DecisionTaskFailure;
@@ -298,6 +324,10 @@ export class DecisionTabDriver implements DecisionTaskController {
       `/v1/sessions/${encodeURIComponent(sessionId)}/rebind`,
       params
     );
+    if (res.session.bindingGeneration <= params.expectedGeneration) {
+      this.checkpointStore.delete();
+      throw new DecisionConflictError("Rebind blocked by authoritative recovery budget");
+    }
     if (this.activeSession && this.activeSession.id === sessionId) {
       this.activeSession = res.session;
     }
@@ -453,9 +483,30 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
   }
 
+  private executionProgress(phase?: string): { phase: string; responseLength: number } {
+    const cp = this.checkpointStore.get();
+    let responseLength = 0;
+    if (cp?.step === "waiting_response" && typeof document !== "undefined") {
+      const turns = getAllAssistantTurns(document);
+      if (turns.length > (cp.baselineCount ?? turns.length)) responseLength = turns.at(-1)?.textContent?.length ?? 0;
+    }
+    return { phase: phase ?? cp?.step ?? "claimed", responseLength };
+  }
+
+  private async publishProgress(phase: string): Promise<void> {
+    if (this.shouldRun && !this.shouldRun()) { this.stop(); throw new Error("Driver disabled"); }
+    const cp = this.checkpointStore.get();
+    if (!cp) throw new Error("Cannot authorize prompt without a checkpoint");
+    await this.transport.request("POST", `/v1/tasks/${encodeURIComponent(cp.taskId)}/heartbeat`, {
+      owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration,
+      ttlMs: this.defaultClaimTtlMs, progress: this.executionProgress(phase),
+    });
+  }
+
   startHeartbeat(task: DecisionTask, lease: DecisionLease, onExpired?: () => void): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(async () => {
+      if (this.shouldRun && !this.shouldRun()) { this.stop(); return; }
       try {
         const hbRes = await this.transport.request<{ expiresAtMs: number; ttlMs: number }>(
           "POST",
@@ -465,6 +516,7 @@ export class DecisionTabDriver implements DecisionTaskController {
             token: lease.token,
             generation: lease.generation,
             ttlMs: this.defaultClaimTtlMs,
+            progress: this.executionProgress(),
           }
         );
         if (hbRes && typeof hbRes.expiresAtMs === "number") {
@@ -530,6 +582,14 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   async resumeCheckpointIfAvailable(): Promise<TaskExecutionOutcome | null> {
+    try { return await this.resumeObservedCheckpoint(); }
+    catch (err) {
+      if (err instanceof ExecutionBlocked) return { status: "blocked", session: err.session, reason: err.reason };
+      throw err;
+    }
+  }
+
+  private async resumeObservedCheckpoint(): Promise<TaskExecutionOutcome | null> {
     const cp = this.checkpointStore.get();
     if (!cp) return null;
 
@@ -539,9 +599,9 @@ export class DecisionTabDriver implements DecisionTaskController {
     }
 
     // 1. Check task status and session on bridge FIRST without requiring heartbeat/lease renewal!
-    let taskRes: { task: DecisionTask } | null = null;
+    let taskRes: { task: DecisionTask; execution?: DecisionExecution | null } | null = null;
     try {
-      taskRes = await this.transport.request<{ task: DecisionTask }>(
+      taskRes = await this.transport.request<{ task: DecisionTask; execution?: DecisionExecution | null }>(
         "GET",
         `/v1/tasks/${encodeURIComponent(cp.taskId)}`
       );
@@ -602,6 +662,11 @@ export class DecisionTabDriver implements DecisionTaskController {
     if (isStaleRollover) {
       this.checkpointStore.delete();
       return null;
+    }
+
+    if (taskRes?.execution?.blocked && (currentTask.status === "claimed" || currentTask.status === "running")) {
+      this.checkpointStore.delete();
+      return { status: "blocked", session: sessionRes!.session, reason: taskRes.execution.blocked.reason };
     }
 
     if (cp.step === "rebind_submitting") {
@@ -743,7 +808,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     if (taskRes?.task?.status === "failed") {
       const receiptRes = await this.transport
         .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
-        .catch(() => null);
+        .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
       this.checkpointStore.delete();
       if (receiptRes?.receipt && receiptRes.receipt.type === "failure") {
         return {
@@ -797,10 +862,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         // Re-submission failed. Check whether bridge recorded it or if it failed/superseded
         const freshTask = await this.transport
           .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
-          .catch(() => null);
+          .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
         const receiptRes = await this.transport
           .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
-          .catch(() => null);
+          .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
         if (receiptRes?.receipt) {
           const receipt = receiptRes.receipt;
@@ -857,6 +922,12 @@ export class DecisionTabDriver implements DecisionTaskController {
       }
     }
 
+
+    if ((cp.recoveryFailures ?? 0) >= DECISION_MAX_TRANSPORT_RECOVERIES && isClaimValid) {
+      await this.submitFailure(cp.taskId, { owner: cp.leaseOwner, token: cp.leaseToken,
+        generation: cp.leaseGeneration, error: "recovery_exhausted", retryable: false });
+    }
+
     // 3. For ongoing uncompleted execution, verify checkpoint expiry & lease validity via heartbeat
     if (!isClaimValid || isCheckpointExpired(cp, Date.now())) {
       this.checkpointStore.delete();
@@ -873,6 +944,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           token: cp.leaseToken,
           generation: cp.leaseGeneration,
           ttlMs: this.defaultClaimTtlMs,
+          progress: this.executionProgress(),
         }
       );
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
@@ -1322,7 +1394,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           error: failure.error,
           details: failure.details,
           retryable: failure.retryable,
-        }).catch(() => null);
+        }).catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
         this.checkpointStore.delete();
         if (failRes) {
@@ -1473,7 +1545,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           error: failure.error,
           details: failure.details,
           retryable: failure.retryable,
-        }).catch(() => null);
+        }).catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
         this.checkpointStore.delete();
         if (failRes) {
@@ -1602,7 +1674,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           error: failure.error,
           details: failure.details,
           retryable: failure.retryable,
-        }).catch(() => null);
+        }).catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
         this.checkpointStore.delete();
         if (failRes) {
@@ -1643,7 +1715,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Check if bridge already accepted it (authoritative receipt):
       const receiptRes = await this.transport
         .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(task.id)}/receipt`)
-        .catch(() => null);
+        .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
       if (receiptRes?.receipt) {
         const receipt = receiptRes.receipt;
@@ -1728,6 +1800,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       this.checkpointStore.delete();
       return outcome;
     } catch (err: unknown) {
+      if (err instanceof ExecutionBlocked) return { status: "blocked", session: err.session, reason: err.reason };
       // Expected supersede/cancel race: the bridge rejected the result or failure
       // submission because the task became non-actionable while executing (e.g. a
       // newer PR HEAD superseded this review task). The stale outcome is correctly
@@ -1798,6 +1871,16 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   async runOnce(): Promise<TaskExecutionOutcome | null> {
+    try { return await this.runOnceObserved(); }
+    catch (err) {
+      if (err instanceof ExecutionBlocked) return { status: "blocked", session: err.session, reason: err.reason };
+      const cp = this.checkpointStore.get();
+      if (cp) this.checkpointStore.set({ ...cp, recoveryFailures: Math.min(DECISION_MAX_TRANSPORT_RECOVERIES, (cp.recoveryFailures ?? 0) + 1) });
+      throw err;
+    }
+  }
+
+  private async runOnceObserved(): Promise<TaskExecutionOutcome | null> {
     // 1. Check for recoverable checkpoint first
     const resumed = await this.resumeCheckpointIfAvailable();
     if (resumed) return resumed;
@@ -1835,8 +1918,10 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.isRunning = true;
 
     while (this.isRunning) {
+      if (this.shouldRun && !this.shouldRun()) { this.stop(); break; }
       try {
-        await this.runOnce();
+        const outcome = await this.runOnce();
+        if (outcome?.status === "blocked") this.onError?.(new Error(`Blocked: ${outcome.reason}`));
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
         if (this.onError) {

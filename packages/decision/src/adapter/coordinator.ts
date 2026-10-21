@@ -128,7 +128,8 @@ export interface TaskExecutionSupersededOutcome {
 export type TaskExecutionOutcome =
   | TaskExecutionSuccessOutcome
   | TaskExecutionFailureOutcome
-  | TaskExecutionSupersededOutcome;
+  | TaskExecutionSupersededOutcome
+  | { readonly status: "blocked"; readonly session: DecisionSession; readonly reason: string };
 
 export async function executeTaskWithAdapter(
   options: ExecuteTaskWithAdapterOptions

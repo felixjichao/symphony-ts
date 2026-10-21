@@ -80,7 +80,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly timeoutMs: number;
   private readonly stabilizationMs: number;
   private readonly checkIntervalMs: number;
-  private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null = null;
+  private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void | Promise<void>) | null = null;
 
   private async waitForSendButton(options: {
     signal?: AbortSignal | undefined;
@@ -146,7 +146,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     this.checkIntervalMs = options.checkIntervalMs ?? 500;
   }
 
-  setStepListener(listener: ((step: DriverStep, meta?: Record<string, unknown>) => void) | null): void {
+  setStepListener(listener: ((step: DriverStep, meta?: Record<string, unknown>) => void | Promise<void>) | null): void {
     this.stepListener = listener;
   }
 
@@ -306,7 +306,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       const currentConvId = extractConversationIdFromUrl(win.location.href);
       if (currentConvId) {
         // If the browser tab is on an existing conversation, navigate to root / new chat
-        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
+        await this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
         win.location.assign(newChatUrl);
 
         // Wait for route to actually change to new chat
@@ -325,10 +325,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
           await new Promise((r) => setTimeout(r, this.checkIntervalMs));
         }
       } else {
-        this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
+        await this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
       }
     } else {
-      this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
+      await this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
     }
 
     // Wait for composer element to be available and ready in dynamic docSupplier
@@ -358,7 +358,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const baselineCount = initialTurns.length;
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
 
-    this.stepListener?.("bootstrap_submitting", { baselineCount });
+    await this.stepListener?.("bootstrap_submitting", { baselineCount });
     sendBtn.click();
     this.stepListener?.("bootstrap_waiting", { baselineCount, targetConvId: null });
 
@@ -469,7 +469,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       const currentConvId = extractConversationIdFromUrl(currentUrl);
 
       if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
-        this.stepListener?.("navigating", { targetUri: binding.resumeUri, targetConvId });
+        await this.stepListener?.("navigating", { targetUri: binding.resumeUri, targetConvId });
         win.location.assign(binding.resumeUri);
       }
 
@@ -686,7 +686,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
 
     // Report prompt submitting step to listener (e.g. driver checkpoint)
-    this.stepListener?.("prompt_submitting", { baselineCount });
+    await this.stepListener?.("prompt_submitting", { baselineCount });
 
     sendBtn.click();
 

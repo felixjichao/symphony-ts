@@ -528,3 +528,13 @@ CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `a
 
 Run `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`,
 `npm run typecheck`, then `npm run gate`.
+
+## Decision/Web execution facts
+
+Optional task-scoped `executions` metadata in the v1 store carries phase, response length (no text), progress deadline, cumulative recovery attempts and nonterminal `blocked` cause/unblock instructions. Claim establishes a ten-minute grace period. Only advanced stages or growth of a new assistant response extend progress; ordinary heartbeats do not. After the deadline the authority refuses renewal, and the existing work-aware coordinator may reclaim after lease expiry. A valid lease is never stolen.
+
+`GET /v1/continuity` and `GET /v1/tasks/:id/execution` expose these facts without credentials. Heartbeat accepts optional `progress: { phase, responseLength }`, fenced by its current lease and binding. Reclaim/rebind share a three-mutation task budget across restarts. A possible prompt/bootstrap/result with a lost owner blocks instead of replaying. `POST /v1/tasks/:id/block` takes live `owner`, `token`, `generation` and a stable `reason` (`auth_required`, `human_required`, `recovery_exhausted`, `invariant_violation`); it creates neither a result receipt nor a terminal failure.
+
+After inspecting the conversation, receipt and blocking cause, an authenticated operator can explicitly authorize recovery with `POST /v1/continuity/unblock` and the current `{ taskId, revision, claimGeneration, bindingGeneration, leaseExpiresAtMs }`. Stale observations are refused. This releases and fences the old attempt and resets its budget/grace; it never authorizes replay under old credentials. Polling does not invoke this operator action. Exact-HEAD result validation, result conflicts and ambiguous-submit receipt matching remain unchanged.
+
+The production Bridge CLI injects a fresh read-only GitHub PR observation before browser navigation/Send and rebind: the PR must still be open at the exact task HEAD. Missing/unreadable facts deny mutation. Native task status, lease and binding are revalidated in the transaction after this I/O. Embedders constructing `DecisionService` directly supply the equivalent `authorizeExecution` port for external target authority; the store does not import tracker or own GitHub policy.

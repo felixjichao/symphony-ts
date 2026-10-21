@@ -396,3 +396,11 @@ Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`.
 | Stable Codex progress replaces raw event activity while retaining timeout disable/boundary semantics | `packages/orchestrator/src/reconciliation.test.ts`; agent event/regression suites |
 
 The host uses the existing marker/HEAD-bound Delivery observer and does not weaken merge checks. Browser automation, durable retry reconstruction and incident policy are deferred (#148–#150). Fixture checks are not real GitHub/Codex verification. [Design note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+
+## Decision/Web continuity (NEST-132 / #148)
+
+| Contract | Implementation / automated evidence | Real environment |
+|---|---|---|
+| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Browser close/reopen pending |
+| SPEC §7/§8/§14 adjacency: native-source host diagnosis and safe reclaim | `apps/cli/src/work-continuity.test.ts`, `review-regressions.test.ts`: real store/host tick, blocked admission, explicit browser-page wait, exact-HEAD conflicts | Real host/browser fault injection pending |
+| Web navigation/send fencing, receipt-first recovery and persistent intent/Stop | `apps/chatgpt-web/test/driver.test.ts`, `userscript-entry.test.ts`, `review-bootstrap.test.ts`, `review-round11.test.ts` | Real Tampermonkey/auth/network acceptance pending |

@@ -1,16 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { validateStoreRecord } from "./store";
 import { describe, expect, it } from "vitest";
 import { githubDecisionRoot } from "@symphony/domain";
 import { DecisionBridge, DecisionBridgeClient, DecisionService, DurableDecisionStore, type ReclaimDecisionClaim } from "./index";
 
-async function fixture() {
+async function fixture(authorizeExecution?: () => Promise<boolean>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "continuity-"));
   let now = 1000;
   const store = new DurableDecisionStore({ storeDir: dir });
   await store.open();
-  const service = new DecisionService(store, { clock: () => now });
+  const service = new DecisionService(store, { clock: () => now, authorizeExecution });
   const session = await service.createSession(githubDecisionRoot("owner", "repo", 1));
   const task = await service.createPlanTask(session.id);
   const claimed = await service.claimTask(task.id, { owner: "web", ttlMs: 1000 });
@@ -94,4 +95,151 @@ it("bridge stop shares a completion barrier and a stopped bridge can restart saf
     await bridge.start();
     expect(bridge.getPort()).not.toBe(null);
   } finally { await bridge.stop(); await f.cleanup(); }
+});
+
+it("heartbeat does not manufacture progress and stalled execution cannot renew forever", async () => {
+  const f = await fixture();
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation };
+    const before = f.service.getExecution(f.expected.taskId)!;
+    f.setTime(1500);
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, ttlMs: 1_000_000 });
+    expect(f.service.getExecution(f.expected.taskId)?.lastProgressAtMs).toBe(before.lastProgressAtMs);
+    f.setTime(before.deadlineAtMs + 1);
+    await expect(f.service.heartbeatTask(f.expected.taskId, credentials)).rejects.toThrow("progress deadline");
+    expect(f.service.getTask(f.expected.taskId)?.lease?.expiresAtMs).toBe(1_001_500);
+  } finally { await f.cleanup(); }
+});
+
+it("new response growth advances progress but repeated phase/content and backward stages do not", async () => {
+  const f = await fixture();
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation };
+    f.setTime(1100);
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress: { phase: "waiting_response", responseLength: 10 } });
+    const progress = f.service.getExecution(f.expected.taskId)!;
+    f.setTime(1200);
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress: { phase: "waiting_response", responseLength: 10 } });
+    expect(f.service.getExecution(f.expected.taskId)).toEqual(progress);
+    f.setTime(1300);
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress: { phase: "navigating", responseLength: 0 } });
+    expect(f.service.getExecution(f.expected.taskId)).toEqual(progress);
+    f.setTime(1400);
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress: { phase: "waiting_response", responseLength: 11 } });
+    expect(f.service.getExecution(f.expected.taskId)?.lastProgressAtMs).toBe(1400);
+  } finally { await f.cleanup(); }
+});
+
+it("lost execution after a possible prompt is blocked durably rather than replayed", async () => {
+  const f = await fixture();
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation };
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, ttlMs: 1000, progress: { phase: "prompt_submitting", responseLength: 0 } });
+    f.setTime(2000);
+    expect(await f.service.reclaimExpiredClaim(f.expected)).toBe(true);
+    expect(f.service.getExecution(f.expected.taskId)?.blocked?.reason).toBe("human_required");
+    expect(await f.service.getNextTask()).toBeNull();
+    await f.store.close(); await f.store.open();
+    expect(f.service.continuityWork()[0]?.tasks[0]?.execution?.blocked?.unblock).toContain("receipt");
+    expect(await f.service.reclaimExpiredClaim(f.expected)).toBe(false);
+    await expect(f.service.claimTask(f.expected.taskId, { owner: "other-tab" })).rejects.toThrow();
+    expect(await f.service.unblockExecution({ ...f.expected, claimGeneration: 99 })).toBe(false);
+    expect(await f.service.unblockExecution(f.expected)).toBe(true);
+    const next = await f.service.claimTask(f.expected.taskId, { owner: "other-tab" });
+    expect(next.lease.generation).toBe(2);
+    await expect(f.service.startTask(f.expected.taskId, credentials)).rejects.toThrow();
+  } finally { await f.cleanup(); }
+});
+
+it("recovery budget survives reclaim and store reopen, then converges to blocked", async () => {
+  const f = await fixture();
+  try {
+    let expected = f.expected;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      f.setTime(expected.leaseExpiresAtMs);
+      expect(await f.service.reclaimExpiredClaim(expected)).toBe(true);
+      const claimed = await f.service.claimTask(expected.taskId, { owner: "replacement", ttlMs: 1000 });
+      expected = { ...expected, claimGeneration: claimed.lease.generation, leaseExpiresAtMs: claimed.lease.expiresAtMs };
+      await f.store.close(); await f.store.open();
+    }
+    f.setTime(expected.leaseExpiresAtMs);
+    expect(await f.service.reclaimExpiredClaim(expected)).toBe(true);
+    expect(f.service.getExecution(expected.taskId)?.blocked?.reason).toBe("recovery_exhausted");
+    expect(f.service.getExecution(expected.taskId)?.recoveryAttempts).toBe(3);
+    expect(await f.service.getNextTask()).toBeNull();
+  } finally { await f.cleanup(); }
+});
+
+it("auth blocking is a nonterminal fenced fact, not a failed task or result receipt", async () => {
+  const f = await fixture();
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation };
+    await f.service.blockExecution(f.expected.taskId, { ...credentials, reason: "auth_required" });
+    expect(f.service.getTask(f.expected.taskId)?.status).toBe("claimed");
+    expect(f.service.getReceipt(f.expected.taskId)).toBeNull();
+    expect(f.service.getPlan(f.expected.taskId)?.status).toBe("pending");
+    await expect(f.service.startTask(f.expected.taskId, credentials)).rejects.toThrow("blocked");
+    await expect(f.service.heartbeatTask(f.expected.taskId, credentials)).rejects.toThrow("blocked");
+    const serialized = JSON.stringify(f.service.continuityWork());
+    expect(serialized).not.toContain(f.claimed.lease.token);
+    await f.service.blockExecution(f.expected.taskId, { ...credentials, reason: "auth_required" });
+    expect(f.service.getExecution(f.expected.taskId)?.blocked?.reason).toBe("auth_required");
+  } finally { await f.cleanup(); }
+});
+
+it("rebind budgets are idempotent and old binding/lease progress is fenced", async () => {
+  const f = await fixture();
+  try {
+    let claimed = f.claimed;
+    const sid = claimed.session.id;
+    for (let binding = 0; binding < 3; binding++) {
+      const credentials = { owner: claimed.lease.owner, token: claimed.lease.token, generation: claimed.lease.generation };
+      const params = { adapter: "chatgpt-web", externalSessionRef: `conversation-${binding}`, resumeUri: null,
+        expectedGeneration: binding, operationKey: `rebind-${binding}`, ...credentials };
+      const session = await f.service.rebindSession(sid, params);
+      expect(session.bindingGeneration).toBe(binding + 1);
+      expect((await f.service.rebindSession(sid, params)).bindingGeneration).toBe(binding + 1);
+      expect(f.service.getExecution(claimed.task.id)?.recoveryAttempts).toBe(binding + 1);
+      claimed = await f.service.claimTask(claimed.task.id, { owner: "replacement", ttlMs: 1000 });
+      await expect(f.service.heartbeatTask(claimed.task.id, { ...credentials,
+        progress: { phase: "waiting_response", responseLength: 999 } })).rejects.toThrow();
+    }
+    await expect(f.service.rebindSession(sid, { adapter: "chatgpt-web", externalSessionRef: "last", resumeUri: null,
+      expectedGeneration: 3, operationKey: "exhausted", owner: claimed.lease.owner,
+      token: claimed.lease.token, generation: claimed.lease.generation })).rejects.toThrow("blocked");
+    expect(f.service.getSession(sid)?.bindingGeneration).toBe(3);
+    expect(f.service.getExecution(claimed.task.id)?.blocked?.reason).toBe("recovery_exhausted");
+    expect(f.service.getTask(claimed.task.id)?.lease?.generation).toBe(claimed.lease.generation);
+  } finally { await f.cleanup(); }
+});
+
+it("refreshes external admission before mutation, then revalidates supersede and lease authority", async () => {
+  let allowed = false;
+  const f = await fixture(async () => allowed);
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation };
+    await expect(f.service.heartbeatTask(f.expected.taskId, { ...credentials,
+      progress: { phase: "navigating", responseLength: 0 } })).rejects.toThrow("no longer current");
+    expect(f.service.getTask(f.expected.taskId)?.lease?.expiresAtMs).toBe(f.expected.leaseExpiresAtMs);
+    await expect(f.service.rebindSession(f.claimed.session.id, { ...credentials, adapter: "chatgpt-web",
+      externalSessionRef: "new", resumeUri: null, expectedGeneration: 0 })).rejects.toThrow("no longer current");
+    expect(f.service.getSession(f.claimed.session.id)?.bindingGeneration).toBe(0);
+    allowed = true;
+    await f.service.supersedeTask(f.expected.taskId);
+    await expect(f.service.heartbeatTask(f.expected.taskId, { ...credentials,
+      progress: { phase: "prompt_submitting", responseLength: 0 } })).rejects.toThrow();
+    expect(f.service.getTask(f.expected.taskId)?.status).toBe("superseded");
+  } finally { await f.cleanup(); }
+});
+
+it("rejects corrupted progress phases while preserving compatibility with pre-metadata stores", async () => {
+  const f = await fixture();
+  try {
+    const state = f.store.getState();
+    Object.assign(state.executions![f.expected.taskId]!, { phase: "not-an-execution-phase" });
+    expect(() => validateStoreRecord(state)).toThrow("Invalid execution facts");
+    const legacy = f.store.getState();
+    delete (legacy as { executions?: unknown }).executions;
+    expect(() => validateStoreRecord(legacy)).not.toThrow();
+  } finally { await f.cleanup(); }
 });

@@ -378,7 +378,7 @@ it('keeps a file-backed uncertain handoff suppressed until native completion evi
 
 
 
-it('does not treat a bound pending Decision adapter as executor liveness or external wait', async () => {
+it('reports a configured-page wait without inventing executor liveness for pending Decision work', async () => {
   const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-binding-'));
   const store = new DurableDecisionStore({ storeDir });
   await store.open();
@@ -389,7 +389,8 @@ it('does not treat a bound pending Decision adapter as executor liveness or exte
   const f = await fixture({ now: () => 1000, planningGate: new DecisionPlanningGate(service) });
   try {
     const result = (await f.host.workContinuity.reconcile())[0]!;
-    expect(result.diagnosis?.status).toBe('stranded');
+    expect(result.diagnosis?.status).toBe('external_wait');
+    expect(result.diagnosis?.reasons).toContain('enabled_configured_chatgpt_page_required');
     expect(result.diagnosis?.owner).toBeNull();
     expect(service.getTask(task.id)?.status).toBe('pending');
   } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }

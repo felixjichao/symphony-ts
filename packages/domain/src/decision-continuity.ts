@@ -14,6 +14,7 @@ export interface DecisionContinuityTask {
   readonly leaseExpiresAtMs: number | null;
   readonly verdict: DecisionResult["verdict"] | null;
   readonly target: DecisionReviewTarget | null;
+  readonly execution?: DecisionExecution | null;
 }
 export interface DecisionContinuityWork {
   readonly workKey: WorkKey;
@@ -28,3 +29,25 @@ export interface ReclaimDecisionClaim {
   readonly bindingGeneration: number;
   readonly leaseExpiresAtMs: number;
 }
+
+/** Native Decision facts, scoped to a task revision. No credentials or response text. */
+export interface DecisionExecution {
+  readonly revision: number;
+  readonly startedAtMs: number;
+  readonly lastProgressAtMs: number;
+  readonly deadlineAtMs: number;
+  readonly phase: string;
+  readonly responseLength: number;
+  readonly recoveryAttempts: number;
+  readonly blocked: { readonly reason: string; readonly unblock: string; readonly atMs: number } | null;
+}
+
+export const DECISION_PROGRESS_TIMEOUT_MS = 10 * 60_000;
+export const DECISION_MAX_RECOVERY_ATTEMPTS = 3;
+
+export const DECISION_MAX_TRANSPORT_RECOVERIES = 6;
+
+export const DECISION_EXECUTION_PHASES: readonly string[] = [
+  "unknown", "claimed", "navigating", "bootstrap_submitting", "bootstrap_waiting", "started",
+  "prompt_submitting", "waiting_response", "result_extracted", "completed",
+];

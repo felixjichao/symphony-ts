@@ -237,42 +237,41 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
     }
   };
 
-  const DRIVER_ENABLED_STORAGE_KEY = "symphony_driver_enabled";
-
+  let enabledInMemory = false;
+  const enabledKey = () => `symphony_driver_enabled:${bridgeUrl.replace(/\/+$/, "")}`;
+  let authProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  let enableGeneration = 0;
   const isDriverEnabledInTab = (): boolean => {
-    if (typeof window !== "undefined" && window.sessionStorage) {
-      try {
-        return window.sessionStorage.getItem(DRIVER_ENABLED_STORAGE_KEY) === "true";
-      } catch {
-        return false;
+    try {
+      const stored = typeof GM_getValue === "function" ? GM_getValue<boolean | null>(enabledKey(), null) : window.localStorage.getItem(enabledKey());
+      if (stored === true || stored === "true") return true;
+      if (stored === false || stored === "false") return false;
+      if (window.sessionStorage.getItem("symphony_driver_enabled") === "true") {
+        setDriverEnabledInTab(true); // One-time migration; persisted Stop always wins.
+        return true;
       }
-    }
-    return false;
+      return enabledInMemory;
+    } catch { return enabledInMemory; }
   };
-
   const setDriverEnabledInTab = (enabled: boolean): void => {
-    if (typeof window !== "undefined" && window.sessionStorage) {
-      try {
-        if (enabled) {
-          window.sessionStorage.setItem(DRIVER_ENABLED_STORAGE_KEY, "true");
-        } else {
-          window.sessionStorage.removeItem(DRIVER_ENABLED_STORAGE_KEY);
-        }
-      } catch {
-        // Ignore storage errors in restricted sandboxes
-      }
-    }
+    enabledInMemory = enabled;
+    try {
+      if (typeof GM_setValue === "function") GM_setValue(enabledKey(), enabled);
+      else window.localStorage.setItem(enabledKey(), String(enabled));
+    } catch { /* Persistence unavailable: current page remains controllable. */ }
   };
 
   const start = async () => {
     try {
-      setDriverEnabledInTab(true);
+      const generation = ++enableGeneration;
+      if (authProbeTimer) clearTimeout(authProbeTimer);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
       }
 
       bridgeUrl = urlInput.value.trim() || "http://127.0.0.1:4040";
+      setDriverEnabledInTab(true);
 
       if (typeof GM_setValue === "function") {
         GM_setValue("symphony_bridge_url", bridgeUrl);
@@ -286,6 +285,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
         transport,
         checkpointStore,
         adapter,
+        shouldRun: isDriverEnabledInTab,
         ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
         onError: (err: Error) => {
           // Auth failures are fatal: polling would loop on 401/403 until credentials
@@ -293,7 +293,17 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
           const isAuthError =
             err instanceof BridgeHttpError && (err.status === 401 || err.status === 403);
           if (isAuthError) {
-            setDriverEnabledInTab(false);
+            // Keep durable intent; only read-only probes run until bridge authorization returns.
+            const probe = async () => {
+              if (generation !== enableGeneration || !isDriverEnabledInTab()) return;
+              try {
+                await transport.request("GET", "/v1/continuity");
+                if (generation === enableGeneration && isDriverEnabledInTab()) void start();
+              } catch {
+                if (generation === enableGeneration) authProbeTimer = setTimeout(() => { void probe(); }, 60_000);
+              }
+            };
+            authProbeTimer = setTimeout(() => { void probe(); }, 30_000);
             if (currentDriver) {
               currentDriver.stop();
               currentDriver = null;
@@ -305,14 +315,13 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
           // lease expiry): keep polling. Checkpoint recovery and the bridge's lease /
           // supersede semantics own reconciliation; stopping here would require a
           // manual Start for every transient conflict.
-          updateUI(true, `Recovered from error: ${err.message}`);
+          updateUI(true, err.message.startsWith("Blocked:") ? err.message : `Recovered from error: ${err.message}`);
         },
       });
 
       updateUI(true, "Connecting & polling...");
       // Fire driver start in background
       currentDriver.start().catch((err: unknown) => {
-        setDriverEnabledInTab(false);
         if (currentDriver) {
           currentDriver.stop();
           currentDriver = null;
@@ -321,7 +330,6 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
         updateUI(false, `Driver stopped on error: ${msg}`, true);
       });
     } catch (err: unknown) {
-      setDriverEnabledInTab(false);
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -332,6 +340,9 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   };
 
   const stop = () => {
+    ++enableGeneration;
+    if (authProbeTimer) clearTimeout(authProbeTimer);
+    authProbeTimer = null;
     setDriverEnabledInTab(false);
     if (currentDriver) {
       currentDriver.stop();
