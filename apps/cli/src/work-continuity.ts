@@ -83,9 +83,13 @@ export function createHostWorkContinuity(options: {
       const eligible = await planningGate.verifyPlanEligibility(decisionSessionId(key), { title: issue.title, body: issue.description ?? "" });
       if (!eligible.eligible) facts = { ...facts, stage: "plan", blocked: eligible.reason ?? "planning_admission_denied" };
     }
-    if (!delivery?.isPaused && !runtime && github?.pullRequest && !task) {
+    // A matching review cannot restart work for an already merged PR. Keep its
+    // native owner/fences intact; contradiction and blocked checks still win.
+    if (!delivery?.isPaused && !runtime && github?.pullRequest
+      && (!task || github.pullRequest.state === "merged" && task.kind === "review")) {
       const pr = github.pullRequest;
-      facts = { ...facts, stage: "delivery", target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: pr.number, headSha: pr.headSha }, expectedFence: { expectedHeadSha: pr.headSha } };
+      facts = { ...facts, stage: "delivery", target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: pr.number, headSha: pr.headSha },
+        expectedFence: task ? facts.expectedFence : { expectedHeadSha: pr.headSha } };
       if (pr.state === "merged") facts = { ...facts, stage: "merge",
         externalWait: { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" } };
       else if (pr.state === "closed") facts = { ...facts, blocked: "pull_request_closed_unmerged" };

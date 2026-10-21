@@ -393,3 +393,55 @@ it('does not treat a bound pending Decision adapter as executor liveness or exte
     expect(service.getTask(task.id)?.status).toBe('pending');
   } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
 });
+
+
+it.each(['pending', 'expired', 'valid', 'expired-blocked', 'valid-blocked'] as const)(
+  'preserves merged tracker wait and native lease protection with a single %s review', async state => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-merged-review-'));
+    const store = new DurableDecisionStore({ storeDir });
+    await store.open();
+    let now = 1000;
+    const service = new DecisionService(store, { clock: () => now });
+    const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+    const plan = await service.createPlanTask(session.id, { requirements: { title: issue.title, body: issue.description ?? '' } });
+    const planClaim = await service.claimTask(plan.id, { owner: 'planner' });
+    const credentials = { owner: 'planner', token: planClaim.task.lease!.token, generation: planClaim.task.claimGeneration };
+    await service.startTask(plan.id, credentials);
+    await service.submitResult(plan.id, { ...credentials, result: { schemaVersion: 1, kind: 'plan', taskId: plan.id,
+      sessionId: session.id, revision: plan.revision, createdAtMs: now, verdict: 'ready',
+      content: { plan: 'plan', acceptanceCriteria: [], risks: [], clarifications: [] } } });
+    await service.markPlanPublished(plan.id, { commentId: 1 });
+    const target = { repository: 'owner/repo', prNumber: 7, headSha: 'a'.repeat(40) };
+    const review = await service.createReviewTask(session.id, { target });
+    if (state !== 'pending') await service.claimTask(review.id, { owner: 'reviewer', ttlMs: 1000 });
+    if (state.startsWith('expired')) now = 2000;
+    const before = service.getTask(review.id);
+    let admissions = 0;
+    let retry: (() => void) | undefined;
+    const f = await fixture({ now: () => now, planningGate: new DecisionPlanningGate(service),
+      canDispatch: () => { admissions++; return false; },
+      retryScheduler: { schedule: (_delay, cb) => { retry = cb; return cb; }, cancel() {} },
+      continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: 'open', url: issue.url! },
+        pullRequest: { number: 7, state: 'merged', url: '', headSha: target.headSha, isDraft: false }, ci: null }) } });
+    try {
+      if (state.endsWith('blocked')) new FileDeliveryStateStorage(path.join(f.dir, 'workspaces', 'GH-42', '.symphony', 'delivery-state.json')).writeState({
+        repo: 'owner/repo', issueNumber: 42, workspaceKey: 'GH-42', spentRepairs: 0, spentWaitSeconds: 0,
+        isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: false, lastUpdated: 'now' });
+      await f.host.start(); f.tick(); await f.host.loop.settled();
+      for (let round = 0; round < 2; round++) {
+        const result = (await f.host.workContinuity.reconcile())[0]!;
+        expect(result.diagnosis?.status).toBe(state.endsWith('blocked') ? 'blocked' : 'external_wait');
+        expect(result.diagnosis?.recovery).toBe('none');
+        expect(result.result).toBe('unchanged');
+        if (!state.endsWith('blocked')) expect(result.diagnosis?.next.authority).toEqual({
+          kind: 'external', system: 'tracker', condition: 'merged_pull_request_waiting_for_tracker_sync' });
+        expect(service.getTask(review.id)).toEqual(before);
+      }
+      f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+        attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+      retry!(); await new Promise(resolve => setImmediate(resolve));
+      expect(admissions).toBe(0);
+      expect(f.host.state.running.size).toBe(0);
+      expect(service.getTask(review.id)).toEqual(before);
+    } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+  });
