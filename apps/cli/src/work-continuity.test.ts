@@ -130,7 +130,7 @@ it("derives current-HEAD CI waits, review execution, accepted results, repair an
       sessionId: session.id, revision: changes.revision, createdAtMs: 1000, target: { repository: "owner/repo", prNumber: 7, headSha: head }, verdict: "changes_requested", findings: [] } });
     expect((await host.workContinuity.reconcile())[0]?.diagnosis?.next.description).toContain("repair:");
     remote = { ...remote, pullRequest: { ...remote.pullRequest!, state: "merged" } };
-    expect((await host.workContinuity.reconcile())[0]?.diagnosis?.next.description).toContain("merge:");
+    expect((await host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe("external_wait");
     expect(host.state.running.size).toBe(0);
   } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });

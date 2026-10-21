@@ -9,7 +9,7 @@ import type { Issue } from '@symphony/domain';
 import type { TrackerAdapterProfile } from '@symphony/tracker';
 import { createStructuredLogger } from '@symphony/observability';
 import { createHost, type CreateHostOptions } from './host';
-import { FileDeliveryStateStorage } from './delivery-skill-cli';
+import { FileDeliveryStateStorage, withDeliveryAuthority } from './delivery-skill-cli';
 
 const issue: Issue = { id: '42', identifier: 'GH-42', title: 'work', description: '', state: 'open',
   nativeRef: { repo: 'owner/repo', number: 42 }, priority: 1, branchName: null,
@@ -213,4 +213,183 @@ it.each([
     expect(second.cwd).toBe(first.cwd);
     expect(() => process.kill(second.pid, 0)).toThrow();
   } finally { await f.cleanup(); }
+});
+
+
+it('keeps different-PR leases conflicting, selects the exact target, and ignores terminal history', async () => {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-targets-'));
+  const store = new DurableDecisionStore({ storeDir });
+  await store.open();
+  const service = new DecisionService(store, { clock: () => 1000 });
+  const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+  const plan = await service.createPlanTask(session.id, { requirements: { title: issue.title, body: issue.description ?? '' } });
+  const planClaim = await service.claimTask(plan.id, { owner: 'planner' });
+  const planCredentials = { owner: 'planner', token: planClaim.task.lease!.token, generation: planClaim.task.claimGeneration };
+  await service.startTask(plan.id, planCredentials);
+  await service.submitResult(plan.id, { ...planCredentials, result: { schemaVersion: 1, kind: 'plan', taskId: plan.id,
+    sessionId: session.id, revision: plan.revision, createdAtMs: 1000, verdict: 'ready',
+    content: { plan: 'plan', acceptanceCriteria: [], risks: [], clarifications: [] } } });
+  await service.markPlanPublished(plan.id, { commentId: 1 });
+  const target = { repository: 'owner/repo', prNumber: 7, headSha: 'a'.repeat(40) };
+  let current = await service.createReviewTask(session.id, { target });
+  for (let revision = 2; revision <= 10; revision++) {
+    await service.supersedeTask(current.id);
+    current = await service.createReviewTask(session.id, { target, forceNewRevision: true });
+  }
+  expect(current.revision).toBe(10);
+  const currentOwner = await service.claimTask(current.id, { owner: 'current-web' });
+  let other = await service.createReviewTask(session.id, { target: { ...target, prNumber: 8 } });
+  for (let revision = 2; revision <= 11; revision++) {
+    await service.supersedeTask(other.id);
+    other = await service.createReviewTask(session.id, { target: { ...target, prNumber: 8 }, forceNewRevision: true });
+  }
+  expect(other.revision).toBe(11); // A numerically higher foreign-PR revision is not newer work for PR #7.
+  await expect(service.claimTask(other.id, { owner: 'other-web' })).rejects.toThrow();
+  let admissions = 0;
+  let observedPr = 7;
+  let merged = false;
+  const f = await fixture({ now: () => 1000, planningGate: new DecisionPlanningGate(service), canDispatch: () => { admissions++; return false; },
+    continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: 'open', url: issue.url! },
+      pullRequest: { number: observedPr, state: merged ? 'merged' : 'open', url: '', headSha: target.headSha, isDraft: false }, ci: { headSha: target.headSha, status: 'success' } }) } });
+  try {
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    const diagnosis = f.host.workContinuity.observations[0]?.diagnosis;
+    expect(diagnosis?.status).toBe('contradictory');
+    expect(diagnosis?.next.taskRef).toEqual({ taskId: current.id, revision: 10 });
+    expect(admissions).toBe(0);
+    expect(service.getTask(current.id)?.lease).toEqual(currentOwner.task.lease);
+    expect(service.getTask(other.id)?.status).toBe('pending');
+    merged = true;
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('contradictory');
+    merged = false;
+    await service.supersedeTask(other.id);
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('unknown');
+    expect(service.getTask(current.id)?.lease).toEqual(currentOwner.task.lease);
+    const credentials = { owner: 'current-web', token: currentOwner.task.lease!.token, generation: currentOwner.task.claimGeneration };
+    await service.startTask(current.id, credentials);
+    const result = { schemaVersion: 1 as const, kind: 'review' as const, taskId: current.id, sessionId: session.id,
+      revision: 9, createdAtMs: 1000, target, verdict: 'approve' as const, findings: [] };
+    await expect(service.submitResult(current.id, { ...credentials, result })).rejects.toThrow();
+    expect(service.getResult(current.id)).toBeNull();
+    await service.submitResult(current.id, { ...credentials, result: { ...result, revision: 10 } });
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.next.description).toContain('delivery:');
+    observedPr = 8; // Same SHA on another PR cannot inherit approval.
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.next.description).toContain('review:');
+  } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+});
+
+it('reports merged PR tracker wait through poll, ends on terminal state and fails closed offline', async () => {
+  const current = { ...issue };
+  let offline = false;
+  let admissions = 0;
+  const f = await fixture({ canDispatch: () => { admissions++; return false; }, continuityGitHub: { observeWork: async () => {
+    if (offline) throw new Error('GitHub unavailable');
+    return { workKey: githubDecisionRoot('owner', 'repo', 42), issue: { state: 'open', url: issue.url! },
+      pullRequest: { number: 7, state: 'merged', url: '', headSha: 'a'.repeat(40), isDraft: false }, ci: null };
+  } } }, false, ['open'], current);
+  try {
+    await f.host.start(); f.tick(); await f.host.loop.settled();
+    expect(f.host.workContinuity.observations[0]?.diagnosis?.status).toBe('external_wait');
+    expect(f.host.workContinuity.observations[0]?.diagnosis?.next.authority).toEqual({ kind: 'external', system: 'tracker', condition: 'merged_pull_request_waiting_for_tracker_sync' });
+    expect(admissions).toBe(0);
+    offline = true;
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('observation_unavailable');
+    offline = false; current.state = 'closed';
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('inactive');
+    expect(admissions).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+it('resolves a lost reclaim response only after native task readback proves release', async () => {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-response-'));
+  const store = new DurableDecisionStore({ storeDir });
+  await store.open();
+  let now = 1000;
+  const service = new DecisionService(store, { clock: () => now });
+  const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+  const task = await service.createPlanTask(session.id);
+  await service.claimTask(task.id, { owner: 'old-web', ttlMs: 1000 });
+  const gate = new DecisionPlanningGate(service);
+  const reclaim = gate.reclaimExpiredClaim.bind(gate);
+  let commit = false;
+  let attempts = 0;
+  // Fault injection at the remote authority boundary, preserving the actual native commit.
+  gate.reclaimExpiredClaim = async request => { attempts++; if (commit) await reclaim(request); throw new Error('response lost'); };
+  const f = await fixture({ planningGate: gate, now: () => now });
+  try {
+    now = 2000;
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+    now = 100000;
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+    expect(attempts).toBe(1);
+    expect(service.getTask(task.id)?.status).toBe('claimed');
+    // An independent native authority resolves the old action, then a new claim is a new target.
+    await reclaim({ taskId: task.id, revision: task.revision, claimGeneration: service.getTask(task.id)!.claimGeneration,
+      bindingGeneration: 0, leaseExpiresAtMs: 2000 });
+    const next = await service.claimTask(task.id, { owner: 'new-web', ttlMs: 1000 });
+    now = next.task.lease!.expiresAtMs; commit = true;
+    await f.host.workContinuity.reconcile();
+    expect(attempts).toBe(2);
+    expect(service.getTask(task.id)?.status).toBe('pending');
+    await f.host.workContinuity.reconcile();
+    expect(attempts).toBe(2);
+  } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+});
+
+
+it('keeps a file-backed uncertain handoff suppressed until native completion evidence', async () => {
+  let admissions = 0;
+  let retry: (() => void) | undefined;
+  const f = await fixture({ canDispatch: () => { admissions++; return false; },
+    retryScheduler: { schedule: (_delay, cb) => { retry = cb; return cb; }, cancel() {} } });
+  const workspace = path.join(f.dir, 'workspaces', 'GH-42');
+  const storage = new FileDeliveryStateStorage(path.join(workspace, '.symphony', 'delivery-state.json'));
+  storage.writeState({ repo: 'owner/repo', issueNumber: 42, workspaceKey: 'GH-42', spentRepairs: 0, spentWaitSeconds: 0,
+    isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: true, lastUpdated: 'first',
+    handoff: { handoffId: 'handoff-1', headSha: 'a'.repeat(40), reason: 'manual_intervention_required', details: 'paused',
+      repo: 'owner/repo', issueNumber: 42, headBranch: 'symphony/GH-42', prNumber: 7, prUrl: '',
+      spentRepairs: 0, maxRepairs: 1, spentWaitSeconds: 0, readyLabel: 'ready' } });
+  try {
+    // Another authority holds the real filesystem lock. No GitHub/Codex command can run.
+    await withDeliveryAuthority(workspace, async () => {
+      expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+      storage.writeState({ ...storage.readState()!, lastUpdated: 'unrelated-change' });
+      const pending = (await f.host.workContinuity.reconcile())[0]!;
+      expect(pending.result).toBe('unverified');
+      expect(pending.diagnosis?.next.action).toBe('require_human');
+      expect(storage.readState()?.pendingCompensation).toBe(true);
+      const snapshot = storage.readState()!;
+      await fs.unlink(path.join(workspace, '.symphony', 'delivery-state.json'));
+      expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+      storage.writeState(snapshot);
+      storage.writeState({ ...storage.readState()!, isPaused: false });
+      await f.host.start(); f.tick(); await f.host.loop.settled();
+      f.host.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, issueUrl: issue.url,
+        attempt: 1, kind: 'continuation', reason: 'continuation', error: null });
+      retry!(); await new Promise(resolve => setImmediate(resolve));
+      expect(admissions).toBe(0);
+      expect(f.host.state.running.size).toBe(0);
+      storage.writeState({ ...storage.readState()!, isPaused: true, pendingCompensation: false });
+      expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
+      expect(storage.readState()?.isPaused).toBe(true);
+    });
+  } finally { await f.cleanup(); }
+});
+
+
+it('does not treat a bound pending Decision adapter as executor liveness or external wait', async () => {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-binding-'));
+  const store = new DurableDecisionStore({ storeDir });
+  await store.open();
+  const service = new DecisionService(store, { clock: () => 1000 });
+  const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+  const task = await service.createPlanTask(session.id);
+  await service.rebindSession(session.id, { adapter: 'chatgpt-web', externalSessionRef: 'bound-session', resumeUri: null, expectedGeneration: 0 });
+  const f = await fixture({ now: () => 1000, planningGate: new DecisionPlanningGate(service) });
+  try {
+    const result = (await f.host.workContinuity.reconcile())[0]!;
+    expect(result.diagnosis?.status).toBe('stranded');
+    expect(result.diagnosis?.owner).toBeNull();
+    expect(service.getTask(task.id)?.status).toBe('pending');
+  } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
 });

@@ -379,6 +379,8 @@ Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`.
 |---|---|
 | Missing/valid/stale owner, meaningful progress boundaries, blocked/external wait/scheduled separation | `packages/orchestrator/src/work-continuity.test.ts` |
 | Re-observe before/after bounded delegation, changing admission/HEAD version cancellation, idempotence, unavailable source/readback, stop fencing | `packages/orchestrator/src/work-continuity.test.ts` |
+| Cross-scan response-loss/readback suppression, unrelated version/heartbeat changes, native resolution and delayed-proof stop fencing | `packages/orchestrator/src/work-continuity.test.ts`; `apps/cli/src/review-regressions.test.ts` (real Decision store and Delivery file readback) |
+| Exact target/revision 9–10, same SHA on different PR, active cross-PR conflicts, terminal history, bound pending adapter, merged tracker wait and terminal/outage transitions | `apps/cli/src/review-regressions.test.ts` |
 | Atomic expired claim reclaim, concurrent attempts, renewed lease, revision/binding fences, authenticated bridge and safe observation | `packages/decision/src/continuity.test.ts` |
 | Real host tick scans without running workers, native store readback after reclaim, temporary tracker outage preserves owner | `apps/cli/src/work-continuity.test.ts` |
 | File-backed run/halt/manual/library compensation share mutation authority lock | `apps/cli/src/work-continuity.test.ts`; existing Delivery recovery regressions |

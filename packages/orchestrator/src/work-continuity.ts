@@ -55,6 +55,9 @@ export interface WorkContinuityPorts {
   observe(work: WorkKey): Promise<WorkContinuityObservation>;
   /** Authority MUST atomically revalidate request version/fence and admission at commit. */
   recover(request: WorkRecoveryRequest, canCommit: () => boolean): Promise<WorkRecoveryResult>;
+  /** Fresh native evidence that an uncertain action completed or its exact target is invalidated.
+   * Missing evidence, elapsed time, heartbeat and unrelated version changes must return false. */
+  isRecoveryResolved?(request: WorkRecoveryRequest): Promise<boolean>;
 }
 export interface WorkContinuityReconciliation {
   readonly workKey: WorkKey;
@@ -66,6 +69,8 @@ export class WorkContinuityCoordinator {
   private latest: readonly WorkContinuityReconciliation[] = [];
   get observations(): readonly WorkContinuityReconciliation[] { return this.latest; }
   private active: Promise<readonly WorkContinuityReconciliation[]> | null = null;
+  private readonly uncertain = new Map<string, WorkRecoveryRequest>();
+  hasUnverifiedRecovery(work: WorkKey): boolean { return this.uncertain.has(formatWorkKey(work)); }
   constructor(private readonly ports: WorkContinuityPorts) {}
   reconcile(): Promise<readonly WorkContinuityReconciliation[]> {
     if (this.stopping) return Promise.resolve([]);
@@ -82,7 +87,7 @@ export class WorkContinuityCoordinator {
   private async scan(): Promise<readonly WorkContinuityReconciliation[]> {
     const results: WorkContinuityReconciliation[] = [];
     const seen = new Set<string>();
-    for (const workKey of await this.ports.listWork()) {
+    for (const workKey of [...await this.ports.listWork(), ...[...this.uncertain.values()].map(request => request.workKey)]) {
       if (this.stopping) break;
       const key = formatWorkKey(workKey);
       if (seen.has(key)) continue;
@@ -92,6 +97,14 @@ export class WorkContinuityCoordinator {
       try {
         const first = await this.ports.observe(workKey);
         diagnosis = deriveWorkContinuity(first);
+        const pending = this.uncertain.get(key);
+        if (pending) {
+          if (first.available && await this.ports.isRecoveryResolved?.(pending)) this.uncertain.delete(key);
+          else {
+            results.push({ workKey, diagnosis: first.available ? this.unverified(diagnosis) : diagnosis, result: "unverified" });
+            continue;
+          }
+        }
         if (diagnosis.recovery === "none" || this.stopping) {
           results.push({ workKey, diagnosis, result: "unchanged" }); continue;
         }
@@ -101,16 +114,38 @@ export class WorkContinuityCoordinator {
           results.push({ workKey, diagnosis: decision, result: "stale" }); continue;
         }
         acted = true;
-        const result = await this.ports.recover({ workKey, version: fresh.version, stage: fresh.stage,
-          action: decision.recovery, authority: decision.next.authority, fence: fresh.expectedFence, taskRef: fresh.taskRef }, () => !this.stopping);
+        const request: WorkRecoveryRequest = { workKey, version: fresh.version, stage: fresh.stage,
+          action: decision.recovery, authority: decision.next.authority, fence: fresh.expectedFence, taskRef: fresh.taskRef,
+          handoffRef: fresh.handoffRef, leaseExpiresAt: fresh.owner?.leaseExpiresAt };
+        // Record before crossing the authority boundary: a rejected promise may follow a commit.
+        this.uncertain.set(key, request);
+        let result: WorkRecoveryResult;
+        try { result = await this.ports.recover(request, () => !this.stopping); }
+        catch { result = "unverified"; }
+        if (result === "stale" || result === "unsupported" || result === "stopped") this.uncertain.delete(key);
         // Always re-observe, including refused/unsupported actions. Never replay on read failure.
-        diagnosis = deriveWorkContinuity(await this.ports.observe(workKey));
+        const after = await this.ports.observe(workKey);
+        diagnosis = deriveWorkContinuity(after);
+        if (after.available && (result === "applied" || (result === "unverified" && await this.ports.isRecoveryResolved?.(request)))) {
+          this.uncertain.delete(key);
+        }
+        if (this.uncertain.has(key)) {
+          result = "unverified";
+          if (after.available) diagnosis = this.unverified(diagnosis);
+        }
         results.push({ workKey, diagnosis, result });
       } catch {
-        results.push({ workKey, diagnosis: null, result: acted ? "unverified" : "observation_unavailable" });
+        results.push({ workKey, diagnosis: diagnosis && this.uncertain.has(key) ? this.unverified(diagnosis) : null,
+          result: acted || this.uncertain.has(key) ? "unverified" : "observation_unavailable" });
       }
     }
     this.latest = results;
     return results;
+  }
+  private unverified(diagnosis: WorkContinuityDiagnosis): WorkContinuityDiagnosis {
+    const instruction = "recovery_outcome_unverified: verify native authority before retrying";
+    return { ...diagnosis, status: "unverified", recovery: "none", reasons: [...diagnosis.reasons, instruction],
+      next: { action: "require_human", description: instruction,
+        authority: { kind: "human", role: "operator", instruction } } };
   }
 }

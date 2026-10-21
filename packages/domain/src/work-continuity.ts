@@ -28,11 +28,13 @@ export interface WorkContinuityObservation {
   readonly contradictions: readonly string[];
   readonly target?: DecisionReviewTarget | undefined;
   readonly taskRef?: { readonly taskId: string; readonly revision: number } | undefined;
+  /** Native handoff identity, independent of observation/version timestamps. */
+  readonly handoffRef?: { readonly handoffId: string; readonly headSha: string | null } | undefined;
 }
 export interface WorkContinuityDiagnosis {
   readonly workKey: WorkKey;
   readonly observedAt: number;
-  readonly status: "inactive" | "healthy" | "unknown" | "blocked" | "external_wait" | "scheduled" | "stranded" | "stalled" | "contradictory" | "observation_unavailable";
+  readonly status: "inactive" | "healthy" | "unknown" | "blocked" | "external_wait" | "scheduled" | "stranded" | "stalled" | "contradictory" | "observation_unavailable" | "unverified";
   readonly next: ExpectedNextAction;
   readonly owner: { readonly id: string; readonly fence: SafeOwnershipFence; readonly liveness: LivenessMetadata } | null;
   readonly reasons: readonly string[];
@@ -46,5 +48,8 @@ export interface WorkRecoveryRequest {
   readonly authority: ActionAuthority;
   readonly fence: OwnershipFence;
   readonly taskRef?: { readonly taskId: string; readonly revision: number } | undefined;
+  readonly handoffRef?: { readonly handoffId: string; readonly headSha: string | null } | undefined;
+  readonly leaseExpiresAt?: number | undefined;
 }
-export type WorkRecoveryResult = "applied" | "stale" | "unsupported" | "stopped";
+/** stale/unsupported/stopped certify that this invocation did not commit a mutation. */
+export type WorkRecoveryResult = "applied" | "stale" | "unsupported" | "stopped" | "unverified";

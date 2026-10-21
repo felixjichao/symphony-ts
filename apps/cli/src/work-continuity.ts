@@ -50,22 +50,28 @@ export function createHostWorkContinuity(options: {
       expectedFence: runtime?.fence ?? {}, scheduled: authority.continuitySchedule(issue.id),
       blocked: delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null };
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
-    let task = [...pendingTasks].sort((a, b) => b.revision - a.revision || a.id.localeCompare(b.id))[0];
     let github: Awaited<ReturnType<GitHubDeliveryService["observeWork"]>> | null = null;
     if (key.provider === "github") {
       const split = key.key.lastIndexOf("#");
       github = await (options.github ?? new GitHubDeliveryService()).observeWork({ repo: key.key.slice(0, split),
         issueNumber: Number(key.key.slice(split + 1)), workspaceKey: delivery?.workspaceKey ?? issue.identifier,
         headBranch: delivery?.handoff?.headBranch ?? `symphony/${issue.identifier}`, baseBranch: "main" });
-      if (github.pullRequest && task?.kind === "review" && (task.target?.headSha !== github.pullRequest.headSha || task.target.prNumber !== github.pullRequest.number || task.target.repository.toLowerCase() !== key.key.slice(0, split).toLowerCase())) {
-        facts = { ...facts, contradictions: ["decision_review_targets_stale_head"] };
-        task = undefined;
-      }
+    }
+    const matchesTarget = (target: import("@symphony/domain").DecisionReviewTarget | null) => !!target && !!github?.pullRequest
+      && target.headSha === github.pullRequest.headSha && target.prNumber === github.pullRequest.number
+      && target.repository.toLowerCase() === key.key.slice(0, key.key.lastIndexOf("#")).toLowerCase();
+    // Revisions only order tasks within a target. Other targets still participate in conflict checks.
+    const matchingReviews = pendingTasks.filter(t => t.kind === "review" && matchesTarget(t.target));
+    const task = (matchingReviews.length ? matchingReviews : pendingTasks.filter(t => t.kind === "plan"))
+      .sort((a, b) => b.revision - a.revision || a.id.localeCompare(b.id))[0];
+    if (pendingTasks.some(t => t.kind === "review" && !matchesTarget(t.target))) {
+      facts = { ...facts, contradictions: ["decision_review_targets_stale_head"] };
     }
     if (delivery && `${delivery.repo.toLowerCase()}#${delivery.issueNumber}` !== key.key.toLowerCase()) {
       facts = { ...facts, contradictions: ["delivery_work_identity_mismatch"] };
     } else if (delivery?.isPaused && delivery.pendingCompensation) {
-      facts = { ...facts, stage: "handoff", owner: null, expectedFence: {} };
+      facts = { ...facts, stage: "handoff", owner: null, expectedFence: {},
+        handoffRef: delivery.handoff?.handoffId ? { handoffId: delivery.handoff.handoffId, headSha: delivery.handoff.headSha } : undefined };
     } else if (task && decision) {
       const fence = { leaseGeneration: task.claimGeneration, bindingGeneration: decision.bindingGeneration,
         ...(task.target ? { expectedHeadSha: task.target.headSha } : {}) };
@@ -80,14 +86,15 @@ export function createHostWorkContinuity(options: {
     if (!delivery?.isPaused && !runtime && github?.pullRequest && !task) {
       const pr = github.pullRequest;
       facts = { ...facts, stage: "delivery", target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: pr.number, headSha: pr.headSha }, expectedFence: { expectedHeadSha: pr.headSha } };
-      if (pr.state === "merged") facts = { ...facts, stage: "merge" };
+      if (pr.state === "merged") facts = { ...facts, stage: "merge",
+        externalWait: { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" } };
       else if (pr.state === "closed") facts = { ...facts, blocked: "pull_request_closed_unmerged" };
       else if (pr.isDraft) facts = { ...facts, externalWait: { system: "human", condition: "publish_draft_pull_request" } };
       else if (!github.ci || github.ci.headSha !== pr.headSha) facts = { ...facts, available: false, unavailableSources: ["current_head_ci"] };
       else if (github.ci.status === "pending") facts = { ...facts, stage: "ci", externalWait: { system: "ci", condition: `checks_for_${pr.headSha}` } };
       else if (github.ci.status === "failure") facts = { ...facts, stage: "repair" };
       else {
-        const review = decision?.tasks.filter(t => t.kind === "review" && t.target?.headSha === pr.headSha && t.target.prNumber === pr.number && t.target.repository.toLowerCase() === facts.target?.repository.toLowerCase() && t.status === "completed")
+        const review = decision?.tasks.filter(t => t.kind === "review" && matchesTarget(t.target) && t.status === "completed")
           .sort((a, b) => b.revision - a.revision)[0];
         facts = { ...facts, stage: review?.verdict === "changes_requested" ? "repair" : review?.verdict === "approve" ? "delivery" : "review",
           blocked: review?.verdict === "needs_human" ? "review_requires_human" : facts.blocked };
@@ -96,6 +103,8 @@ export function createHostWorkContinuity(options: {
     if (facts.stage !== "coding" && facts.scheduled?.kind === "retry") facts = { ...facts, scheduled: null,
       contradictions: [...facts.contradictions, "runtime_retry_conflicts_with_next_stage"] };
     if (pendingTasks.length > 1) facts = { ...facts, contradictions: [...facts.contradictions, "multiple_active_decision_tasks"] };
+    if (facts.stage === "handoff" && (runtime || pendingTasks.length)) facts = { ...facts,
+      contradictions: [...facts.contradictions, "delivery_and_execution_ownership_overlap"] };
     if (!issueRoutable(issue, controller.current.scheduling.policy) && !facts.blocked) facts = { ...facts, blocked: "tracker_admission_denied" };
     // Remote reads may take time. Reject a mixed snapshot if native ownership or
     // pause state changed while HEAD/CI/planning facts were being collected.
@@ -118,6 +127,24 @@ export function createHostWorkContinuity(options: {
   };
   const observe = async (key: WorkKey) => (await read(key)).observation;
   const coordinator = new WorkContinuityCoordinator({
+    async isRecoveryResolved(request) {
+      if (request.action === "reclaim" && request.taskRef && planningGate) {
+        const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
+        const task = work?.tasks.find(t => t.id === request.taskRef?.taskId);
+        if (!work || !task) return false; // disappearing/unreadable records are not completion evidence
+        return task.status !== "claimed" && task.status !== "running"
+          || task.revision !== request.taskRef.revision || task.claimGeneration !== request.fence.leaseGeneration
+          || work.bindingGeneration !== request.fence.bindingGeneration || task.leaseExpiresAtMs !== request.leaseExpiresAt;
+      }
+      const identity = identities.get(decisionSessionId(request.workKey));
+      if (request.action === "compensate" && request.handoffRef && identity?.workspace) {
+        const state = new FileDeliveryStateStorage(path.join(identity.workspace, ".symphony", "delivery-state.json")).readState();
+        if (!state || `${state.repo.toLowerCase()}#${state.issueNumber}` !== request.workKey.key.toLowerCase()) return false;
+        return state.pendingCompensation === false || !!state.handoff?.handoffId
+          && (state.handoff.handoffId !== request.handoffRef.handoffId || state.handoff.headSha !== request.handoffRef.headSha);
+      }
+      return false;
+    },
     async listWork() {
       const issues = await controller.current.adapter.fetchIssuesByStates(controller.current.scheduling.policy.activeStates);
       for (const issue of issues) {
@@ -177,7 +204,7 @@ export function createHostWorkContinuity(options: {
           if (!delivery?.handoff?.handoffId || !delivery.isPaused || !delivery.pendingCompensation) return "unsupported";
           const result = await recoverDeliveryHandoff({ cwd: identity.workspace!, repo: delivery.repo,
             issueNumber: delivery.issueNumber, workspaceKey: delivery.workspaceKey, stateStorage: storage, runner });
-          return result.success ? "applied" : "unsupported";
+          return result.success ? "applied" : "unverified";
         });
       }
       // Coding is admitted by the normal dispatch loop; browser/repair/merge recovery
@@ -196,6 +223,7 @@ export function createHostWorkContinuity(options: {
       const current = await read(key);
       const f = current.observation;
       if (!f.available) throw new Error("Continuity dispatch observation unavailable");
+      if (coordinator.hasUnverifiedRecovery(key)) return null;
       return f.active && f.stage === "coding" && !f.blocked && !f.externalWait
         && !f.owner && f.contradictions.length === 0 ? current.issue : null;
     },

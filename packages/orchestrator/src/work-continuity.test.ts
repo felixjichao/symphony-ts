@@ -83,3 +83,64 @@ describe("work-level continuity", () => {
     expect(mutations).toBe(0);
   });
 });
+
+
+describe("uncertain authority outcomes across scans", () => {
+  it.each(["response-lost", "readback-throws", "readback-unavailable"])("does not replay %s after time, version or heartbeat changes", async failure => {
+    let reads = 0;
+    let mutations = 0;
+    let world = facts({ stage: "review", taskRef: { taskId: "review", revision: 10 }, owner: { ...owner, leaseExpiresAt: 1 } });
+    const coordinator = new WorkContinuityCoordinator({ listWork: async () => [key],
+      observe: async () => {
+        reads++;
+        if (reads === 3 && failure === "readback-throws") throw new Error("readback lost");
+        return reads === 3 && failure === "readback-unavailable" ? { ...world, available: false } : world;
+      },
+      recover: async () => { mutations++; if (failure === "response-lost") throw new Error("committed, response lost"); return "applied"; },
+    });
+    expect((await coordinator.reconcile())[0]?.result).toBe("unverified");
+    for (let i = 0; i < 3; i++) {
+      world = { ...world, observedAt: world.observedAt + 100000, version: `unrelated-${i}`,
+        owner: { ...world.owner!, liveness: { ...world.owner!.liveness, lastObservedAt: 100000 + i } } };
+      const result = (await coordinator.reconcile())[0]!;
+      expect(result.result).toBe("unverified");
+      expect(result.diagnosis?.next.action).toBe("require_human");
+      expect(result.diagnosis?.recovery).toBe("none");
+    }
+    expect(reads).toBe(6);
+    expect(mutations).toBe(1);
+  });
+
+  it("only authoritative resolution permits a new target decision", async () => {
+    let resolved = false;
+    let mutations = 0;
+    let world = facts({ stage: "handoff", blocked: "paused", handoffRef: { handoffId: "h1", headSha: "head" } });
+    const coordinator = new WorkContinuityCoordinator({ listWork: async () => [key], observe: async () => world,
+      isRecoveryResolved: async request => { expect(request.handoffRef?.handoffId).toBe("h1"); return resolved; },
+      recover: async () => { mutations++; throw new Error("response lost"); } });
+    await coordinator.reconcile();
+    world = { ...world, handoffRef: { handoffId: "h2", headSha: "head" }, version: "new-target" };
+    expect((await coordinator.reconcile())[0]?.result).toBe("unverified");
+    expect(mutations).toBe(1);
+    resolved = true;
+    await coordinator.reconcile();
+    expect(mutations).toBe(2);
+  });
+
+  it("unavailable resolution evidence retains suppression and stop fences a delayed proof", async () => {
+    let mutations = 0;
+    let release!: (value: boolean) => void;
+    let proof: () => Promise<boolean> = async () => { throw new Error("source unavailable"); };
+    const coordinator = new WorkContinuityCoordinator({ listWork: async () => [key], observe: async () => facts(),
+      isRecoveryResolved: () => proof(), recover: async () => { mutations++; throw new Error("lost"); } });
+    await coordinator.reconcile();
+    expect((await coordinator.reconcile())[0]?.result).toBe("unverified");
+    proof = () => new Promise(resolve => { release = resolve; });
+    const scan = coordinator.reconcile();
+    await Promise.resolve(); await Promise.resolve();
+    const stop = coordinator.stop();
+    release(true);
+    await Promise.all([scan, stop]);
+    expect(mutations).toBe(1);
+  });
+});
