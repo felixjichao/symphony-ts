@@ -82,6 +82,16 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly checkIntervalMs: number;
   private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void | Promise<void>) | null = null;
 
+  /**
+   * Cancellation is cooperative: the step listener may await (driver checkpoint writes,
+   * bridge calls), so every await preceding a page-mutating action must re-check the
+   * signal. Otherwise Stop issued during the wait is acknowledged by the driver while the
+   * already-scheduled Send/navigation still runs.
+   */
+  private throwIfAborted(signal: AbortSignal | undefined, message: string): void {
+    if (signal?.aborted) throw new Error(message);
+  }
+
   private async waitForSendButton(options: {
     signal?: AbortSignal | undefined;
     targetConvId?: string | null | undefined;
@@ -307,6 +317,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       if (currentConvId) {
         // If the browser tab is on an existing conversation, navigate to root / new chat
         await this.stepListener?.("navigating", { targetUri: newChatUrl, targetConvId: null });
+        this.throwIfAborted(options.signal, "Aborted before navigating to new chat");
         win.location.assign(newChatUrl);
 
         // Wait for route to actually change to new chat
@@ -359,6 +370,19 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
 
     await this.stepListener?.("bootstrap_submitting", { baselineCount });
+    // The listener await may have taken arbitrarily long (checkpoint/bridge I/O). Nothing has
+    // been sent yet, so a Stop or a page that left the new-chat route must cancel the click
+    // instead of sending a bootstrap prompt into an unexpected conversation.
+    this.throwIfAborted(options.signal, "Aborted before sending the bootstrap prompt");
+    const bootstrapRouteConvId = win?.location ? extractConversationIdFromUrl(win.location.href) : null;
+    if (bootstrapRouteConvId !== null) {
+      throw new DecisionAdapterError({
+        code: "execution_failed",
+        message: `ChatGPT Web left the new-chat route for conversation "${bootstrapRouteConvId}" while the bootstrap prompt was pending; refusing to send`,
+        suggestedAction: "retry",
+        promptSubmitted: false,
+      });
+    }
     sendBtn.click();
     this.stepListener?.("bootstrap_waiting", { baselineCount, targetConvId: null });
 
@@ -470,7 +494,12 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
       if (currentConvId !== targetConvId && currentUrl !== binding.resumeUri) {
         await this.stepListener?.("navigating", { targetUri: binding.resumeUri, targetConvId });
-        win.location.assign(binding.resumeUri);
+        this.throwIfAborted(options.signal, "Aborted before navigating to the bound conversation");
+        // Re-read the page after the listener await: a Stop or an already-satisfied route
+        // must not be turned into a navigation away from the current page.
+        if (extractConversationIdFromUrl(win.location.href) !== targetConvId && win.location.href !== binding.resumeUri) {
+          win.location.assign(binding.resumeUri);
+        }
       }
 
       // Wait for route to actually match target conversation
@@ -687,6 +716,24 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     // Report prompt submitting step to listener (e.g. driver checkpoint)
     await this.stepListener?.("prompt_submitting", { baselineCount });
+
+    // The listener await may have taken arbitrarily long (checkpoint/bridge I/O). The prompt is
+    // typed but not sent, so Stop or a page that moved off the bound conversation must abort
+    // here: promptSubmitted stays false and the task can be retried without a duplicate prompt.
+    this.throwIfAborted(options.signal, "Aborted before sending the task prompt");
+    if (targetConvId) {
+      const currentWin = this.winSupplier();
+      const currentConvId = currentWin?.location ? extractConversationIdFromUrl(currentWin.location.href) : null;
+      if (currentConvId !== targetConvId) {
+        throw new DecisionAdapterError({
+          code: "binding_broken",
+          message: `ChatGPT left bound conversation "${targetConvId}" for "${currentConvId ?? "root"}" while the task prompt was pending; refusing to send`,
+          suggestedAction: "rebind",
+          observedGeneration: session.bindingGeneration,
+          promptSubmitted: false,
+        });
+      }
+    }
 
     sendBtn.click();
 

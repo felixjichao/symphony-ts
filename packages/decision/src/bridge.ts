@@ -224,17 +224,32 @@ export class DecisionBridge {
       this.sendJson(res, 200, { work: this.service.continuityWork() });
       return;
     }
-    if (method === "POST" && (pathname === "/v1/continuity/reclaim" || pathname === "/v1/continuity/unblock")) {
+    if (method === "POST" && pathname === "/v1/continuity/reclaim") {
       const body = await this.readJsonBody(req) as Record<string, unknown> | null;
       if (!body || typeof body["taskId"] !== "string" ||
         !["revision", "claimGeneration", "bindingGeneration", "leaseExpiresAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0)) {
         throw new DecisionValidationError("Invalid expired claim fence");
       }
-      const action = pathname.endsWith("/unblock") ? this.service.unblockExecution.bind(this.service) : this.service.reclaimExpiredClaim.bind(this.service);
-      const reclaimed = await action({ taskId: body["taskId"],
+      const reclaimed = await this.service.reclaimExpiredClaim({ taskId: body["taskId"],
         revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
         bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: body["leaseExpiresAtMs"] as number });
       this.sendJson(res, 200, { reclaimed });
+      return;
+    }
+    if (method === "POST" && pathname === "/v1/continuity/unblock") {
+      const body = await this.readJsonBody(req) as Record<string, unknown> | null;
+      // `leaseExpiresAtMs: null` is the explicit fence for a pending task that owns no lease.
+      const leaseExpiresAtMs = body?.["leaseExpiresAtMs"];
+      if (!body || typeof body["taskId"] !== "string" ||
+        !["revision", "claimGeneration", "bindingGeneration", "blockedAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0) ||
+        (leaseExpiresAtMs !== null && !(Number.isSafeInteger(leaseExpiresAtMs) && (leaseExpiresAtMs as number) >= 0))) {
+        throw new DecisionValidationError("Invalid unblock fence");
+      }
+      const unblocked = await this.service.unblockExecution({ taskId: body["taskId"],
+        revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
+        bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: leaseExpiresAtMs as number | null,
+        blockedAtMs: body["blockedAtMs"] as number });
+      this.sendJson(res, 200, { unblocked });
       return;
     }
 

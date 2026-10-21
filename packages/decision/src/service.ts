@@ -1,4 +1,4 @@
-import type { DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";
+import type { DecisionContinuityWork, ReclaimDecisionClaim, UnblockDecisionExecution } from "./continuity";
 import crypto from "node:crypto";
 import {
   DECISION_PROGRESS_TIMEOUT_MS,
@@ -156,20 +156,34 @@ export class DecisionService {
     });
   }
 
-  /** Explicit operator authorization after inspecting uncertain side effects. Never used by polling. */
-  async unblockExecution(expected: ReclaimDecisionClaim): Promise<boolean> {
+  /**
+   * Explicit operator authorization after inspecting uncertain side effects. Never used by polling.
+   * Two fenced shapes exist because two checked states can be blocked:
+   * - leased (`claimed`/`running`): the exact lease expiry identifies the blocked execution and is
+   *   released, so the incumbent fails closed on its next fenced action;
+   * - lease-less `pending`: recovery budgets can be exhausted by rebind, which releases the claim
+   *   before it blocks, so there is no lease to quote. The fence is then the asserted absence of a
+   *   lease plus the exact task/claim/binding generation, and the block timestamp.
+   */
+  async unblockExecution(expected: UnblockDecisionExecution): Promise<boolean> {
     return this.store.transaction(draft => {
       const task = draft.tasks[expected.taskId];
       const session = task ? draft.sessions[task.sessionId] : undefined;
       const e = draft.executions?.[expected.taskId];
       if (!task || !session || !e?.blocked || task.revision !== expected.revision
         || task.claimGeneration !== expected.claimGeneration || session.bindingGeneration !== expected.bindingGeneration
-        || !task.lease || task.lease.expiresAtMs !== expected.leaseExpiresAtMs
-        || (task.status !== "claimed" && task.status !== "running") || draft.receipts[task.id]?.type === "result") return false;
+        || e.blocked.atMs !== expected.blockedAtMs || draft.receipts[task.id]?.type === "result") return false;
+      const isLeased = task.status === "claimed" || task.status === "running";
+      if (isLeased) {
+        if (!task.lease || expected.leaseExpiresAtMs === null
+          || task.lease.expiresAtMs !== expected.leaseExpiresAtMs) return false;
+      } else if (task.status !== "pending" || task.lease !== null || expected.leaseExpiresAtMs !== null) {
+        return false;
+      }
       const now = this.clock();
       this.writeExecution(draft, task.id, { ...e, blocked: null, phase: "claimed", responseLength: 0,
         recoveryAttempts: 0, lastProgressAtMs: now, deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS });
-      draft.tasks[task.id] = releaseDecisionTaskForBindingInvalidation(task, now);
+      if (isLeased) draft.tasks[task.id] = releaseDecisionTaskForBindingInvalidation(task, now);
       delete draft.claimBindingGenerations[task.id];
       return true;
     });

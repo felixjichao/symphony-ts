@@ -232,7 +232,15 @@ export class DecisionTabDriver implements DecisionTaskController {
       error: string;
       details?: unknown;
       retryable?: boolean;
-    }
+    },
+    options: {
+      /**
+       * Keep the checkpoint when the failure becomes a block. Recovery exhaustion of an
+       * already-extracted candidate must not discard the candidate or the duty to verify its
+       * receipt: a later run still holds the evidence the operator is asked to check.
+       */
+      retainCheckpoint?: boolean | undefined;
+    } = {}
   ): Promise<{ receipt: SubmissionReceipt; failure: DecisionTaskFailure; superseded: boolean }> {
     const details = params.details && typeof params.details === "object" ? params.details as Record<string, unknown> : {};
     const mapping = mapDecisionAdapterFailure({ code: params.error as DecisionAdapterErrorCode,
@@ -245,7 +253,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         owner: params.owner, token: params.token, generation: params.generation, reason: blockedError,
       });
       const session = this.activeSession ?? (await this.transport.request<{ session: DecisionSession }>("GET", `/v1/sessions/${encodeURIComponent(this.checkpointStore.get()?.sessionId ?? "")}`)).session;
-      this.checkpointStore.delete();
+      if (!options.retainCheckpoint) this.checkpointStore.delete();
       this.stopHeartbeat();
       throw new ExecutionBlocked(session, blockedError);
     }
@@ -257,6 +265,63 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     this.checkpointStore.delete();
     return res;
+  }
+
+  /**
+   * Authoritative receipt check for an already-extracted candidate result. It runs before any
+   * further submission and before the recovery budget ends the attempt: a submission whose
+   * response was lost may already have been accepted, so the candidate is neither replayed nor
+   * discarded without reading the receipt the bridge recorded for it.
+   */
+  private async verifyCandidateReceipt(
+    cp: DriverCheckpoint,
+    session: DecisionSession | null,
+    knownTask?: DecisionTask | null
+  ): Promise<{ state: "unconfirmed" } | { state: "confirmed"; outcome: TaskExecutionOutcome | null }> {
+    const candidate = cp.candidateResult as DecisionResult;
+    const lease = { owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration };
+    const outcomeSession = session ?? ({} as DecisionSession);
+    try {
+      const task = knownTask ?? (await this.transport
+        .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
+        .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; }))?.task ?? null;
+      const receipt = (await this.transport
+        .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
+        .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; }))?.receipt ?? null;
+      if (!receipt) {
+        if (task?.status === "superseded" || task?.status === "cancelled") {
+          return { state: "confirmed", outcome: null };
+        }
+        return { state: "unconfirmed" };
+      }
+      const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
+      if (isValidMatchingResultReceipt(receipt, lease, candidate) && !isSuperseded) {
+        return { state: "confirmed", outcome: { status: "completed", result: receipt.payload as DecisionResult,
+          receipt, superseded: false, session: outcomeSession } };
+      }
+      if (receipt.type === "result" && !isValidMatchingResultReceipt(receipt, lease, candidate)) {
+        // A different payload accepted for this task is an explicit conflict, never a retry.
+        throw new BridgeHttpError(
+          `Conflict: task "${cp.taskId}" already accepted a different result receipt than candidate result`,
+          "conflict",
+          409
+        );
+      }
+      if (receipt.type === "failure" || task?.status === "failed") {
+        return { state: "confirmed", outcome: { status: "failed",
+          failure: (receipt.type === "failure" ? receipt.payload : undefined) as DecisionTaskFailure,
+          receipt, superseded: isSuperseded, session: outcomeSession, error: new Error("Task failed on bridge") } };
+      }
+      if (isSuperseded || task?.status === "superseded") {
+        return { state: "confirmed", outcome: null };
+      }
+      return { state: "unconfirmed" };
+    } catch (err: unknown) {
+      if (err instanceof ExecutionBlocked) throw err;
+      if (err instanceof BridgeHttpError && err.status === 409) throw err;
+      // Authoritative source unreadable: acceptance is unconfirmed, not refuted.
+      return { state: "unconfirmed" };
+    }
   }
 
   async putBinding(
@@ -828,8 +893,35 @@ export class DecisionTabDriver implements DecisionTaskController {
       return null;
     }
 
-    // 2. If candidateResult was extracted, idempotently re-submit result
+    // 2. If candidateResult was extracted, verify its receipt before re-submitting it. The
+    // recovery budget is applied here, ahead of the submission: this branch used to throw from
+    // the submission before the shared budget check below was ever reached, so a persistently
+    // failing result POST could re-submit forever without ever blocking.
     if (cp.candidateResult && (cp.step === "result_extracted" || cp.step === "waiting_response")) {
+      if ((cp.recoveryFailures ?? 0) >= DECISION_MAX_TRANSPORT_RECOVERIES) {
+        const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (verified.state === "confirmed") {
+          this.checkpointStore.delete();
+          return verified.outcome;
+        }
+        if (!isClaimValid) {
+          this.checkpointStore.delete();
+          return null;
+        }
+        // Acceptance is unconfirmed and the budget is exhausted: block instead of resubmitting.
+        // The checkpoint is retained so the candidate and the receipt verification stay available
+        // to the operator who explicitly unblocks this execution.
+        await this.submitFailure(cp.taskId, {
+          owner: cp.leaseOwner,
+          token: cp.leaseToken,
+          generation: cp.leaseGeneration,
+          error: "recovery_exhausted",
+          retryable: false,
+        }, { retainCheckpoint: true });
+        // submitFailure throws ExecutionBlocked for recovery_exhausted. Reaching this point means
+        // no block was recorded, and resubmitting would bypass the exhausted budget.
+        throw new Error("Recovery budget exhausted and the execution block was not recorded");
+      }
       try {
         const submitRes = await this.submitResult(cp.taskId, {
           owner: cp.leaseOwner,

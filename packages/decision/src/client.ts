@@ -1,4 +1,4 @@
-import type { DecisionContinuityWork, ReclaimDecisionClaim } from "./continuity";
+import type { DecisionContinuityWork, ReclaimDecisionClaim, UnblockDecisionExecution } from "./continuity";
 import { execFileSync } from "node:child_process";
 import type {
   DecisionSession,
@@ -72,6 +72,9 @@ export class DecisionBridgeClient {
   }
   async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
     return (await this.request<{ reclaimed: boolean }>("POST", "/v1/continuity/reclaim", expected)).reclaimed;
+  }
+  async unblockExecution(expected: UnblockDecisionExecution): Promise<boolean> {
+    return (await this.request<{ unblocked: boolean }>("POST", "/v1/continuity/unblock", expected)).unblocked;
   }
 
   private syncRequest(method: "GET" | "POST", path: string, body: unknown): unknown {

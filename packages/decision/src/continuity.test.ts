@@ -143,8 +143,16 @@ it("lost execution after a possible prompt is blocked durably rather than replay
     expect(f.service.continuityWork()[0]?.tasks[0]?.execution?.blocked?.unblock).toContain("receipt");
     expect(await f.service.reclaimExpiredClaim(f.expected)).toBe(false);
     await expect(f.service.claimTask(f.expected.taskId, { owner: "other-tab" })).rejects.toThrow();
-    expect(await f.service.unblockExecution({ ...f.expected, claimGeneration: 99 })).toBe(false);
-    expect(await f.service.unblockExecution(f.expected)).toBe(true);
+    const fenced = {
+      taskId: f.expected.taskId, revision: f.expected.revision,
+      claimGeneration: f.expected.claimGeneration, bindingGeneration: f.expected.bindingGeneration,
+      leaseExpiresAtMs: f.expected.leaseExpiresAtMs,
+      blockedAtMs: f.service.getExecution(f.expected.taskId)!.blocked!.atMs,
+    };
+    expect(await f.service.unblockExecution({ ...fenced, claimGeneration: 99 })).toBe(false);
+    expect(await f.service.unblockExecution({ ...fenced, leaseExpiresAtMs: null })).toBe(false);
+    expect(await f.service.unblockExecution({ ...fenced, blockedAtMs: fenced.blockedAtMs - 1 })).toBe(false);
+    expect(await f.service.unblockExecution(fenced)).toBe(true);
     const next = await f.service.claimTask(f.expected.taskId, { owner: "other-tab" });
     expect(next.lease.generation).toBe(2);
     await expect(f.service.startTask(f.expected.taskId, credentials)).rejects.toThrow();
@@ -210,6 +218,46 @@ it("rebind budgets are idempotent and old binding/lease progress is fenced", asy
     expect(f.service.getSession(sid)?.bindingGeneration).toBe(3);
     expect(f.service.getExecution(claimed.task.id)?.blocked?.reason).toBe("recovery_exhausted");
     expect(f.service.getTask(claimed.task.id)?.lease?.generation).toBe(claimed.lease.generation);
+  } finally { await f.cleanup(); }
+});
+
+it("pending lease-less budget blocks have a fenced operator unblock path", async () => {
+  const f = await fixture();
+  try {
+    const sid = f.claimed.session.id;
+    // Rebind releases the claim before it runs, so exhausting the budget blocks a pending,
+    // lease-less task: there is no lease to quote when authorizing recovery.
+    for (let binding = 0; binding < 3; binding++) {
+      await f.service.rebindSession(sid, { adapter: "chatgpt-web",
+        externalSessionRef: `conversation-${binding}`, resumeUri: null, expectedGeneration: binding });
+    }
+    await expect(f.service.rebindSession(sid, { adapter: "chatgpt-web",
+      externalSessionRef: "exhausted", resumeUri: null, expectedGeneration: 3 })).rejects.toThrow("blocked");
+    const blockedTask = f.service.getTask(f.expected.taskId)!;
+    expect(blockedTask.status).toBe("pending");
+    expect(blockedTask.lease).toBeNull();
+    const blocked = f.service.getExecution(f.expected.taskId)!.blocked!;
+    expect(blocked.reason).toBe("recovery_exhausted");
+    await expect(f.service.claimTask(f.expected.taskId, { owner: "operator-tab" })).rejects.toThrow("blocked");
+
+    const fence = { taskId: f.expected.taskId, revision: blockedTask.revision,
+      claimGeneration: blockedTask.claimGeneration, bindingGeneration: 3,
+      leaseExpiresAtMs: null, blockedAtMs: blocked.atMs };
+    // A lease the task never held, a stale block fact or a stale binding must fail closed.
+    expect(await f.service.unblockExecution({ ...fence, leaseExpiresAtMs: f.expected.leaseExpiresAtMs })).toBe(false);
+    expect(await f.service.unblockExecution({ ...fence, blockedAtMs: blocked.atMs - 1 })).toBe(false);
+    expect(await f.service.unblockExecution({ ...fence, bindingGeneration: 2 })).toBe(false);
+    expect(await f.service.unblockExecution(fence)).toBe(true);
+
+    const reclaimed = await f.service.claimTask(f.expected.taskId, { owner: "operator-tab" });
+    expect(reclaimed.task.status).toBe("claimed");
+    expect(f.service.getExecution(f.expected.taskId)?.blocked).toBeNull();
+    expect(f.service.getExecution(f.expected.taskId)?.recoveryAttempts).toBe(0);
+    // Replaying the authorization cannot clear a block recorded after it was captured.
+    await f.service.blockExecution(f.expected.taskId, { owner: "operator-tab",
+      token: reclaimed.lease.token, generation: reclaimed.lease.generation, reason: "human_required" });
+    expect(await f.service.unblockExecution(fence)).toBe(false);
+    expect(f.service.getExecution(f.expected.taskId)?.blocked?.reason).toBe("human_required");
   } finally { await f.cleanup(); }
 });
 

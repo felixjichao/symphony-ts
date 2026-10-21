@@ -30,6 +30,22 @@ export interface ReclaimDecisionClaim {
   readonly leaseExpiresAtMs: number;
 }
 
+/**
+ * Fence for an operator-authorized unblock after inspecting the exact block fact.
+ * `leaseExpiresAtMs` must equal the incumbent lease expiry for a leased execution, and must be
+ * `null` for a pending execution that owns no lease: the absence of a lease is itself the state
+ * being fenced, so an authorization captured before a later claim cannot clear that claim's block.
+ * `blockedAtMs` pins the block the operator reviewed, so a replay cannot clear a newer one.
+ */
+export interface UnblockDecisionExecution {
+  readonly taskId: string;
+  readonly revision: number;
+  readonly claimGeneration: number;
+  readonly bindingGeneration: number;
+  readonly leaseExpiresAtMs: number | null;
+  readonly blockedAtMs: number;
+}
+
 /** Native Decision facts, scoped to a task revision. No credentials or response text. */
 export interface DecisionExecution {
   readonly revision: number;
