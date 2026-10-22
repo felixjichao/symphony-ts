@@ -547,6 +547,16 @@ describe("DecisionReviewGate", () => {
         expect(statusRes.result.findings).toHaveLength(1);
       }
 
+      // Recovery may adopt the completed exact-target round into a stable
+      // operation receipt; this does not mean an explicit new review round.
+      const adopted = await httpGate.ensureReviewTask(sessionId, targetA, undefined,
+        { operationKey: "delivery-recovery-adopt", reuseCompleted: true });
+      expect(adopted.id).toBe(first.id);
+      const repeated = await httpGate.ensureReviewTask(sessionId, targetA, undefined,
+        { operationKey: "delivery-recovery-adopt", reuseCompleted: true });
+      expect(repeated.id).toBe(first.id);
+      expect(bridgeService.getTasksForSession(sessionId)).toHaveLength(1);
+
       // Explicitly forcing new revision creates a fresh task and supersedes previous
       const freshTask = await httpGate.ensureReviewTask(sessionId, targetA, undefined, { forceNewRevision: true });
       expect(freshTask.id).not.toBe(first.id);

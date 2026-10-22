@@ -13,7 +13,7 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
-- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；跨重启 durable intent 和浏览器自动恢复仍属后续任务。
+- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；多轮升级仍由 #150 跟进。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
@@ -100,7 +100,7 @@
 
 - HTTP / dashboard status surface（SPEC §13.7）；
 - provider-native agent tools（SPEC §11.5）；
-- durable scheduler state / durable recovery；
+- 通用 durable scheduler DB / workflow engine；原生 handoff 和 retry 预约恢复已由下文 #149 覆盖；
 - SSH worker（Appendix A）；
 - 最终 provider-native credential / tool boundary：当前 GitHub Delivery 使用 host 的 `git` + `gh`，是显式、临时的 MVP trust boundary。
 
@@ -143,7 +143,7 @@
 
 Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`. The Decision bridge only exposes fenced reclaim; it no longer makes context-free startup/timer recovery decisions. Certified pre-entry lock failures allow later compensation, while post-entry uncertainty remains suppressed. Merged runtime/plan conflicts are diagnosed without mutation. Launch admission now reads native sources for each poll/retry attempt and rechecks keyed tracker facts after remote I/O; inventory failures suppress dispatch, observation failures retain retry reservations through backoff, and remote PR/CI reads work without a local workspace.
 
-Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. Durable restart retry restoration (#149), Web progress/recovery (#148) and multi-round escalation (#150) remain deferred. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; multi-round escalation remains #150 work. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
 
 ## NEST-132 Decision/Web continuity
 
@@ -169,11 +169,12 @@ Review-fix validation: full gate passed (2,042 tests, one existing opt-in skip; 
 
 Later 2026-10-22, after the operator updated Userscript 0.1.5, scoped real-browser acceptance passed native response-growth reporting, active reload without repeated Send, and accepted-result acknowledgement loss resolved by receipt readback. Two Plan receipts retained claim/binding generation 1. Build metadata duplication is fixed: Vitest shutdown no longer prepends to the built file. Full gate remains green (2,042 passed, one opt-in skip). [Evidence and limits](evidence/web-continuity/live015-acceptance-2026-10-22.md) distinguish this run from the untriggered ten-minute DOM-windowing and Send/checkpoint crash-gap cases; #148/#151 stay open.
 
-### NEST-133 / #149 implementation foundation (incomplete)
+### NEST-133 / #149 durable handoffs
 
-A draft foundation persists unresolved work-recovery invocations and fsyncs atomic
-Delivery state writes. Startup retains suppression until native evidence resolves
-the exact invocation. This does **not** complete #149: Review/Delivery continuation,
-landing acknowledgement, retry restoration and crash-lock reclamation remain open.
-The retry-to-coding dispatch boundary needs an amended executor ownership design;
-see the [proposed note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+Implementation protects coordinator invocation, CI→Review, Review-result→Delivery,
+paused compensation, landing acknowledgement and retry→worker boundaries. Native
+host startup restores reservations/intent discovery; uncertain launch/repair/child
+outcomes are durable blocks. Local validation covers real child-process SIGKILL and
+restart, native host ticks and both landing paths. Implementation awaits independent
+review; real GitHub/Codex smoke is not claimed. See the
+[implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).

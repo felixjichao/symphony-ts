@@ -608,6 +608,7 @@ export class DecisionBridge {
           ...(operationKey !== undefined ? { operationKey } : {}),
           supersedeSessionReviews,
           ...(forceNewRevision ? { forceNewRevision: true } : {}),
+          ...(b["reuseCompleted"] === true ? { reuseCompleted: true } : {}),
         });
         this.sendJson(res, 201, { task });
         return;

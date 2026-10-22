@@ -121,10 +121,10 @@ Real acceptance additionally requires an enabled Tampermonkey page plus authenti
 
 `apps/cli/src/decision-web-admission.test.ts` checks exact current PR HEAD/open-state admission and fail-closed GitHub errors. Decision continuity tests verify that external admission refusal cannot mutate a lease/binding and native supersede is revalidated after admission.
 
-The partial #149 invocation foundation has a targeted entry:
-`npm test -w @symphony/cli -- src/recovery-storage.test.ts`. It bundles the real
-writer into a temporary directory and kills only its own child process after
-intent persistence, then reconstructs a coordinator against the same file. It
-also covers lost acknowledgements, stale clears and write failures. This does
-not validate retry-to-worker dispatch, Review/Delivery continuation or real
-GitHub effects; those #149 acceptance cases remain outstanding.
+The #149 native recovery entries are `apps/cli/src/durable-delivery.test.ts`,
+`durable-retry.test.ts`, `landing-recovery.test.ts`, `recovery-storage.test.ts` and
+`work-continuity.test.ts`. They use real temporary files, native authorities and a
+bundled separate Node process for SIGKILL, replacing only external GitHub/Codex or
+time/scheduler boundaries. Recovery is verified at intent/effect/acknowledgement,
+with drift, unavailable sources, duplicate calls and stale ownership. Full validation
+uses `npm run gate`; local fixtures do not substitute for real GitHub/Codex smoke.

@@ -1,3 +1,4 @@
+import { withDeliveryFileAuthority } from "./file-authority";
 import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +17,8 @@ import {
 } from "@symphony/decision";
 import {
   decisionSessionId,
+  isDeliveryContinuation,
+  isLandingIntent,
   formatDeliveryHandoffMarkdown,
   type DecisionMaterializedPlan,
   type DeliveryHandoff,
@@ -67,6 +70,13 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       typeof rec["isPaused"] !== "boolean"
     ) {
       throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);
+    }
+    if (rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
+        rec["landing"] !== undefined && (!isLandingIntent(rec["landing"])
+          || rec["landing"].context.repo.toLowerCase() !== String(rec["repo"]).toLowerCase()
+          || rec["landing"].context.issueNumber !== rec["issueNumber"]
+          || rec["landing"].context.workspaceKey !== rec["workspaceKey"])) {
+      throw new Error("Corrupted delivery recovery step schema");
     }
     return rec as unknown as PersistedDeliveryState;
   }
@@ -207,17 +217,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
  * Never steal a lock by age: an old process may still be executing a GitHub mutation.
  */
 export async function withDeliveryAuthority<T>(cwd: string, action: () => Promise<T>): Promise<T> {
-  const directory = path.join(cwd, ".symphony");
-  fs.mkdirSync(directory, { recursive: true });
-  const lockPath = path.join(directory, "delivery-authority.lock");
-  const fd = fs.openSync(lockPath, "wx");
-  try {
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
-    return await action();
-  } finally {
-    fs.closeSync(fd);
-    fs.unlinkSync(lockPath);
-  }
+  return withDeliveryFileAuthority(path.join(cwd, ".symphony", "delivery-authority.lock"), action);
 }
 
 export async function runDeliverySkillCli(
@@ -297,6 +297,13 @@ async function runDeliverySkillCliLocked(
       existingState = stateStorage.readState();
     } catch {
       // ignore
+    }
+
+    if (existingState?.isPaused) {
+      if (!existingState.pendingCompensation) return 0;
+      const recovered = await recoverDeliveryHandoff({ cwd, repo: parsed.repo, issueNumber: parsed.issueNumber,
+        workspaceKey: parsed.workspaceKey, stateStorage, runner });
+      return recovered.success ? 0 : 1;
     }
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);

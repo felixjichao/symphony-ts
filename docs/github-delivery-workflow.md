@@ -275,15 +275,31 @@ is implemented as an opt-in harness; see
 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md) and the target
 [template](../examples/github-delivery-dogfood/README.md).
 
-### Outstanding recovery invocations (partial #149 foundation)
+### Durable stage recovery and operator verification
 
-The host retains unresolved authority requests in
-`<workspace.root>/.symphony-host/recovery.json`, separately from individual
-Delivery budget/pause files. Restart observes their native targets before allowing
-another delegation. Missing authority evidence keeps the work `unverified` and
-requires operator verification; it does not authorize repeating the old command.
-A corrupt snapshot or leftover `recovery.json.lock` fails closed. Before removing
-a leftover lock, verify the writer is stopped and inspect the snapshot and native
-authority; never use file age as proof. Preserve unresolved requests until native
-completion/invalidation can be established. Delivery crash-lock reclamation and
-automatic stage/retry continuation are not provided by this partial foundation.
+The host keeps invocation/retry records in `<workspace.root>/.symphony-host/`, outside
+individual workspace cleanup. Delivery keeps continuation, landing, pause and budget
+facts in `.symphony/delivery-state.json`. Restart refreshes GitHub, Decision and native
+ownership before acting; it does not rerun initial validation/commit/push. Pending CI
+and Review yield to later ticks. Already-merged PRs only gain local acknowledgement;
+an open Issue waits for tracker synchronization, without an automatic Issue close.
+Review needs-human and paused compensation never silently restart coding.
+
+Scheduled retry reservations retain attempt and UTC expiry; overdue work still
+refreshes stage/admission. A killed worker launch becomes `worker_launch_unverified`.
+A killed repair remains `repair_outcome_unverified`. A lock with uncertain child
+activity remains blocked. These conditions deliberately require verification instead
+of starting a second possible executor. Clean dead-owner locks without subprocess
+uncertainty can be reclaimed automatically; no lock is stolen by age.
+
+For an ambiguous launch/repair/child: stop affected hosts, verify and terminate only
+the recorded old executor/process group after checking its identity, inspect local
+and remote HEAD/PR/Decision/merge/comment facts, and preserve the snapshots for audit.
+Only after proving the old executor cannot continue may an operator release that
+exact blocked reservation/lock in the stopped host's state. Never remove a newer
+token/nonce or reset budgets to make recovery proceed. Keep unresolved intent records
+until native evidence resolves them. Then restart for fresh stage/admission reads;
+use explicit `delivery-skill run --resume` only to authorize resuming paused work.
+A changed HEAD invalidates an old one-shot `pr land` authorization; issue a new explicit
+opt-in for the current target. Corrupt/legacy state and interrupted reclaim metadata
+require the same conservative verification, not automatic deletion.

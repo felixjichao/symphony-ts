@@ -438,11 +438,17 @@ The review follow-up passed the full gate with 2,042 tests (Web 216); see [repro
 
 Userscript 0.1.5 live follow-up (2026-10-22): real Edge/Tampermonkey response growth advanced native progress; active reload resumed generation 1 without repeated Send and accepted a matching receipt. Lost success acknowledgement recovered through receipt readback with one result POST. The metadata duplication caused by Vitest calling `closeBundle` is fixed and reproduced/verified through real builds. See [live evidence and explicit limits](evidence/web-continuity/live015-acceptance-2026-10-22.md); the >10-minute growing-windowed-response and Send/checkpoint crash-gap combinations remain automated-only.
 
-### #149 partial foundation evidence (not acceptance)
+### #149 durable handoff recovery evidence
 
-`apps/cli/src/recovery-storage.test.ts` covers persisted invocation discovery after
-SIGKILL, ambiguous effect suppression across restart, stale acknowledgements,
-competing store instances, failed writes and invalid schema. Existing
-`packages/orchestrator/src/work-continuity.test.ts` remains the native fencing and
-readback regression. Full durable handoff/retry acceptance is outstanding;
-[dispatch ownership design gap](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: native intents persist before effect,
+authoritative readback precedes acknowledgement, startup discovers incomplete work,
+and native fences/locks refuse stale ownership. `durable-delivery.test.ts` covers
+SIGKILL before/after Review and merge effects, repair ambiguity, paused compensation,
+remote receipt deduplication, target changes and lock races. `durable-retry.test.ts`
+covers reservation/launch SIGKILL, wall-clock restoration, attempt/token preservation,
+admission drift, source outage and failed persistence. `landing-recovery.test.ts`
+covers the tracker path with real durable state. `work-continuity.test.ts` exercises
+native host startup/ticks and result consumption without coding replay. Existing
+Decision generation/lease regressions remain authoritative. See the
+[boundary/evidence mapping](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+Real GitHub/Codex integration remains unverified by these local fixtures.

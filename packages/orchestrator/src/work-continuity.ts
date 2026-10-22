@@ -59,6 +59,8 @@ export interface WorkRecoveryStorage {
 }
 export interface WorkContinuityPorts {
   readonly recoveryStorage?: WorkRecoveryStorage;
+  /** Native idempotent/fenced primitive; never arbitrary command replay. */
+  canResumeRecovery?(request: WorkRecoveryRequest, current: WorkContinuityObservation): boolean;
 
   /** Union of active tracker work and known source identities. Never only running workers. */
   listWork(): Promise<readonly WorkKey[]>;
@@ -132,7 +134,18 @@ export class WorkContinuityCoordinator {
         if (pending) {
           if (first.available && await this.ports.isRecoveryResolved?.(pending)) this.settle(pending);
           else {
-            results.push({ workKey, diagnosis: first.available ? this.unverified(diagnosis) : diagnosis, result: "unverified" });
+            if (first.available && !this.stopping && this.ports.canResumeRecovery?.(pending, first)) {
+              // Retain the original durable slot until the native replay has
+              // re-observed and committed (or certified no mutation). A crash in
+              // this gap therefore cannot erase ambiguity.
+              const result = await this.ports.recover({ ...pending, version: first.version,
+                stage: pending.action === "dispatch" ? first.stage : pending.stage }, () => !this.stopping);
+              const after = await this.ports.observe(workKey);
+              if (after.available && (result === "applied" || result === "stale" || result === "unsupported" || result === "stopped")) {
+                this.settle(pending);
+                results.push({ workKey, diagnosis: deriveWorkContinuity(after), result });
+              } else results.push({ workKey, diagnosis: this.unverified(deriveWorkContinuity(after)), result: "unverified" });
+            } else results.push({ workKey, diagnosis: first.available ? this.unverified(diagnosis) : diagnosis, result: "unverified" });
             continue;
           }
         }

@@ -53,7 +53,7 @@ export { RUN_ATTEMPT_STATUSES } from "./run";
 export type { CodexEventName, LiveSession } from "./session";
 export { composeSessionId } from "./session";
 
-export type { RetryEntry, TimerHandle } from "./retry";
+export type { DurableRetryReservation, RetryReservationStorage, RetryEntry, TimerHandle } from "./retry";
 
 export type {
   CodexRateLimits,
@@ -74,6 +74,9 @@ export type {
   ChecksEvaluationResult,
   ChecksSummaryStatus,
   DeliveryContext,
+  DeliveryContinuation,
+  LandingIntent,
+  LandingIntentStorage,
   DeliveryErrorCode,
   DeliveryErrorOptions,
   DeliveryHandoff,
@@ -114,3 +117,5 @@ export * from "./execution-continuity";
 
 export * from "./work-continuity";
 export * from "./decision-continuity";
+
+export { isDeliveryContinuation, isLandingIntent } from "./delivery-recovery";

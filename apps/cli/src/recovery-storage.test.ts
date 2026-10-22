@@ -78,6 +78,25 @@ process.kill(process.pid, 'SIGKILL');`;
     expect(ports.recoveryStorage.load()).toEqual([]);
     expect(calls).toBe(1);
   });
+  it("retains the durable slot while a certified native primitive resumes a pre-effect crash", async () => {
+    const { file } = fixture();
+    const store = new FileWorkRecoveryStorage(file);
+    store.put(request);
+    let calls = 0;
+    let settled = false;
+    const coordinator = new WorkContinuityCoordinator({ recoveryStorage: store, listWork: async () => [],
+      observe: async () => ({ ...facts, blocked: settled ? "operator" : null }),
+      canResumeRecovery: () => true,
+      recover: async recovered => {
+        expect(store.load()).toEqual([request]);
+        expect(recovered.fence).toEqual(request.fence);
+        calls++; settled = true; return "applied";
+      } });
+    expect((await coordinator.reconcile())[0]?.result).toBe("applied");
+    expect(store.load()).toEqual([]);
+    await coordinator.reconcile();
+    expect(calls).toBe(1);
+  });
   it("does not perform effects after a failed durable commit", async () => {
     const { file } = fixture();
     fs.mkdirSync(path.dirname(file), { recursive: true });

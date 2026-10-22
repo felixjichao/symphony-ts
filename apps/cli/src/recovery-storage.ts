@@ -1,3 +1,4 @@
+import { acquireFileAuthority } from "./file-authority";
 /** Host-owned durable recovery invocations (§4/§8/§17). Never a workflow lifecycle. */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +23,17 @@ export function writeDurableJson(file: string, value: unknown): void {
 
 interface Snapshot { schemaVersion: 1; requests: WorkRecoveryRequest[] }
 
+function isTaskRef(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  return typeof r["taskId"] === "string" && typeof r["revision"] === "number" && Number.isSafeInteger(r["revision"]) && r["revision"] >= 1;
+}
+function isHandoffRef(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  return typeof r["handoffId"] === "string" && (r["headSha"] === null || typeof r["headSha"] === "string");
+}
+
 function validateRequest(value: unknown): value is WorkRecoveryRequest {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
@@ -31,14 +43,23 @@ function validateRequest(value: unknown): value is WorkRecoveryRequest {
     && typeof r["version"] === "string" && typeof r["stage"] === "string"
     && ["plan", "coding", "ci", "review", "repair", "delivery", "merge", "handoff"].includes(r["stage"])
     && typeof r["action"] === "string" && (RECOVERY_ACTIONS as readonly string[]).includes(r["action"])
-    && !!authority && typeof authority["kind"] === "string"
-    && !!r["fence"] && typeof r["fence"] === "object"
+    && !!authority && (authority["kind"] === "internal" && typeof authority["authority"] === "string"
+      || authority["kind"] === "external" && typeof authority["system"] === "string" && typeof authority["condition"] === "string"
+      || authority["kind"] === "human" && typeof authority["role"] === "string" && typeof authority["instruction"] === "string")
+    && !!r["fence"] && typeof r["fence"] === "object" && !Array.isArray(r["fence"])
+    && Object.entries(r["fence"]).every(([key, value]) =>
+      ["retryToken", "leaseToken", "expectedHeadSha"].includes(key) ? typeof value === "string"
+      : ["lifecycleGeneration", "reconciliationEpoch", "leaseGeneration", "bindingGeneration"].includes(key)
+        && typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+    && (r["taskRef"] === undefined || isTaskRef(r["taskRef"]))
+    && (r["handoffRef"] === undefined || isHandoffRef(r["handoffRef"]))
+    && (r["leaseExpiresAt"] === undefined || typeof r["leaseExpiresAt"] === "number" && Number.isFinite(r["leaseExpiresAt"]))
     && (r["invocationId"] === undefined || typeof r["invocationId"] === "string");
 }
 
-/** All read-modify-write operations serialize across processes. A crash in this tiny
- * synchronous section leaves a lock requiring operator verification; never steal by age.
- * Native authorities still fence effects. An existing unresolved slot cannot be replaced. */
+/** Cross-process read/modify/write exclusion. Proven dead clean owners may be
+ * reclaimed; legacy/ambiguous metadata fails closed. Native authorities still
+ * fence effects, and an unresolved WorkKey slot cannot be replaced. */
 export class FileWorkRecoveryStorage implements WorkRecoveryStorage {
   constructor(private readonly file: string) {}
   private read(): Snapshot {
@@ -79,13 +100,62 @@ export class FileWorkRecoveryStorage implements WorkRecoveryStorage {
 
 
 /** Synchronous file commit mutex, never held across external effects or awaits. */
-function withStorageMutation(file: string, action: () => void): void {
+export function withStorageMutation(file: string, action: () => void): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lock = `${file}.lock`;
-  const fd = fs.openSync(lock, "wx", 0o600);
-  try {
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, nonce: randomUUID() }));
-    fs.fsyncSync(fd);
-    action();
-  } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
+  const lock = acquireFileAuthority(`${file}.lock`);
+  try { action(); } finally { lock.release(); }
+}
+
+import type { DurableRetryReservation, RetryReservationStorage } from "@symphony/domain";
+export class FileRetryReservationStorage implements RetryReservationStorage {
+  constructor(private readonly file: string) {}
+  load(): readonly DurableRetryReservation[] {
+    if (!fs.existsSync(this.file)) return [];
+    const raw: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"));
+    if (!raw || typeof raw !== "object") throw new Error("Invalid retry snapshot");
+    const s = raw as Record<string, unknown>;
+    if (s["schemaVersion"] !== 1 || !Array.isArray(s["reservations"])) throw new Error("Invalid retry schema");
+    const seen = new Set<string>();
+    for (const value of s["reservations"]) {
+      if (!value || typeof value !== "object") throw new Error("Invalid retry reservation");
+      const r = value as Record<string, unknown>;
+      if (typeof r["issueId"] !== "string" || !r["issueId"] || seen.has(r["issueId"])
+        || !(r["identifier"] === null || typeof r["identifier"] === "string")
+        || !(r["issueUrl"] === null || typeof r["issueUrl"] === "string")
+        || !(r["error"] === null || typeof r["error"] === "string")
+        || typeof r["attempt"] !== "number" || !Number.isSafeInteger(r["attempt"]) || r["attempt"] < 1
+        || typeof r["dueAtUtcMs"] !== "number" || !Number.isSafeInteger(r["dueAtUtcMs"]) || r["dueAtUtcMs"] < 0
+        || typeof r["token"] !== "string" || !r["token"]
+        || !["failure", "continuation"].includes(String(r["kind"]))
+        || !["scheduled", "launch_pending", "blocked"].includes(String(r["phase"]))) throw new Error("Invalid retry reservation");
+      if (r["workKey"] !== undefined) {
+        const key = r["workKey"] as Record<string, unknown> | null;
+        if (!key || typeof key["provider"] !== "string" || typeof key["key"] !== "string") throw new Error("Invalid retry WorkKey");
+      }
+      seen.add(r["issueId"]);
+    }
+    return s["reservations"] as DurableRetryReservation[];
+  }
+  private mutate(action: (records: DurableRetryReservation[]) => void): void {
+    withStorageMutation(this.file, () => {
+      const records = [...this.load()];
+      action(records);
+      writeDurableJson(this.file, { schemaVersion: 1, reservations: records });
+    });
+  }
+  put(record: DurableRetryReservation, expectedToken: string | null): void {
+    this.mutate(records => {
+      const index = records.findIndex(r => r.issueId === record.issueId);
+      if ((records[index]?.token ?? null) !== expectedToken) throw new Error("Stale durable retry owner");
+      if (index >= 0) records[index] = record;
+      else records.push(record);
+    });
+  }
+  remove(issueId: string, token: string): void {
+    this.mutate(records => {
+      const index = records.findIndex(r => r.issueId === issueId);
+      if (index < 0 || records[index]?.token !== token) throw new Error("Stale durable retry owner");
+      records.splice(index, 1);
+    });
+  }
 }

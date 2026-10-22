@@ -94,10 +94,12 @@ Poll inventory failure skips that tick's candidate dispatch. Host launches and r
 
 Decision/Web continuity adds optional task-scoped execution metadata to the existing Decision authority. Lease renewal consumes meaningful stage/response progress rather than heartbeat age; stalled renewal stops before the work-aware coordinator can reclaim an expired lease. Native recovery budgets and nonterminal blocks survive store restart. The Web adapter awaits fenced authorization before navigation/Send; userscript enabled/Stop intent survives page loss without sharing another tab's lease. Browser availability is an explicit host wait. See the [implementation decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md) and [protocol](decision-protocol.md#decisionweb-execution-facts). No browser supervisor, automatic login or Operations mutation path is added.
 
-The proposed [durable invocation foundation](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md)
-adds an injected synchronous recovery-request storage port to the existing work
-coordinator. The CLI stores outstanding invocations outside issue workspaces,
-loads them at startup and retains ambiguous outcomes until native evidence resolves
-them. This is durable suppression, not a new workflow lifecycle or permission to
-replay. Retry-to-worker dispatch ownership and the remaining #149 stage handoffs
-are still pending design/implementation.
+The [native durable handoff implementation](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md)
+adds synchronous injected storage ports for recovery invocations and retry/launch
+reservations, and explicit continuation/landing markers in Delivery's existing state.
+The host restores native intents after preflight and re-observes current authority
+facts before action. Review receipts reuse the same plan/target round; stage recovery
+skips coding. Merge acknowledgements share the native Delivery lock and exact-target
+opt-in. Scheduled retries restore from UTC deadlines; uncertain worker launches,
+repairs and subprocesses remain explicitly blocked until operator verification.
+No second business lifecycle, supervisor or Operations mutation path is introduced.

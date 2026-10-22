@@ -141,3 +141,59 @@ it("derives current-HEAD CI waits, review execution, accepted results, repair an
     expect(host.state.running.size).toBe(0);
   } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+it("real host startup and ticks ensure Review and consume a durable result without relaunching coding", async () => {
+  const { createFixtureRunner, saveRemote, remote, context } = await import("../test-fixtures/durable-delivery-harness");
+  const { DecisionReviewGate } = await import("@symphony/decision");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "host-native-delivery-"));
+  saveRemote(dir, { head: "a".repeat(40), merged: false, merges: 0, comments: [], labels: ["symphony-ready"], repairs: 0 });
+  const store = new DurableDecisionStore({ storeDir: path.join(dir, "decision") });
+  await store.open();
+  const service = new DecisionService(store);
+  const work = githubDecisionRoot("fixture", "durable", 1);
+  const session = await service.createSession(work);
+  const plan = await service.createPlanTask(session.id, { requirements: { title: "Fixture", body: "Requirement" } });
+  const { lease } = await service.claimTask(plan.id, { owner: "planner" });
+  await service.startTask(plan.id, lease);
+  await service.submitResult(plan.id, { ...lease, result: { schemaVersion: 1, kind: "plan", taskId: plan.id,
+    sessionId: session.id, revision: plan.revision, createdAtMs: Date.now(), verdict: "ready",
+    content: { plan: "Implement fixture", acceptanceCriteria: [], risks: [], clarifications: [] } } });
+  await service.markPlanPublished(plan.id, { commentId: 1 });
+  const issue: Issue = { id: "1", identifier: "GH-1", title: "Fixture", description: "Requirement", state: "open",
+    nativeRef: { repo: context.repo, number: 1 }, priority: 1, branchName: null,
+    url: `https://github.com/${context.repo}/issues/1`, assigneeId: null, labels: [], blockedBy: [], dispatchable: true, createdAt: 0, updatedAt: 0 };
+  const profile: TrackerAdapterProfile = { kind: "fixture", documentation: "fixture", secretProviderKeys: [], secretEnvVars: [],
+    defaultActiveStates: ["open"], defaultTerminalStates: ["closed"], createAdapter: () => ({ kind: "fixture",
+      fetchIssuesByStates: async states => states.includes("open") ? [issue] : [], fetchIssuesByIds: async () => [issue] }) };
+  const workflowPath = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: must-never-launch\n---\nPrompt\n`);
+  let tick: (() => void) | undefined;
+  const create = () => createHost({ workflowPath, trackerProfiles: [profile], planningGate: new DecisionPlanningGate(service),
+    continuityReviewGate: new DecisionReviewGate(service), continuityRunner: createFixtureRunner(dir),
+    logger: createStructuredLogger({ sinks: [{ write() {} }] }),
+    scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} },
+    continuityGitHub: { observeWork: async () => ({ workKey: work, issue: { state: "open", url: issue.url! },
+      pullRequest: { number: 2, state: "open", url: `https://github.com/${context.repo}/pull/2`, headSha: remote(dir).head, isDraft: false },
+      ci: { headSha: remote(dir).head, status: "success" } }) } });
+  let host = await create();
+  try {
+    await host.start(); tick!(); await host.loop.settled();
+    const review = service.getTasksForSession(session.id).find(t => t.kind === "review");
+    expect(review?.status, JSON.stringify(host.workContinuity.observations)).toBe("pending");
+    expect(host.state.running.size).toBe(0);
+    const claim = await service.claimTask(review!.id, { owner: "reviewer" });
+    await service.startTask(review!.id, claim.lease);
+    await service.submitResult(review!.id, { ...claim.lease, result: { schemaVersion: 1, taskId: review!.id, sessionId: session.id,
+      kind: "review", revision: review!.revision, createdAtMs: Date.now(), target: { repository: context.repo, prNumber: 2, headSha: remote(dir).head }, verdict: "approve", findings: [] } });
+    tick!(); await host.loop.settled();
+    const storage = new FileDeliveryStateStorage(path.join(dir, "workspaces", "GH-1", ".symphony", "delivery-state.json"));
+    expect(storage.readState()?.continuation?.phase).toBe("ready");
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("external_wait");
+    await host.stop();
+    host = await create();
+    await host.start(); tick!(); await host.loop.settled();
+    expect(service.getTasksForSession(session.id).filter(t => t.kind === "review")).toHaveLength(1);
+    expect(host.state.running.size).toBe(0);
+    expect(remote(dir).merges).toBe(0);
+  } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

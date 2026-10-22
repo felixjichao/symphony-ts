@@ -1,84 +1,126 @@
-# Durable recovery invocation foundation (NEST-133 / GitHub #149)
+# Agent Note: Native durable handoffs and startup recovery
+Status: proposed
 
-Status: proposed; partial implementation only. SPEC §4 adjacent, §7/§8/§14 and §17/§18.
+## Problem
 
+NEST-133 / GitHub #149 requires cross-stage effects to survive service interruption
+without losing continuation or replaying unknown executor effects. The implementation
+is complete and pending independent review. SPEC §4 adjacent, §7/§8/§14 and §17/§18.
 Baseline: `main@1a8eb105a29d6d4340cd05243644f8312ff3f8ca`.
 
-## Implemented boundary
+## Decision
 
-The work coordinator records a unique invocation before delegating to a native
-Decision or Delivery authority. The host stores these requests under the workspace
-root's `.symphony-host/recovery.json`, outside individual issue workspaces. Startup
-loads them even when tracker inventory no longer contains their WorkKey. Failed
-reads or unresolved authority outcomes retain suppression across restarts. Native
-evidence of completion/invalidation or a certified no-commit refusal settles the
-request. This does not make an ambiguous operation safe to replay.
+| Native boundary | Durable intent / recovery |
+| --- | --- |
+| Coordinator → authority | Unique invocation persisted before delegation; startup discovers its WorkKey even outside current tracker inventory. Native idempotent/fenced replay retains the original slot until readback; unavailable or ambiguous facts retain suppression. |
+| Coding/CI → Review | Existing owned PR + current HEAD + CI + eligible plan authorize the stage entry. Delivery stores target and operation key before ensuring Review, then task ID/revision. Receipt adoption explicitly permits reuse of an existing completed task for the same plan/target without creating a review round. |
+| Review result → Delivery | Re-read task ID/revision/target and verdict, record result identity, then continue from CI/Review/landing. Initial validation, commit and push are skipped. Needs-human is paused; repair authorization is preserved, but a started repair with an unknown outcome blocks rather than replaying arbitrary commands. |
+| Delivery pause → compensation | Preserve pause/deadline/budgets and handoff ID. Re-read current Issue labels and PR ownership/HEAD before mutation. Complete label removal/reporting through the existing compensation code; repeated recovery deduplicates the handoff marker. Compensation never resumes coding. |
+| Landing → confirmation | Skill and `pr land` use the same `LandingIntent` in the existing Delivery state and the same filesystem authority. Persist explicit opt-in and exact PR/HEAD before gates/effect; observe merged/merge commit before acknowledging. A timeout can follow success, so exit status alone is never the merge result. Already-merged recovery only acknowledges, without another merge or closing an Issue. |
+| Retry reservation → worker | Persist UTC due time, attempt, kind, error and a unique incarnation/token before timer registration. Refresh current tracker/stage/admission on expiry. Persist `launch_pending` before invoking the worker; never erase the only durable record between reservation and launch. |
 
-Observation versions now hash the existing native-source snapshot rather than
-persisting its JSON, which contains service configuration. Persisted requests retain
-only the target, invocation ID, authority and relevant native fences. Snapshot files
-are created with mode 0600. Ordinary Delivery state writes reuse the fsync + atomic
-rename writer; budget and pause semantics otherwise remain unchanged.
+These are small native records, not a second business lifecycle or a generic
+transaction engine. GitHub, Decision and the Orchestrator retain their authorities;
+Operations remains read-only. Library adapters without a durable storage capability
+retain their in-memory semantics; the native CLI/host supplies the file ports.
 
-A synchronous, exclusive file mutex serializes snapshot read/modify/write across
-processes. An unresolved WorkKey cannot be overwritten. Acknowledgement compares
-the entire request including its unique invocation ID, so an old acknowledgement
-cannot delete a newer request. A crash inside the file commit may leave the mutex;
-startup fails closed rather than guessing that the write succeeded. Atomic rename
-alone is not the concurrency protocol.
+## Retry launch ambiguity: resolution of the initial design gap
 
-## Additional dispatch boundary requiring a design amendment
+The initial foundation identified a gap if a retry reservation were simply cleared
+around `startWorker`. The continued implementation, requested by the user, resolves
+it using the original analysis's explicit durable-block outcome:
 
-The approved analysis proposes durable retry reservations, removed on dispatch,
-with incarnation/token fencing. The existing authority still transitions from
-reservation to `running` in a synchronous, process-local `commitDispatch`, and
-`startWorker` launches an external coding process. A durable retry snapshot alone
-cannot protect this boundary:
+- A scheduled reservation restores automatically with its original UTC deadline
+  and attempt; the new monotonic clock is used only for the new timer.
+- `launch_pending` is written before **any** executor invocation. A restart that
+  cannot prove the old executor finished changes that record to `blocked`, retains
+  the claim and refuses another coding launch. A new UUID is not executor revocation.
+- A normally settled attempt replaces the launch record with the next reservation
+  or removes it on a definitive release. Clean shutdown waits for attempt/transport/
+  hook settlement and retains a safe scheduled reservation; SIGKILL cannot take
+  that path. Storage failure retains the launch evidence and prevents new work.
+- Replacement, cancellation and launch writes compare the previous durable token.
+  Old process callbacks cannot consume a newer incarnation's reservation.
 
-1. Remove the durable reservation before launching: process death after removal
-   but before launch loses the reservation, its attempt and due-time evidence.
-2. Keep it until launch: process death after launch but before acknowledgement
-   leaves an ambiguous reservation and possibly a live orphan coding process.
-3. Restore that reservation in a new host: a new incarnation prevents token
-   reuse, but does not prove the old executor is dead or prevent its external
-   mutations. Comparing a stored token is not executor revocation.
+This intentionally does not introduce a process supervisor or claim that an orphan
+coding executor can always be revoked. Ambiguous launch/repair/subprocess records
+carry explicit operator verification conditions, rather than silently stranding work
+or automatically running a second possible executor.
 
-The host has no durable active-attempt/launch receipt or host ownership lease
-that can establish the missing fact. `WorkerControl`, `active`, lifecycle
-`generation`, and retry ownership are all process-local. Fresh GitHub and Decision
-reads alone cannot prove that an unacknowledged local coding executor never
-started. The Delivery authority lock is a separate boundary and does not fence
-these coding workers.
+## Storage and filesystem authority
 
-Completing the retry guarantee therefore requires an explicit decision about a
-**retry-to-coding dispatch intent and executor ownership/revocation contract**,
-including orphan-child evidence and the point where a reservation can be settled.
-That expands the approved design beyond serializing timer reservations. The
-implementation agent has stopped this expansion and requested requirement
-analysis. The retry prototype was withdrawn; no retry persistence is enabled by
-this foundation. Review/result continuation, landing intent unification and safe
-Delivery crash-lock reclamation also remain unimplemented.
+Host invocation and retry records live in `<workspace.root>/.symphony-host/`, outside
+individual issue workspace cleanup. Schema-validated snapshots use mode 0600,
+file fsync, atomic replacement and directory fsync. Observation versions are hashes,
+so complete service configuration is not written into invocation records. The
+existing Delivery state carries continuation, landing, budget and pause facts;
+ordinary budget writes preserve unfinished steps. Foreign work identity and malformed
+new records fail closed. Acknowledgements compare unique invocation identities.
+
+Synchronous file commits and asynchronous Delivery operations share one native lock
+primitive. Lock metadata records PID, hostname, nonce and subprocess uncertainty.
+Reclamation is serialized and requires a proven dead same-host owner and no pending
+subprocess. No lock is stolen by age. Release checks nonce. The native git/gh runners
+mark uncertainty **before** spawning and clear it only on confirmed child close;
+if an action returns before close, the authority remains held until close. A parent
+that dies with an ambiguous child therefore cannot be treated as safely stopped.
+Missing/legacy metadata, an interrupted reclaim, cross-host ownership and uncertain
+subprocess effects require operator verification. Admission surfaces these lock
+conditions as explicit blocks. PID reuse conservatively prevents automatic reclaim.
+
+Startup preflight/terminal cleanup precede retry restoration. Startup and later ticks
+use the existing coordinator and native readers. Native stage recovery takes the
+same Delivery lock, revalidates observation/plan/target, and yields on pending CI or
+Review rather than sleeping inside the host scan. Shutdown synchronously fences new
+calls; already-started writes/effects are awaited and their durable records survive.
+Nonstandard branch/base contexts are restored from the native Delivery intent.
 
 ## Alternatives considered
 
-- Persist only `dueAtMs`: rejected because it belongs to the old monotonic clock.
-- Clear the reservation immediately before `startWorker`: rejected because it
-  leaves a durable gap before the external effect.
-- Keep the reservation and restore it unconditionally: rejected because an old
-  coding executor may still be acting externally.
-- Use a fresh UUID alone as revocation: rejected because a process-local worker
-  does not consult that UUID before each external mutation.
-- Ship the invocation foundation as complete #149: rejected; durable suppression
-  is one prerequisite, not stage continuation or retry recovery.
-- Automatically steal a leftover filesystem mutex by age: rejected; time does
-  not prove that an owner or its external mutation has stopped.
+- Persist monotonic `dueAtMs`: rejected; it cannot survive a new process clock.
+- Clear a reservation immediately before or after launch: rejected; either order
+  loses a crash window. Retain a launch intent and block genuinely ambiguous starts.
+- Use a new UUID as proof the old worker stopped: rejected; it does not revoke an
+  external process. Tokens fence durable writes; uncertainty remains explicit.
+- Restore the whole CLI command: rejected; stage recovery must skip coding and must
+  not blindly repeat an uncertain repair or invent merge opt-in.
+- Give every recovery a new Review operation key: rejected; it can create a new
+  round and lose a completed result. Stable target/plan identity and explicit
+  completed-task receipt adoption preserve existing rounds.
+- Steal crash locks by age or parent PID alone: rejected; a child may still mutate
+  GitHub. Unknown child outcomes block, even if the parent is dead.
+- Add a generic workflow/transaction framework: rejected; injected native file
+  ports and explicit per-boundary markers suffice.
 
-## Validation
+## Consequences
 
-`apps/cli/src/recovery-storage.test.ts` bundles the production storage writer,
-starts it in a separate Node process, persists an intent, and SIGKILLs that child.
-A fresh coordinator discovers the intent and refuses replay without native
-resolution evidence. Other cases cover ambiguous effects, durable-write failure,
-old acknowledgements, competing storage instances, invalid schema and atomic
-replacement. Existing work-continuity tests continue to exercise native fences,
-re-observation and shutdown. These are foundation tests, not #149 acceptance.
+The native host can restore safe reservations and stage continuations automatically,
+while genuinely unknown executor outcomes require explicit verification. File-backed
+adapters carry the new guarantees; custom adapters must supply equivalent durability
+and child-lifecycle evidence. Runtime `.symphony` files are excluded from Delivery
+source commits, including locks and leftover snapshot temporaries. Changing the
+configured workspace root requires stopping the host and preserving/migrating its
+host recovery records; no automatic cross-root migration is claimed.
+
+### Evidence
+
+`durable-delivery.test.ts` bundles production stage entry, FileDeliveryStateStorage
+and Decision store into a separate child process. SIGKILL covers Review intent,
+effect and acknowledgement; merge intent, effect and acknowledgement; repair start;
+and remote handoff receipt loss. Reopening validates task reuse, exact-HEAD drift,
+no coding replay, one merge/report, preserved budgets and paused compensation.
+Additional cases cover competing locks, stale nonce release and ambiguous child locks.
+
+`durable-retry.test.ts` SIGKILLs after reservation persistence and at executor launch,
+then restores the real authority with a different monotonic clock. It covers expiry,
+attempt preservation, missing/inactive/new-stage admission, source outage, old-token
+callbacks, cancellation, write failure and clean shutdown. `landing-recovery.test.ts`
+exercises the tracker landing path with real file storage and lost receipts on both
+sides of the effect. The real host startup/tick test ensures a Review and consumes its
+stored result without launching coding, then reopens the host without a new round.
+Existing Decision fencing, coordinator single-flight, unavailable-read, storage,
+Delivery and whole-repository regressions remain part of `npm run gate`.
+
+These are local fixtures at external GitHub/Codex boundaries. They do not claim a
+real GitHub/Codex smoke, cross-machine distributed ownership, exactly-once effects,
+power-loss certification, or automatic resolution of unknowable executor outcomes.

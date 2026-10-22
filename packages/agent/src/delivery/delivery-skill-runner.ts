@@ -1,3 +1,5 @@
+import { recoverDeliveryHandoff } from "./recover-handoff";
+import { randomUUID } from "node:crypto";
 import {
   decisionSessionId,
   evaluateChecksAutoMergePolicy,
@@ -13,6 +15,7 @@ import {
   type DecisionReviewTarget,
   type DecisionTask,
   type DeliveryContext,
+  type DeliveryContinuation,
   type DeliveryHandoff,
   type DeliveryReviewStatusResult,
   type DeliverySkillConfig,
@@ -30,6 +33,9 @@ export interface DeliveryStateStorage {
 }
 
 export interface RunDeliverySkillOptions extends DeliverySkillConfig {
+  readonly canCommit?: (() => boolean) | undefined;
+  readonly resumeStageOnly?: boolean;
+  readonly yieldOnWait?: boolean;
   readonly cwd: string;
   readonly runner: DeliveryGitGhRunner;
   readonly stateStorage?: DeliveryStateStorage | undefined;
@@ -43,7 +49,7 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
 // SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
 // Commit --only uses these paths even for previously staged state, preserving its
 // original index entry and the local budget file.
-const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/delivery-state.json"] as const;
+const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/**"] as const;
 
 const DEFAULT_READY_LABEL = "symphony-ready";
 const DEFAULT_MAX_REPAIRS = 3;
@@ -361,7 +367,13 @@ export async function runDeliverySkill(options: RunDeliverySkillOptions): Promis
 async function runDeliverySkillLocked(
   options: RunDeliverySkillOptions,
 ): Promise<DeliverySkillResult> {
-  const runner = options.runner;
+  const native = options.runner;
+  const guard = () => { if (options.canCommit && !options.canCommit()) throw new Error("Delivery stopped before effect"); };
+  const runner: DeliveryGitGhRunner = {
+    git: (args, cwd, timeout) => { guard(); return native.git(args, cwd, timeout); },
+    gh: (args, cwd, timeout) => { guard(); return native.gh(args, cwd, timeout); },
+    exec: (command, cwd, timeout, env) => { guard(); return native.exec(command, cwd, timeout, env); },
+  };
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
 
@@ -398,6 +410,20 @@ async function runDeliverySkillLocked(
     }
   }
 
+  if (persisted && (persisted.repo.toLowerCase() !== context.repo.toLowerCase()
+    || persisted.issueNumber !== context.issueNumber || persisted.workspaceKey !== context.workspaceKey)) {
+    return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
+      spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
+      reason: "manual_intervention_required", handoffMarkdown: "Delivery state belongs to a different work identity" };
+  }
+  if (persisted?.isPaused && persisted.pendingCompensation && options.resume && stateStorage) {
+    const compensation = await recoverDeliveryHandoff({ ...context, cwd: options.cwd, stateStorage, runner });
+    if (!compensation.success) return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
+      spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
+      reason: "manual_intervention_required", handoffMarkdown: "Complete pending compensation before resuming Delivery" };
+    persisted = await stateStorage.readState();
+  }
+
   let spentRepairs = 0;
   let initialSpentWaitSeconds = 0;
   let deadlineTimestampMs: number | undefined;
@@ -405,7 +431,7 @@ async function runDeliverySkillLocked(
   let prUrl: string | null = null;
   let currentHeadSha: string | null = null;
 
-  if (persisted && persisted.repo === context.repo && persisted.issueNumber === context.issueNumber) {
+  if (persisted && persisted.repo.toLowerCase() === context.repo.toLowerCase() && persisted.issueNumber === context.issueNumber) {
     if (persisted.isPaused && !options.resume) {
       log(`[delivery-skill] Previous delivery paused (${persisted.pauseReason ?? "unknown"}). Refusing to dispatch without resume.`);
       return {
@@ -424,6 +450,8 @@ async function runDeliverySkillLocked(
     deadlineTimestampMs = persisted.deadlineTimestampMs;
   }
 
+  let continuation = persisted?.continuation;
+  let landing = persisted?.landing;
   const now = options.nowFn ?? Date.now;
   const startTimeMs = now();
   if (deadlineTimestampMs === undefined) {
@@ -447,6 +475,8 @@ async function runDeliverySkillLocked(
     if (!stateStorage) return;
     try {
       await stateStorage.writeState({
+        continuation,
+        landing,
         repo: context.repo,
         issueNumber: context.issueNumber,
         workspaceKey: context.workspaceKey,
@@ -462,6 +492,20 @@ async function runDeliverySkillLocked(
       throw err;
     }
   };
+
+  const checkpoint = async (phase: DeliveryContinuation["phase"], extra: Partial<DeliveryContinuation> = {}) => {
+    if (prNumber === null || !currentHeadSha) return;
+    const same = continuation?.headSha === currentHeadSha && continuation.prNumber === prNumber;
+    continuation = { intentId: same ? continuation!.intentId : randomUUID(),
+      headBranch: context.headBranch, baseBranch: context.baseBranch, headSha: currentHeadSha, prNumber,
+      ...(same ? continuation : {}),
+      optInLand: options.optInLand === true, readyLabel, maxRepairAttempts: maxRepairs, maxWaitSeconds,
+      requiredChecks: options.requiredChecks, repairCommand: options.repairCommand,
+      validationCommand: options.validationCommand, phase, ...extra };
+    await persistCurrentState();
+  };
+  const waiting = (): DeliverySkillResult => ({ status: "waiting", prNumber, prUrl, headSha: currentHeadSha,
+    spentRepairs, spentWaitSeconds: getElapsedWaitSeconds(), reason: "awaiting_native_stage" });
 
   // 辅助函数：触发 Blocker / 预算耗尽处理并移除 ready 标签停止派发
   const haltDispatch = async (
@@ -760,6 +804,10 @@ async function runDeliverySkillLocked(
         }
       }
 
+      if (landing && landing.prNumber === candidate.number && landing.headSha === candidate.headRefOid && realMergeSha) {
+        landing = { ...landing, phase: "observed", mergeCommitSha: realMergeSha };
+        await persistCurrentState();
+      }
       if (issueState === "CLOSED") {
         log(`[delivery-skill] PR #${candidate.number} is MERGED and issue #${context.issueNumber} is CLOSED. Completed.`);
         return {
@@ -801,6 +849,13 @@ async function runDeliverySkillLocked(
     );
   }
 
+  if (options.resumeStageOnly && continuation?.phase === "repair_pending") {
+    return haltDispatch("manual_intervention_required", "repair_outcome_unverified: inspect local/remote HEAD and old executor before resuming");
+  }
+  if (options.resumeStageOnly && (prNumber === null || !currentHeadSha)) {
+    return haltDispatch("manual_intervention_required", "Stage continuation requires an existing owned PR and exact HEAD");
+  }
+  if (!options.resumeStageOnly) {
   // ==========================================
   // Phase 2: Run Project Validation
   // ==========================================
@@ -912,6 +967,9 @@ async function runDeliverySkillLocked(
     }
     log(`[delivery-skill] Created PR #${prNumber} (${prUrl})`);
   }
+
+  }
+  await checkpoint("ci");
 
   // ==========================================
   // Phase 6: Inspect CI checks & Repair Loop
@@ -1166,11 +1224,12 @@ async function runDeliverySkillLocked(
         log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
 
         // 在修复副作用执行前立即持久化预算消耗
-        await persistCurrentState({ spentRepairs });
+        await checkpoint("repair_pending");
 
         let repairSuccess = false;
         try {
           if (options.repairFn) {
+            guard();
             repairSuccess = await options.repairFn(diagResult.diagnostics);
           } else if (options.repairCommand) {
             log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
@@ -1242,8 +1301,8 @@ async function runDeliverySkillLocked(
         currentHeadSha = newHeadSha;
         log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Waiting for new CI run to start...`);
 
-        // 刷新持久化状态中的预算消耗
-        await persistCurrentState({ spentRepairs });
+        // New exact HEAD acknowledges the complete repair/commit/push sequence.
+        await checkpoint("ci");
 
         await sleep(pollInterval);
         continue;
@@ -1252,6 +1311,7 @@ async function runDeliverySkillLocked(
       // 6c. Checks Pending -> 等待下一次轮询
       log(`[delivery-skill] CI checks pending (${evaluation.reason}). Waiting ${pollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
       await persistCurrentState();
+      if (options.yieldOnWait) return waiting();
       await sleep(pollInterval);
     }
 
@@ -1480,14 +1540,19 @@ async function runDeliverySkillLocked(
       unresolvedFindings: [...unresolvedFindings],
     };
 
+    const operationKey = `delivery-review:${continuation?.intentId ?? randomUUID()}:${options.plan?.taskId ?? "none"}:${options.plan?.revision ?? 0}`;
+    await checkpoint("review_intent", { reviewOperationKey: operationKey });
     let reviewTask: DecisionTask;
     try {
+      guard();
       reviewTask = await options.reviewGate.ensureReviewTask(
         resolvedSessionId,
         reviewTarget,
         reviewContext,
+        { operationKey, reuseCompleted: true },
       );
       lastReviewTaskId = reviewTask.id;
+      await checkpoint("review_wait", { reviewTaskId: reviewTask.id, reviewRevision: reviewTask.revision });
       log(`[delivery-skill] Ensured ReviewTask: ${reviewTask.id} (status: ${reviewTask.status})`);
     } catch (err) {
       return haltDispatch(
@@ -1523,6 +1588,7 @@ async function runDeliverySkillLocked(
               `[delivery-skill] PR HEAD moved from ${currentHeadSha} to ${headCheckObj.headRefOid}. Superseding old review task ${reviewTask.id} and re-entering CI...`,
             );
             if (options.reviewGate.supersedeReviewTask) {
+              guard();
               await options.reviewGate.supersedeReviewTask(reviewTask.id);
             }
             currentHeadSha = headCheckObj.headRefOid;
@@ -1551,6 +1617,13 @@ async function runDeliverySkillLocked(
             `Review task ${reviewTask.id} completed with missing or malformed review result.`,
           );
         }
+
+        if (reviewResult.taskId !== reviewTask.id || reviewResult.revision !== reviewTask.revision
+          || reviewResult.target.headSha !== currentHeadSha || reviewResult.target.prNumber !== prNumber
+          || reviewResult.target.repository.toLowerCase() !== context.repo.toLowerCase()) {
+          return haltDispatch("manual_intervention_required", "Review result identity/target changed during continuation");
+        }
+        await checkpoint("result_observed", { verdict: reviewResult.verdict });
 
         // Case A: Approved
         if (reviewResult.verdict === "approve") {
@@ -1606,11 +1679,12 @@ async function runDeliverySkillLocked(
 
           spentRepairs++;
           log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs} for review feedback...`);
-          await persistCurrentState({ spentRepairs });
+          await checkpoint("repair_pending");
 
           let repairSuccess = false;
           try {
             if (options.repairFn) {
+              guard();
               repairSuccess = await options.repairFn(findingSummary);
             } else if (options.repairCommand) {
               log(`[delivery-skill] Executing repair command for review: ${options.repairCommand}`);
@@ -1679,13 +1753,15 @@ async function runDeliverySkillLocked(
           }
 
           if (options.reviewGate.supersedeReviewTask) {
-            await options.reviewGate.supersedeReviewTask(reviewTask.id);
+            guard();
+              await options.reviewGate.supersedeReviewTask(reviewTask.id);
           }
 
           currentHeadSha = newHeadSha;
           log(`[delivery-skill] Pushed repaired commit ${currentHeadSha}. Re-entering CI and review loop...`);
 
-          await persistCurrentState({ spentRepairs });
+          await checkpoint("ci");
+          if (options.yieldOnWait) return waiting();
           await sleep(pollInterval);
           continue delivery_loop;
         }
@@ -1714,6 +1790,7 @@ async function runDeliverySkillLocked(
 
       log(`[delivery-skill] Review status: ${statusResult.status}. Waiting ${reviewPollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
       await persistCurrentState();
+      if (options.yieldOnWait) return waiting();
       await sleep(reviewPollInterval);
     }
   }
@@ -1726,6 +1803,7 @@ async function runDeliverySkillLocked(
   // 默认绝不自动 land，必须显式 optInLand
   if (options.optInLand !== true) {
     log("[delivery-skill] optInLand is not true. PR is green and ready to land. Skipping merge.");
+    await checkpoint("ready");
     return {
       status: "ready_to_land",
       prNumber,
@@ -1748,6 +1826,11 @@ async function runDeliverySkillLocked(
       "Auto-merge requires review gate verification, but no review gate is configured. Refusing auto-merge fail-closed.",
     );
   }
+
+  if (!landing || landing.headSha !== currentHeadSha || landing.prNumber !== prNumber) {
+    landing = { intentId: randomUUID(), context, prNumber, headSha: currentHeadSha ?? "", optIn: true, phase: "intent" };
+  }
+  await persistCurrentState();
 
   // Pre-merge verification: re-read full PR state immediately before merge
   const preMergePrRes = await runner.gh(
@@ -1876,10 +1959,8 @@ async function runDeliverySkillLocked(
     mergeArgs.push("--match-head-commit", currentHeadSha);
   }
 
-  const mergeRes = await runner.gh(mergeArgs, options.cwd);
-  if (mergeRes.exitCode !== 0) {
-    return haltDispatch("unmergeable", `Failed to squash merge PR #${prNumber}: ${mergeRes.stderr}`);
-  }
+  // A timeout may follow a successful merge: always observe before deciding.
+  try { await runner.gh(mergeArgs, options.cwd); } catch { /* preserve intent; read below */ }
 
   // 严格验证 PR 终态是否确实为 MERGED
   const verifyRes = await runner.gh(
@@ -1900,6 +1981,10 @@ async function runDeliverySkillLocked(
   } catch (err) {
     return haltDispatch("unmergeable", `Failed to parse post-merge verification response: ${String(err)}`);
   }
+
+  if (!mergeSha) return haltDispatch("reconciliation_needed", "Merged state lacks a verified merge commit; preserve landing intent");
+  landing = { ...landing, phase: "observed", mergeCommitSha: mergeSha };
+  await persistCurrentState();
 
   // 核对关联 Issue 是否已自动关闭
   const issueVerifyRes = await runner.gh(
