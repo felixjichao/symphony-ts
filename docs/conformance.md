@@ -458,3 +458,10 @@ for Delivery ownership during merge auto-close, unknown children, legacy/corrupt
 evidence, unfinished intents and cleanup/recreation exclusion. Its formal halt
 CLI cases verify all checkpoints preserve recovery targets and budgets, and reject
 corrupt/foreign state before remote calls (§8/§9/§17 extensions).
+
+The cleanup regression additionally runs the real Delivery skill and durable
+Decision store through auto-merge, then passes its unmodified `result_observed`
+plus `landing.observed` output into the real host terminal sweep. Negative cases
+retain mismatched/unverified merges. Formal halt/recover tests maintain distinct
+Issue and PR comment collections and lose the first Issue response: the persisted
+report destination yields one receipt without discarding the business PR target.

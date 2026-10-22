@@ -1541,19 +1541,14 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     };
     realDiskStorage.writeState(interruptedState);
 
-    // On GitHub: the comment was ACTUALLY posted before worker died!
+    // Legacy destination is absent: re-observe PR and Issue separately, then
+    // verify the selected PR receipt again before acknowledging it.
     const runner = new MockDeliveryRunner();
-    runner.ghResponses.push({
-      stdout: JSON.stringify({
-        comments: [
-          {
-            body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }),
-          },
-        ],
-      }),
-      stderr: "",
-      exitCode: 0,
-    });
+    const receipt = { stdout: JSON.stringify({ comments: [
+      { body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }) },
+    ] }), stderr: "", exitCode: 0 };
+    runner.ghResponses.push(receipt,
+      { stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 }, receipt);
 
     const result = await recoverDeliveryHandoff({
       cwd,

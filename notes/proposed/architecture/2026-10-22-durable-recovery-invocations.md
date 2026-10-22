@@ -138,9 +138,19 @@ outside mutex through containment checks, hooks and removal, and refuses legacy
 owners, unknown children, corrupt snapshots, pending compensation and unfinished
 continuation/landing intents even when GitHub has already closed the Issue after
 merge. An observed landing and ready continuation can be cleaned once the owner
-has released its authority. Existing in-workspace locks remain honored.
+has released its authority. Auto-land instead completes from `result_observed`:
+cleanup also accepts an approved result only when the observed merge commit
+belongs to the exact same PR, HEAD, head branch and base branch. Existing in-workspace locks remain honored.
 
 Explicit halt preserves continuation, landing, budgets and work identity in every
 checkpoint, including failed compensation. Corrupt or foreign snapshots fail
 before remote mutation or replacement. The native host startup and formal halt
 CLI regressions cover these refusal and acknowledgement windows.
+
+Handoff reports persist `reportDestination` independently of the business PR
+number. Explicit halt reports to the Issue even when it retains a PR target;
+native Delivery reports to the PR when one exists. Compensation observes and
+posts to that persisted destination, so an accepted report whose response was
+lost cannot move to another comment collection. Older handoffs with a PR and a unique marker inspect both collections before
+persisting the recovered destination; unavailable evidence blocks replay.
+Unmarked legacy records retain their conservative legacy receipt checks.

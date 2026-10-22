@@ -121,6 +121,7 @@ async function recoverDeliveryHandoffLocked(
     "symphony-ready";
   const reason = (currentState.pauseReason as DeliveryHandoff["reason"]) ?? "manual_intervention_required";
   const prNumber = currentState.handoff?.prNumber ?? null;
+  let reportDestination = currentState.handoff?.reportDestination ?? (prNumber !== null ? "pr" : "issue");
 
   // Re-observe authoritative identity/labels; old step flags never grant permission.
   const readLabels = async (): Promise<boolean> => {
@@ -145,6 +146,22 @@ async function recoverDeliveryHandoffLocked(
         throw new Error("Handoff PR ownership/HEAD changed; old compensation refused");
       }
     }
+    // Earlier halt snapshots retained a PR target but reported on the Issue.
+    // With a stable receipt marker, inspect both collections before choosing a
+    // legacy destination. Unavailable evidence blocks rather than duplicating.
+    if (handoff && !handoff.reportDestination && handoff.handoffId && prNumber !== null && !currentState.commentPosted) {
+      for (const [kind, number] of [["pr", prNumber], ["issue", issueNumber]] as const) {
+        const result = await runner.gh([kind, "view", String(number), "--repo", repo, "--json", "comments"], cwd);
+        if (result.exitCode !== 0) throw new Error("Legacy report destination unavailable");
+        const value = JSON.parse(result.stdout) as { comments?: { body?: string }[] };
+        if (!Array.isArray(value.comments)) throw new Error("Legacy report comments unavailable");
+        if (value.comments.some(comment => typeof comment.body === "string" && hasHandoffMarker(comment.body, handoff.handoffId!))) {
+          reportDestination = kind;
+        }
+      }
+      currentState = { ...currentState, handoff: { ...handoff, reportDestination } };
+      await stateStorage.writeState(currentState);
+    }
     if (!readyLabelRemoved) {
       await runner.gh(["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel], cwd);
       readyLabelRemoved = await readLabels();
@@ -163,11 +180,12 @@ async function recoverDeliveryHandoffLocked(
   const handoffId = currentState.handoff?.handoffId;
   const headSha = currentState.handoff?.headSha;
 
-  const viewTargetArgs = prNumber !== null
+  const reportToPr = reportDestination === "pr";
+  const viewTargetArgs = reportToPr
     ? ["pr", "view", String(prNumber), "--repo", repo, "--json", "comments"]
     : ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"];
 
-  const commentTargetArgs = prNumber !== null
+  const commentTargetArgs = reportToPr
     ? ["pr", "comment", String(prNumber), "--repo", repo]
     : ["issue", "comment", String(issueNumber), "--repo", repo];
 
@@ -302,6 +320,7 @@ async function recoverDeliveryHandoffLocked(
       handoffToPost = {
         ...baseHandoff,
         handoffId: baseHandoff.handoffId ?? generatedHandoffId,
+        reportDestination: reportToPr ? "pr" : "issue",
       };
 
       // 关键核心修复（Blocker 1）：在发起任何远端评论网络请求之前，必须立即将补齐 handoffId 的完整 handoff 持久化落盘！

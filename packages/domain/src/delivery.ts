@@ -452,6 +452,9 @@ export interface DeliveryHandoff {
   readonly readyLabelRemoved?: boolean | undefined;
   readonly commentPosted?: boolean | undefined;
   readonly handoffId?: string | undefined;
+  /** Receipt destination is independent of the PR business target. Legacy
+   * handoffs with a PR and unique marker re-observe both comment collections. */
+  readonly reportDestination?: "issue" | "pr" | undefined;
 }
 
 /** Small native Delivery step markers (§4 adjacent); current stage remains derived. */

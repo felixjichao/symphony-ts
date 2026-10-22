@@ -536,6 +536,7 @@ async function runDeliverySkillLocked(
       readyLabelRemoved: false,
       commentPosted: false,
       handoffId,
+      reportDestination: prNumber !== null ? "pr" : "issue",
     };
 
     // 关键设计决策（先写持久化状态）：在发起任何远端操作之前，必须先将 paused、原因、实际预算/deadline 和待补偿 handoff 落盘。

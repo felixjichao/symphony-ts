@@ -78,6 +78,11 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
           || rec["landing"].context.workspaceKey !== rec["workspaceKey"])) {
       throw new Error("Corrupted delivery recovery step schema");
     }
+    const handoff = rec["handoff"] as DeliveryHandoff | undefined;
+    if (handoff?.reportDestination !== undefined && (handoff.reportDestination !== "issue" && handoff.reportDestination !== "pr"
+      || handoff.reportDestination === "pr" && handoff.prNumber === null)) {
+      throw new Error("Corrupted delivery report destination");
+    }
     return rec as unknown as PersistedDeliveryState;
   }
 
@@ -328,6 +333,7 @@ async function runDeliverySkillCliLocked(
       readyLabelRemoved: false,
       commentPosted: false,
       handoffId,
+      reportDestination: "issue",
     };
 
     // 先持久化 paused 状态和待补偿事实

@@ -311,3 +311,9 @@ active owners, unknown subprocess outcomes, corrupt state and unacknowledged
 Delivery/landing steps; merge auto-closing an Issue does not acknowledge the local
 intent. Use native observation/recovery before cleanup. Explicit `delivery-skill
 halt` preserves these steps and rejects corrupt or mismatched state.
+
+Auto-land's approved `result_observed` continuation is settled for cleanup only
+by an observed merge commit for the same PR, HEAD and branches. A handoff's
+`reportDestination` records whether its receipt lives on the Issue or PR;
+retaining a business PR target does not change the destination of an explicit
+halt report. Recovery queries that same comment collection before posting.
