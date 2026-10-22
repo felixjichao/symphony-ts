@@ -1,0 +1,136 @@
+{
+  "validationSourceCommit": "a38d5629e799c3bea5a913deb7d6dd570fee30c4",
+  "baseline": "627daa2164f2a8cdbad67b05d860300ecb822db2",
+  "gate": {
+    "exitCode": 0,
+    "passed": 2158,
+    "skipped": 2,
+    "liveAcceptance": false
+  },
+  "rootTypecheckExitCode": 0,
+  "focusedPassed": 487,
+  "scenarioResults": {
+    "H01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "H02": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "H03": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "H04": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "H05": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "H06": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W02": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W03": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W04": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W05": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W06": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W07": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W08": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W09": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "W10": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "L01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "L02": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "L03": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "L04": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "P01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "P02": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "P03": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "P04": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "P05": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "R01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "R02": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "R03": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    },
+    "A01": {
+      "automated": "passed_scoped_suite",
+      "currentLive": "not_run"
+    }
+  },
+  "parent145ReadyToClose": false,
+  "limitations": [
+    "No authenticated live browser or isolated live target supplied",
+    "Historical browser evidence is not current-composition live evidence",
+    "Fixture counters and timings do not establish a production SLA"
+  ]
+}

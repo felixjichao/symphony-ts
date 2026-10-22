@@ -1,0 +1,12 @@
+{
+  "sourceCommit": "a38d5629e799c3bea5a913deb7d6dd570fee30c4",
+  "runtimeSourceBaseline": "627daa2164f2a8cdbad67b05d860300ecb822db2",
+  "node": "v22.23.1",
+  "npm": "10.9.8",
+  "platform": "linux-x64",
+  "installedInLiveBrowser": false,
+  "artifacts": {
+    "apps/cli/dist/bin/symphony.js": "5e4dd5edf472f323cd866c9cced01a2b9f1ea47d42dc53d86523d926d3d06ddb",
+    "apps/chatgpt-web/dist/symphony-decision-driver.user.js": "1ced74f4e363a24cb48f651cc9b04f33fb896d0be594e6f9cfe3f198345d9ff5"
+  }
+}
