@@ -1,3 +1,4 @@
+import { RecoveryIncidentReporter } from "./recovery-reporter";
 import { deliveryAuthorityBlock } from "./file-authority";
 import { createHash } from "node:crypto";
 import { FileWorkRecoveryStorage } from "./recovery-storage";
@@ -5,7 +6,7 @@ import { FileWorkRecoveryStorage } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
 import { recoverDeliveryHandoff, runDeliverySkill } from "@symphony/agent";
-import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId,
+import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId, validateOwnershipFence, mapNativeRecoveryBlock,
   type Issue, type WorkKey, type WorkContinuityObservation, type WorkRecoveryRequest, type WorkRecoveryResult,
 } from "@symphony/domain";
 import { GitHubDeliveryService } from "@symphony/tracker";
@@ -17,6 +18,7 @@ import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
 
 export function createHostWorkContinuity(options: {
   controller: EffectiveRuntimeController;
+  recovery?: ReturnType<typeof import("./host-recovery").createHostRecovery>;
   authority: OrchestratorAuthority;
   planningGate: DecisionPlanningGate | null;
   reviewGate?: import("@symphony/domain").DeliveryReviewGate | undefined;
@@ -50,10 +52,14 @@ export function createHostWorkContinuity(options: {
     const workspace = identity?.workspace ?? controller.current.workspaceManager.resolveWorkspacePath(issue.identifier);
     const delivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
     const decision = planningGate ? (await planningGate.continuityWork()).find(work => decisionSessionId(work.workKey) === decisionSessionId(key)) : undefined;
+    options.recovery?.resumeAuthorizedRetry(authority, issue.id, key);
     const runtime = authority.continuityOwner(issue.id);
+    const retryEvidence = authority.continuityRetryReferences().find(record => record.issueId === issue.id);
     // The original scheduler retains actual timer ownership (including due/in-flight refresh).
     let facts: WorkContinuityObservation = { ...base, active: isActiveState(issue.state, controller.current.scheduling.policy), owner: runtime,
-      expectedFence: runtime?.fence ?? {}, scheduled: authority.continuitySchedule(issue.id),
+      expectedFence: runtime?.fence ?? (retryEvidence?.token ? { retryToken: retryEvidence.token } : {}), scheduled: authority.continuitySchedule(issue.id),
+      ...(retryEvidence ? { nativeRecovery: { attempts: retryEvidence.legacyRecoveryAttempts, epoch: 0, lastProgressAt: "unknown" as const, actions: [] } } : {}),
+      ...(delivery?.isPaused && delivery.handoff?.handoffId ? { handoffRef: { handoffId: delivery.handoff.handoffId, headSha: delivery.handoff.headSha } } : {}),
       blocked: authority.continuityBlock(issue.id) ?? (delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null) };
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
     let github: Awaited<ReturnType<GitHubDeliveryService["observeWork"]>> | null = null;
@@ -83,6 +89,7 @@ export function createHostWorkContinuity(options: {
         ...(task.target ? { expectedHeadSha: task.target.headSha } : {}) };
       facts = { ...facts, stage: task.kind, expectedFence: fence, target: task.target ?? undefined, taskRef: { taskId: task.id, revision: task.revision },
         contradictions: runtime ? ["runtime_and_decision_ownership_overlap"] : facts.contradictions,
+        nativeRecovery: { lastProgressAt: task.execution?.lastProgressAtMs ?? "unknown", attempts: Math.max(task.execution?.recoveryAttempts ?? 0, task.execution?.blocked?.recoveryCount ?? 0), epoch: task.execution?.recoveryEpoch ?? 0, actions: task.execution?.recoveryActions ?? [] },
         blocked: task.execution?.blocked ? `${task.execution.blocked.reason}: ${task.execution.blocked.unblock}` : facts.blocked,
         externalWait: !task.owner ? { system: "browser", condition: "enabled_configured_chatgpt_page_required" } : facts.externalWait,
         owner: task.owner && task.leaseExpiresAtMs !== null ? { id: task.owner, fence: { ...fence, bindingGeneration: task.claimBindingGeneration ?? decision.bindingGeneration },
@@ -153,14 +160,28 @@ export function createHostWorkContinuity(options: {
     const version = createHash("sha256").update(JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
       github, execution: task?.execution, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
       policy: controller.current.scheduling.policy, config: controller.current.serviceConfig })).digest("hex");
-    const observation = { ...facts, version };
+    const nativeBlock = mapNativeRecoveryBlock(facts.blocked?.split(":")[0] ?? "");
+    const normalized = { ...facts, version, ...(nativeBlock ? { nativeBlock } : {}) };
+    const observation = options.recovery?.observe(normalized) ?? normalized;
     options.onObservation?.(observation);
     return { observation, issue };
   };
   const observe = async (key: WorkKey) => (await read(key)).observation;
+  const reporter = options.recovery ? new RecoveryIncidentReporter(options.recovery.ledger, runner, process.cwd()) : null;
   const coordinator = new WorkContinuityCoordinator({
+    reportIncidents: async canCommit => {
+      try { await reporter?.publish(async incident => {
+        const fresh = await observe(incident.workKey);
+        return fresh.available && fresh.active && (fresh.recoveryIncidentId === incident.id || options.recovery?.isNativeIncident(fresh, incident.id) === true);
+      }, canCommit); } catch { /* Durable local report remains available; no recursive incidents. */ }
+    },
     recoveryStorage: new FileWorkRecoveryStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "recovery.json")),
+    canCommitRecovery: request => options.recovery?.canCommit(request) ?? true,
+    onRefused: request => options.recovery?.refused(request),
+    onUnverified: (request, current) => options.recovery?.unverified(request, current),
+    authorizeRecovery: (request, current) => options.recovery?.authorize(request, current) ?? true,
     canResumeRecovery(request, current) {
+      if (current.recoveryIncidentId) return false;
       if (request.action === "reclaim") return current.stage === request.stage && !!current.owner
         && current.taskRef?.taskId === request.taskRef?.taskId && current.taskRef?.revision === request.taskRef?.revision
         && current.owner.leaseExpiresAt === request.leaseExpiresAt && current.observedAt >= (request.leaseExpiresAt ?? Infinity);
@@ -211,6 +232,7 @@ export function createHostWorkContinuity(options: {
       return false;
     },
     async listWork() {
+      for (const budget of options.recovery?.ledger.list() ?? []) if (budget.incident) add(budget.incident.workKey, null, null);
       const issues = await controller.current.adapter.fetchIssuesByStates(controller.current.scheduling.policy.activeStates);
       for (const issue of issues) {
         const id = resolveSession(issue);
@@ -251,7 +273,7 @@ export function createHostWorkContinuity(options: {
       try {
         const fresh = await observe(request.workKey);
         if (!canCommit()) return "stopped";
-        if (fresh.version !== request.version || !fresh.available || fresh.stage !== request.stage) return "stale";
+        if (fresh.recoveryIncidentId || fresh.version !== request.version || !fresh.available || fresh.stage !== request.stage) return "stale";
         if (request.action === "reclaim" && request.taskRef && planningGate) {
           const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
           const task = work?.tasks.find(t => t.id === request.taskRef?.taskId);
@@ -328,6 +350,17 @@ export function createHostWorkContinuity(options: {
         // requires a safe native primitive. Diagnosis must not substitute replaying a command.
         return "unsupported";
       } catch (error) {
+        // Reclaim is one atomic local Decision transaction. Exact unchanged claim
+        // readback proves no mutation, unlike a subprocess/Send/merge timeout.
+        if (mutationMayHaveStarted && request.action === "reclaim") {
+          try {
+            const after = await observe(request.workKey);
+            if (after.available && !after.blocked && after.taskRef?.taskId === request.taskRef?.taskId
+              && after.taskRef?.revision === request.taskRef?.revision
+              && after.owner?.leaseExpiresAt === request.leaseExpiresAt
+              && validateOwnershipFence(request.fence, after.expectedFence).valid) return "failed";
+          } catch { /* Missing readback never proves that a mutation failed. */ }
+        }
         if (!mutationMayHaveStarted) return "stale"; // certified no commit, including lock acquisition failure
         throw error;
       }

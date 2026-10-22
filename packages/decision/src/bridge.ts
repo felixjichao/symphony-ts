@@ -312,6 +312,7 @@ export class DecisionBridge {
         || typeof b["generation"] !== "number" || typeof b["reason"] !== "string") throw new DecisionValidationError("Invalid block request");
       await this.service.blockExecution(decodeURIComponent(blockMatch[1]!), {
         owner: b["owner"], token: b["token"], generation: b["generation"], reason: b["reason"],
+        ...(b["recoveryCount"] !== undefined ? { recoveryCount: b["recoveryCount"] as number } : {}),
       });
       this.sendJson(res, 200, { blocked: true });
       return;

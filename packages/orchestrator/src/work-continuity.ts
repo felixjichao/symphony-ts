@@ -19,13 +19,17 @@ export function deriveWorkContinuity(f: WorkContinuityObservation): WorkContinui
   });
   if (!f.available) return result("observation_unavailable", f.unavailableSources);
   if (!f.active) return result("inactive", []);
+  if (f.recoveryIncidentId && f.blocked) return result("blocked", [f.blocked], "none", {
+    ...next, action: "require_human", description: `${f.stage}: ${f.blocked}`,
+    authority: { kind: "human", role: "operator", instruction: f.blocked },
+  });
   if (f.contradictions.length) return result("contradictory", f.contradictions);
   if (f.owner && !validateOwnershipFence(f.expectedFence, f.owner.fence).valid) {
     return result("contradictory", ["stale_or_conflicting_owner_fence"]);
   }
   // Blocked work can finish a pending report, but must never resume execution.
-  if (f.blocked && f.stage !== "handoff") return result("blocked", [f.blocked], "none", {
-    action: "require_human", description: f.blocked,
+  if (f.blocked && (f.stage !== "handoff" || f.recoveryIncidentId)) return result("blocked", [f.blocked], "none", {
+    ...next, action: "require_human", description: `${f.stage}: ${f.blocked}`,
     authority: { kind: "human", role: "operator", instruction: f.blocked },
   });
   if (f.externalWait) return result("external_wait", [f.externalWait.condition], "none", {
@@ -59,6 +63,13 @@ export interface WorkRecoveryStorage {
 }
 export interface WorkContinuityPorts {
   readonly recoveryStorage?: WorkRecoveryStorage;
+  /** Explicit control-side reporter; read models never invoke it. */
+  reportIncidents?(canCommit: () => boolean): Promise<void>;
+  canCommitRecovery?(request: WorkRecoveryRequest): boolean;
+  onRefused?(request: WorkRecoveryRequest): void;
+  onUnverified?(request: WorkRecoveryRequest, current: WorkContinuityObservation): void;
+  /** Synchronous durable reservation after obtaining the unique invocation slot. */
+  authorizeRecovery?(request: WorkRecoveryRequest, current: WorkContinuityObservation): boolean;
   /** Native idempotent/fenced primitive; never arbitrary command replay. */
   canResumeRecovery?(request: WorkRecoveryRequest, current: WorkContinuityObservation): boolean;
 
@@ -138,13 +149,22 @@ export class WorkContinuityCoordinator {
               // Retain the original durable slot until the native replay has
               // re-observed and committed (or certified no mutation). A crash in
               // this gap therefore cannot erase ambiguity.
-              const result = await this.ports.recover({ ...pending, version: first.version,
-                stage: pending.action === "dispatch" ? first.stage : pending.stage }, () => !this.stopping);
+              const resumed = { ...pending, version: first.version, stage: pending.action === "dispatch" ? first.stage : pending.stage };
+              if (this.ports.authorizeRecovery && !this.ports.authorizeRecovery(resumed, first)) {
+                results.push({ workKey, diagnosis, result: "unchanged" }); continue;
+              }
+              let result: WorkRecoveryResult;
+              try { result = await this.ports.recover(resumed, () => !this.stopping && (this.ports.canCommitRecovery?.(resumed) ?? true)); }
+              catch { result = "unverified"; }
               const after = await this.ports.observe(workKey);
-              if (after.available && (result === "applied" || result === "stale" || result === "unsupported" || result === "stopped")) {
+              if (after.available && (result === "applied" || result === "failed" || result === "stale" || result === "unsupported" || result === "stopped")) {
+                if (result !== "applied" && result !== "failed") this.ports.onRefused?.(resumed);
                 this.settle(pending);
                 results.push({ workKey, diagnosis: deriveWorkContinuity(after), result });
-              } else results.push({ workKey, diagnosis: this.unverified(deriveWorkContinuity(after)), result: "unverified" });
+              } else {
+                if (after.available) this.ports.onUnverified?.(pending, after);
+                results.push({ workKey, diagnosis: this.unverified(deriveWorkContinuity(after)), result: "unverified" });
+              }
             } else results.push({ workKey, diagnosis: first.available ? this.unverified(diagnosis) : diagnosis, result: "unverified" });
             continue;
           }
@@ -164,10 +184,19 @@ export class WorkContinuityCoordinator {
         // Record before crossing the authority boundary: a rejected promise may follow a commit.
         this.ports.recoveryStorage?.put(request);
         this.uncertain.set(key, request);
+        if (this.ports.authorizeRecovery && !this.ports.authorizeRecovery(request, fresh)) {
+          this.settle(request);
+          const blocked = await this.ports.observe(workKey);
+          results.push({ workKey, diagnosis: deriveWorkContinuity(blocked), result: "unchanged" });
+          continue;
+        }
         let result: WorkRecoveryResult;
-        try { result = await this.ports.recover(request, () => !this.stopping); }
+        try { result = await this.ports.recover(request, () => !this.stopping && (this.ports.canCommitRecovery?.(request) ?? true)); }
         catch { result = "unverified"; }
-        if (result === "stale" || result === "unsupported" || result === "stopped") this.settle(request);
+        if (result === "failed" || result === "stale" || result === "unsupported" || result === "stopped") {
+          if (result !== "failed") this.ports.onRefused?.(request);
+          this.settle(request);
+        }
         // Always re-observe, including refused/unsupported actions. Never replay on read failure.
         const after = await this.ports.observe(workKey);
         diagnosis = deriveWorkContinuity(after);
@@ -175,6 +204,7 @@ export class WorkContinuityCoordinator {
           this.settle(request);
         }
         if (this.uncertain.has(key)) {
+          if (after.available) this.ports.onUnverified?.(request, after);
           result = "unverified";
           if (after.available) diagnosis = this.unverified(diagnosis);
         }
@@ -184,10 +214,12 @@ export class WorkContinuityCoordinator {
           result: acted || this.uncertain.has(key) ? "unverified" : "observation_unavailable" });
       }
     }
+    await this.ports.reportIncidents?.(() => !this.stopping);
     this.latest = results;
     return results;
   }
   private unverified(diagnosis: WorkContinuityDiagnosis): WorkContinuityDiagnosis {
+    if (diagnosis.status === "blocked") return diagnosis;
     const instruction = "recovery_outcome_unverified: verify native authority before retrying";
     return { ...diagnosis, status: "unverified", recovery: "none", reasons: [...diagnosis.reasons, instruction],
       next: { action: "require_human", description: instruction,

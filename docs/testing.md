@@ -134,3 +134,20 @@ uses real host startup sweeps and the formal halt CLI with native file storage.
 It covers merge auto-close before acknowledgement, deletion/recreation exclusion,
 unknown child and legacy/corrupt evidence, and preservation of repair/landing
 steps through every halt checkpoint.
+
+## Bounded recovery extension
+
+Run `npm test -w @symphony/orchestrator -- src/recovery-policy.test.ts src/retry-queue.test.ts`
+for selection, budget accounting and native backoff; run
+`npm test -w @symphony/cli -- src/host-recovery.test.ts src/recovery-ledger.test.ts`
+for persisted host composition, real filesystem/SIGKILL, independent-process exhaustion,
+reporter concurrency, ACK-loss verification, stale publication and exact authorization.
+Decision continuity and Web regression suites retain native 3/6 limits and no-replay
+checks. New local tests use isolated fixtures and injected GitHub runners. They do
+not publish live comments or establish real browser/provider acceptance.
+
+NEST-134 review regressions additionally run with
+`npm test -w @symphony/cli -- src/recovery-review-regressions.test.ts src/review-regressions.test.ts`:
+real authority → six slot waits → worker failure, accounting provenance across restart,
+non-ownership invariant retention, modeled-condition migration, and actual native
+Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.

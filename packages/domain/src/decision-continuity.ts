@@ -55,7 +55,10 @@ export interface DecisionExecution {
   readonly phase: string;
   readonly responseLength: number;
   readonly recoveryAttempts: number;
-  readonly blocked: { readonly reason: string; readonly unblock: string; readonly atMs: number } | null;
+  /** Explicit operator authorization changes recovery epoch; lease/rebind does not. */
+  readonly recoveryEpoch?: number;
+  readonly recoveryActions?: readonly ("rebind" | "reclaim")[];
+  readonly blocked: { readonly reason: string; readonly unblock: string; readonly atMs: number; readonly recoveryCount?: number } | null;
 }
 
 export const DECISION_PROGRESS_TIMEOUT_MS = 10 * 60_000;

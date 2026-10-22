@@ -465,3 +465,25 @@ plus `landing.observed` output into the real host terminal sweep. Negative cases
 retain mismatched/unverified merges. Formal halt/recover tests maintain distinct
 Issue and PR comment collections and lose the first Issue response: the persisted
 report destination yields one receipt without discarding the business PR target.
+
+## Bounded recovery and incidents (NEST-134 / #150)
+
+| Contract / SPEC | Automated evidence | Limits |
+| --- | --- | --- |
+| §4 adjacent / §14 finite policy, fingerprints and capability-aware escalation | `packages/orchestrator/src/recovery-policy.test.ts`: repeated/alternating fingerprints, supported strategies, total budget, same invocation, changed target, non-retryable blocks and legacy counts | No new browser supervisor or arbitrary replay |
+| §7/§8/§14 bounded retry retains exponential delays and legitimate waits | `packages/orchestrator/src/retry-queue.test.ts`: 10s/20s then exhausted hook; continuation/slot waits uncharged | CLI composes durable policy port |
+| §17/§18 durable policy blocks and exact authorization | `apps/cli/src/host-recovery.test.ts`: native evidence, stale HEAD/task/handoff, infrastructure scope, pending invocation suppression, modeled-conflict unblock, explicit epoch; Decision continuity tests assert native epoch | Native unknown effects require their own authorization |
+| §17/§18 persistence and one durable incident | `apps/cli/src/recovery-ledger.test.ts`: SIGKILL and independent-process exhaustion, history, corruption, concurrent reporters, POST/ACK loss, marker verification, stale publication and report bounds | External GitHub/browser faults not exercised live; exactly-once not promised |
+| §5/§6 finite configuration | Config workflow tests: defaults/overrides and invalid/unsafe limits | No unlimited setting |
+
+[Operator documentation](bounded-recovery.md) describes retained outbox uncertainty
+and native unblock prerequisites. Dashboard/Operations remain read-only.
+
+NEST-134 review regressions: `apps/cli/src/recovery-review-regressions.test.ts`
+uses the real scheduling authority and file stores to cover six capacity waits
+after successful continuation, with/without restart, followed by one charged failure
+and eventual bounded exhaustion; explicit legacy migration survives reconstruction.
+It also verifies persistent path/other invariant blocks, conservative legacy unblock,
+invalid accounting schema rejection, exact human-reason incident/list/report dedup
+and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
+completed needs-human Review and paused Delivery facts through the production host.

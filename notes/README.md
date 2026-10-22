@@ -126,3 +126,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [accepted/architecture/2026-10-03-observability-snapshot.md](accepted/architecture/2026-10-03-observability-snapshot.md) — M6.1 snapshot、双时钟与 retry URL 最小跨包透传。
 
 - [Task-bound Web response completion under DOM windowing](accepted/architecture/2026-10-17-task-bound-web-response-completion.md) — exact-task result matching, selector union and bounded local diagnostics.
+
+- [Bounded recovery and durable incidents](proposed/architecture/2026-10-22-bounded-recovery-incidents.md) — NEST-134 finite policy, epochs, native authority, durable reports and no-replay outbox.

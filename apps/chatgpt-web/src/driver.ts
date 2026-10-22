@@ -263,6 +263,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     if (blockedError === "human_required" || blockedError === "auth_required" || blockedError === "recovery_exhausted") {
       await this.transport.request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/block`, {
         owner: params.owner, token: params.token, generation: params.generation, reason: blockedError,
+        recoveryCount: this.checkpointStore.get()?.recoveryFailures ?? 0,
       });
       const session = this.activeSession ?? (await this.transport.request<{ session: DecisionSession }>("GET", `/v1/sessions/${encodeURIComponent(this.checkpointStore.get()?.sessionId ?? "")}`)).session;
       if (!options.retainCheckpoint) this.checkpointStore.delete();

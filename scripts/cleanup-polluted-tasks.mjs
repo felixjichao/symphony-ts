@@ -593,6 +593,7 @@ function validateDecisionContextForTask(context, task, session) {
 }
 const DECISION_PROGRESS_TIMEOUT_MS = 10 * 6e4;
 const DECISION_MAX_RECOVERY_ATTEMPTS = 3;
+const DECISION_MAX_TRANSPORT_RECOVERIES = 6;
 const DECISION_EXECUTION_PHASES = [
   "unknown",
   "claimed",
@@ -711,7 +712,7 @@ class DecisionService {
         } });
         return true;
       }
-      if (execution) this.writeExecution(draft, task.id, { ...execution, recoveryAttempts: execution.recoveryAttempts + 1 });
+      if (execution) this.writeExecution(draft, task.id, { ...execution, recoveryActions: [...execution.recoveryActions ?? [], "reclaim"], recoveryAttempts: execution.recoveryAttempts + 1 });
       draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
       delete draft.claimBindingGenerations?.[task.id];
       return true;
@@ -733,11 +734,13 @@ class DecisionService {
       if (!["auth_required", "human_required", "recovery_exhausted", "invariant_violation"].includes(params.reason)) throw new DecisionValidationError("Invalid block reason");
       const e = draft.executions?.[taskId];
       if (!e) throw new DecisionConflictError("Missing execution facts");
+      if (params.recoveryCount !== void 0 && (!Number.isSafeInteger(params.recoveryCount) || params.recoveryCount < 0 || params.recoveryCount > DECISION_MAX_TRANSPORT_RECOVERIES)) throw new DecisionValidationError("Invalid recovery count");
       if (e.blocked) return;
       this.writeExecution(draft, taskId, { ...e, blocked: {
         reason: params.reason,
         unblock: "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock",
-        atMs: now
+        atMs: now,
+        ...params.recoveryCount !== void 0 ? { recoveryCount: params.recoveryCount } : {}
       } });
     });
   }
@@ -769,6 +772,8 @@ class DecisionService {
         phase: "claimed",
         responseLength: 0,
         recoveryAttempts: 0,
+        recoveryActions: [],
+        recoveryEpoch: (e.recoveryEpoch ?? 0) + 1,
         lastProgressAtMs: now,
         deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS
       });
@@ -932,7 +937,7 @@ class DecisionService {
       }
       for (const t of Object.values(draft.tasks).filter((t2) => t2.sessionId === sessionId && (t2.status === "running" || t2.status === "claimed" || t2.status === "pending"))) {
         const e = draft.executions?.[t.id];
-        if (e) this.writeExecution(draft, t.id, { ...e, recoveryAttempts: e.recoveryAttempts + 1, phase: "claimed", responseLength: 0 });
+        if (e) this.writeExecution(draft, t.id, { ...e, recoveryActions: [...e.recoveryActions ?? [], "rebind"], recoveryAttempts: e.recoveryAttempts + 1, phase: "claimed", responseLength: 0 });
       }
       const nextGen = session.bindingGeneration + 1;
       const binding = {
@@ -2485,7 +2490,7 @@ function validateStoreRecord(record2) {
       throw new CorruptedStoreError("Invalid execution facts table");
     }
     for (const [id, e] of Object.entries(record2.executions)) {
-      if (!record2.tasks[id] || !e || e.revision !== record2.tasks[id].revision || ![e.startedAtMs, e.lastProgressAtMs, e.deadlineAtMs, e.responseLength, e.recoveryAttempts].every((n) => Number.isSafeInteger(n) && n >= 0) || typeof e.phase !== "string" || !DECISION_EXECUTION_PHASES.includes(e.phase) || e.blocked !== null && (!e.blocked || typeof e.blocked.reason !== "string" || !e.blocked.reason || typeof e.blocked.unblock !== "string" || !e.blocked.unblock || !Number.isSafeInteger(e.blocked.atMs))) {
+      if (!record2.tasks[id] || !e || e.revision !== record2.tasks[id].revision || e.recoveryActions !== void 0 && (!Array.isArray(e.recoveryActions) || !e.recoveryActions.every((a) => a === "rebind" || a === "reclaim")) || e.recoveryEpoch !== void 0 && (!Number.isSafeInteger(e.recoveryEpoch) || e.recoveryEpoch < 0) || ![e.startedAtMs, e.lastProgressAtMs, e.deadlineAtMs, e.responseLength, e.recoveryAttempts].every((n) => Number.isSafeInteger(n) && n >= 0) || typeof e.phase !== "string" || !DECISION_EXECUTION_PHASES.includes(e.phase) || e.blocked !== null && (!e.blocked || typeof e.blocked.reason !== "string" || !e.blocked.reason || e.blocked.recoveryCount !== void 0 && (!Number.isSafeInteger(e.blocked.recoveryCount) || e.blocked.recoveryCount < 0) || typeof e.blocked.unblock !== "string" || !e.blocked.unblock || !Number.isSafeInteger(e.blocked.atMs))) {
         throw new CorruptedStoreError(`Invalid execution facts for ${id}`);
       }
     }

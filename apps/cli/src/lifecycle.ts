@@ -1,3 +1,4 @@
+import { runRecoveryCli } from "./recovery-cli";
 /** Executable lifecycle (SPEC §17.7 / §18.1). Host owns resources; shell owns signals/status. */
 import pkg from "../package.json";
 import { runRepositoryBootstrapCli } from "@symphony/workspace";
@@ -35,6 +36,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
   let host: Pick<SymphonyHost, "start" | "stop" | "failure">;
   try {
     const args = parseCliArgs(argv);
+    if (args.subcommand === "recovery") return runRecoveryCli(args.subcommandArgs ?? [], shell);
     if (args.subcommand === "decision-bridge") {
       return await runDecisionBridgeCli(args.subcommandArgs ?? [], {
         stdout: shell.stdout,
@@ -76,6 +78,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
     if (args.help) {
       shell.stdout.write(
         "Usage: symphony [workflow-path]\n" +
+        "       symphony recovery list|show|authorize <ledger-file> [incident-id]\n" +
         "       symphony repo-bootstrap --repo <url> [options]\n" +
         "       symphony workspace bootstrap --repo <url> [options]\n" +
         "       symphony delivery-skill [run|halt] [options]\n" +

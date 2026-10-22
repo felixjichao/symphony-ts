@@ -32,6 +32,7 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
   let tick: (() => void) | undefined;
   const host = await createHost({ workflowPath, trackerProfiles: [profile], planningGate: new DecisionPlanningGate(service), now: () => now,
     logger: createStructuredLogger({ sinks: [{ write() {} }] }),
+    continuityRunner: { gh: async () => ({ exitCode: 1, stdout: "", stderr: "fixture offline" }), git: async () => { throw new Error("unexpected git"); }, exec: async () => { throw new Error("unexpected exec"); } },
     continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: "open", url: issue.url! }, pullRequest: null, ci: null }) }, scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} } });
   try {
     await host.start();

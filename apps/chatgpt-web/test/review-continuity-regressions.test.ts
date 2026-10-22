@@ -199,6 +199,7 @@ describe("candidate result recovery budget", () => {
       expect(submissions).toBe(DECISION_MAX_TRANSPORT_RECOVERIES);
       expect(blocks).toBe(1);
       expect(f.service.getExecution(f.task.id)?.blocked?.reason).toBe("recovery_exhausted");
+      expect(f.service.getExecution(f.task.id)?.blocked?.recoveryCount).toBe(DECISION_MAX_TRANSPORT_RECOVERIES);
       expect(f.service.getReceipt(f.task.id)).toBeNull();
       // The candidate and its verification duty survive the block.
       expect(cp.get()?.candidateResult).toEqual(result);

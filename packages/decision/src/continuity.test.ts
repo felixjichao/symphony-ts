@@ -155,6 +155,7 @@ it("lost execution after a possible prompt is blocked durably rather than replay
     expect(await f.service.unblockExecution({ ...fenced, leaseExpiresAtMs: null })).toBe(false);
     expect(await f.service.unblockExecution({ ...fenced, blockedAtMs: fenced.blockedAtMs - 1 })).toBe(false);
     expect(await f.service.unblockExecution(fenced)).toBe(true);
+    expect(f.service.getExecution(f.expected.taskId)?.recoveryEpoch).toBe(1);
     const next = await f.service.claimTask(f.expected.taskId, { owner: "other-tab" });
     expect(next.lease.generation).toBe(2);
     await expect(f.service.startTask(f.expected.taskId, credentials)).rejects.toThrow();

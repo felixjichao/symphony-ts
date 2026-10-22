@@ -128,6 +128,11 @@ export class FileRetryReservationStorage implements RetryReservationStorage {
         || typeof r["token"] !== "string" || !r["token"]
         || !["failure", "continuation"].includes(String(r["kind"]))
         || !["scheduled", "launch_pending", "blocked"].includes(String(r["phase"]))) throw new Error("Invalid retry reservation");
+      if (r["recoveryAccounting"] !== undefined) {
+        const accounting = r["recoveryAccounting"] as Record<string, unknown> | null;
+        if (!accounting || accounting["schemaVersion"] !== 1 || typeof accounting["legacyAttempts"] !== "number"
+          || !Number.isSafeInteger(accounting["legacyAttempts"]) || accounting["legacyAttempts"] < 0) throw new Error("Invalid retry recovery accounting");
+      }
       if (r["workKey"] !== undefined) {
         const key = r["workKey"] as Record<string, unknown> | null;
         if (!key || typeof key["provider"] !== "string" || typeof key["key"] !== "string") throw new Error("Invalid retry WorkKey");

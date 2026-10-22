@@ -189,7 +189,12 @@ export function resolveServiceConfig(
   };
 
   const agentSection = readSection(raw, "agent", ctx);
+  const recoverySection = readSection(agentSection, "recovery", ctx);
   const agent: AgentConfig = {
+    recovery: {
+      maxAttempts: readRecoveryLimit(recoverySection, "max_attempts", "agent.recovery.max_attempts", 6, ctx),
+      maxStrategyAttempts: readRecoveryLimit(recoverySection, "max_strategy_attempts", "agent.recovery.max_strategy_attempts", 2, ctx),
+    },
     maxConcurrentAgents: readPositiveInt(
       agentSection,
       "max_concurrent_agents",
@@ -623,4 +628,11 @@ function readByStateMap(
     resolved[stateKey] = entry;
   }
   return resolved;
+}
+
+/** Recovery budgets must be safe counters, not effectively unbounded numbers. */
+function readRecoveryLimit(section: Record<string, unknown>, key: string, field: string, fallback: number, ctx: ResolutionContext): number {
+  const value = readPositiveInt(section, key, field, fallback, ctx);
+  if (!Number.isSafeInteger(value)) invalidConfig(field, "expected a finite safe positive integer", ctx);
+  return value;
 }
