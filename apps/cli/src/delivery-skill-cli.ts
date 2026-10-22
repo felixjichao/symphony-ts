@@ -292,11 +292,12 @@ async function runDeliverySkillCliLocked(
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
     const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
-    let existingState: PersistedDeliveryState | null = null;
-    try {
-      existingState = stateStorage.readState();
-    } catch {
-      // ignore
+    // A damaged or foreign record is evidence, never permission to replace it.
+    const existingState = stateStorage.readState();
+    if (existingState && (existingState.repo.toLowerCase() !== parsed.repo.toLowerCase()
+      || existingState.issueNumber !== parsed.issueNumber
+      || (parsed.workspaceKey !== undefined && existingState.workspaceKey !== parsed.workspaceKey))) {
+      throw new Error("Delivery halt work identity does not match persisted state");
     }
 
     if (existingState?.isPaused) {
@@ -315,10 +316,10 @@ async function runDeliverySkillCliLocked(
       details,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
-      headBranch: parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
-      prNumber: null,
-      prUrl: null,
-      headSha: null,
+      headBranch: existingState?.continuation?.headBranch ?? existingState?.landing?.context.headBranch ?? parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
+      prNumber: existingState?.continuation?.prNumber ?? existingState?.landing?.prNumber ?? null,
+      prUrl: existingState?.handoff?.prUrl ?? null,
+      headSha: existingState?.continuation?.headSha ?? existingState?.landing?.headSha ?? null,
       spentRepairs,
       maxRepairs: parsed.maxRepairs ?? spentRepairs,
       spentWaitSeconds,
@@ -331,6 +332,7 @@ async function runDeliverySkillCliLocked(
 
     // 先持久化 paused 状态和待补偿事实
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -388,6 +390,7 @@ async function runDeliverySkillCliLocked(
 
     const handoffAfterLabel = { ...handoff, readyLabelRemoved };
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -432,6 +435,7 @@ async function runDeliverySkillCliLocked(
 
     const pendingCompensation = !(readyLabelRemoved && commentPosted);
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),

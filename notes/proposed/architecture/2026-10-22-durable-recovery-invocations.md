@@ -126,3 +126,21 @@ Delivery and whole-repository regressions remain part of `npm run gate`.
 These are local fixtures at external GitHub/Codex boundaries. They do not claim a
 real GitHub/Codex smoke, cross-machine distributed ownership, exactly-once effects,
 power-loss certification, or automatic resolution of unknowable executor outcomes.
+
+### Delivery cleanup and explicit halt
+
+Delivery run, halt, recovery and landing acquire a lifecycle mutex under the
+workspace parent's `.symphony-host/delivery-authorities/` before the existing
+in-workspace authority. The key hashes the canonical parent and workspace name,
+so deletion/recreation cannot remove or change the exclusion key. Subprocess
+uncertainty is recorded in both authorities. Host native cleanup holds the same
+outside mutex through containment checks, hooks and removal, and refuses legacy
+owners, unknown children, corrupt snapshots, pending compensation and unfinished
+continuation/landing intents even when GitHub has already closed the Issue after
+merge. An observed landing and ready continuation can be cleaned once the owner
+has released its authority. Existing in-workspace locks remain honored.
+
+Explicit halt preserves continuation, landing, budgets and work identity in every
+checkpoint, including failed compensation. Corrupt or foreign snapshots fail
+before remote mutation or replacement. The native host startup and formal halt
+CLI regressions cover these refusal and acknowledgement windows.

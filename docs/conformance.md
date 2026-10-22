@@ -452,3 +452,9 @@ native host startup/ticks and result consumption without coding replay. Existing
 Decision generation/lease regressions remain authoritative. See the
 [boundary/evidence mapping](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
 Real GitHub/Codex integration remains unverified by these local fixtures.
+
+`apps/cli/src/delivery-cleanup.test.ts` adds native host terminal-sweep coverage
+for Delivery ownership during merge auto-close, unknown children, legacy/corrupt
+evidence, unfinished intents and cleanup/recreation exclusion. Its formal halt
+CLI cases verify all checkpoints preserve recovery targets and budgets, and reject
+corrupt/foreign state before remote calls (§8/§9/§17 extensions).

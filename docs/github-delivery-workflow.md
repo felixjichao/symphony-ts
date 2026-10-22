@@ -303,3 +303,11 @@ use explicit `delivery-skill run --resume` only to authorize resuming paused wor
 A changed HEAD invalidates an old one-shot `pr land` authorization; issue a new explicit
 opt-in for the current target. Corrupt/legacy state and interrupted reclaim metadata
 require the same conservative verification, not automatic deletion.
+
+Delivery cleanup also shares an outside-workspace lifecycle mutex in the workspace
+parent's `.symphony-host/delivery-authorities/`. Preserve this directory along with
+host recovery state when migrating workspace roots. Terminal Issue cleanup refuses
+active owners, unknown subprocess outcomes, corrupt state and unacknowledged
+Delivery/landing steps; merge auto-closing an Issue does not acknowledge the local
+intent. Use native observation/recovery before cleanup. Explicit `delivery-skill
+halt` preserves these steps and rejects corrupt or mismatched state.

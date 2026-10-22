@@ -1,3 +1,4 @@
+import { withDeliveryCleanupAuthority } from "./delivery-cleanup";
 import { FileRetryReservationStorage } from "./recovery-storage";
 import { createHostWorkContinuity } from "./work-continuity";
 import fs from "node:fs";
@@ -264,10 +265,13 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       removeWorkspace: (identifier: string) => cleanupWorkspace.removeWorkspaceForIssue!({ issueId: null, identifier }),
       removeWorkspaceForIssue: async (context: WorkspaceCleanupIssueContext) => {
         const { manager, release } = workspaceCoordinator.resolveForCleanup(context);
-        const result = await manager.removeWorkspace(context.identifier, {
+        const workspacePath = manager.resolveWorkspacePath(context.identifier);
+        // Validate containment before touching native state or creating a mutex.
+        await manager.assertWorkspacePathSafe(workspacePath);
+        const result = await withDeliveryCleanupAuthority(workspacePath, () => manager.removeWorkspace(context.identifier, {
           hooks: controller.current.serviceConfig.hooks,
           onHookEvent: observers.onHookEventForIssue(context),
-        });
+        }));
         if (result.status === "removed" || result.status === "missing") {
           release();
         }

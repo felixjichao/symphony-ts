@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 interface Owner { pid: number; hostname: string; nonce: string; effectsPending: boolean }
@@ -27,6 +27,7 @@ function write(fd: number, owner: Owner): void {
   fs.fsyncSync(fd);
 }
 export function acquireFileAuthority(file: string): { release(): void; update(pending: boolean): void } {
+  if (fs.existsSync(`${file}.reclaim`)) throw Object.assign(new Error(`Authority reclamation unverified: ${file}`), { code: "EEXIST" });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const owner: Owner = { pid: process.pid, hostname: os.hostname(), nonce: randomUUID(), effectsPending: false };
   let fd: number;
@@ -66,10 +67,30 @@ export function acquireFileAuthority(file: string): { release(): void; update(pe
     },
   };
 }
+/** Stable lifecycle mutex outside the directory that cleanup may remove (§9/§17).
+ * Canonicalize the parent, not the workspace: the key survives deletion/recreation. */
+export function deliveryLifecycleAuthorityPath(cwd: string): string {
+  const absolute = path.resolve(cwd);
+  const parent = fs.realpathSync(path.dirname(absolute));
+  const key = createHash("sha256").update(path.join(parent, path.basename(absolute))).digest("hex");
+  return path.join(parent, ".symphony-host", "delivery-authorities", `${key}.lock`);
+}
+export async function withDeliveryLifecycleAuthority<T>(cwd: string, action: () => Promise<T>): Promise<T> {
+  const authority = acquireFileAuthority(deliveryLifecycleAuthorityPath(cwd));
+  try { return await action(); } finally { authority.release(); }
+}
 export async function withDeliveryFileAuthority<T>(file: string, action: () => Promise<T>): Promise<T> {
-  const authority = acquireFileAuthority(file);
-  try { return await deliveryOwner.run({ update: authority.update, count: 0, file }, action); }
-  finally { authority.release(); }
+  const lifecycle = acquireFileAuthority(deliveryLifecycleAuthorityPath(path.dirname(path.dirname(file))));
+  try {
+    const authority = acquireFileAuthority(file);
+    try {
+      return await deliveryOwner.run({ update: pending => {
+        // Outer uncertainty survives even if the workspace is externally removed.
+        lifecycle.update(pending);
+        authority.update(pending);
+      }, count: 0, file }, action);
+    } finally { authority.release(); }
+  } finally { lifecycle.release(); }
 }
 /** Mark uncertainty BEFORE spawning; only a confirmed close settles a subprocess.
  * If the parent dies in either gap, recovery blocks rather than replaying an orphan. */
@@ -89,8 +110,9 @@ export function beginDeliverySubprocess(): () => void {
 
 /** Source fact for admission; the owning async action may re-observe under its lock. */
 export function deliveryAuthorityBlock(file: string): string | null {
-  if (deliveryOwner.getStore()?.file === file || !fs.existsSync(file)) return null;
+  if (deliveryOwner.getStore()?.file === file) return null;
   if (fs.existsSync(`${file}.reclaim`)) return "delivery_reclaim_interrupted: inspect authority before resuming";
+  if (!fs.existsSync(file)) return null;
   const owner = read(file);
   if (!owner) return "legacy_delivery_authority_requires_verification";
   if (owner.effectsPending) return "delivery_subprocess_outcome_unverified: verify old children and remote effects";

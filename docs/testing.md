@@ -128,3 +128,9 @@ bundled separate Node process for SIGKILL, replacing only external GitHub/Codex 
 time/scheduler boundaries. Recovery is verified at intent/effect/acknowledgement,
 with drift, unavailable sources, duplicate calls and stale ownership. Full validation
 uses `npm run gate`; local fixtures do not substitute for real GitHub/Codex smoke.
+
+Delivery cleanup/halt regression: `npx vitest run apps/cli/src/delivery-cleanup.test.ts`
+uses real host startup sweeps and the formal halt CLI with native file storage.
+It covers merge auto-close before acknowledgement, deletion/recreation exclusion,
+unknown child and legacy/corrupt evidence, and preservation of repair/landing
+steps through every halt checkpoint.
