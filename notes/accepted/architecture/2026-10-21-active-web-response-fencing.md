@@ -28,8 +28,22 @@ transaction after admission I/O. Existing accepted receipts remain idempotently
 readable after an external HEAD change. This does not make remote GitHub observation
 and the local store transaction atomic; delivery still validates the exact HEAD.
 
+The response waiter and heartbeat use one adapter-owned task/document/conversation
+observation. Count growth retains its normal fence. With a windowed DOM, live
+pre-Send nodes/text are excluded and observed append growth on the same eligible
+node while generating establishes response ownership. Restored sent checkpoints
+exclude older visible turns and require observed growth on the current turn; a
+static rerender alone cannot renew progress. Only numeric length reaches Decision;
+response snapshots stay in memory. Decision's monotonic length and ten-minute
+no-progress policy are unchanged. Prompt-submission recovery additionally accepts
+a strictly validated result for the exact task/revision/Review target as Send
+confirmation, then follows normal fenced extraction and receipt submission.
+
 ## Alternatives considered
 
+- Remove the count fence or count Stop/DOM churn as progress: old messages could keep a stalled execution alive.
+- Wait for final JSON before reporting growth: a healthy long answer may emit that block only at the end.
+- Persist response text to recover identity: unnecessary retention; sent checkpoints can observe fresh growth conservatively.
 - Trust local expiry: a lost renewal response can make it older than native authority.
 - Rebind/replay a sent task on another route: cannot prove the first prompt had no effect.
 - Check HEAD only before Send: HEAD can change while the model responds.

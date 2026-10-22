@@ -63,6 +63,23 @@ describe("task-bound response completion under DOM windowing", () => {
     await expect(adapter.executeTask(request)).resolves.toMatchObject({ result });
   });
 
+  it("confirms Send from a strictly matching result after DOM windowing and Stop disappears", () => {
+    const { doc, adapter } = fixture();
+    doc.body.appendChild(modernTurn(result));
+    expect(adapter.isPromptConfirmedSent(undefined, 20, task)).toBe(true);
+  });
+
+  it.each([
+    { ...result, taskId: "another-task" },
+    { ...result, revision: 1 },
+    { ...result, target: { ...target, headSha: "b".repeat(40) } },
+    { ...result, extra: "invalid schema" },
+  ])("does not confirm Send from an unrelated or invalid result: %j", candidate => {
+    const { doc, adapter } = fixture();
+    doc.body.appendChild(modernTurn(candidate));
+    expect(adapter.isPromptConfirmedSent(undefined, 20, task)).toBe(false);
+  });
+
   it("recovers the exact task result when the persisted baseline exceeds current DOM count", async () => {
     const { doc, adapter } = fixture();
     doc.body.appendChild(modernTurn(result));

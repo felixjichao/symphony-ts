@@ -234,6 +234,8 @@ export interface WaitForCompletionOptions {
   readonly baselineTurn?: HTMLElement | null | undefined;
   /** Only a fully validated result for the exact task may bypass count growth. Never use for unstructured bootstrap replies. */
   readonly matchesExpectedResult?: ((turn: HTMLElement) => boolean) | undefined;
+  /** A task-scoped observer may identify a growing post-Send turn despite DOM windowing. */
+  readonly isNewResponse?: ((turn: HTMLElement) => boolean) | undefined;
   readonly onState?: ((state: ResponseWaitState) => void) | undefined;
   readonly isCompletionCandidate?: ((turn: HTMLElement) => boolean) | undefined;
   readonly checkIntervalMs?: number | undefined;
@@ -312,7 +314,9 @@ export async function waitForStreamingCompletion(
     const matchingTaskResult = candidate !== null && Boolean(options.matchesExpectedResult?.(candidate));
     // Count growth is useful for unstructured responses, but DOM windowing and selector
     // changes can shrink the list. An exact task-bound result is stronger evidence.
-    const newTurn = candidate !== null && turns.length > baselineCount && candidate !== baselineTurn;
+    const newTurn = candidate !== null && (options.isNewResponse
+      ? options.isNewResponse(candidate)
+      : turns.length > baselineCount && candidate !== baselineTurn);
     const targetTurn = newTurn || matchingTaskResult ? candidate : null;
     let reason: ResponseWaitState["reason"] = "no_new_turn";
     if (targetTurn) {

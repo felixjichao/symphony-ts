@@ -88,6 +88,51 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly stabilizationMs: number;
   private readonly checkIntervalMs: number;
   private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void | Promise<void>) | null = null;
+  private responseObservation: {
+    task: DecisionTask;
+    doc: Document;
+    conversationId: string | null;
+    baseline: Set<HTMLElement>;
+    baselineTexts: Set<string>;
+    baselineResults: Set<string>;
+    candidate: HTMLElement | null;
+    text: string;
+    growing: boolean;
+  } | null = null;
+
+  private observeTaskResponse(taskId: string, baselineCount: number): HTMLElement | null {
+    const observation = this.responseObservation;
+    if (!observation || observation.task.id !== taskId || this.docSupplier() !== observation.doc ||
+        extractConversationIdFromUrl(this.winSupplier()?.location.href ?? "") !== observation.conversationId) return null;
+    const turns = getAllAssistantTurns(observation.doc);
+    const candidate = turns.at(-1);
+    if (!candidate) return null;
+    if (turns.length > baselineCount && !observation.baseline.has(candidate)) return candidate;
+    try {
+      const result = canonicalJsonStringify(extractResultFromAssistantTurn(candidate, observation.task));
+      if (!observation.baselineResults.has(result)) return candidate;
+      return null;
+    } catch { /* A streaming response need not contain its final result yet. */ }
+    const text = candidate.textContent ?? "";
+    if (observation.baseline.has(candidate) || observation.baselineTexts.has(text)) return null;
+    // Require observed append growth on the same eligible node while generating.
+    // A restored sent checkpoint can observe its current streaming node, but a
+    // count change or static re-render alone never proves response growth.
+    if (candidate !== observation.candidate) {
+      observation.candidate = candidate;
+      observation.text = text;
+      observation.growing = false;
+    } else if (findStopButton(observation.doc) && text.length > observation.text.length && text.startsWith(observation.text)) {
+      observation.text = text;
+      observation.growing = true;
+    }
+    return observation.growing ? candidate : null;
+  }
+
+  /** Shared with the response waiter; response text remains in memory, never diagnostics/storage. */
+  getResponseLength(taskId: string, baselineCount: number): number {
+    return this.observeTaskResponse(taskId, baselineCount)?.textContent?.length ?? 0;
+  }
 
   /**
    * Cancellation is cooperative: the step listener may await (driver checkpoint writes,
@@ -726,6 +771,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const baselineCount = initialTurns.length;
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
 
+    const baselineTexts = new Set(initialTurns.map(turn => turn.textContent ?? ""));
     const baselineResults = new Set(initialTurns.flatMap(turn => {
       try { return [canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))]; } catch { return []; }
     }));
@@ -753,6 +799,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     sendBtn.click();
 
+    this.responseObservation = { task, doc, conversationId: targetConvId,
+      baseline: new Set(initialTurns), baselineTexts,
+      baselineResults, candidate: null, text: "", growing: false };
+
     // Report waiting response step
     this.stepListener?.("waiting_response", { baselineCount });
 
@@ -766,6 +816,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
       isCompletionCandidate: isResultTurn,
+      isNewResponse: () => this.observeTaskResponse(task.id, baselineCount) !== null,
       matchesExpectedResult: turn => {
         try { return !baselineResults.has(canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))); } catch { return false; }
       },
@@ -794,6 +845,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     }
   ): Promise<DecisionExecutionOutcome> {
     const doc = this.docSupplier();
+    const olderTurns = getAllAssistantTurns(doc).slice(0, -1);
+    this.responseObservation = { task, doc, conversationId: extractConversationIdFromUrl(this.winSupplier()?.location.href ?? ""),
+      baseline: new Set(olderTurns), baselineTexts: new Set(olderTurns.map(turn => turn.textContent ?? "")),
+      baselineResults: new Set(), candidate: null, text: "", growing: false };
     const assistantTurn = await waitForStreamingCompletion({
       doc,
       baselineCount: options.baselineCount,
@@ -803,6 +858,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
       isCompletionCandidate: isResultTurn,
+      isNewResponse: () => this.observeTaskResponse(task.id, options.baselineCount) !== null,
       matchesExpectedResult: turn => {
         try { extractResultFromAssistantTurn(turn, task); return true; } catch { return false; }
       },
@@ -813,7 +869,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     return { result };
   }
 
-  isPromptConfirmedSent(docSupplierOrDoc?: Document | (() => Document), baselineCount?: number): boolean {
+  isPromptConfirmedSent(docSupplierOrDoc?: Document | (() => Document), baselineCount?: number, task?: DecisionTask): boolean {
     const doc =
       typeof docSupplierOrDoc === "function"
         ? docSupplierOrDoc()
@@ -821,11 +877,16 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const count = baselineCount ?? 0;
     if (findStopButton(doc) !== null) return true;
     if (getAllAssistantTurns(doc).length > count) return true;
+    const candidate = getAllAssistantTurns(doc).at(-1);
+    if (task && candidate) {
+      try { extractResultFromAssistantTurn(candidate, task); return true; } catch { /* Exact-task results only. */ }
+    }
     return false;
   }
 
   async confirmPromptSubmitted(options: {
     baselineCount: number;
+    task?: DecisionTask;
     timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<boolean> {
@@ -833,11 +894,11 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       if (options.signal?.aborted) return false;
-      if (this.isPromptConfirmedSent(undefined, options.baselineCount)) {
+      if (this.isPromptConfirmedSent(undefined, options.baselineCount, options.task)) {
         return true;
       }
       await new Promise((r) => setTimeout(r, Math.min(this.checkIntervalMs, 200)));
     }
-    return this.isPromptConfirmedSent(undefined, options.baselineCount);
+    return this.isPromptConfirmedSent(undefined, options.baselineCount, options.task);
   }
 }

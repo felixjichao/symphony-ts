@@ -566,8 +566,12 @@ export class DecisionTabDriver implements DecisionTaskController {
     const doc = this.adapter instanceof ChatGptWebAdapter ? this.adapter.getDocument() :
       (typeof document !== "undefined" ? document : null);
     if (cp?.step === "waiting_response" && doc) {
-      const turns = getAllAssistantTurns(doc);
-      if (turns.length > (cp.baselineCount ?? turns.length)) responseLength = turns.at(-1)?.textContent?.length ?? 0;
+      if (this.adapter instanceof ChatGptWebAdapter) {
+        responseLength = this.adapter.getResponseLength(cp.taskId, cp.baselineCount ?? 0);
+      } else {
+        const turns = getAllAssistantTurns(doc);
+        if (turns.length > (cp.baselineCount ?? turns.length)) responseLength = turns.at(-1)?.textContent?.length ?? 0;
+      }
     }
     return { phase: phase ?? cp?.step ?? "claimed", responseLength };
   }
@@ -1330,17 +1334,18 @@ export class DecisionTabDriver implements DecisionTaskController {
 
       try {
         const adapterWithProbes = this.adapter as unknown as {
-          confirmPromptSubmitted?: (opts: { baselineCount: number; signal?: AbortSignal }) => Promise<boolean>;
-          isPromptConfirmedSent?: (doc?: unknown, baselineCount?: number) => boolean;
+          confirmPromptSubmitted?: (opts: { baselineCount: number; task?: DecisionTask; signal?: AbortSignal }) => Promise<boolean>;
+          isPromptConfirmedSent?: (doc?: unknown, baselineCount?: number, task?: DecisionTask) => boolean;
         };
         let isConfirmedSent = false;
         if (typeof adapterWithProbes.confirmPromptSubmitted === "function") {
           isConfirmedSent = await adapterWithProbes.confirmPromptSubmitted({
             baselineCount: cp.baselineCount ?? 0,
+            task: taskRes.task,
             signal,
           }).catch(() => false);
         } else if (typeof adapterWithProbes.isPromptConfirmedSent === "function") {
-          isConfirmedSent = adapterWithProbes.isPromptConfirmedSent(undefined, cp.baselineCount ?? 0);
+          isConfirmedSent = adapterWithProbes.isPromptConfirmedSent(undefined, cp.baselineCount ?? 0, taskRes.task);
         } else if (typeof (globalThis as unknown as { document?: Document }).document !== "undefined") {
           const doc = (globalThis as unknown as { document: Document }).document;
           const count = cp.baselineCount ?? 0;

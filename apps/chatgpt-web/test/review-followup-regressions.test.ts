@@ -383,3 +383,28 @@ it("retains an actually expired sent checkpoint across native human blocking", a
     } finally { now.mockRestore(); }
   } finally { await f.close(); }
 });
+
+it("recovers prompt_submitting from an exact task result after DOM shrink without another Send", async () => {
+  const f = await realChain(36);
+  try {
+    await f.service.startTask(f.task.id, f.claim.lease);
+    const cp = new MemoryCheckpointStore();
+    cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+      leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token, leaseGeneration: 1,
+      leaseExpiresAtMs: f.claim.lease.expiresAtMs, bindingGeneration: 1,
+      step: "prompt_submitting", baselineCount: 20, targetConvId: "conv-1", attemptId: "a", savedAtMs: Date.now() });
+    const p = page("https://chatgpt.com/c/conv-1");
+    const result = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id, revision: f.task.revision,
+      createdAtMs: Date.now(), kind: "plan", verdict: "ready", content: {
+        plan: "Bounded test plan", acceptanceCriteria: ["No repeated Send"], risks: [], clarifications: [] } };
+    const response = new MockElement("div", { "data-message-author-role": "assistant" });
+    response.textContent = "```symphony-result\n" + JSON.stringify(result) + "\n```";
+    p.doc.body.appendChild(response);
+    const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window,
+      stabilizationMs: 1, checkIntervalMs: 1, responseTimeoutMs: 500 });
+    const driver = new DecisionTabDriver({ transport: new FetchBridgeTransport({ baseUrl: f.baseUrl }), adapter, checkpointStore: cp });
+    expect((await driver.runOnce())?.status).toBe("completed");
+    expect(p.sends()).toBe(0);
+    expect(f.service.getReceipt(f.task.id)?.type).toBe("result");
+  } finally { await f.close(); }
+});
