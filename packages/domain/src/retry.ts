@@ -39,6 +39,8 @@ export interface RetryEntry {
 /** Native retry/launch recovery record (§4/§8/§14), never a serialized timer. */
 export interface DurableRetryReservation {
   readonly workKey?: WorkKey | undefined;
+  /** Distinguishes pre-policy snapshots from current scheduling/wait counters. */
+  readonly recoveryAccounting?: { readonly schemaVersion: 1; readonly legacyAttempts: number };
   readonly issueId: string;
   readonly identifier: string | null;
   readonly issueUrl: string | null;

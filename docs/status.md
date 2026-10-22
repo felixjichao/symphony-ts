@@ -193,3 +193,10 @@ concurrent reporter, ACK-loss and stale-target tests are included. Live GitHub/b
 fault acceptance for this change has not been run. Independent review is pending.
 See [operator behavior](bounded-recovery.md) and the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
+
+NEST-134 review follow-up fixes three blockers: automatic unblock now requires an
+explicit modeled ownership condition; versioned native accounting separates legacy
+migration from new capacity/continuation waits; native needs-human/manual reasons
+produce durable deduplicated incidents without blocking Delivery report compensation.
+Focused real-authority/file-store and production-host regressions are included;
+independent re-review and external fault acceptance remain pending.

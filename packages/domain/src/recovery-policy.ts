@@ -23,6 +23,7 @@ export interface RecoveryContext {
   readonly lastProgressAt: number | "unknown";
   readonly failure: RecoveryFailure;
   readonly unblock: string;
+  readonly unblockCondition?: { readonly kind: "ownership_conflict_absent"; readonly reason: RecoveryOwnershipConflict };
 }
 export interface RecoveryIncident extends RecoveryContext {
   readonly id: string;
@@ -60,4 +61,42 @@ export function recoveryScope(context: Pick<RecoveryContext, "workKey" | "expect
 }
 export function recoveryFingerprintInput(context: RecoveryContext): string {
   return JSON.stringify([recoveryScope(context), context.target, context.failure.classification, context.failure.reason]);
+}
+
+export const RECOVERY_OWNERSHIP_CONFLICTS = [
+  "multiple_active_decision_tasks", "runtime_and_decision_ownership_overlap",
+  "merged_pull_request_has_conflicting_executor", "runtime_retry_conflicts_with_next_stage",
+  "delivery_and_execution_ownership_overlap", "stale_or_conflicting_owner_fence",
+  "decision_review_targets_stale_head",
+] as const;
+export type RecoveryOwnershipConflict = typeof RECOVERY_OWNERSHIP_CONFLICTS[number];
+export function isRecoveryOwnershipConflict(reason: unknown): reason is RecoveryOwnershipConflict {
+  return typeof reason === "string" && (RECOVERY_OWNERSHIP_CONFLICTS as readonly string[]).includes(reason);
+}
+export interface NativeRecoveryBlock {
+  readonly authority: "decision" | "delivery" | "orchestrator";
+  readonly failure: RecoveryFailure;
+}
+/** Exact native reason codes. Free-form messages never determine report identity. */
+export function mapNativeRecoveryBlock(reason: string): NativeRecoveryBlock | null {
+  const block = (authority: NativeRecoveryBlock["authority"], classification: RecoveryFailureClass): NativeRecoveryBlock => ({ authority, failure: { classification, reason } });
+  switch (reason) {
+    case "auth_required": return block("decision", "auth_required");
+    case "human_required": case "approval_required": case "review_requires_human":
+    case "verdict_needs_human": case "verdict_needs_clarification": case "unresolved_clarifications":
+      return block("decision", "human_required");
+    case "invariant_violation": return block("decision", "invariant_violation");
+    case "irrecoverable_binding": return block("decision", "irrecoverable_binding");
+    case "recovery_exhausted": return block("decision", "recoverable");
+    case "manual_intervention_required": case "review_needs_human": case "budget_exhausted":
+    case "landing_target_superseded": case "pull_request_closed_unmerged": case "delivery_paused":
+    case "ci_failed_max_repairs": case "review_changes_requested_max_repairs": case "ci_wait_timeout": case "unmergeable":
+      return block("delivery", "human_required");
+    case "foreign_pr_conflict": return block("delivery", "invariant_violation");
+    case "delivery_reclaim_interrupted": case "legacy_delivery_authority_requires_verification": case "delivery_subprocess_outcome_unverified":
+      return block("delivery", "outcome_unknown");
+    case "worker_launch_unverified": case "retry_recovery_unverified": case "recovery_outcome_unverified":
+      return block("orchestrator", "outcome_unknown");
+    default: return null;
+  }
 }

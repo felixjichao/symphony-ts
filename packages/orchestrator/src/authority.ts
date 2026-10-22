@@ -102,6 +102,8 @@ export interface RetryScheduleRequest {
   /** 延迟口径：continuation 固定 1s；failure `min(10000 * 2^(attempt-1), cap)`。 */
   readonly kind: RetryDelayKind;
   readonly reason?: RetryEventReason;
+  /** Only the native snapshot migration supplies this count; never infer it from attempt. */
+  readonly legacyRecoveryAttempts?: number;
   readonly lastProgressAt?: number | "unknown";
   readonly owner?: string;
   readonly fence?: SafeOwnershipFence;
@@ -328,10 +330,13 @@ export class OrchestratorAuthority {
     if (this.stopping) return;
     for (const record of this.retryStorage?.load() ?? []) {
       if (this.durableRetries.has(record.issueId)) continue;
-      this.durableRetries.set(record.issueId, record);
+      const migrated = { ...record, recoveryAccounting: record.recoveryAccounting ?? {
+        schemaVersion: 1 as const, legacyAttempts: record.kind === "failure" ? Math.max(0, record.attempt - 1) : 0,
+      } };
+      this.durableRetries.set(record.issueId, migrated);
       if (record.phase === "scheduled") this.scheduleRetryAt(record, record.dueAtUtcMs);
       else {
-        const blocked: DurableRetryReservation = { ...record, phase: "blocked",
+        const blocked: DurableRetryReservation = { ...migrated, phase: "blocked",
           token: `blocked::${this.incarnation}::${++this.retryTokenCounter}`,
           error: "worker_launch_unverified: verify old executor stopped before releasing reservation" };
         this.retryStorage?.put(blocked, record.token);
@@ -364,7 +369,7 @@ export class OrchestratorAuthority {
 
   public continuityRetryReferences() {
     return [...new Map([...this.state.retryAttempts.values(), ...this.durableRetries.values()]
-      .map(retry => [retry.issueId, { issueId: retry.issueId, attempt: retry.attempt, token: "token" in retry ? retry.token as string : undefined, url: retry.issueUrl ?? null, workKey: "workKey" in retry ? retry.workKey as WorkKey : undefined }])).values()];
+      .map(retry => [retry.issueId, { issueId: retry.issueId, attempt: retry.attempt, legacyRecoveryAttempts: "recoveryAccounting" in retry ? retry.recoveryAccounting?.legacyAttempts ?? 0 : 0, token: "token" in retry ? retry.token as string : undefined, url: retry.issueUrl ?? null, workKey: "workKey" in retry ? retry.workKey as WorkKey : undefined }])).values()];
   }
 
   /** A CLI authorization removes only the exact durable blocked token. Reconcile
@@ -617,7 +622,7 @@ export class OrchestratorAuthority {
       : Math.max(0, restoredDueAtUtcMs - this.now());
     const token = `retry::${this.incarnation}::${request.issueId}::${++this.retryTokenCounter}`;
     if (restoredDueAtUtcMs === undefined && request.kind === "failure" && request.reason !== "no_available_slots"
-      && this.optionsAuthorizeFailureRetry && !this.optionsAuthorizeFailureRetry(request, `${this.durableRetries.get(request.issueId)?.token ?? token}:${request.reason ?? "failure"}`)) {
+      && this.optionsAuthorizeFailureRetry && !this.optionsAuthorizeFailureRetry({ ...request, legacyRecoveryAttempts: this.durableRetries.get(request.issueId)?.recoveryAccounting?.legacyAttempts ?? 0 }, `${this.durableRetries.get(request.issueId)?.token ?? token}:${request.reason ?? "failure"}`)) {
       // The worker/failed operation is settled. The durable policy block now owns admission.
       this.cancelScheduledRetry(request.issueId);
       this.state.claimed.delete(request.issueId);
@@ -626,6 +631,7 @@ export class OrchestratorAuthority {
     if (this.retryStorage) {
       const record: DurableRetryReservation = { workKey: this.durableRetries.get(request.issueId)?.workKey, issueId: request.issueId, identifier: request.identifier,
         issueUrl: request.issueUrl ?? null, attempt: request.attempt, kind: request.kind, error: request.error,
+        recoveryAccounting: this.durableRetries.get(request.issueId)?.recoveryAccounting ?? { schemaVersion: 1, legacyAttempts: 0 },
         dueAtUtcMs: restoredDueAtUtcMs ?? this.now() + delayMs, token, phase: "scheduled" };
       this.retryStorage.put(record, this.durableRetries.get(request.issueId)?.token ?? null);
       this.durableRetries.set(request.issueId, record);
@@ -1099,6 +1105,7 @@ export class OrchestratorAuthority {
       const intent: DurableRetryReservation = { workKey: this.resolveWorkKey?.(issue) ?? undefined, issueId: issue.id, identifier: issue.identifier,
         issueUrl: issue.url, attempt: attemptNumber ?? 1, kind: previous?.kind ?? "continuation",
         error: "worker_launch_unverified", dueAtUtcMs: this.now(), token: `launch::${this.incarnation}::${token}`,
+        recoveryAccounting: previous?.recoveryAccounting ?? { schemaVersion: 1, legacyAttempts: 0 },
         phase: "launch_pending" };
       this.retryStorage.put(intent, previous?.token ?? null);
       this.durableRetries.set(issue.id, intent);

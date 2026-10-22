@@ -1,7 +1,7 @@
 /** Host composition for native recovery policy; Operations/Dashboard never own actions. */
 import { AGENT_ERROR_CODES } from "@symphony/agent";
 import { createHash } from "node:crypto";
-import { sanitizeOwnershipFence, validateOwnershipFence, recoveryScope, type RecoveryContext, type RecoveryFailure, type RecoveryPolicy,
+import { sanitizeOwnershipFence, validateOwnershipFence, recoveryScope, isRecoveryOwnershipConflict, mapNativeRecoveryBlock, type RecoveryContext, type RecoveryFailure, type RecoveryPolicy,
   type WorkContinuityObservation, type WorkRecoveryRequest } from "@symphony/domain";
 import { reserveRecovery, refundRecovery, beginRecoveryEpoch, type RetryScheduleRequest } from "@symphony/orchestrator";
 import { FileRecoveryLedger } from "./recovery-ledger";
@@ -16,6 +16,10 @@ export function createHostRecovery(ledger: FileRecoveryLedger, policy: () => Rec
     target: failure.classification === "auth_required" || failure.classification === "irrecoverable_binding"
       ? `infrastructure:${f.nativeRecovery?.epoch ?? 0}` : f.stage === "coding" ? "runtime" : targetFor(f), owner: f.owner?.id ?? null,
     fence: sanitizeOwnershipFence(f.expectedFence), lastProgressAt: f.owner?.liveness.lastProgressAt ?? f.nativeRecovery?.lastProgressAt ?? "unknown", failure, unblock,
+  });
+  const nativeBlockFor = (f: WorkContinuityObservation) => f.nativeBlock ?? mapNativeRecoveryBlock(f.blocked?.split(":")[0] ?? "");
+  const deliveryBlockContext = (f: WorkContinuityObservation, failure: RecoveryFailure): RecoveryContext => ({
+    ...contextFor(f, failure), expectedAction: "delivery:blocked", target: JSON.stringify(f.handoffRef ?? f.target ?? "delivery_pause"),
   });
   const blockClass = (reason: string): RecoveryFailure["classification"] => {
     if (reason.startsWith("auth_required")) return "auth_required";
@@ -33,6 +37,12 @@ export function createHostRecovery(ledger: FileRecoveryLedger, policy: () => Rec
         && i.epoch + 1 === budget.epoch && i.fence.retryToken);
       if (reviewed?.fence.retryToken) authority.releaseAuthorizedRetry(issueId, reviewed.fence.retryToken);
     },
+    isNativeIncident(f: WorkContinuityObservation, id: string): boolean {
+      const native = nativeBlockFor(f);
+      if (!f.available || !f.active || !f.blocked || native?.authority !== "delivery" || native.failure.classification !== "human_required") return false;
+      const context = deliveryBlockContext(f, native.failure);
+      return ledger.list().some(b => b.scope === recoveryScope(context) && b.target === context.target && b.incident?.id === id);
+    },
     blocked(workKey: import("@symphony/domain").WorkKey): boolean {
       return ledger.list().some(b => b.scope === recoveryScope({ workKey, expectedAction: "coding:retry" }) && b.incident !== null);
     },
@@ -44,7 +54,7 @@ export function createHostRecovery(ledger: FileRecoveryLedger, policy: () => Rec
       const failure: RecoveryFailure = { classification: nonRetryable ? blockClass(code) : "recoverable", reason };
       const context: RecoveryContext = { workKey, expectedAction: "coding:retry", target: "runtime", owner: request.owner ?? "orchestrator",
         fence: request.fence ?? sanitizeOwnershipFence({}), lastProgressAt: request.lastProgressAt ?? "unknown", failure, unblock };
-      return !reserveRecovery({ ledger, context, policy: policy(), invocation, priorAttempts: Math.max(0, request.attempt - 1), strategies: ["retry"], now: now() }).incident;
+      return !reserveRecovery({ ledger, context, policy: policy(), invocation, priorAttempts: request.legacyRecoveryAttempts ?? 0, strategies: ["retry"], now: now() }).incident;
     },
     authorize(request: WorkRecoveryRequest, f: WorkContinuityObservation): boolean {
       // Coding dispatch is owned by the worker authority; unsupported primitives are never charged.
@@ -82,11 +92,15 @@ export function createHostRecovery(ledger: FileRecoveryLedger, policy: () => Rec
       const context = contextFor(f, { classification: "recoverable", reason: "incomplete_stage" });
       const invariant = f.contradictions[0] ?? (f.owner && !validateOwnershipFence(f.expectedFence, f.owner.fence).valid ? "stale_or_conflicting_owner_fence" : null);
       if (invariant) {
-        reserveRecovery({ ledger, context: contextFor(f, { classification: "invariant_violation", reason: invariant }),
+        reserveRecovery({ ledger, context: { ...contextFor(f, { classification: "invariant_violation", reason: invariant }),
+          ...(isRecoveryOwnershipConflict(invariant) ? { unblockCondition: { kind: "ownership_conflict_absent" as const, reason: invariant },
+            unblock: `Fresh native facts must prove ownership conflict ${invariant} absent; otherwise authorize the exact incident` } : {}) },
           policy: policy(), invocation: createHash("sha256").update(JSON.stringify([context.target, f.contradictions])).digest("hex"), strategies: [], now: now() });
       }
       const budget = ledger.list().find(b => b.scope === recoveryScope(context) && (b.target === context.target || b.target === `infrastructure:${f.nativeRecovery?.epoch ?? 0}`));
-      if (budget?.incident?.failure.classification === "invariant_violation" && !invariant && !f.blocked) {
+      if (budget?.incident?.failure.classification === "invariant_violation"
+        && budget.incident.unblockCondition?.kind === "ownership_conflict_absent"
+        && budget.incident.unblockCondition.reason === budget.incident.failure.reason && !invariant && !f.blocked) {
         ledger.transact(budget.scope, latest => {
           if (!latest) throw new Error("Missing invariant block");
           return latest.incident?.id === budget.incident!.id ? beginRecoveryEpoch(latest) : latest;
@@ -95,10 +109,13 @@ export function createHostRecovery(ledger: FileRecoveryLedger, policy: () => Rec
       }
       if (budget?.incident) return { ...f, recoveryIncidentId: budget.incident.id, blocked: `${budget.incident.blockedReason}: ${budget.incident.unblock}` };
       // Native blocked facts are durable and reconstruct the incident after a block/outbox crash.
-      if (f.blocked && /auth_required|human_required|approval_required|invariant_violation|recovery_exhausted|irrecoverable_binding|unverified/.test(f.blocked)) {
-        const classification = f.blocked.startsWith("recovery_exhausted") ? "recoverable" : blockClass(f.blocked);
-        const evidence = contextFor(f, { classification, reason: classification === "recoverable" ? "recovery_exhausted" : classification });
-        reserveRecovery({ ledger, context: evidence, policy: policy(), invocation: createHash("sha256").update(JSON.stringify([context.target, f.blocked])).digest("hex"), strategies: [], priorAttempts: f.nativeRecovery?.attempts ?? 0, priorActions: f.nativeRecovery?.actions ?? [], now: now() });
+      const native = nativeBlockFor(f);
+      if (f.blocked && native) {
+        // A paused Delivery may still finish its bounded report compensation.
+        // Reporting the human block must not take ownership of that native action.
+        const evidence = native.authority === "delivery" && native.failure.classification === "human_required"
+          ? deliveryBlockContext(f, native.failure) : contextFor(f, native.failure);
+        reserveRecovery({ ledger, context: evidence, policy: policy(), invocation: createHash("sha256").update(JSON.stringify([evidence.target, native.failure])).digest("hex"), strategies: [], priorAttempts: f.nativeRecovery?.attempts ?? 0, priorActions: f.nativeRecovery?.actions ?? [], now: now() });
       }
       return f;
     },

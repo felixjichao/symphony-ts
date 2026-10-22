@@ -478,3 +478,12 @@ report destination yields one receipt without discarding the business PR target.
 
 [Operator documentation](bounded-recovery.md) describes retained outbox uncertainty
 and native unblock prerequisites. Dashboard/Operations remain read-only.
+
+NEST-134 review regressions: `apps/cli/src/recovery-review-regressions.test.ts`
+uses the real scheduling authority and file stores to cover six capacity waits
+after successful continuation, with/without restart, followed by one charged failure
+and eventual bounded exhaustion; explicit legacy migration survives reconstruction.
+It also verifies persistent path/other invariant blocks, conservative legacy unblock,
+invalid accounting schema rejection, exact human-reason incident/list/report dedup
+and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
+completed needs-human Review and paused Delivery facts through the production host.

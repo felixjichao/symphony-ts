@@ -22,8 +22,10 @@ budget. Successful process exit alone does not erase unresolved worker history.
 A task/revision/HEAD or handoff change can re-scope the related stage budget.
 Lease/binding changes, page reload, heartbeat and timer reconstruction do not.
 Authentication/infrastructure blocks do not disappear just because a PR HEAD changes.
-Existing snapshots retain their native counts; legacy worker retry attempts are
-conservatively inherited when they next fail. Hot reload uses the same ledger.
+Only pre-accounting snapshots supply conservative legacy failure counts at
+restoration. New reservations persist versioned accounting provenance, including
+zero legacy attempts: continuation/capacity waits never become failures later,
+even after restarting or creating the first ledger entry. Hot reload uses the same ledger.
 If changing the workspace root between host runs, retain/migrate the host recovery
 files with the native state; moving to an empty directory is not an unblock API.
 
@@ -56,8 +58,10 @@ rerun a repair, or opt into merging. Decision blocks use the existing exact-fenc
 blocks retain their native verification requirements. If authorization is interrupted
 after native removal, repeat the same exact-ID authorization; policy stays blocked
 until that commit succeeds.
-A modeled ownership conflict can clear automatically after fresh native facts prove
-the conflict is gone; its prior incident remains in history and its old epoch cannot
+Only an incident carrying the explicit `ownership_conflict_absent` condition for
+a recognized ownership conflict can clear automatically after fresh facts prove it
+is gone. Other invariants, including `invalid_workspace_cwd` and old incidents
+without a modeled condition, retain their block until exact authorization; its prior incident remains in history and its old epoch cannot
 commit. A failed atomic reclaim can retry within budget only after exact unchanged
 claim readback proves no commit. Unknown subprocess/Send/merge outcomes still block.
 Old incident IDs cannot authorize a newer block. Reconciliation re-reads authority
@@ -82,3 +86,9 @@ never creates another incident. The Dashboard does not own reporting or recovery
 These guarantees apply to the CLI host composition. Library embedders must provide
 the `authorizeFailureRetry` and work-continuity policy ports plus durable storage.
 Fixtures are not live GitHub/browser acceptance; see [testing](testing.md).
+
+Native manual blocks are normalized from exact reason codes, including completed
+Review `review_requires_human` and Delivery `manual_intervention_required`, rather
+than matching error-message substrings. A native Delivery human-block incident is
+reported under its own stable action/target identity; native pause still prevents
+execution, while pending report compensation retains its separate finite budget.

@@ -83,6 +83,7 @@ describe("host native recovery composition", () => {
     const { ledger, recovery } = fixture();
     const blocked = recovery.observe({ ...facts, contradictions: ["multiple_active_decision_tasks"] });
     expect(blocked.recoveryIncidentId).toBeDefined();
+    expect(ledger.incidents()[0]?.unblockCondition).toEqual({ kind: "ownership_conflict_absent", reason: "multiple_active_decision_tasks" });
     expect(recovery.observe({ ...facts, contradictions: ["multiple_active_decision_tasks"] }).recoveryIncidentId).toBe(blocked.recoveryIncidentId);
     expect(recovery.observe(facts).recoveryIncidentId).toBeUndefined();
     expect(ledger.list()[0]?.epoch).toBe(2);

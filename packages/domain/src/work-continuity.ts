@@ -23,6 +23,7 @@ export interface WorkContinuityObservation {
   readonly expectedFence: OwnershipFence;
   readonly owner: ContinuityOwner | null;
   readonly blocked: string | null;
+  readonly nativeBlock?: import("./recovery-policy").NativeRecoveryBlock;
   /** Host-owned policy block; unlike a native handoff pause it forbids compensation too. */
   readonly recoveryIncidentId?: string;
   readonly nativeRecovery?: { readonly lastProgressAt: number | "unknown"; readonly attempts: number; readonly epoch: number; readonly actions: readonly import("./recovery-policy").RecoveryStrategy[] };

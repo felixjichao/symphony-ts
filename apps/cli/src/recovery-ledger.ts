@@ -1,6 +1,6 @@
 /** Host-owned recovery evidence, not a copy of task/PR lifecycle (§17/§18). */
 import fs from "node:fs";
-import type { RecoveryBudget, RecoveryIncident, RecoveryLedger } from "@symphony/domain";
+import { isRecoveryOwnershipConflict, type RecoveryBudget, type RecoveryIncident, type RecoveryLedger } from "@symphony/domain";
 import { withStorageMutation, writeDurableJson } from "./recovery-storage";
 
 interface Snapshot { schemaVersion: 1; budgets: RecoveryBudget[]; incidents: RecoveryIncident[] }
@@ -21,10 +21,12 @@ function validIncident(value: unknown): value is RecoveryIncident {
   const i = value as Record<string, unknown>;
   const w = i["workKey"] as Record<string, unknown> | null;
   const f = i["failure"] as Record<string, unknown> | null;
+  const condition = i["unblockCondition"] as Record<string, unknown> | undefined;
   const fence = i["fence"] as Record<string, unknown> | null;
   return typeof i["id"] === "string" && typeof i["fingerprint"] === "string" && count(i["epoch"])
     && count(i["attempts"]) && count(i["createdAt"]) && typeof i["target"] === "string"
     && typeof i["expectedAction"] === "string" && typeof i["blockedReason"] === "string" && typeof i["unblock"] === "string"
+    && (condition === undefined || !!condition && condition["kind"] === "ownership_conflict_absent" && isRecoveryOwnershipConflict(condition["reason"]))
     && (i["owner"] === null || typeof i["owner"] === "string")
     && (i["lastProgressAt"] === "unknown" || count(i["lastProgressAt"]))
     && !!w && typeof w["provider"] === "string" && typeof w["key"] === "string"

@@ -33,8 +33,11 @@ revision, HEAD or handoff changes re-scope only the corresponding stage; auth an
 irrecoverable-binding blocks use an infrastructure scope. Worker infrastructure
 budgets survive successful continuation and HEAD changes. Explicit fenced native
 Decision unblock advances a persistent recovery epoch; host-policy authorization
-requires the exact current incident ID and retains history. An invariant conflict
-whose modeled native facts demonstrably clear can also begin a new fenced epoch;
+requires the exact current incident ID and retains history. An incident explicitly carrying the versioned contract
+`ownership_conflict_absent` for a recognized ownership conflict can also begin a
+new epoch when fresh native facts prove it absent. Other invariants (including
+invalid workspace paths), and legacy incidents without that condition, cannot
+auto-clear merely because no ownership contradiction is currently visible;
 auth, human and unknown-effect blocks do not clear through elapsed time.
 
 Reservations precede effects and reuse invocation identity. The existing unique
@@ -45,8 +48,11 @@ settles as a counted failure, permitting a new bounded invocation. Unknown
 subprocess/Send/merge outcomes immediately become an explicit policy block; pending
 native invocations stay durable and are not blindly retried. A legacy invocation
 without an ID gets a deterministic hashed identity. Restored scheduled retries do
-not charge again. When a legacy retry first fails under the new policy, its prior
-attempt count is conservatively inherited; old attempts do not silently become zero.
+not charge again. Only restoration of a pre-accounting retry snapshot derives a conservative legacy
+count. New retry/launch reservations persist accounting schema 1 and legacy attempts
+(including zero), so current queue attempts and capacity waits never seed a failure
+ledger. That provenance survives further waits, continuation and restart; old
+legacy evidence does not silently become zero.
 Old Decision records retain their existing count and optional new metadata defaults.
 
 The file ledger serializes cross-process mutations using the existing filesystem
@@ -94,3 +100,10 @@ concurrent processes/reporters, SIGKILL, receipt loss, stale callbacks, safe evi
 and authorization. New live GitHub/browser fault acceptance is separate from fixture
 results and is not claimed by this implementation. See the operator instructions in
 [bounded recovery](../../../docs/bounded-recovery.md).
+
+Review follow-up: native blocked facts now carry an explicit authority/failure
+projection from exact native reason codes. Completed needs-human Review and manual
+Delivery pauses produce durable incidents. A Delivery human pause's incident uses a
+separate `delivery:blocked` scope; the pause continues to deny execution, while its
+pending native report compensation keeps independent bounded mutation authority.
+This avoids turning incident reporting into a deadlock of existing compensation.

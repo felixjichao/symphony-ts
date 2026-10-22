@@ -6,7 +6,7 @@ import { FileWorkRecoveryStorage } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
 import { recoverDeliveryHandoff, runDeliverySkill } from "@symphony/agent";
-import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId, validateOwnershipFence,
+import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId, validateOwnershipFence, mapNativeRecoveryBlock,
   type Issue, type WorkKey, type WorkContinuityObservation, type WorkRecoveryRequest, type WorkRecoveryResult,
 } from "@symphony/domain";
 import { GitHubDeliveryService } from "@symphony/tracker";
@@ -58,7 +58,8 @@ export function createHostWorkContinuity(options: {
     // The original scheduler retains actual timer ownership (including due/in-flight refresh).
     let facts: WorkContinuityObservation = { ...base, active: isActiveState(issue.state, controller.current.scheduling.policy), owner: runtime,
       expectedFence: runtime?.fence ?? (retryEvidence?.token ? { retryToken: retryEvidence.token } : {}), scheduled: authority.continuitySchedule(issue.id),
-      ...(retryEvidence ? { nativeRecovery: { attempts: retryEvidence.attempt, epoch: 0, lastProgressAt: "unknown" as const, actions: [] } } : {}),
+      ...(retryEvidence ? { nativeRecovery: { attempts: retryEvidence.legacyRecoveryAttempts, epoch: 0, lastProgressAt: "unknown" as const, actions: [] } } : {}),
+      ...(delivery?.isPaused && delivery.handoff?.handoffId ? { handoffRef: { handoffId: delivery.handoff.handoffId, headSha: delivery.handoff.headSha } } : {}),
       blocked: authority.continuityBlock(issue.id) ?? (delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null) };
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
     let github: Awaited<ReturnType<GitHubDeliveryService["observeWork"]>> | null = null;
@@ -159,7 +160,9 @@ export function createHostWorkContinuity(options: {
     const version = createHash("sha256").update(JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
       github, execution: task?.execution, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
       policy: controller.current.scheduling.policy, config: controller.current.serviceConfig })).digest("hex");
-    const observation = options.recovery?.observe({ ...facts, version }) ?? { ...facts, version };
+    const nativeBlock = mapNativeRecoveryBlock(facts.blocked?.split(":")[0] ?? "");
+    const normalized = { ...facts, version, ...(nativeBlock ? { nativeBlock } : {}) };
+    const observation = options.recovery?.observe(normalized) ?? normalized;
     options.onObservation?.(observation);
     return { observation, issue };
   };
@@ -169,7 +172,7 @@ export function createHostWorkContinuity(options: {
     reportIncidents: async canCommit => {
       try { await reporter?.publish(async incident => {
         const fresh = await observe(incident.workKey);
-        return fresh.available && fresh.active && fresh.recoveryIncidentId === incident.id;
+        return fresh.available && fresh.active && (fresh.recoveryIncidentId === incident.id || options.recovery?.isNativeIncident(fresh, incident.id) === true);
       }, canCommit); } catch { /* Durable local report remains available; no recursive incidents. */ }
     },
     recoveryStorage: new FileWorkRecoveryStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "recovery.json")),

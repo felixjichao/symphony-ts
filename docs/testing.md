@@ -145,3 +145,9 @@ reporter concurrency, ACK-loss verification, stale publication and exact authori
 Decision continuity and Web regression suites retain native 3/6 limits and no-replay
 checks. New local tests use isolated fixtures and injected GitHub runners. They do
 not publish live comments or establish real browser/provider acceptance.
+
+NEST-134 review regressions additionally run with
+`npm test -w @symphony/cli -- src/recovery-review-regressions.test.ts src/review-regressions.test.ts`:
+real authority → six slot waits → worker failure, accounting provenance across restart,
+non-ownership invariant retention, modeled-condition migration, and actual native
+Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.

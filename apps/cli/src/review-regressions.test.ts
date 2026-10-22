@@ -10,6 +10,7 @@ import type { TrackerAdapterProfile } from '@symphony/tracker';
 import { createStructuredLogger } from '@symphony/observability';
 import { createHost, type CreateHostOptions } from './host';
 import { DefaultDeliveryGitGhRunner } from './git-gh-runner';
+import { FileRecoveryLedger } from './recovery-ledger';
 import { FileDeliveryStateStorage, withDeliveryAuthority } from './delivery-skill-cli';
 
 const issue: Issue = { id: '42', identifier: 'GH-42', title: 'work', description: '', state: 'open',
@@ -618,4 +619,43 @@ it('reports a live Codex worker conflicting with merged without replacing or sto
     expect(process.kill(pid!, 0)).toBe(true);
   } finally { await f.cleanup(); }
   expect(() => process.kill(pid!, 0)).toThrow();
+});
+
+
+it('persists the real completed needs_human Review as one operator incident', async () => {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-human-review-'));
+  const store = new DurableDecisionStore({ storeDir }); await store.open();
+  const service = new DecisionService(store, { clock: () => 1000 });
+  const session = await service.createSession(githubDecisionRoot('owner', 'repo', 42));
+  const target = { repository: 'owner/repo', prNumber: 7, headSha: 'a'.repeat(40) };
+  const task = await service.createReviewTask(session.id, { target });
+  const claim = await service.claimTask(task.id, { owner: 'reviewer' });
+  await service.startTask(task.id, claim.lease);
+  await service.submitResult(task.id, { ...claim.lease, result: { schemaVersion: 1, kind: 'review', taskId: task.id,
+    sessionId: session.id, revision: task.revision, createdAtMs: 1000, target, verdict: 'needs_human', findings: [] } });
+  const f = await fixture({ planningGate: new DecisionPlanningGate(service),
+    continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: 'open', url: issue.url! },
+      pullRequest: { number: 7, state: 'open', url: '', headSha: target.headSha, isDraft: false }, ci: { headSha: target.headSha, status: 'success' } }) } });
+  try {
+    for (let i = 0; i < 3; i++) expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
+    const ledger = new FileRecoveryLedger(path.join(f.dir, 'workspaces', '.symphony-host', 'recovery-ledger.json'));
+    expect(ledger.incidents()).toHaveLength(1);
+    expect(ledger.incidents()[0]?.failure).toEqual({ classification: 'human_required', reason: 'review_requires_human' });
+    expect(f.host.state.running.size).toBe(0);
+  } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
+});
+
+it('reports a real paused Delivery manual_intervention_required once', async () => {
+  const f = await fixture();
+  try {
+    new FileDeliveryStateStorage(path.join(f.dir, 'workspaces', issue.identifier, '.symphony', 'delivery-state.json')).writeState({
+      repo: 'owner/repo', issueNumber: 42, workspaceKey: issue.identifier, spentRepairs: 0, spentWaitSeconds: 0,
+      isPaused: true, pauseReason: 'manual_intervention_required', pendingCompensation: false, lastUpdated: 'now',
+    });
+    for (let i = 0; i < 3; i++) expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
+    const ledger = new FileRecoveryLedger(path.join(f.dir, 'workspaces', '.symphony-host', 'recovery-ledger.json'));
+    expect(ledger.incidents()).toHaveLength(1);
+    expect(ledger.incidents()[0]?.failure).toEqual({ classification: 'human_required', reason: 'manual_intervention_required' });
+    expect(f.host.state.running.size).toBe(0);
+  } finally { await f.cleanup(); }
 });
