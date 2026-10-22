@@ -12,7 +12,7 @@
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
-- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
+- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard / history / operator mutation 仍是独立后续能力。
 - **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
@@ -94,11 +94,15 @@
 
 默认 `npm run gate` 始终 credential-free：dogfood 入口需要显式 opt-in，缺凭据显式 skip，不计为 passed。
 
+## Operational Snapshot HTTP transport（#137）
+
+`@symphony/observability` 提供显式启动、默认 loopback 的 `GET /api/operations/snapshot`，直接序列化 `@symphony/operations` 查询结果。四类 freshness、partial failure、WorkKey 隔离、exact-HEAD review、anomaly/evidence 均经真实 HTTP 测试验证；无 workflow mutation、缓存或后台轮询。父任务 #136 保持未完成；#138–#140 的 Dashboard / production-path closeout 仍待完成。
+
 ## deferred / optional
 
 以下能力**未实现或明确保持 optional**，不计入当前已完成范围：
 
-- HTTP / dashboard status surface（SPEC §13.7）；
+- Dashboard consumer 与验收（#138–#139）、生产 HTTP lifecycle 装配（#140，SPEC §13.7）；
 - provider-native agent tools（SPEC §11.5）；
 - 通用 durable scheduler DB / workflow engine；原生 handoff 和 retry 预约恢复已由下文 #149 覆盖；
 - SSH worker（Appendix A）；

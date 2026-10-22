@@ -6,3 +6,5 @@ export type {
 } from "@symphony/domain";
 export { createStructuredLogger, createStderrLogSink, renderStructuredLogEvent } from "./logger";
 export type { StructuredLogEvent, StructuredLogger, StructuredLoggerOptions, LogSink } from "./logger";
+export { startOperationsHttpServer } from "./operations-http";
+export type { OperationsHttpOptions } from "./operations-http";

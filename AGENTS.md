@@ -52,7 +52,7 @@ workspace           → domain
 decision            → domain
 agent               → domain + config + workspace
 orchestrator        → domain + config + tracker + workspace + agent
-observability       → domain（以及只读 runtime snapshot 契约）
+observability       → domain + operations（只读 runtime snapshot 与 HTTP transport）
 operations          → domain（只读 operational facts / 投影契约；源包不得反向 import）
 apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability + decision
 ```
