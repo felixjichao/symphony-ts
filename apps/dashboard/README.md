@@ -16,6 +16,8 @@ npm run dev -w @symphony/dashboard
 npm run demo -w @symphony/dashboard -- --scenario=unavailable
 ```
 
+Dev HMR upgrades share the same loopback HTTP listener; no default wildcard HMR port is opened. Stop closes HMR clients before the HTTP listeners. Dev lifecycle tests check every acquired listener, a real HMR upgrade, bind failure cleanup and restart.
+
 Both modes continuously show **演示数据**. Scenarios: `populated`, `empty`, `stale`, `unknown`, `unavailable`. Scope is only `github:demo/alpha#1` and `github:demo/beta#1` (empty excludes both). Controlled memory SourceReaders feed the real operations query/projector and real observability HTTP server; no production stores or scheduler are opened. Importing examples does not start listeners. Startup failures clean up acquired resources. Production source/scope/lifecycle wiring belongs to #140.
 
 Browser has one fixed `GET /api/operations/snapshot`, no-store and redirects refused. The demo static server proxies this exact path to an ephemeral loopback transport without reshaping JSON. Other API paths return 404; upstream method/error codes remain intact. No CORS is added. Default exposure is local only; snapshots can contain sensitive identifiers and paths.
@@ -40,7 +42,7 @@ npm run docs:check
 npm run gate
 ```
 
-Browser tsc uses generated ignored `.contracts` declarations, without Node ambient globals. Node examples/tests/config have a separate tsconfig. Tests cover eight required UI states, input immutability, inconsistent projection pass-through, WorkKey isolation, polling cancellation and real query/HTTP/proxy behavior. Guards traverse core manifests and TS imports including aliases/dynamic/relative imports, restrict browser capabilities/imports, reject projection construction using the type checker and AST, pin closed shape/format helpers, test negative derivations and inspect the production module graph. Helper changes require explicit guard/fingerprint and negative-test review. These guard a restricted presentation surface; they do not prove arbitrary JavaScript safe.
+Browser tsc uses generated ignored `.contracts` declarations, without Node ambient globals. Node examples/tests/config have a separate tsconfig. Tests cover eight required UI states, input immutability, inconsistent projection pass-through, WorkKey isolation, polling cancellation and real query/HTTP/proxy behavior. Guards traverse core manifests and TS imports including aliases/dynamic/relative imports, restrict browser capabilities/imports at reference/binding sites (including fetch aliases), reject source-dependent truthiness/conditional/helper flows and typed business-enum returns, reject projection construction using the type checker and AST, pin closed shape/format helpers, test negative derivations and inspect the production module graph. Helper changes require explicit guard/fingerprint and negative-test review. These guard a restricted presentation surface; they do not prove arbitrary JavaScript safe.
 
 ## Real browser smoke
 

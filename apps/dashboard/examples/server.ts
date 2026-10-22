@@ -20,7 +20,6 @@ export async function startDemo(service: OperationalQueryService, options: { dev
   let vite: ViteDevServer | undefined;
   let site: Server | undefined;
   try {
-    if (options.dev) vite = await createViteServer({ configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)), server: { middlewareMode: true }, appType: "spa" });
     site = createServer((request, response) => {
       const path = request.url?.split("?", 1)[0] ?? "/";
       if (path === "/api/operations/snapshot") {
@@ -45,9 +44,16 @@ export async function startDemo(service: OperationalQueryService, options: { dev
         } catch { response.writeHead(404).end(); }
       })();
     });
+    // HMR shares this exact loopback listener; it must not open Vite's wildcard
+    // middleware-mode WebSocket listener on the default HMR port.
+    if (options.dev) vite = await createViteServer({
+      configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)),
+      server: { middlewareMode: true, host: "127.0.0.1", hmr: { server: site, host: "127.0.0.1" } },
+      appType: "spa",
+    });
     const listening = site;
     await new Promise<void>((resolve, reject) => { listening.once("error", reject); listening.listen(options.port ?? 0, "127.0.0.1", resolve); });
-    return { url: origin(site), upstream, async stop() { await close(listening); await vite?.close(); if (upstream.listening) await close(upstream); } };
+    return { url: origin(site), upstream, async stop() { await vite?.close(); await close(listening); if (upstream.listening) await close(upstream); } };
   } catch (error) {
     if (site?.listening) await close(site);
     await vite?.close(); await close(upstream); throw error;

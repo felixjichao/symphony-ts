@@ -21,6 +21,20 @@ describe("mechanical observation boundaries", () => {
     const negative = ts.createProgram([...browserFiles, name], parsed.options, host);
     expect(projectionWrites(negative, path.join(root, "apps/dashboard/src")).length).toBeGreaterThan(0);
   });
+  it.each([
+    'export function inferred(w: WorkProjection): WorkProjection["phase"] { const phase = w.ci?.status ? "ci" : "unknown"; return phase; }',
+    'export function inferred(w: WorkProjection) { const status = w.ci?.status; const phase = status ? "ci" : "unknown"; return phase; }',
+    'export const inferred = (w: WorkProjection): WorkProjection["phase"] => { let phase: WorkProjection["phase"] = "unknown"; if (w.ci?.status) phase = "ci"; return phase; };',
+  ])("rejects type-correct helper conclusions through locals: %s", body => {
+    const config = ts.readConfigFile(path.join(root, "tsconfig.base.json"), ts.sys.readFile);
+    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+    const name = path.join(root, "apps/dashboard/src/negative.ts");
+    const host = ts.createCompilerHost(parsed.options); const original = host.getSourceFile.bind(host);
+    host.getSourceFile = (file, language, onError, fresh) => file === name ? ts.createSourceFile(file, `import type { WorkProjection } from "@symphony/operations"; ${body}`, language, true) : original(file, language, onError, fresh);
+    const program = ts.createProgram([name], parsed.options, host);
+    expect(program.getSemanticDiagnostics(program.getSourceFile(name)!)).toEqual([]);
+    expect(projectionWrites(program, path.join(root, "apps/dashboard/src"))).toContain("helper returns domain conclusion");
+  });
   it("locks approved shape/format/rank helpers to a closed implementation", () => {
     // Updating these fingerprints requires reviewing the helper and its negative cases.
     const approved: Record<string, string> = {"identity.ts": "489c9ec6ac964845784a4be94c5c0bcc551d85d5bba93b4ce3cf81ec4daa11bc", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "3c9f96c9a19a9e57c4b0a755d158ad211f33c43002ef7b0a698f9317a07d8337"};
@@ -42,6 +56,41 @@ describe("mechanical observation boundaries", () => {
     'fetch("/api/operations/snapshot", {method:"POST"});',
   ])("rejects unsafe source: %s", source => expect(browserErrors("helper.ts", source).length).toBeGreaterThan(0));
   it("rejects POST even inside the sole transport module", () => expect(browserErrors("transport.ts", 'fetch("/api/operations/snapshot", {method:"POST",cache:"no-store",redirect:"error"})').length).toBeGreaterThan(0));
+  it.each([
+    'window.fetch("https://example.invalid/mutate", {method:"POST"})',
+    'globalThis.fetch("https://example.invalid/mutate", {method:"POST"})',
+    'window["fetch"]("https://example.invalid/mutate", {method:"POST"})',
+    'const send = fetch; send("/mutate", {method:"POST"})',
+    'const send = window.fetch; const alias = send; alias("/mutate", {method:"POST"})',
+    'const { fetch: send } = globalThis; send("/mutate", {method:"POST"})',
+    'const send = window.fetch.bind(window); send("/mutate", {method:"POST"})',
+    'const scope = window; scope.fetch("/mutate", {method:"POST"})',
+    'const scope = globalThis; scope["fe" + "tch"]("/mutate", {method:"POST"})',
+  ])("rejects capability binding before aliases can escape: %s", source => {
+    const view = readFileSync(path.join(root, "apps/dashboard/src/view.ts"), "utf8");
+    const transport = readFileSync(path.join(root, "apps/dashboard/src/transport.ts"), "utf8");
+    for (const [name, original] of [["view.ts", view], ["transport.ts", transport]]) expect(browserErrors(name!, `${original}\n${source}`).some(e => e.includes("capability"))).toBe(true);
+  });
+  it.each([
+    'const phase = w.ci?.status ? "ci" : "unknown"; return phase;',
+    'const status = w.ci?.status; const phase = status ? "ci" : "unknown"; return phase;',
+    'if (w.ci?.status) return "ci"; return "unknown";',
+    'const status = w.ci?.status; if (status) return "ci"; return "unknown";',
+    'switch (w.ci?.status) { case "success": return "review"; default: return "ci"; }',
+    'return choose(w.ci?.status);',
+    'const { status: signal } = w.ci; return signal ? "ci" : "unknown";',
+    'let signal; signal = w.ci?.status; return signal ? "ci" : "unknown";',
+    'return !w.ci?.status;',
+    'w.ci?.toString(); return "unknown";',
+  ])("rejects sensitive control flow and helper calls: %s", body => {
+    const view = readFileSync(path.join(root, "apps/dashboard/src/view.ts"), "utf8");
+    const errors = browserErrors("view.ts", `${view}\nfunction inferred(w: WorkProjection): WorkProjection["phase"] { ${body} }`);
+    expect(errors.some(e => /source-dependent|source truthiness|unapproved helper|returning source/.test(e))).toBe(true);
+  });
+  it.each([
+    '{ method: "GET", cache: "no-store", redirect: "error", signal, ...options }',
+    '{ method: "GET", cache: "no-store", redirect: "error", signal, method: "POST" }',
+  ])("rejects transport option overrides: %s", options => expect(browserErrors("transport.ts", `fetch("/api/operations/snapshot", ${options})`)).toContain("closed transport options"));
   it("traverses core manifest and resolved TS graphs, including relative/alias/dynamic edges", () => {
     const config = ts.readConfigFile(path.join(root, "tsconfig.base.json"), ts.sys.readFile);
     const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
