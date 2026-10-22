@@ -103,3 +103,12 @@ skips coding. Merge acknowledgements share the native Delivery lock and exact-ta
 opt-in. Scheduled retries restore from UTC deadlines; uncertain worker launches,
 repairs and subprocesses remain explicitly blocked until operator verification.
 No second business lifecycle, supervisor or Operations mutation path is introduced.
+
+NEST-134 / #150 adds the [bounded recovery policy and incident boundary](bounded-recovery.md).
+Domain owns safe evidence contracts; orchestrator selects finite capability-aware
+strategies; CLI persists reservations/blocks/incidents atomically and composes a
+separate marker-verifying GitHub reporter. Native Decision/Web limits and ownership
+fences remain authoritative. Unknown effects block rather than replay. The reporter
+has a finite outbox budget and never recursively creates incidents. Operations and
+Dashboard gain no mutation authority. See the
+[decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).

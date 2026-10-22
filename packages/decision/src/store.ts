@@ -219,9 +219,12 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
     }
     for (const [id, e] of Object.entries(record.executions)) {
       if (!record.tasks[id] || !e || e.revision !== record.tasks[id]!.revision
+        || (e.recoveryActions !== undefined && (!Array.isArray(e.recoveryActions) || !e.recoveryActions.every(a => a === "rebind" || a === "reclaim")))
+        || (e.recoveryEpoch !== undefined && (!Number.isSafeInteger(e.recoveryEpoch) || e.recoveryEpoch < 0))
         || ![e.startedAtMs, e.lastProgressAtMs, e.deadlineAtMs, e.responseLength, e.recoveryAttempts].every(n => Number.isSafeInteger(n) && n >= 0)
         || typeof e.phase !== "string" || !DECISION_EXECUTION_PHASES.includes(e.phase)
         || (e.blocked !== null && (!e.blocked || typeof e.blocked.reason !== "string" || !e.blocked.reason
+          || (e.blocked.recoveryCount !== undefined && (!Number.isSafeInteger(e.blocked.recoveryCount) || e.blocked.recoveryCount < 0))
           || typeof e.blocked.unblock !== "string" || !e.blocked.unblock || !Number.isSafeInteger(e.blocked.atMs)))) {
         throw new CorruptedStoreError(`Invalid execution facts for ${id}`);
       }

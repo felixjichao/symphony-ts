@@ -4,6 +4,7 @@ import {
   DECISION_PROGRESS_TIMEOUT_MS,
   DECISION_EXECUTION_PHASES,
   DECISION_MAX_RECOVERY_ATTEMPTS,
+  DECISION_MAX_TRANSPORT_RECOVERIES,
   type DecisionExecution,
   decisionSessionId,
   decisionTaskId,
@@ -122,7 +123,7 @@ export class DecisionService {
           unblock: "Operator must inspect execution and authorize recovery", atMs: now } });
         return true;
       }
-      if (execution) this.writeExecution(draft, task.id, { ...execution, recoveryAttempts: execution.recoveryAttempts + 1 });
+      if (execution) this.writeExecution(draft, task.id, { ...execution, recoveryActions: [...(execution.recoveryActions ?? []), "reclaim"], recoveryAttempts: execution.recoveryAttempts + 1 });
       draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
       delete draft.claimBindingGenerations?.[task.id];
       return true;
@@ -138,7 +139,7 @@ export class DecisionService {
     return this.store.getState().executions?.[taskId] ?? null;
   }
 
-  async blockExecution(taskId: string, params: { owner: string; token: string; generation: number; reason: string }): Promise<void> {
+  async blockExecution(taskId: string, params: { owner: string; token: string; generation: number; reason: string; recoveryCount?: number }): Promise<void> {
     await this.store.transaction(draft => {
       const task = draft.tasks[taskId];
       const session = task ? draft.sessions[task.sessionId] : undefined;
@@ -150,9 +151,11 @@ export class DecisionService {
       if (!["auth_required", "human_required", "recovery_exhausted", "invariant_violation"].includes(params.reason)) throw new DecisionValidationError("Invalid block reason");
       const e = draft.executions?.[taskId];
       if (!e) throw new DecisionConflictError("Missing execution facts");
+      if (params.recoveryCount !== undefined && (!Number.isSafeInteger(params.recoveryCount) || params.recoveryCount < 0 || params.recoveryCount > DECISION_MAX_TRANSPORT_RECOVERIES)) throw new DecisionValidationError("Invalid recovery count");
       if (e.blocked) return;
       this.writeExecution(draft, taskId, { ...e, blocked: { reason: params.reason,
-        unblock: "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock", atMs: now } });
+        unblock: "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock", atMs: now,
+        ...(params.recoveryCount !== undefined ? { recoveryCount: params.recoveryCount } : {}) } });
     });
   }
 
@@ -182,7 +185,7 @@ export class DecisionService {
       }
       const now = this.clock();
       this.writeExecution(draft, task.id, { ...e, blocked: null, phase: "claimed", responseLength: 0,
-        recoveryAttempts: 0, lastProgressAtMs: now, deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS });
+        recoveryAttempts: 0, recoveryActions: [], recoveryEpoch: (e.recoveryEpoch ?? 0) + 1, lastProgressAtMs: now, deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS });
       if (isLeased) draft.tasks[task.id] = releaseDecisionTaskForBindingInvalidation(task, now);
       delete draft.claimBindingGenerations[task.id];
       return true;
@@ -421,7 +424,7 @@ export class DecisionService {
       }
       for (const t of Object.values(draft.tasks).filter(t => t.sessionId === sessionId && (t.status === "running" || t.status === "claimed" || t.status === "pending"))) {
         const e = draft.executions?.[t.id];
-        if (e) this.writeExecution(draft, t.id, { ...e, recoveryAttempts: e.recoveryAttempts + 1, phase: "claimed", responseLength: 0 });
+        if (e) this.writeExecution(draft, t.id, { ...e, recoveryActions: [...(e.recoveryActions ?? []), "rebind"], recoveryAttempts: e.recoveryAttempts + 1, phase: "claimed", responseLength: 0 });
       }
       const nextGen = session.bindingGeneration + 1;
       const binding = {

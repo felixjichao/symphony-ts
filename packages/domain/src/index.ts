@@ -119,3 +119,4 @@ export * from "./work-continuity";
 export * from "./decision-continuity";
 
 export { isDeliveryContinuation, isLandingIntent } from "./delivery-recovery";
+export * from "./recovery-policy";

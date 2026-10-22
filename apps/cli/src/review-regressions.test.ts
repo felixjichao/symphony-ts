@@ -31,7 +31,12 @@ async function fixture(options: CreateHostOptions = {}, failSecondList: boolean 
   const workflowPath = path.join(dir, 'WORKFLOW.md');
   await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\n  active_states: ${JSON.stringify(activeStates)}\n  required_labels: ${JSON.stringify(requiredLabels)}\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: ${JSON.stringify(command)}\n---\nPrompt\n`);
   let tick: (() => void) | undefined;
-  const host = await createHost({ workflowPath, trackerProfiles: [profile], env: {}, enablePlanning: false,
+  const nativeRunner = new DefaultDeliveryGitGhRunner();
+  const continuityRunner: import('@symphony/agent').DeliveryGitGhRunner = {
+    gh: async (args, cwd, timeout) => args[0] === 'api' ? { exitCode: 1, stdout: '', stderr: 'fixture offline' } : nativeRunner.gh(args, cwd, timeout),
+    git: nativeRunner.git.bind(nativeRunner), exec: nativeRunner.exec.bind(nativeRunner),
+  };
+  const host = await createHost({ continuityRunner, workflowPath, trackerProfiles: [profile], env: {}, enablePlanning: false,
     logger: createStructuredLogger({ sinks: [{ write() {} }] }),
     continuityGitHub: { observeWork: async () => ({ workKey: { provider: 'github', key: 'owner/repo#42' },
       issue: { state: 'open', url: issue.url! }, pullRequest: null, ci: null }) },
@@ -255,13 +260,13 @@ it('keeps different-PR leases conflicting, selects the exact target, and ignores
   try {
     await f.host.start(); f.tick(); await f.host.loop.settled();
     const diagnosis = f.host.workContinuity.observations[0]?.diagnosis;
-    expect(diagnosis?.status).toBe('contradictory');
+    expect(diagnosis?.status).toBe('blocked');
     expect(diagnosis?.next.taskRef).toEqual({ taskId: current.id, revision: 10 });
     expect(admissions).toBe(0);
     expect(service.getTask(current.id)?.lease).toEqual(currentOwner.task.lease);
     expect(service.getTask(other.id)?.status).toBe('pending');
     merged = true;
-    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('contradictory');
+    expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('blocked');
     merged = false;
     await service.supersedeTask(other.id);
     expect((await f.host.workContinuity.reconcile())[0]?.diagnosis?.status).toBe('unknown');
@@ -319,11 +324,11 @@ it('resolves a lost reclaim response only after native task readback proves rele
   const f = await fixture({ planningGate: gate, now: () => now });
   try {
     now = 2000;
-    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('failed');
     now = 100000;
-    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
-    // Fresh native claim/lease evidence permits the same fenced primitive to
-    // retry; time alone still does not acknowledge it or create a new owner.
+    expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('failed');
+    // Exact unchanged native readback permits a new bounded invocation of the
+    // fenced primitive; time alone does not acknowledge it or create an owner.
     expect(attempts).toBe(2);
     expect(service.getTask(task.id)?.status).toBe('claimed');
     // An independent native authority resolves the old action, then a new claim is a new target.
@@ -563,7 +568,7 @@ it('retries compensation after certified lock contention without suppressing an 
 });
 
 
-it.each(['pending', 'valid', 'expired'] as const)('reports merged with %s plan ownership as a contradiction without reclaim', async state => {
+it.each(['pending', 'valid', 'expired'] as const)('reports merged with %s plan ownership as a durable invariant block without reclaim', async state => {
   const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'continuity-merged-plan-'));
   const store = new DurableDecisionStore({ storeDir });
   await store.open();
@@ -582,7 +587,7 @@ it.each(['pending', 'valid', 'expired'] as const)('reports merged with %s plan o
   try {
     await f.host.start(); f.tick(); await f.host.loop.settled();
     const result = (await f.host.workContinuity.reconcile())[0]!;
-    expect(result.diagnosis?.status).toBe('contradictory');
+    expect(result.diagnosis?.status).toBe('blocked');
     expect(result.diagnosis?.next.description).toContain('merge:');
     expect(result.diagnosis?.recovery).toBe('none');
     expect(service.getTask(plan.id)).toEqual(before);
@@ -606,7 +611,7 @@ it('reports a live Codex worker conflicting with merged without replacing or sto
     const worker = f.host.authority.getWorker(issue.id);
     merged = true;
     const result = (await f.host.workContinuity.reconcile())[0]!;
-    expect(result.diagnosis?.status).toBe('contradictory');
+    expect(result.diagnosis?.status).toBe('blocked');
     expect(result.diagnosis?.next.description).toContain('merge:');
     expect(result.diagnosis?.recovery).toBe('none');
     expect(f.host.authority.getWorker(issue.id)).toBe(worker);

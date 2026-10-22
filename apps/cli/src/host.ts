@@ -1,3 +1,5 @@
+import { createHostRecovery } from "./host-recovery";
+import { FileRecoveryLedger } from "./recovery-ledger";
 import { withDeliveryCleanupAuthority } from "./delivery-cleanup";
 import { FileRetryReservationStorage } from "./recovery-storage";
 import { createHostWorkContinuity } from "./work-continuity";
@@ -321,6 +323,9 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
     let continuity: ReturnType<typeof createHostWorkContinuity> | null = null;
     const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
+      const recoverySession = resolveIssueSessionId(issue, getEffectiveRepo());
+      const recoveryKey = recoverySession ? parseDecisionSessionRootFromId(recoverySession) : { provider: controller.current.serviceConfig.tracker.kind, key: issue.id };
+      if (recovery.blocked(recoveryKey)) return false;
       if (options.canDispatch && !options.canDispatch(issue, context)) {
         return false;
       }
@@ -339,7 +344,15 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       return eligibility.eligible;
     };
 
-    const authority = new OrchestratorAuthority({
+    const recovery = createHostRecovery(new FileRecoveryLedger(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "recovery-ledger.json")), () => controller.current.serviceConfig.agent.recovery!, now);
+    const authority: OrchestratorAuthority = new OrchestratorAuthority({
+      authorizeFailureRetry: (request, invocation) => {
+        const reference = authority.continuityIssues().find(issue => issue.id === request.issueId);
+        const session = reference ? resolveIssueSessionId(reference, getEffectiveRepo()) : null;
+        const saved = authority.continuityRetryReferences().find(r => r.issueId === request.issueId)?.workKey;
+        const key = session ? parseDecisionSessionRootFromId(session) : saved ?? { provider: controller.current.serviceConfig.tracker.kind, key: request.issueId };
+        return recovery.authorizeRetry(request, invocation, key);
+      },
       resolveWorkKey: issue => { const id = resolveIssueSessionId(issue, getEffectiveRepo()); return id ? parseDecisionSessionRootFromId(id) : null; },
       retryStorage: new FileRetryReservationStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "retries.json")),
       state,
@@ -371,7 +384,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     controller.setAuthority(authority);
 
     continuity = createHostWorkContinuity({ controller, authority, planningGate,
-      resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now, reviewGate,
+      resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now, reviewGate, recovery,
       github: options.continuityGitHub, runner: options.continuityRunner });
     const workContinuity = continuity.coordinator;
     const loop = new OrchestratorLoop({

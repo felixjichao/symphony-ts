@@ -13,7 +13,7 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
-- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；多轮升级仍由 #150 跟进。
+- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
@@ -143,7 +143,7 @@
 
 Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`. The Decision bridge only exposes fenced reclaim; it no longer makes context-free startup/timer recovery decisions. Certified pre-entry lock failures allow later compensation, while post-entry uncertainty remains suppressed. Merged runtime/plan conflicts are diagnosed without mutation. Launch admission now reads native sources for each poll/retry attempt and rechecks keyed tracker facts after remote I/O; inventory failures suppress dispatch, observation failures retain retry reservations through backoff, and remote PR/CI reads work without a local workspace.
 
-Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; multi-round escalation remains #150 work. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; NEST-134 / #150 adds the bounded policy and incidents described below, pending independent review. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
 
 ## NEST-132 Decision/Web continuity
 
@@ -178,3 +178,18 @@ outcomes are durable blocks. Local validation covers real child-process SIGKILL 
 restart, native host ticks and both landing paths. Implementation awaits independent
 review; real GitHub/Codex smoke is not claimed. See the
 [implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+
+### NEST-134 / #150 bounded recovery and incidents
+
+Implementation adds independent finite failure budgets, normalized SHA-256 fingerprints,
+capability-aware strategy selection, stable recovery epochs and durable host policy
+blocks. Native Decision/Web limits and fresh-admission/fencing remain authoritative.
+The CLI exposes incident list/detail and exact-ID policy authorization; its dedicated
+GitHub outbox verifies marker receipts and bounds reporting attempts without replaying
+unknown POSTs. Operations/Dashboard remain read-only.
+
+Automated policy, native retry, real filesystem/SIGKILL, cross-process exhaustion,
+concurrent reporter, ACK-loss and stale-target tests are included. Live GitHub/browser
+fault acceptance for this change has not been run. Independent review is pending.
+See [operator behavior](bounded-recovery.md) and the
+[decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).

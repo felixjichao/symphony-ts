@@ -202,7 +202,7 @@ interface Harness {
 }
 
 function makeHarness(
-  overrides: Partial<Pick<OrchestratorAuthorityOptions, "policy" | "refreshDispatch">> = {},
+  overrides: Partial<Pick<OrchestratorAuthorityOptions, "policy" | "refreshDispatch" | "authorizeFailureRetry">> = {},
 ): Harness {
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 30_000, maxConcurrentAgents: 10 });
   const runner = new FakeRunner();
@@ -225,6 +225,7 @@ function makeHarness(
     state,
     policy: overrides.policy ?? POLICY,
     refreshDispatch: overrides.refreshDispatch,
+    authorizeFailureRetry: overrides.authorizeFailureRetry,
     runner: runner.run,
     createAttemptOptions,
     tracker,
@@ -800,5 +801,33 @@ describe("fresh native admission at dispatch commit", () => {
       h.runner.last.resolve(h.runner.successResult(issue));
       await h.authority.waitForIdle();
     } finally { await h.authority.shutdown(); }
+  });
+});
+
+
+describe("bounded retry authority hook", () => {
+  it("preserves exponential delays but schedules no timer after recovery exhaustion", async () => {
+    let charges = 0;
+    const h = makeHarness({ authorizeFailureRetry: () => ++charges <= 2 });
+    const issue = makeIssue(); h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(h.scheduler.lastPending.delayMs).toBe(10_000);
+    h.scheduler.fire(h.scheduler.lastPending.id); await flush();
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(h.scheduler.lastPending.delayMs).toBe(20_000);
+    h.scheduler.fire(h.scheduler.lastPending.id); await flush();
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(charges).toBe(3); expect(h.scheduler.pending).toEqual([]);
+    expect(h.state.retryAttempts.size).toBe(0);
+  });
+  it("does not charge successful continuations or slot waits", async () => {
+    let charges = 0;
+    const h = makeHarness({ authorizeFailureRetry: () => { charges++; return true; } });
+    const issue = makeIssue(); h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue); h.runner.last.resolve(h.runner.successResult(issue)); await flush();
+    expect(charges).toBe(0);
+    h.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, attempt: 9, error: "slots", kind: "failure", reason: "no_available_slots" });
+    expect(charges).toBe(0);
   });
 });

@@ -23,6 +23,9 @@ export interface WorkContinuityObservation {
   readonly expectedFence: OwnershipFence;
   readonly owner: ContinuityOwner | null;
   readonly blocked: string | null;
+  /** Host-owned policy block; unlike a native handoff pause it forbids compensation too. */
+  readonly recoveryIncidentId?: string;
+  readonly nativeRecovery?: { readonly lastProgressAt: number | "unknown"; readonly attempts: number; readonly epoch: number; readonly actions: readonly import("./recovery-policy").RecoveryStrategy[] };
   readonly externalWait: { readonly system: string; readonly condition: string } | null;
   readonly scheduled: { readonly id: string; readonly kind: "retry" | "recovery" | "admission"; readonly due: boolean } | null;
   readonly contradictions: readonly string[];
@@ -54,4 +57,5 @@ export interface WorkRecoveryRequest {
   readonly leaseExpiresAt?: number | undefined;
 }
 /** stale/unsupported/stopped certify that this invocation did not commit a mutation. */
-export type WorkRecoveryResult = "applied" | "stale" | "unsupported" | "stopped" | "unverified";
+/** failed: attempted native operation with authoritative proof that no mutation committed. */
+export type WorkRecoveryResult = "failed" | "applied" | "stale" | "unsupported" | "stopped" | "unverified";

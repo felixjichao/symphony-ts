@@ -1,3 +1,4 @@
+import { sanitizeOwnershipFence, type SafeOwnershipFence } from "@symphony/domain";
 import { randomUUID } from "node:crypto";
 import type { RetryReservationStorage, DurableRetryReservation, WorkKey } from "@symphony/domain";
 /**
@@ -101,11 +102,16 @@ export interface RetryScheduleRequest {
   /** 延迟口径：continuation 固定 1s；failure `min(10000 * 2^(attempt-1), cap)`。 */
   readonly kind: RetryDelayKind;
   readonly reason?: RetryEventReason;
+  readonly lastProgressAt?: number | "unknown";
+  readonly owner?: string;
+  readonly fence?: SafeOwnershipFence;
 }
 
 /** {@link OrchestratorAuthority} 构造参数。 */
 export interface OrchestratorAuthorityOptions {
   readonly retryStorage?: RetryReservationStorage;
+  /** Host-persisted bounded policy. Called only for failed operations, never slot/continuation waits. */
+  readonly authorizeFailureRetry?: ((request: RetryScheduleRequest, invocation: string) => boolean) | undefined;
   readonly resolveWorkKey?: ((issue: Issue) => WorkKey | null) | undefined;
   /** 单一权威 runtime state（由 {@link createOrchestratorRuntimeState} 初始化）。 */
   readonly state: OrchestratorRuntimeState;
@@ -285,6 +291,7 @@ export class OrchestratorAuthority {
   private readonly inFlightCleanups = new Set<Promise<unknown>>();
 
   private readonly retryStorage: RetryReservationStorage | undefined;
+  private readonly optionsAuthorizeFailureRetry: OrchestratorAuthorityOptions["authorizeFailureRetry"];
   private readonly resolveWorkKey: ((issue: Issue) => WorkKey | null) | undefined;
   private readonly durableRetries = new Map<string, DurableRetryReservation>();
   private readonly incarnation = randomUUID();
@@ -292,6 +299,7 @@ export class OrchestratorAuthority {
 
   constructor(options: OrchestratorAuthorityOptions) {
     this.retryStorage = options.retryStorage;
+    this.optionsAuthorizeFailureRetry = options.authorizeFailureRetry;
     this.resolveWorkKey = options.resolveWorkKey;
     this.state = options.state;
     this.policy = options.policy;
@@ -356,7 +364,20 @@ export class OrchestratorAuthority {
 
   public continuityRetryReferences() {
     return [...new Map([...this.state.retryAttempts.values(), ...this.durableRetries.values()]
-      .map(retry => [retry.issueId, { issueId: retry.issueId, url: retry.issueUrl ?? null, workKey: "workKey" in retry ? retry.workKey as WorkKey : undefined }])).values()];
+      .map(retry => [retry.issueId, { issueId: retry.issueId, attempt: retry.attempt, token: "token" in retry ? retry.token as string : undefined, url: retry.issueUrl ?? null, workKey: "workKey" in retry ? retry.workKey as WorkKey : undefined }])).values()];
+  }
+
+  /** A CLI authorization removes only the exact durable blocked token. Reconcile
+   * the cached owner only after that removal is proved; never clear a successor. */
+  public releaseAuthorizedRetry(issueId: string, expectedToken: string): boolean {
+    const current = this.durableRetries.get(issueId);
+    if (!current || current.token !== expectedToken || current.phase === "scheduled" || this.active.has(issueId)
+      || this.retryStorage?.load().some(record => record.issueId === issueId)) return false;
+    this.durableRetries.delete(issueId);
+    this.retryFaults.delete(issueId);
+    this.retryOwners.delete(issueId);
+    this.state.claimed.delete(issueId);
+    return true;
   }
 
   public continuityIssues(): readonly Issue[] {
@@ -595,6 +616,13 @@ export class OrchestratorAuthority {
         : failureRetryDelayMs(request.attempt, this.retry.maxRetryBackoffMs())
       : Math.max(0, restoredDueAtUtcMs - this.now());
     const token = `retry::${this.incarnation}::${request.issueId}::${++this.retryTokenCounter}`;
+    if (restoredDueAtUtcMs === undefined && request.kind === "failure" && request.reason !== "no_available_slots"
+      && this.optionsAuthorizeFailureRetry && !this.optionsAuthorizeFailureRetry(request, `${this.durableRetries.get(request.issueId)?.token ?? token}:${request.reason ?? "failure"}`)) {
+      // The worker/failed operation is settled. The durable policy block now owns admission.
+      this.cancelScheduledRetry(request.issueId);
+      this.state.claimed.delete(request.issueId);
+      return null;
+    }
     if (this.retryStorage) {
       const record: DurableRetryReservation = { workKey: this.durableRetries.get(request.issueId)?.workKey, issueId: request.issueId, identifier: request.identifier,
         issueUrl: request.issueUrl ?? null, attempt: request.attempt, kind: request.kind, error: request.error,
@@ -1160,7 +1188,9 @@ export class OrchestratorAuthority {
           this.durableRetries.set(issueId, scheduled);
         }
       } else if (this.retry !== undefined && !terminal.suppressRetry) {
-        this.scheduleOutcomeRetry(terminal, entry.issue.url);
+        this.scheduleOutcomeRetry(terminal, entry.issue.url, { owner: token,
+          fence: sanitizeOwnershipFence({ lifecycleGeneration: this.lifecycleGeneration.get(issueId) ?? 0 }),
+          lastProgressAt: record.telemetry.lastProgressAt ?? "unknown" });
       } else this.forgetDurableRetry(issueId);
     } catch (error) {
       // The launch intent stays durable. Refuse another dispatch if storage is
@@ -1177,7 +1207,7 @@ export class OrchestratorAuthority {
   }
 
   /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
-  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome, issueUrl: string | null): void {
+  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome, issueUrl: string | null, evidence: Pick<RetryScheduleRequest, "owner" | "fence" | "lastProgressAt">): void {
     // 关停期间自然退出的 worker 不得重建 retry / timer（M5.5）。
     if (this.stopping) {
       return;
@@ -1201,6 +1231,7 @@ export class OrchestratorAuthority {
         issueUrl,
         attempt: (terminal.attempt ?? 0) + 1,
         kind: "failure",
+        ...evidence,
         reason: "worker_failure",
         error: terminal.error ?? `worker exited: ${terminal.status}`,
       });
