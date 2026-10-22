@@ -35,13 +35,27 @@ describe("mechanical observation boundaries", () => {
     expect(program.getSemanticDiagnostics(program.getSourceFile(name)!)).toEqual([]);
     expect(projectionWrites(program, path.join(root, "apps/dashboard/src"))).toContain("helper returns domain conclusion");
   });
+  it.each([
+    'import type { SourceFreshness as Alias } from "@symphony/operations"; const forged: Alias = {status:"stale",observedAt:1,lastAttemptAt:2};',
+    'import type { OperationalAnomaly as Alias } from "@symphony/operations"; const forged: Alias = {code:"invented",severity:"error",workKey:null,message:"forged",detectedAt:1};',
+    'import type { SourceFreshnessStatus } from "@symphony/operations"; function infer(): SourceFreshnessStatus { return "stale"; }',
+    'import type { OperationalAnomaly } from "@symphony/operations"; function infer(): OperationalAnomaly["severity"] { return "error"; }',
+    'import type { OperationalAnomaly } from "@symphony/operations"; declare const anomaly: OperationalAnomaly; anomaly["severity"] = "warning";',
+  ])("rejects typed diagnostic constructions, writes and conclusion helpers: %s", body => {
+    const config = ts.readConfigFile(path.join(root, "tsconfig.base.json"), ts.sys.readFile);
+    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+    const name = path.join(root, "apps/dashboard/src/negative.ts");
+    const host = ts.createCompilerHost(parsed.options); const original = host.getSourceFile.bind(host);
+    host.getSourceFile = (file, language, onError, fresh) => file === name ? ts.createSourceFile(file, body, language, true) : original(file, language, onError, fresh);
+    expect(projectionWrites(ts.createProgram([name], parsed.options, host), path.join(root, "apps/dashboard/src")).length).toBeGreaterThan(0);
+  });
   it("locks approved shape/format/rank helpers to a closed implementation", () => {
     // Updating these fingerprints requires reviewing the helper and its negative cases.
-    const approved: Record<string, string> = {"identity.ts": "489c9ec6ac964845784a4be94c5c0bcc551d85d5bba93b4ce3cf81ec4daa11bc", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "3c9f96c9a19a9e57c4b0a755d158ad211f33c43002ef7b0a698f9317a07d8337"};
+    const approved: Record<string, string> = {"identity.ts": "88a2cea6ce61287e55c5958c533f7c5c4d4cdbe71f5220944d45f9d8b4b8de61", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "d769d5359aeef8082711cd6a8d8dfaea57aae89f8e1222e89cbb9173ac386d7f", "evidence.ts": "f6a8de7a108591e774e15bea3b9a3b0bf903723ec9f67065dd8658e251536f1e", "anomaly.ts": "494432b621796e9e5ec2332e0da713a8d66deafbc126416e5cdc800bf69d2c79"};
     for (const [name, digest] of Object.entries(approved)) expect(createHash("sha256").update(readFileSync(path.join(root, "apps/dashboard/src", name))).digest("hex"), name).toBe(digest);
   });
   it("checks every browser module, including local helpers", () => {
-    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts"];
+    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts"];
     for (const file of files(path.join(root, "apps/dashboard/src")).filter(f => f.endsWith(".ts"))) {
       expect(allowed).toContain(path.basename(file));
       expect(browserErrors(path.basename(file), readFileSync(file, "utf8")), file).toEqual([]);
@@ -55,6 +69,24 @@ describe("mechanical observation boundaries", () => {
     'import { read } from "@hidden/source";',
     'fetch("/api/operations/snapshot", {method:"POST"});',
   ])("rejects unsafe source: %s", source => expect(browserErrors("helper.ts", source).length).toBeGreaterThan(0));
+  it.each([
+    'const {code: c} = entry; const alias = c; return alias ? "needs_human" : "normal";',
+    'const signal = entry["f" + "ield"]; return choose(signal);',
+    'const {value: signal} = w.evidence[0]; const alias = signal; if (alias) return "needs_human";',
+    'const code = w.evidence[0]["ruleId"]; return code === "ci_success" ? "review" : "unknown";',
+    'const severity = w.anomalies[0].severity; if (severity === "error") return "degraded";',
+    'let stamp; stamp = w.freshness.decision.observedAt; return Date.now() - stamp > 1000 ? "stale" : "fresh";',
+    'const {taskId: id} = w.review.task; return id === w.review.result.taskId ? "approved_current_head" : "unknown";',
+    'const {revision: rev} = w.review.result; return rev === w.review.task.revision ? "approved_current_head" : "unknown";',
+    'const x = w.review.result.outcome.target; return choose(x);',
+    'return {code: "review_target_head_mismatch", severity: "warning"};',
+    'return {freshnessStatus: "stale"};',
+  ])("rejects diagnostics-derived semantics in every new renderer: %s", body => {
+    for (const name of ["detail.ts", "evidence.ts", "anomaly.ts"]) expect(browserErrors(name, `function inferred(w) { ${body} }`).length).toBeGreaterThan(0);
+  });
+  it.each(["detail.ts", "evidence.ts", "anomaly.ts"])("rejects fetch aliases in %s", name => {
+    expect(browserErrors(name, 'const {fetch: send} = window; send("/mutate");')).toContain("fetch capability reference outside fixed invocation");
+  });
   it("rejects POST even inside the sole transport module", () => expect(browserErrors("transport.ts", 'fetch("/api/operations/snapshot", {method:"POST",cache:"no-store",redirect:"error"})').length).toBeGreaterThan(0));
   it.each([
     'window.fetch("https://example.invalid/mutate", {method:"POST"})',

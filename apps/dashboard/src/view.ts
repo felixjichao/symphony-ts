@@ -2,11 +2,9 @@ import type { OperationalSnapshot, ReviewProjection, WorkProjection } from "@sym
 import type { Observation } from "./polling";
 import { findWork, token } from "./identity";
 import { approvalLabels, freshness, ordered, timestamp } from "./presentation";
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
+import { el } from "./dom";
+import { workDetail } from "./detail";
+import { anomalyCards } from "./anomaly";
 function reviewDetails(work: WorkProjection): HTMLElement {
   const details = el("details");
   details.id = `review-${token(work.key)}`;
@@ -56,16 +54,32 @@ export function mount(root: HTMLElement): { update: (state: Observation) => void
   nav.append(overviewLink, " · ", workLink); header.append(nav);
   const notice = el("p", "加载快照…"); notice.setAttribute("role", "status");
   const route = el("p"); route.setAttribute("role", "status");
-  const main = el("main"); root.replaceChildren(header, notice, route, main);
+  const main = el("main");
+  const detail = el("section"); detail.id = "detail";
+  root.replaceChildren(header, notice, route, main, detail);
   let current: OperationalSnapshot | undefined;
-  const locate = () => {
+  const locate = (focus = false) => {
+    const opened = new Set([...detail.querySelectorAll("details[open]")].map(d => d.id));
+    const focused = document.activeElement?.id;
+    detail.replaceChildren();
     const hash = window.location.hash;
-    if (!hash || hash === "#overview" || hash === "#work") { route.textContent = ""; return; }
+    if (!hash || hash === "#overview" || hash === "#work") {
+      route.textContent = "";
+      if (focused && document.getElementById(focused) === null) workLink.focus();
+      return;
+    }
     const work = current && findWork(current.work, hash);
     route.textContent = work ? `已定位 ${work.key.provider}:${work.key.key}` : "工作标识无效或不在当前 scope";
-    if (work) document.getElementById(`work-${token(work.key)}`)?.scrollIntoView?.({ block: "nearest" });
+    if (!work && focused && detail.id !== focused && document.getElementById(focused) === null) workLink.focus();
+    if (work && current) {
+      detail.append(workDetail(work, current));
+      for (const item of detail.querySelectorAll("details")) if (opened.has(item.id)) item.open = true;
+      if (focus) document.getElementById("detail-heading")?.focus();
+      else if (focused) document.getElementById(focused)?.focus();
+    }
   };
-  window.addEventListener("hashchange", locate);
+  const navigate = () => locate(true);
+  window.addEventListener("hashchange", navigate);
   return {
     update(state) {
       notice.textContent = state.error ? `${state.snapshot ? "刷新失败，显示上次成功快照" : "尚未取得快照"} · ${state.error} · 上次成功响应 ${timestamp(state.receivedAt)}` : state.snapshot ? `已收到当前快照 · 响应时间 ${timestamp(state.receivedAt)}` : "加载快照…";
@@ -89,11 +103,12 @@ export function mount(root: HTMLElement): { update: (state: Observation) => void
         if (executor.currentWork !== null) { const link = el("a", `${executor.currentWork.provider}:${executor.currentWork.key}`); link.href = `#${token(executor.currentWork)}`; item.append(" · ", link); }
         executors.append(item);
       }
-      main.replaceChildren(overview, workTable(current), sources, executors);
+      main.replaceChildren(overview, workTable(current), sources, executors, anomalyCards(current.anomalies, null));
       for (const details of main.querySelectorAll("details")) if (open.has(details.id)) details.open = true;
       if (focused) document.getElementById(focused)?.focus();
       locate();
+      if (focused && document.getElementById(focused) === null) (document.getElementById("detail-heading") ?? workLink).focus();
     },
-    destroy() { window.removeEventListener("hashchange", locate); root.replaceChildren(); },
+    destroy() { window.removeEventListener("hashchange", navigate); root.replaceChildren(); },
   };
 }
