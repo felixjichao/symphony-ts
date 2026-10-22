@@ -1460,6 +1460,14 @@ export class OrchestratorAuthority {
       return null;
     }
     try {
+      // Startup cleanup runs before timer restoration. Read the durable source,
+      // not just this process's maps, so a possible old executor's workspace is
+      // never removed while its launch/reservation evidence is still pending.
+      if (issueId !== null && this.retryStorage?.load().some(record => record.issueId === issueId)) {
+        this.emitDiagnostic({ kind: "cleanup_refused", issueId, identifier,
+          message: "durable reservation/launch still owns workspace; settle ownership before cleanup" });
+        return "refused";
+      }
       const result = await this.trackCleanup(cleanup.removeWorkspaceForIssue === undefined
         ? cleanup.removeWorkspace(identifier)
         : cleanup.removeWorkspaceForIssue({ issueId, identifier }));

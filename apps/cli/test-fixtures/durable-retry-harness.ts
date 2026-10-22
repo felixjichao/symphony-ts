@@ -11,12 +11,13 @@ export function makeRetryHarness(file: string, now = 10000, monotonic = 500, onL
   const store = new FileRetryReservationStorage(file);
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 1000, maxConcurrentAgents: 1 });
   let launches = 0;
+  let cleanupCalls = 0;
   let visible: readonly Issue[] = [retryIssue];
   let admission: Issue | null = retryIssue;
   let unavailable = false;
   const authority = new OrchestratorAuthority({ state,
     policy: { activeStates: ["open"], terminalStates: ["closed"], requiredLabels: [], maxConcurrentAgentsByState: {} },
-    tracker: { fetchIssuesByIds: async () => { if (unavailable) throw new Error("offline"); return visible; } },
+    tracker: { fetchIssuesByStates: async states => visible.filter(issue => states.includes(issue.state)), fetchIssuesByIds: async () => { if (unavailable) throw new Error("offline"); return visible; } },
     refreshDispatch: async () => admission,
     createAttemptOptions: context => ({ issue: context.issue, attempt: context.attempt, signal: context.signal }) as AgentAttemptOptions,
     runner: options => {
@@ -27,12 +28,12 @@ export function makeRetryHarness(file: string, now = 10000, monotonic = 500, onL
     },
     resolveWorkspacePath: () => "/fixture/workspace", retryStorage: store,
     now: () => now, monotonicNow: () => monotonic,
-    retry: { cleanupWorkspace: { removeWorkspace: async () => ({ status: "missing" as const }) }, maxRetryBackoffMs: () => 300000, scheduler: {
+    retry: { cleanupWorkspace: { removeWorkspace: async () => { cleanupCalls++; return { status: "missing" as const }; } }, maxRetryBackoffMs: () => 300000, scheduler: {
       schedule: (delay, callback) => { const t = { delay, callback, cancelled: false }; timers.push(t); return t; },
       cancel: handle => { const t = handle as typeof timers[number]; t.cancelled = true; },
     } },
   });
-  return { authority, state, store, timers, get launches() { return launches; },
+  return { authority, state, store, timers, get launches() { return launches; }, get cleanupCalls() { return cleanupCalls; },
     setVisible(value: readonly Issue[]) { visible = value; }, setAdmission(value: Issue | null) { admission = value; },
     setUnavailable() { unavailable = true; } };
 }

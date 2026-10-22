@@ -99,6 +99,18 @@ describe("native retry restart protocol", () => {
     expect(current.launches).toBe(0);
     await current.authority.shutdown();
   });
+  it.each(["scheduled", "launch_pending"])("does not clean a terminal workspace with a durable %s record before restoration", async phase => {
+    const file = fixture(); crash(file, phase === "launch_pending");
+    const h = makeRetryHarness(file);
+    h.setVisible([{ ...retryIssue, state: "closed" }]);
+    const cleanup = await h.authority.runStartupTerminalCleanup();
+    expect(cleanup.refused).toEqual(["GH-1"]);
+    expect(h.cleanupCalls).toBe(0);
+    expect(h.store.load()[0]?.phase).toBe(phase);
+    h.authority.restoreRetries();
+    expect(h.launches).toBe(0);
+    await h.authority.shutdown();
+  });
   it("does not register a timer after persistence fails, and rejects stale cancellation", async () => {
     const file = fixture();
     const h = makeRetryHarness(file);

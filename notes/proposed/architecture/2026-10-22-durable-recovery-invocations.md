@@ -68,7 +68,9 @@ Missing/legacy metadata, an interrupted reclaim, cross-host ownership and uncert
 subprocess effects require operator verification. Admission surfaces these lock
 conditions as explicit blocks. PID reuse conservatively prevents automatic reclaim.
 
-Startup preflight/terminal cleanup precede retry restoration. Startup and later ticks
+Startup preflight/terminal cleanup precede timer restoration. Cleanup consults the
+durable reservation source before deleting anything, refusing workspaces that may
+still belong to an old executor even before in-memory restoration. Startup and later ticks
 use the existing coordinator and native readers. Native stage recovery takes the
 same Delivery lock, revalidates observation/plan/target, and yields on pending CI or
 Review rather than sleeping inside the host scan. Shutdown synchronously fences new

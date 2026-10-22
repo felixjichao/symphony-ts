@@ -292,8 +292,8 @@ activity remains blocked. These conditions deliberately require verification ins
 of starting a second possible executor. Clean dead-owner locks without subprocess
 uncertainty can be reclaimed automatically; no lock is stolen by age.
 
-For an ambiguous launch/repair/child: stop affected hosts, verify and terminate only
-the recorded old executor/process group after checking its identity, inspect local
+For an ambiguous launch/repair/child: stop affected hosts, identify the old executor/process group for that WorkKey/workspace and verify its
+identity before terminating it, inspect local
 and remote HEAD/PR/Decision/merge/comment facts, and preserve the snapshots for audit.
 Only after proving the old executor cannot continue may an operator release that
 exact blocked reservation/lock in the stopped host's state. Never remove a newer
