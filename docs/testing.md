@@ -108,3 +108,46 @@ readiness 用真实 request/session/transcript/prompt/after_run marker，无固�
 `npm test -w @symphony/domain` covers v1 parsing, task/session transitions, lease fencing, binding generation, exact HEAD authorization in `src/decision.test.ts`, and context bundle validation in `src/decision-context.test.ts`. `npm test -w @symphony/decision` covers store persistence, process locking, lease coordination, HTTP bridge, result extraction, and executor adapters in `src/adapter.test.ts`. Protocol and caller/store boundaries: [decision-protocol.md](decision-protocol.md); extension evidence: [conformance.md](conformance.md). Final validation remains `npm run gate`.
 
 Delivery review recovery: `npm test -w @symphony/cli -- src/delivery-review-recovery.test.ts` exercises fixed base/head diff recovery (SHA fetch, fixed compare API, fail-closed) and closes/reopens the durable Decision store and HTTP bridge before the delivery runner consumes `needs_human` or passes `changes_requested` findings into repair. The repair fixture deliberately fails; assertions verify handoff, repair budget consumption and no merge. These local fixtures do not replace the isolated real GitHub/ChatGPT Web dogfood acceptance.
+
+### Work continuity admission regressions
+
+`npm test -w @symphony/cli -- src/review-regressions.test.ts src/work-continuity.test.ts` exercises real host poll/retry entry points with a real temporary Delivery file and Decision store, and injected tracker/GitHub/timer boundaries. It covers Bridge startup/timer non-reclaim on merged work, pre-entry contention versus post-entry uncertainty, tracker state/routing/label drift during remote reads, merged runtime/plan conflicts, inventory failure, invalidation of earlier coding facts, new pause/Decision/CI facts, observation outage/backoff and late reads after stop/retry replacement. `npm test -w @symphony/orchestrator -- src/retry-queue.test.ts` verifies that refreshed Issue facts reach the native commit and overlapping admissions cannot create multiple owners. The real executable tests inject a read-only GitHub CLI fixture through the child process environment; they retain the actual binary, worker subprocess, signal handling and filesystem readback, and reject unexpected GitHub commands.
+
+### Decision/Web continuity faults
+
+`npm test -w @symphony/decision -- src/continuity.test.ts` uses a real temporary store, controlled clock and HTTP bridge to test progress deadlines, vanished owners, old leases/bindings, idempotent rebind, persisted budgets and nonterminal blocks. `npm test -w @symphony/chatgpt-web` exercises checkpoint/receipt recovery, conservative bootstrap blocking and persisted enable/Stop with tab identity loss. `apps/chatgpt-web/test/review-followup-regressions.test.ts` drives the real driver → adapter → temporary HTTP Bridge chain: a persisted Stop written by another tab during the prompt or navigation authorization, and an extracted candidate that must survive repeated blocked polls and a rebuilt driver until the operator unblocks it. Host fixtures above verify blocked work cannot launch coding and absent pages are explicit waits. The full local gate remains `npm run gate`.
+
+Real acceptance additionally requires an enabled Tampermonkey page plus authenticated ChatGPT/Bridge: reload mid-response, close/reopen with tab identity loss, recover bridge authorization, interrupt before/after result acceptance, invalidate a conversation, change review HEAD and exercise competing tabs. Record interventions, native receipt/claim/binding readbacks and Stop persistence. Fixture results cannot substitute for those browser/environment checks.
+
+`apps/cli/src/decision-web-admission.test.ts` checks exact current PR HEAD/open-state admission and fail-closed GitHub errors. Decision continuity tests verify that external admission refusal cannot mutate a lease/binding and native supersede is revalidated after admission.
+
+The #149 native recovery entries are `apps/cli/src/durable-delivery.test.ts`,
+`durable-retry.test.ts`, `landing-recovery.test.ts`, `recovery-storage.test.ts` and
+`work-continuity.test.ts`. They use real temporary files, native authorities and a
+bundled separate Node process for SIGKILL, replacing only external GitHub/Codex or
+time/scheduler boundaries. Recovery is verified at intent/effect/acknowledgement,
+with drift, unavailable sources, duplicate calls and stale ownership. Full validation
+uses `npm run gate`; local fixtures do not substitute for real GitHub/Codex smoke.
+
+Delivery cleanup/halt regression: `npx vitest run apps/cli/src/delivery-cleanup.test.ts`
+uses real host startup sweeps and the formal halt CLI with native file storage.
+It covers merge auto-close before acknowledgement, deletion/recreation exclusion,
+unknown child and legacy/corrupt evidence, and preservation of repair/landing
+steps through every halt checkpoint.
+
+## Bounded recovery extension
+
+Run `npm test -w @symphony/orchestrator -- src/recovery-policy.test.ts src/retry-queue.test.ts`
+for selection, budget accounting and native backoff; run
+`npm test -w @symphony/cli -- src/host-recovery.test.ts src/recovery-ledger.test.ts`
+for persisted host composition, real filesystem/SIGKILL, independent-process exhaustion,
+reporter concurrency, ACK-loss verification, stale publication and exact authorization.
+Decision continuity and Web regression suites retain native 3/6 limits and no-replay
+checks. New local tests use isolated fixtures and injected GitHub runners. They do
+not publish live comments or establish real browser/provider acceptance.
+
+NEST-134 review regressions additionally run with
+`npm test -w @symphony/cli -- src/recovery-review-regressions.test.ts src/review-regressions.test.ts`:
+real authority → six slot waits → worker failure, accounting provenance across restart,
+non-ownership invariant retention, modeled-condition migration, and actual native
+Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.

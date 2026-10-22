@@ -69,6 +69,8 @@ await bridge.stop();
 | `POST` | `/v1/tasks/:id/cancel` | Explicitly cancels unfinished task |
 | `POST` | `/v1/tasks/:id/supersede` | Explicitly supersedes task |
 
+Expired-claim recovery policy belongs to the work-aware host coordinator. Bridge startup, timers, task polling and claim requests do not reclaim leases independently. Polling is read-only; claims accept only pending tasks and cannot replace an unsettled session lease merely because its deadline elapsed; callers delegate through the authenticated fenced reclaim primitive after checking current work-level admission and stage facts.
+
 ## Known limitations
 
 - Restricted strictly to loopback (`127.0.0.1`). Not exposed to the local network (LAN) or public interfaces.

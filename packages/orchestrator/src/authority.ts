@@ -1,3 +1,6 @@
+import { sanitizeOwnershipFence, type SafeOwnershipFence } from "@symphony/domain";
+import { randomUUID } from "node:crypto";
+import type { RetryReservationStorage, DurableRetryReservation, WorkKey } from "@symphony/domain";
 /**
  * Orchestrator runtime authority：dispatch、worker lifecycle、outcome 归约，
  * retry 队列 / timer 所有权，以及 active-run reconciliation / stall / terminal
@@ -99,10 +102,19 @@ export interface RetryScheduleRequest {
   /** 延迟口径：continuation 固定 1s；failure `min(10000 * 2^(attempt-1), cap)`。 */
   readonly kind: RetryDelayKind;
   readonly reason?: RetryEventReason;
+  /** Only the native snapshot migration supplies this count; never infer it from attempt. */
+  readonly legacyRecoveryAttempts?: number;
+  readonly lastProgressAt?: number | "unknown";
+  readonly owner?: string;
+  readonly fence?: SafeOwnershipFence;
 }
 
 /** {@link OrchestratorAuthority} 构造参数。 */
 export interface OrchestratorAuthorityOptions {
+  readonly retryStorage?: RetryReservationStorage;
+  /** Host-persisted bounded policy. Called only for failed operations, never slot/continuation waits. */
+  readonly authorizeFailureRetry?: ((request: RetryScheduleRequest, invocation: string) => boolean) | undefined;
+  readonly resolveWorkKey?: ((issue: Issue) => WorkKey | null) | undefined;
   /** 单一权威 runtime state（由 {@link createOrchestratorRuntimeState} 初始化）。 */
   readonly state: OrchestratorRuntimeState;
   /** 当前 effective 调度策略（active / terminal states、required labels、per-state 并发）。 */
@@ -163,6 +175,8 @@ export interface OrchestratorAuthorityOptions {
    * 派发普通任务或 retry 前同步校验；返回 false 则拒绝派发。
    */
   readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
+  /** Fresh native-source admission for poll/retry launches. null denies; rejection means unavailable. */
+  readonly refreshDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => Promise<Issue | null>) | undefined;
 }
 
 /** {@link OrchestratorAuthority.dispatchIssue} 的返回值。 */
@@ -228,6 +242,8 @@ export class OrchestratorAuthority {
   private readonly stallTimeoutMs: () => number;
   private readonly cleanupPort: RetryWorkspaceCleanup | undefined;
   private readonly cleanupDiagnostic: ((diagnostic: RetryDiagnostic) => void) | undefined;
+  private readonly refreshDispatch: OrchestratorAuthorityOptions["refreshDispatch"];
+  private readonly inFlightAdmissions = new Set<Promise<Issue | null>>();
   private readonly canDispatch: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
 
   private readonly active = new Map<string, ActiveWorkerRecord>();
@@ -276,7 +292,17 @@ export class OrchestratorAuthority {
    */
   private readonly inFlightCleanups = new Set<Promise<unknown>>();
 
+  private readonly retryStorage: RetryReservationStorage | undefined;
+  private readonly optionsAuthorizeFailureRetry: OrchestratorAuthorityOptions["authorizeFailureRetry"];
+  private readonly resolveWorkKey: ((issue: Issue) => WorkKey | null) | undefined;
+  private readonly durableRetries = new Map<string, DurableRetryReservation>();
+  private readonly incarnation = randomUUID();
+  private readonly retryFaults = new Map<string, string>();
+
   constructor(options: OrchestratorAuthorityOptions) {
+    this.retryStorage = options.retryStorage;
+    this.optionsAuthorizeFailureRetry = options.authorizeFailureRetry;
+    this.resolveWorkKey = options.resolveWorkKey;
     this.state = options.state;
     this.policy = options.policy;
     this.runner = options.runner;
@@ -296,6 +322,84 @@ export class OrchestratorAuthority {
     this.cleanupPort = options.cleanupWorkspace ?? options.retry?.cleanupWorkspace;
     this.cleanupDiagnostic = options.onCleanupDiagnostic ?? options.retry?.onDiagnostic;
     this.canDispatch = options.canDispatch;
+    this.refreshDispatch = options.refreshDispatch;
+  }
+
+  /** Called once by the host after native-source admission is connected. */
+  public restoreRetries(): void {
+    if (this.stopping) return;
+    for (const record of this.retryStorage?.load() ?? []) {
+      if (this.durableRetries.has(record.issueId)) continue;
+      const migrated = { ...record, recoveryAccounting: record.recoveryAccounting ?? {
+        schemaVersion: 1 as const, legacyAttempts: record.kind === "failure" ? Math.max(0, record.attempt - 1) : 0,
+      } };
+      this.durableRetries.set(record.issueId, migrated);
+      if (record.phase === "scheduled") this.scheduleRetryAt(record, record.dueAtUtcMs);
+      else {
+        const blocked: DurableRetryReservation = { ...migrated, phase: "blocked",
+          token: `blocked::${this.incarnation}::${++this.retryTokenCounter}`,
+          error: "worker_launch_unverified: verify old executor stopped before releasing reservation" };
+        this.retryStorage?.put(blocked, record.token);
+        this.durableRetries.set(record.issueId, blocked);
+        this.state.claimed.add(record.issueId);
+      }
+    }
+  }
+  public continuityBlock(issueId: string): string | null {
+    if (this.retryFaults.has(issueId)) return this.retryFaults.get(issueId)!;
+    const record = this.durableRetries.get(issueId);
+    return record && record.phase !== "scheduled" && !this.active.has(issueId)
+      ? record.error ?? "worker_launch_unverified" : null;
+  }
+  private forgetDurableRetry(issueId: string): void {
+    const record = this.durableRetries.get(issueId);
+    if (!record) return;
+    this.retryStorage?.remove(issueId, record.token);
+    this.durableRetries.delete(issueId);
+  }
+
+  /** Real scheduling evidence, including retry refresh after its timer was consumed. */
+  public continuitySchedule(issueId: string) {
+    const token = this.retryOwners.get(issueId);
+    if (!token) return null;
+    const retry = this.state.retryAttempts.get(issueId);
+    return { id: token, kind: "retry" as const,
+      due: retry === undefined || retry.dueAtMs <= this.monotonicNow() };
+  }
+
+  public continuityRetryReferences() {
+    return [...new Map([...this.state.retryAttempts.values(), ...this.durableRetries.values()]
+      .map(retry => [retry.issueId, { issueId: retry.issueId, attempt: retry.attempt, legacyRecoveryAttempts: "recoveryAccounting" in retry ? retry.recoveryAccounting?.legacyAttempts ?? 0 : 0, token: "token" in retry ? retry.token as string : undefined, url: retry.issueUrl ?? null, workKey: "workKey" in retry ? retry.workKey as WorkKey : undefined }])).values()];
+  }
+
+  /** A CLI authorization removes only the exact durable blocked token. Reconcile
+   * the cached owner only after that removal is proved; never clear a successor. */
+  public releaseAuthorizedRetry(issueId: string, expectedToken: string): boolean {
+    const current = this.durableRetries.get(issueId);
+    if (!current || current.token !== expectedToken || current.phase === "scheduled" || this.active.has(issueId)
+      || this.retryStorage?.load().some(record => record.issueId === issueId)) return false;
+    this.durableRetries.delete(issueId);
+    this.retryFaults.delete(issueId);
+    this.retryOwners.delete(issueId);
+    this.state.claimed.delete(issueId);
+    return true;
+  }
+
+  public continuityIssues(): readonly Issue[] {
+    return [...this.state.running.values()].map(entry => entry.issue);
+  }
+
+  /** Current authority-owned progress and generation, never inferred from a process ID. */
+  public continuityOwner(issueId: string) {
+    const record = this.active.get(issueId);
+    if (!record) return null;
+    return { id: record.token,
+      fence: { lifecycleGeneration: this.lifecycleGeneration.get(issueId) ?? 0 },
+      liveness: { startedAt: record.entry.attempt.startedAt,
+        lastProgressAt: record.telemetry.lastProgressAt ?? "unknown" as const,
+        lastObservedAt: this.now(),
+        stallPolicy: { timeoutMs: this.stallTimeoutMs(), policy: "mark_stalled" as const } },
+    };
   }
 
   /** 当前是否有活跃 worker（供 poll loop / 测试观察）。 */
@@ -392,6 +496,7 @@ export class OrchestratorAuthority {
       );
       await this.waitForIdle();
       await this.waitForCleanups();
+      await Promise.allSettled([...this.inFlightAdmissions]);
     })();
     return this.shutdownPromise;
   }
@@ -447,6 +552,33 @@ export class OrchestratorAuthority {
     }
   }
 
+  /** Poll admission performs I/O before the authority's existing synchronous commit. */
+  public async dispatchIssueWithRefresh(issue: Issue): Promise<DispatchResult> {
+    if (!this.refreshDispatch) return this.dispatchIssue(issue);
+    const generation = this.lifecycleGeneration.get(issue.id);
+    if (this.stopping) return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    let fresh: Issue | null;
+    try { fresh = await this.refreshIssueForDispatch(issue, false); }
+    catch { return { kind: "not_eligible", issueId: issue.id, attemptToken: null }; }
+    if (this.stopping || generation !== this.lifecycleGeneration.get(issue.id)) {
+      return { kind: "skipped", issueId: issue.id, attemptToken: null };
+    }
+    if (!fresh) return { kind: "not_eligible", issueId: issue.id, attemptToken: null };
+    return this.dispatchIssue(fresh);
+  }
+
+  private async refreshIssueForDispatch(issue: Issue, isRetry: boolean): Promise<Issue | null> {
+    if (!this.refreshDispatch) return issue;
+    const read = this.refreshDispatch(issue, { isRetry });
+    this.inFlightAdmissions.add(read);
+    try {
+      const fresh = await read;
+      return fresh?.id === issue.id ? fresh : null;
+    } finally {
+      this.inFlightAdmissions.delete(read);
+    }
+  }
+
   /** 主动停止某 issue 的 worker（幂等；M5.4 / M5.5 复用）。 */
   public async stopWorker(issueId: string, reason: WorkerStopReason): Promise<void> {
     const record = this.active.get(issueId);
@@ -476,32 +608,44 @@ export class OrchestratorAuthority {
    * retry 控制面时返回 `null`。
    */
   public scheduleRetry(request: RetryScheduleRequest): RetryEntry | null {
+    return this.scheduleRetryAt(request);
+  }
+  private scheduleRetryAt(request: RetryScheduleRequest, restoredDueAtUtcMs?: number): RetryEntry | null {
     // 关停后不再建立 / 替换 retry timer（M5.5）。
     if (this.stopping || this.retry === undefined || this.scheduler === undefined) {
       return null;
     }
 
-    // 1. 取消同 issue 旧 timer（策略：新 retry 替换旧 timer）。
-    const existing = this.state.retryAttempts.get(request.issueId);
-    if (existing !== undefined) {
-      this.scheduler.cancel(existing.timerHandle);
+    const delayMs = restoredDueAtUtcMs === undefined
+      ? request.kind === "continuation" ? continuationRetryDelayMs()
+        : failureRetryDelayMs(request.attempt, this.retry.maxRetryBackoffMs())
+      : Math.max(0, restoredDueAtUtcMs - this.now());
+    const token = `retry::${this.incarnation}::${request.issueId}::${++this.retryTokenCounter}`;
+    if (restoredDueAtUtcMs === undefined && request.kind === "failure" && request.reason !== "no_available_slots"
+      && this.optionsAuthorizeFailureRetry && !this.optionsAuthorizeFailureRetry({ ...request, legacyRecoveryAttempts: this.durableRetries.get(request.issueId)?.recoveryAccounting?.legacyAttempts ?? 0 }, `${this.durableRetries.get(request.issueId)?.token ?? token}:${request.reason ?? "failure"}`)) {
+      // The worker/failed operation is settled. The durable policy block now owns admission.
+      this.cancelScheduledRetry(request.issueId);
+      this.state.claimed.delete(request.issueId);
+      return null;
     }
-
-    // 2. 分配新 ownership token：同时使任何在途 refresh 的迟到结果失效。
-    const token = `retry::${request.issueId}::${++this.retryTokenCounter}`;
+    if (this.retryStorage) {
+      const record: DurableRetryReservation = { workKey: this.durableRetries.get(request.issueId)?.workKey, issueId: request.issueId, identifier: request.identifier,
+        issueUrl: request.issueUrl ?? null, attempt: request.attempt, kind: request.kind, error: request.error,
+        recoveryAccounting: this.durableRetries.get(request.issueId)?.recoveryAccounting ?? { schemaVersion: 1, legacyAttempts: 0 },
+        dueAtUtcMs: restoredDueAtUtcMs ?? this.now() + delayMs, token, phase: "scheduled" };
+      this.retryStorage.put(record, this.durableRetries.get(request.issueId)?.token ?? null);
+      this.durableRetries.set(request.issueId, record);
+    }
+    const existing = this.state.retryAttempts.get(request.issueId);
+    if (existing !== undefined) this.scheduler.cancel(existing.timerHandle);
     this.retryOwners.set(request.issueId, token);
-
-    // 3. 计算延迟：每次新建都读取当前 effective cap（§8.4）。
-    const delayMs =
-      request.kind === "continuation"
-        ? continuationRetryDelayMs()
-        : failureRetryDelayMs(request.attempt, this.retry.maxRetryBackoffMs());
     const dueAtMs = this.monotonicNow() + delayMs;
 
     // 4. 注册 timer：回调只提交带 issueId + token 的到期事件。
     const timerHandle = this.scheduler.schedule(delayMs, () => {
       void this.handleRetryTimerFired(request.issueId, token).catch(() => {
-        /* timer 回调异常隔离，不破坏 authority 状态权威 */
+        this.retryFaults.set(request.issueId, "retry_recovery_unverified: inspect durable reservation before retry");
+        this.state.claimed.add(request.issueId);
       });
     });
 
@@ -530,6 +674,8 @@ export class OrchestratorAuthority {
    * 替换、以及后续 M5.4 shutdown / M5.5 reload 复用；**不移除 claim**（调用方决定）。
    */
   public cancelScheduledRetry(issueId: string): void {
+    this.forgetDurableRetry(issueId);
+    this.retryFaults.delete(issueId);
     const entry = this.state.retryAttempts.get(issueId);
     if (entry !== undefined) {
       this.scheduler?.cancel(entry.timerHandle);
@@ -953,6 +1099,18 @@ export class OrchestratorAuthority {
       this.retryOwners.delete(issue.id);
     }
 
+    if (this.retryStorage) {
+      const previous = this.durableRetries.get(issue.id);
+      if (previous && previous.phase !== "scheduled") throw new Error("Worker launch outcome unverified");
+      const intent: DurableRetryReservation = { workKey: this.resolveWorkKey?.(issue) ?? undefined, issueId: issue.id, identifier: issue.identifier,
+        issueUrl: issue.url, attempt: attemptNumber ?? 1, kind: previous?.kind ?? "continuation",
+        error: "worker_launch_unverified", dueAtUtcMs: this.now(), token: `launch::${this.incarnation}::${token}`,
+        recoveryAccounting: previous?.recoveryAccounting ?? { schemaVersion: 1, legacyAttempts: 0 },
+        phase: "launch_pending" };
+      this.retryStorage.put(intent, previous?.token ?? null);
+      this.durableRetries.set(issue.id, intent);
+    }
+
     // 提交段（无 await）：running + claimed 原子进入，retry 条目清除。
     this.state.running.set(issue.id, entry);
     this.state.claimed.add(issue.id);
@@ -1025,18 +1183,38 @@ export class OrchestratorAuthority {
     }
 
     // M5.3 retry 决策：按 outcome 的 retryKind 建立 entry（suppressRetry 时不排）。
-    if (this.retry !== undefined && !terminal.suppressRetry) {
-      this.scheduleOutcomeRetry(terminal, entry.issue.url);
+    try {
+      if (this.stopping && this.retryStorage) {
+        // A settled runAgentAttempt includes transport and hook cleanup. Unlike
+        // SIGKILL, this proves no old worker remains; retain a safe reservation.
+        const previous = this.durableRetries.get(issueId);
+        if (previous) {
+          const scheduled: DurableRetryReservation = { ...previous, phase: "scheduled", error: null,
+            dueAtUtcMs: this.now(), token: `stopped::${this.incarnation}::${token}` };
+          this.retryStorage.put(scheduled, previous.token);
+          this.durableRetries.set(issueId, scheduled);
+        }
+      } else if (this.retry !== undefined && !terminal.suppressRetry) {
+        this.scheduleOutcomeRetry(terminal, entry.issue.url, { owner: token,
+          fence: sanitizeOwnershipFence({ lifecycleGeneration: this.lifecycleGeneration.get(issueId) ?? 0 }),
+          lastProgressAt: record.telemetry.lastProgressAt ?? "unknown" });
+      } else this.forgetDurableRetry(issueId);
+    } catch (error) {
+      // The launch intent stays durable. Refuse another dispatch if storage is
+      // unavailable or a newer incarnation owns the reservation.
+      this.state.claimed.add(issueId);
+      this.emitDiagnostic({ kind: "cleanup_error", issueId, identifier: entry.issue.identifier,
+        message: `retry persistence failed: ${String(error)}` });
     }
 
     // claim 默认释放；若已建立 retry entry（native 或外部 onOutcome），则保留 claim。
-    if (!this.state.retryAttempts.has(issueId)) {
+    if (!this.state.retryAttempts.has(issueId) && !this.continuityBlock(issueId)) {
       this.state.claimed.delete(issueId);
     }
   }
 
   /** worker 终态按分类建立 retry entry：continuation 固定 attempt 1 / failure 递增。 */
-  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome, issueUrl: string | null): void {
+  private scheduleOutcomeRetry(terminal: WorkerTerminalOutcome, issueUrl: string | null, evidence: Pick<RetryScheduleRequest, "owner" | "fence" | "lastProgressAt">): void {
     // 关停期间自然退出的 worker 不得重建 retry / timer（M5.5）。
     if (this.stopping) {
       return;
@@ -1060,6 +1238,7 @@ export class OrchestratorAuthority {
         issueUrl,
         attempt: (terminal.attempt ?? 0) + 1,
         kind: "failure",
+        ...evidence,
         reason: "worker_failure",
         error: terminal.error ?? `worker exited: ${terminal.status}`,
       });
@@ -1132,7 +1311,7 @@ export class OrchestratorAuthority {
       return; // 迟到结果：ownership 已变。
     }
 
-    const issue = refreshed.find((candidate) => candidate.id === issueId);
+    let issue = refreshed.find((candidate) => candidate.id === issueId);
     if (issue === undefined) {
       // 5. missing → 只释放 claim，不清理 workspace。
       this.releaseRetry(issueId);
@@ -1150,6 +1329,29 @@ export class OrchestratorAuthority {
       return;
     }
 
+    if (!isRetryDispatchAllowed(issue, this.state, this.policy, issueId)) {
+      this.releaseRetry(issueId);
+      return;
+    }
+    let fresh: Issue | null;
+    try {
+      fresh = await this.refreshIssueForDispatch(issue, true);
+    } catch {
+      if (!this.stopping && this.retryOwners.get(issueId) === token) {
+        this.scheduleRetry({ issueId, identifier: entry.identifier, issueUrl: entry.issueUrl ?? null,
+          attempt: entry.attempt + 1, kind: "failure", reason: "admission_refresh_failed",
+          error: "dispatch admission refresh failed" });
+      }
+      return; // observation failure preserves the reservation through bounded backoff
+    }
+    // Source reads may overlap replacement, cancellation, shutdown or another lifecycle.
+    // Never consume a newer retry's reservation with an old admission result.
+    if (this.stopping || this.retryOwners.get(issueId) !== token) return;
+    if (!fresh) {
+      this.releaseRetry(issueId);
+      return;
+    }
+    issue = fresh;
     if (
       !isRetryDispatchAllowed(issue, this.state, this.policy, issueId) ||
       (this.canDispatch !== undefined && !this.canDispatch(issue, { isRetry: true }))
@@ -1201,6 +1403,7 @@ export class OrchestratorAuthority {
 
   /** 释放 retry ownership：清 token + entry + claim（refresh 后不可派发路径）。 */
   private releaseRetry(issueId: string): void {
+    this.forgetDurableRetry(issueId);
     this.retryOwners.delete(issueId);
     this.state.retryAttempts.delete(issueId);
     this.state.claimed.delete(issueId);
@@ -1295,6 +1498,14 @@ export class OrchestratorAuthority {
       return null;
     }
     try {
+      // Startup cleanup runs before timer restoration. Read the durable source,
+      // not just this process's maps, so a possible old executor's workspace is
+      // never removed while its launch/reservation evidence is still pending.
+      if (issueId !== null && this.retryStorage?.load().some(record => record.issueId === issueId)) {
+        this.emitDiagnostic({ kind: "cleanup_refused", issueId, identifier,
+          message: "durable reservation/launch still owns workspace; settle ownership before cleanup" });
+        return "refused";
+      }
       const result = await this.trackCleanup(cleanup.removeWorkspaceForIssue === undefined
         ? cleanup.removeWorkspace(identifier)
         : cleanup.removeWorkspaceForIssue({ issueId, identifier }));

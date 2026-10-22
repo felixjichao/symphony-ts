@@ -70,6 +70,8 @@ export interface HooksConfig {
 
 /** SPEC §5.3.5 `agent`。 */
 export interface AgentConfig {
+  /** Finite automatic recovery limits; resolved by config (§14 extension). */
+  readonly recovery?: import("./recovery-policy").RecoveryPolicy;
   /** `agent.max_concurrent_agents`：全局并发上限；默认 10；变更影响后续 dispatch（§6.2）。 */
   readonly maxConcurrentAgents: number;
   /** `agent.max_turns`：单个 worker session 内 coding-agent turn 数上限；正整数，默认 20。 */

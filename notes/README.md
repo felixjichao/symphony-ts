@@ -47,8 +47,17 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Native durable handoffs and startup recovery](proposed/architecture/2026-10-22-durable-recovery-invocations.md) — NEST-133: native stage/landing intents, retry/launch reservations, crash-lock safety and restart evidence.
+
+
+- [Active Web response recovery fencing](accepted/architecture/2026-10-21-active-web-response-fencing.md) — PR #156 活跃认证中断、权威 lease、会话校验与结果 admission。
+
+- [Work-level continuity reconciliation](accepted/architecture/2026-10-20-work-level-continuity.md) — native-source stage/liveness derivation, bounded re-observation, atomic Decision reclaim and locked Delivery compensation (NEST-138).
+
+- [Execution continuity, ownership, and failure contracts](accepted/architecture/2026-10-17-execution-continuity-contracts.md) — 跨阶段执行连续性、所有权防御与故障分类契约：四类作用域（work/task/attempt/binding）、一等非终态 `blocked`、重试重观测（re-observe + re-decide）语义、多维原生 fencing 与凭据脱敏、有效进展判定、五类故障分类（transient/recoverable/blocked_external/superseded/invariant_violation）及 Decision/Delivery/Web/Orchestrator 故障映射与显式 unmapped 缺口记录（NEST-130 / #146）。
 - [Decision environment isolation and handoff reconciliation](accepted/architecture/2026-10-16-decision-environment-isolation-and-handoff-reconciliation.md) — 决策环境隔离与交接取消竞态排查契约：测试套件环境变量隔离、CLI/Host 选项冲突 fail-fast 与 store 覆盖、交付中断前先写持久化状态、交接补偿与评论幂等去重（`recover-handoff`），以及针对 #99 泄漏计划任务的定向清理工具（NEST-128）。
 - [OperationalSnapshot read-only HTTP transport](accepted/architecture/2026-10-16-operational-snapshot-http.md) — #137 / §13.7：operations → observability 单向只读 transport、loopback 默认、完整 snapshot pass-through 与错误隔离。
+
 
 - [Operational query service and integration acceptance](accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md) — 进程内只读查询服务契约：公共查询接口（`getOperationalSnapshot`、`listWork`、`getWork`、`listExecutors`）、一轮有界装配、部分失败与多 work 隔离、显式 WorkKey 作用域边界、确定性排序与无后台轮询/持久缓存（NEST-117 / #113，闭环父任务 #108）。
 - [Cross-source anomaly detection and projection explanations](accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md) — 跨源异常检测与投影解释契约：8 类跨源领域异常（GitHub、runtime、Decision、executor）、结构化投影证据（`ProjectionEvidence` breadcrumbs）、attention/system health 降级联动、stale/unavailable 安全守卫与数组/证据换序不变性（NEST-116 / #112）。
@@ -116,3 +125,7 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [superseded/architecture/2026-09-26-ctl-gateway-access.md](superseded/architecture/2026-09-26-ctl-gateway-access.md) — symctl 访问网关的路径（被 align-with-upstream-spec 取代，ctl / gateway 已删除）
 
 - [accepted/architecture/2026-10-03-observability-snapshot.md](accepted/architecture/2026-10-03-observability-snapshot.md) — M6.1 snapshot、双时钟与 retry URL 最小跨包透传。
+
+- [Task-bound Web response completion under DOM windowing](accepted/architecture/2026-10-17-task-bound-web-response-completion.md) — exact-task result matching, selector union and bounded local diagnostics.
+
+- [Bounded recovery and durable incidents](proposed/architecture/2026-10-22-bounded-recovery-incidents.md) — NEST-134 finite policy, epochs, native authority, durable reports and no-replay outbox.

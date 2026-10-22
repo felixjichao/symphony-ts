@@ -31,7 +31,7 @@ M5.5 已落地 **poll loop / startup 编排 / per-tick 失败降级 / live confi
 - terminal retry refresh 的 workspace 清理只经注入的 `cleanupWorkspace` 端口（生产接 `WorkspaceManager.removeWorkspace`），`refused` / `failed` / 异常只记诊断并释放 claim，本包不做删除 fallback；
 - worker 停止的上界由 agent 层自身的 `shutdownTimeoutMs` 与 workspace hook effective timeout 提供，本包不额外引入硬超时（避免"超时宣布退出却让 runner 继续运行"）；
 - `applyAgentEvent` 只从可靠生命周期事件推进 turn 身份 / 计数，并按 thread 隔离异 thread / 异 turn 诊断事件；身份未齐时的 usage / last event 暂存在 per-attempt 遥测（`AgentTelemetryState`）中，usage 仍立即入账，因此"先到 usage、后到身份"或"身份始终未齐并最终启动失败"都不会漏账；
-- runtime state 是 in-memory only（§14.3）：不提供 durable scheduler DB 或跨重启恢复，retry timer 不跨进程重启保留。
+- ephemeral runtime state remains in memory. The optional synchronous retry storage port preserves native reservations and launch uncertainty; the CLI supplies durable files, restores UTC scheduling after startup preflight, and blocks ambiguous old launches. Timer handles themselves never cross restart.
 
 ## M5.6 Core Conformance assembly
 

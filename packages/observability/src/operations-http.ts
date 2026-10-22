@@ -31,9 +31,11 @@ export async function startOperationsHttpServer(
       try {
         const snapshot = await service.getOperationalSnapshot();
         const body = JSON.stringify(snapshot);
-        response.writeHead(200).end(body);
+        if (!response.destroyed) response.writeHead(200).end(body);
       } catch {
-        response.writeHead(500).end(JSON.stringify({ error: "operational_snapshot_failed" }));
+        if (!response.destroyed) {
+          response.writeHead(500).end(JSON.stringify({ error: "operational_snapshot_failed" }));
+        }
       }
     })();
   });

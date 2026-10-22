@@ -51,6 +51,16 @@ No heartbeat or expiry scheduler exists here. The future store must compare curr
 state, generation/token and lease expiry **atomically** with result insertion and
 transition to completed. Passing a pure helper does not prove concurrency safety.
 
+Decision service recovery policy: ordinary `getNextTask()` polling is read-only, and
+`claimTask()` only transitions its pending target. Neither request releases expired
+leases elsewhere (or implicitly releases its own expired target). An unsettled leased
+task still excludes another claim in the same session. Work-aware policy or explicit
+operator action must first use fenced reclaim/cancel/supersede as appropriate; only
+then may a new pending claim acquire fresh credentials. The native reclaim checks
+revision, claim generation, binding generation and the exact observed expiry in one
+transaction. This preserves merged/external-wait and blocked work across normal
+Bridge requests without moving tracker/GitHub policy into Decision.
+
 ## Results and approval
 
 `DecisionResult` is a discriminated Plan/Review envelope containing version,
@@ -518,3 +528,13 @@ CLI integration is verified in `apps/cli/src/decision-bridge-cli.test.ts` and `a
 
 Run `npm test -w @symphony/domain`, `npm test -w @symphony/decision`, `npm test -w @symphony/cli`,
 `npm run typecheck`, then `npm run gate`.
+
+## Decision/Web execution facts
+
+Optional task-scoped `executions` metadata in the v1 store carries phase, response length (no text), progress deadline, cumulative recovery attempts and nonterminal `blocked` cause/unblock instructions. Claim establishes a ten-minute grace period. Only advanced stages or growth of a new assistant response extend progress; ordinary heartbeats do not. After the deadline the authority refuses renewal, and the existing work-aware coordinator may reclaim after lease expiry. A valid lease is never stolen.
+
+`GET /v1/continuity` and `GET /v1/tasks/:id/execution` expose these facts without credentials. Heartbeat accepts optional `progress: { phase, responseLength }`, fenced by its current lease and binding. Reclaim/rebind share a three-mutation task budget across restarts. A possible prompt/bootstrap/result with a lost owner blocks instead of replaying. `POST /v1/tasks/:id/block` takes live `owner`, `token`, `generation` and a stable `reason` (`auth_required`, `human_required`, `recovery_exhausted`, `invariant_violation`); it creates neither a result receipt nor a terminal failure.
+
+After inspecting the conversation, receipt and blocking cause, an authenticated operator can explicitly authorize recovery with `POST /v1/continuity/unblock` and the current `{ taskId, revision, claimGeneration, bindingGeneration, leaseExpiresAtMs, blockedAtMs }`. `blockedAtMs` pins the reviewed block fact so a replay cannot clear a newer one. A leased execution must quote its exact `leaseExpiresAtMs`; a pending execution that owns no lease must quote `null` instead, because recovery budgets can be exhausted by rebind, which releases the claim before it blocks. Both shapes are fenced by task revision, claim generation and binding generation; stale observations are refused. This releases and fences the old attempt and resets its budget/grace; it never authorizes replay under old credentials. Polling does not invoke this operator action. Exact-HEAD result validation, result conflicts and ambiguous-submit receipt matching remain unchanged.
+
+The production Bridge CLI injects a fresh read-only GitHub PR observation before browser navigation/Send and rebind: the PR must still be open at the exact task HEAD. Missing/unreadable facts deny mutation. Native task status, lease and binding are revalidated in the transaction after this I/O. Embedders constructing `DecisionService` directly supply the equivalent `authorizeExecution` port for external target authority; the store does not import tracker or own GitHub policy.

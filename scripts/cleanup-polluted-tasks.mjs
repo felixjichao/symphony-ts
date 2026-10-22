@@ -591,6 +591,21 @@ function validateDecisionContextForTask(context, task, session) {
     }
   }
 }
+const DECISION_PROGRESS_TIMEOUT_MS = 10 * 6e4;
+const DECISION_MAX_RECOVERY_ATTEMPTS = 3;
+const DECISION_MAX_TRANSPORT_RECOVERIES = 6;
+const DECISION_EXECUTION_PHASES = [
+  "unknown",
+  "claimed",
+  "navigating",
+  "bootstrap_submitting",
+  "bootstrap_waiting",
+  "started",
+  "prompt_submitting",
+  "waiting_response",
+  "result_extracted",
+  "completed"
+];
 function canonicalJsonStringify(value) {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -628,14 +643,144 @@ class DecisionService {
   store;
   clock;
   defaultClaimTtlMs;
+  authorizeExecution;
   constructor(store, config = {}) {
     this.store = store;
     this.clock = config.clock ?? (() => Date.now());
     this.defaultClaimTtlMs = config.defaultClaimTtlMs ?? 12e4;
+    this.authorizeExecution = config.authorizeExecution;
   }
   /** Read-only operational view from the already-open store. */
   observeWork(root) {
     return this.store.observeWork(root);
+  }
+  /** Read current tasks from the already-open authoritative store; never expose lease tokens. */
+  continuityWork() {
+    const state = this.store.getState();
+    const claimBindings = state.claimBindingGenerations;
+    return this.store.getAllSessions().map((session) => ({
+      workKey: session.root,
+      sessionId: session.id,
+      bindingGeneration: session.bindingGeneration,
+      tasks: this.getTasksForSession(session.id).map((task) => ({
+        id: task.id,
+        revision: task.revision,
+        kind: task.kind,
+        status: task.status,
+        claimBindingGeneration: claimBindings[task.id] ?? null,
+        claimGeneration: task.claimGeneration,
+        createdAtMs: task.createdAtMs,
+        owner: task.lease?.owner ?? null,
+        leaseExpiresAtMs: task.lease?.expiresAtMs ?? null,
+        verdict: this.getResult(task.id)?.verdict ?? null,
+        target: task.kind === "review" ? task.target : null,
+        execution: state.executions?.[task.id] ?? null
+      }))
+    }));
+  }
+  /** Authority commit: renewal, completion, rebinding and competing reclaim all win over stale callers. */
+  async reclaimExpiredClaim(expected) {
+    return this.store.transaction((draft) => {
+      const task = draft.tasks[expected.taskId];
+      const session = task ? draft.sessions[task.sessionId] : void 0;
+      const now = this.clock();
+      if (!task || !session || session.status === "completed" || task.revision !== expected.revision || task.claimGeneration !== expected.claimGeneration || session.bindingGeneration !== expected.bindingGeneration || task.status !== "claimed" && task.status !== "running" || !task.lease || task.lease.expiresAtMs !== expected.leaseExpiresAtMs || now < task.lease.expiresAtMs) return false;
+      const execution = draft.executions?.[task.id] ?? {
+        revision: task.revision,
+        startedAtMs: task.createdAtMs,
+        lastProgressAtMs: task.createdAtMs,
+        deadlineAtMs: now,
+        phase: "unknown",
+        responseLength: 0,
+        recoveryAttempts: 0,
+        blocked: null
+      };
+      if (execution?.blocked) return false;
+      if (execution && (execution.phase === "unknown" || execution.phase === "prompt_submitting" || execution.phase === "waiting_response" || execution.phase === "result_extracted" || execution.phase === "bootstrap_submitting" || execution.phase === "bootstrap_waiting")) {
+        this.writeExecution(draft, task.id, { ...execution, blocked: {
+          reason: "human_required",
+          unblock: "Verify conversation/result receipt before authorizing another prompt",
+          atMs: now
+        } });
+        return true;
+      }
+      if (execution && execution.recoveryAttempts >= DECISION_MAX_RECOVERY_ATTEMPTS) {
+        this.writeExecution(draft, task.id, { ...execution, blocked: {
+          reason: "recovery_exhausted",
+          unblock: "Operator must inspect execution and authorize recovery",
+          atMs: now
+        } });
+        return true;
+      }
+      if (execution) this.writeExecution(draft, task.id, { ...execution, recoveryActions: [...execution.recoveryActions ?? [], "reclaim"], recoveryAttempts: execution.recoveryAttempts + 1 });
+      draft.tasks[task.id] = releaseExpiredDecisionTask(task, now);
+      delete draft.claimBindingGenerations?.[task.id];
+      return true;
+    });
+  }
+  writeExecution(draft, id, execution) {
+    if (!draft.executions) Object.assign(draft, { executions: {} });
+    draft.executions[id] = execution;
+  }
+  getExecution(taskId) {
+    return this.store.getState().executions?.[taskId] ?? null;
+  }
+  async blockExecution(taskId, params) {
+    await this.store.transaction((draft) => {
+      const task = draft.tasks[taskId];
+      const session = task ? draft.sessions[task.sessionId] : void 0;
+      const now = this.clock();
+      if (!task || !session || task.status !== "claimed" && task.status !== "running" || !task.lease || task.lease.owner !== params.owner || task.lease.token !== params.token || task.claimGeneration !== params.generation || now >= task.lease.expiresAtMs || draft.claimBindingGenerations[taskId] !== session.bindingGeneration) throw new DecisionConflictError("Invalid execution fence");
+      if (!["auth_required", "human_required", "recovery_exhausted", "invariant_violation"].includes(params.reason)) throw new DecisionValidationError("Invalid block reason");
+      const e = draft.executions?.[taskId];
+      if (!e) throw new DecisionConflictError("Missing execution facts");
+      if (params.recoveryCount !== void 0 && (!Number.isSafeInteger(params.recoveryCount) || params.recoveryCount < 0 || params.recoveryCount > DECISION_MAX_TRANSPORT_RECOVERIES)) throw new DecisionValidationError("Invalid recovery count");
+      if (e.blocked) return;
+      this.writeExecution(draft, taskId, { ...e, blocked: {
+        reason: params.reason,
+        unblock: "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock",
+        atMs: now,
+        ...params.recoveryCount !== void 0 ? { recoveryCount: params.recoveryCount } : {}
+      } });
+    });
+  }
+  /**
+   * Explicit operator authorization after inspecting uncertain side effects. Never used by polling.
+   * Two fenced shapes exist because two checked states can be blocked:
+   * - leased (`claimed`/`running`): the exact lease expiry identifies the blocked execution and is
+   *   released, so the incumbent fails closed on its next fenced action;
+   * - lease-less `pending`: recovery budgets can be exhausted by rebind, which releases the claim
+   *   before it blocks, so there is no lease to quote. The fence is then the asserted absence of a
+   *   lease plus the exact task/claim/binding generation, and the block timestamp.
+   */
+  async unblockExecution(expected) {
+    return this.store.transaction((draft) => {
+      const task = draft.tasks[expected.taskId];
+      const session = task ? draft.sessions[task.sessionId] : void 0;
+      const e = draft.executions?.[expected.taskId];
+      if (!task || !session || !e?.blocked || task.revision !== expected.revision || task.claimGeneration !== expected.claimGeneration || session.bindingGeneration !== expected.bindingGeneration || e.blocked.atMs !== expected.blockedAtMs || draft.receipts[task.id]?.type === "result") return false;
+      const isLeased = task.status === "claimed" || task.status === "running";
+      if (isLeased) {
+        if (!task.lease || expected.leaseExpiresAtMs === null || task.lease.expiresAtMs !== expected.leaseExpiresAtMs) return false;
+      } else if (task.status !== "pending" || task.lease !== null || expected.leaseExpiresAtMs !== null) {
+        return false;
+      }
+      const now = this.clock();
+      this.writeExecution(draft, task.id, {
+        ...e,
+        blocked: null,
+        phase: "claimed",
+        responseLength: 0,
+        recoveryAttempts: 0,
+        recoveryActions: [],
+        recoveryEpoch: (e.recoveryEpoch ?? 0) + 1,
+        lastProgressAtMs: now,
+        deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS
+      });
+      if (isLeased) draft.tasks[task.id] = releaseDecisionTaskForBindingInvalidation(task, now);
+      delete draft.claimBindingGenerations[task.id];
+      return true;
+    });
   }
   getStore() {
     return this.store;
@@ -684,6 +829,7 @@ class DecisionService {
         if (!activeLeaseTask || !activeLeaseTask.lease) {
           throw new DecisionConflictError("No active lease found on session matching credentials for binding update");
         }
+        if (draft.executions?.[activeLeaseTask.id]?.blocked) throw new DecisionConflictError("Execution is blocked");
         if (activeLeaseTask.lease.owner !== params.owner || activeLeaseTask.lease.token !== params.token || activeLeaseTask.lease.generation !== params.generation) {
           throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
         }
@@ -743,7 +889,12 @@ class DecisionService {
         return checkRebindOp(op);
       }
     }
-    return await this.store.transaction((draft) => {
+    if (this.authorizeExecution) {
+      for (const task of this.getTasksForSession(sessionId).filter((t) => t.status === "pending" || t.status === "claimed" || t.status === "running")) {
+        if (!await this.authorizeExecution(task)) throw new DecisionConflictError("Recovery target is no longer current");
+      }
+    }
+    const result = await this.store.transaction((draft) => {
       if (params.operationKey) {
         const op = draft.operationReceipts[params.operationKey];
         if (op) {
@@ -762,6 +913,7 @@ class DecisionService {
         if (!activeLeaseTask || !activeLeaseTask.lease) {
           throw new DecisionConflictError("No active lease found on session matching credentials for binding update");
         }
+        if (draft.executions?.[activeLeaseTask.id]?.blocked) throw new DecisionConflictError("Execution is blocked");
         if (activeLeaseTask.lease.owner !== params.owner || activeLeaseTask.lease.token !== params.token || activeLeaseTask.lease.generation !== params.generation) {
           throw new DecisionConflictError("Stale or invalid lease credentials for binding update");
         }
@@ -770,6 +922,22 @@ class DecisionService {
         throw new DecisionConflictError(
           `Compare-and-swap failed: expected bindingGeneration ${params.expectedGeneration}, but current is ${session.bindingGeneration}`
         );
+      }
+      for (const t of Object.values(draft.tasks).filter((t2) => t2.sessionId === sessionId && (t2.status === "running" || t2.status === "claimed" || t2.status === "pending"))) {
+        const e = draft.executions?.[t.id];
+        if (e?.blocked) return session;
+        if (e && e.recoveryAttempts >= DECISION_MAX_RECOVERY_ATTEMPTS) {
+          this.writeExecution(draft, t.id, { ...e, blocked: {
+            reason: "recovery_exhausted",
+            unblock: "Operator must inspect conversation and authorize recovery",
+            atMs: now
+          } });
+          return session;
+        }
+      }
+      for (const t of Object.values(draft.tasks).filter((t2) => t2.sessionId === sessionId && (t2.status === "running" || t2.status === "claimed" || t2.status === "pending"))) {
+        const e = draft.executions?.[t.id];
+        if (e) this.writeExecution(draft, t.id, { ...e, recoveryActions: [...e.recoveryActions ?? [], "rebind"], recoveryAttempts: e.recoveryAttempts + 1, phase: "claimed", responseLength: 0 });
       }
       const nextGen = session.bindingGeneration + 1;
       const binding = {
@@ -809,6 +977,8 @@ class DecisionService {
       }
       return updated;
     });
+    if (result.bindingGeneration === params.expectedGeneration) throw new DecisionConflictError("Execution blocked by recovery budget");
+    return result;
   }
   async breakBinding(sessionId, params) {
     return await this.store.transaction((draft) => {
@@ -822,6 +992,7 @@ class DecisionService {
         if (!activeLeaseTask || !activeLeaseTask.lease) {
           throw new DecisionConflictError("No active lease found on session matching credentials for break binding");
         }
+        if (draft.executions?.[activeLeaseTask.id]?.blocked) throw new DecisionConflictError("Execution is blocked");
         if (activeLeaseTask.lease.owner !== params.owner || activeLeaseTask.lease.token !== params.token || activeLeaseTask.lease.generation !== params.generation) {
           throw new DecisionConflictError("Stale or invalid lease credentials for break binding");
         }
@@ -1089,7 +1260,7 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
       const now = this.clock();
-      const isExplicitNewRound = Boolean(params.forceNewRevision || params.operationKey && !draft.operationReceipts[params.operationKey]);
+      const isExplicitNewRound = Boolean(params.forceNewRevision || params.operationKey && !params.reuseCompleted && !draft.operationReceipts[params.operationKey]);
       const existingTask = Object.values(draft.tasks).find(
         (t) => {
           if (t.sessionId !== sessionId || t.kind !== "review" || t.target.repository.toLowerCase() !== params.target.repository.toLowerCase() || t.target.prNumber !== params.target.prNumber || t.target.headSha !== params.target.headSha) {
@@ -1122,7 +1293,7 @@ class DecisionService {
         }
       );
       if (existingTask) {
-        if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+        if (params.operationKey && !params.reuseCompleted && !draft.operationReceipts[params.operationKey]) {
           draft.operationReceipts[params.operationKey] = {
             schemaVersion: 1,
             operationKey: params.operationKey,
@@ -1342,26 +1513,9 @@ class DecisionService {
     return this.store.getContext(taskId);
   }
   async getNextTask() {
-    const now = this.clock();
-    let hasExpired = false;
-    for (const t of this.store.getAllTasks()) {
-      if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-        hasExpired = true;
-        break;
-      }
-    }
-    if (hasExpired) {
-      await this.store.transaction((draft) => {
-        const txNow = this.clock();
-        for (const t of Object.values(draft.tasks)) {
-          if ((t.status === "claimed" || t.status === "running") && t.lease && txNow >= t.lease.expiresAtMs) {
-            draft.tasks[t.id] = releaseExpiredDecisionTask(t, txNow);
-          }
-        }
-      });
-    }
+    const executions = this.store.getState().executions;
     const candidates = this.store.getAllTasks().filter((t) => {
-      if (t.status !== "pending") return false;
+      if (t.status !== "pending" || executions?.[t.id]?.blocked) return false;
       const s = this.store.getSession(t.sessionId);
       return s !== null && (s.status === "active" || s.status === "broken-binding");
     }).sort((a, b) => {
@@ -1378,7 +1532,7 @@ class DecisionService {
       throw new DecisionValidationError("Claim owner must be a nonempty string");
     }
     return await this.store.transaction((draft) => {
-      let task = draft.tasks[taskId];
+      const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
       const session = draft.sessions[task.sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${task.sessionId}" not found`);
@@ -1386,14 +1540,8 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot claim task for session in status "${session.status}"`);
       }
       const now = this.clock();
-      for (const t of Object.values(draft.tasks)) {
-        if ((t.status === "claimed" || t.status === "running") && t.lease && now >= t.lease.expiresAtMs) {
-          draft.tasks[t.id] = releaseExpiredDecisionTask(t, now);
-        }
-      }
-      task = draft.tasks[taskId];
       for (const otherTask of Object.values(draft.tasks)) {
-        if (otherTask.sessionId === task.sessionId && otherTask.id !== taskId && (otherTask.status === "claimed" || otherTask.status === "running") && otherTask.lease && now < otherTask.lease.expiresAtMs) {
+        if (otherTask.sessionId === task.sessionId && otherTask.id !== taskId && (otherTask.status === "claimed" || otherTask.status === "running") && otherTask.lease) {
           throw new DecisionConflictError(
             `Session "${task.sessionId}" already has an actively executing task "${otherTask.id}" under lease`
           );
@@ -1402,6 +1550,18 @@ class DecisionService {
       if (task.status !== "pending") {
         throw new DecisionConflictError(`Task "${taskId}" is in status "${task.status}" and cannot be claimed`);
       }
+      const execution = draft.executions?.[taskId];
+      if (execution?.blocked) throw new DecisionConflictError(`Execution blocked: ${execution.blocked.reason}`);
+      if (!execution) this.writeExecution(draft, taskId, {
+        revision: task.revision,
+        startedAtMs: now,
+        lastProgressAtMs: now,
+        deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS,
+        phase: "claimed",
+        responseLength: 0,
+        recoveryAttempts: 0,
+        blocked: null
+      });
       const ttl = params.ttlMs ?? this.defaultClaimTtlMs;
       const expiresAtMs = now + ttl;
       const token = crypto__default.randomUUID();
@@ -1437,6 +1597,7 @@ class DecisionService {
           `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
         );
       }
+      if (draft.executions?.[taskId]?.blocked) throw new DecisionConflictError("Execution is blocked");
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
@@ -1447,6 +1608,10 @@ class DecisionService {
     });
   }
   async heartbeatTask(taskId, params) {
+    if (this.authorizeExecution) {
+      const task = this.store.getTask(taskId);
+      if (task && this.authorizeExecution && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
+    }
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
@@ -1463,9 +1628,37 @@ class DecisionService {
           `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
         );
       }
+      if (draft.executions?.[taskId]?.blocked) throw new DecisionConflictError("Execution is blocked");
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
+      }
+      if (!draft.executions?.[taskId]) this.writeExecution(draft, taskId, {
+        revision: task.revision,
+        startedAtMs: now,
+        lastProgressAtMs: now,
+        deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS,
+        phase: "unknown",
+        responseLength: 0,
+        recoveryAttempts: 0,
+        blocked: null
+      });
+      const execution = draft.executions?.[taskId];
+      if (execution?.blocked) throw new DecisionConflictError(`Execution blocked: ${execution.blocked.reason}`);
+      if (execution && now > execution.deadlineAtMs) throw new DecisionConflictError("Execution progress deadline exceeded; lease cannot renew");
+      const progress = params.progress;
+      if (progress && (!(DECISION_EXECUTION_PHASES.includes(progress.phase) || progress.phase === "rebind_submitting") || !Number.isSafeInteger(progress.responseLength) || progress.responseLength < 0)) {
+        throw new DecisionValidationError("Invalid execution progress");
+      }
+      if (execution && progress) {
+        const advanced = DECISION_EXECUTION_PHASES.indexOf(progress.phase) > DECISION_EXECUTION_PHASES.indexOf(execution.phase);
+        const grew = progress.phase === "waiting_response" && progress.responseLength > execution.responseLength;
+        this.writeExecution(draft, taskId, {
+          ...execution,
+          phase: advanced ? progress.phase : execution.phase,
+          responseLength: Math.max(execution.responseLength, progress.responseLength),
+          ...advanced || grew ? { lastProgressAtMs: now, deadlineAtMs: now + DECISION_PROGRESS_TIMEOUT_MS } : {}
+        });
       }
       const ttl = params.ttlMs ?? this.defaultClaimTtlMs;
       const newExpiry = now + ttl;
@@ -1475,6 +1668,10 @@ class DecisionService {
     });
   }
   async submitResult(taskId, params) {
+    if (this.authorizeExecution && !this.store.getReceipt(taskId)) {
+      const task = this.store.getTask(taskId);
+      if (task && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
+    }
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
@@ -1505,6 +1702,7 @@ class DecisionService {
           `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
         );
       }
+      if (draft.executions?.[taskId]?.blocked) throw new DecisionConflictError("Execution is blocked");
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
@@ -1577,6 +1775,7 @@ class DecisionService {
           `Task claim belongs to stale binding generation ${claimBindingGen}, but session is at generation ${session.bindingGeneration}`
         );
       }
+      if (draft.executions?.[taskId]?.blocked) throw new DecisionConflictError("Execution is blocked");
       const now = this.clock();
       if (now >= task.lease.expiresAtMs) {
         throw new DecisionConflictError("Claim lease has already expired");
@@ -2283,6 +2482,16 @@ function validateStoreRecord(record2) {
     for (const [key, gen] of Object.entries(record2.claimBindingGenerations)) {
       if (typeof gen !== "number" || !Number.isSafeInteger(gen) || gen < 0) {
         throw new CorruptedStoreError(`Invalid binding generation for task "${key}"`);
+      }
+    }
+  }
+  if (record2.executions !== void 0) {
+    if (!record2.executions || typeof record2.executions !== "object" || Array.isArray(record2.executions)) {
+      throw new CorruptedStoreError("Invalid execution facts table");
+    }
+    for (const [id, e] of Object.entries(record2.executions)) {
+      if (!record2.tasks[id] || !e || e.revision !== record2.tasks[id].revision || e.recoveryActions !== void 0 && (!Array.isArray(e.recoveryActions) || !e.recoveryActions.every((a) => a === "rebind" || a === "reclaim")) || e.recoveryEpoch !== void 0 && (!Number.isSafeInteger(e.recoveryEpoch) || e.recoveryEpoch < 0) || ![e.startedAtMs, e.lastProgressAtMs, e.deadlineAtMs, e.responseLength, e.recoveryAttempts].every((n) => Number.isSafeInteger(n) && n >= 0) || typeof e.phase !== "string" || !DECISION_EXECUTION_PHASES.includes(e.phase) || e.blocked !== null && (!e.blocked || typeof e.blocked.reason !== "string" || !e.blocked.reason || e.blocked.recoveryCount !== void 0 && (!Number.isSafeInteger(e.blocked.recoveryCount) || e.blocked.recoveryCount < 0) || typeof e.blocked.unblock !== "string" || !e.blocked.unblock || !Number.isSafeInteger(e.blocked.atMs))) {
+        throw new CorruptedStoreError(`Invalid execution facts for ${id}`);
       }
     }
   }

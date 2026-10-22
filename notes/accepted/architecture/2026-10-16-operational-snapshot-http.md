@@ -17,7 +17,7 @@ Startup is explicit, defaults to 127.0.0.1 and an ephemeral port, and returns th
 
 - Put HTTP in operations: rejected because it mixes the established pure query boundary with network capabilities and contradicts the designated status-surface owner.
 - Copy projections or expose source-specific resources: rejected because full snapshot pass-through already preserves freshness, WorkKey identity, exact review targets and evidence without a second semantic layer.
-- Keep the reverse devDependency: rejected because workspace dependency cycles complicate package boundaries and builds; domain fixtures retain source-reader integration coverage while observability retains projector tests.
+- Keep the reverse devDependency: rejected because workspace dependency cycles complicate package boundaries and builds; domain fixtures retain source-reader integration coverage while downstream observability integration verifies the real projector → reader → query → HTTP chain.
 
 ## Consequences
 

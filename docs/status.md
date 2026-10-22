@@ -13,11 +13,13 @@
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
 - **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard / history / operator mutation 仍是独立后续能力。
+- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
 
 ## Decision Plane extension
+
 
 本扩展是 §4（domain contracts）旁的 provider-neutral extension（GitHub #93 / NEST-98），不是上游 Symphony SPEC Core requirement，不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义；逐项能力与证据矩阵见 [conformance.md](conformance.md#decision-plane-extension-evidence-nest-99--94-nest-100--95-nest-101--96-nest-102--97-nest-103--98--nest-104--99)。
 
@@ -54,6 +56,10 @@
 - NEST-115 / GitHub #111: pure, deterministic work and system projectors in `@symphony/operations` — derived-only `WorkPhase`, `WaitingReason`, `AttentionState`, `SystemHealth`, review approval safety with exact HEAD verification, partial facts handling, and snapshot cross-counts. [Projector note](../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md); evidence in [conformance](conformance.md#deterministic-work-and-system-projectors-nest-115--111).
 - NEST-116 / GitHub #112: cross-source anomaly detection and projection explanations in `@symphony/operations` — 8 canonical domain anomalies across GitHub, runtime, Decision Plane, and executor facts, structured `ProjectionEvidence` breadcrumbs with roles, deterministic multi-work aggregation and tie-breaking, attention state degradation, and snapshot/system health degradation with stale/unavailable safety guards. [Anomaly note](../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md); evidence in [conformance](conformance.md#cross-source-anomaly-detection-and-projection-explanations-nest-116--112).
 - NEST-117 / GitHub #113: in-process Operational Query Service and integration acceptance in `@symphony/operations` — public query surface (`getOperationalSnapshot`, `listWork`, `getWork`, `listExecutors`), single-round bounded assembly, partial failure tolerance, WorkKey scope boundaries, deterministic ordering, and multi-work isolation without background polling or persistent caching. Closes parent epic GitHub #108. [Query service note](../notes/accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md); evidence in [conformance](conformance.md#operational-query-service-and-integration-acceptance-nest-117--113).
+
+## Execution Continuity and Recovery extension
+
+- NEST-130 / GitHub #146: provider-neutral execution continuity, ownership fencing, and failure contracts in `@symphony/domain` (`src/execution-continuity.ts`) — continuity scopes (`work` / `task` / `attempt` / `binding`), continuity states with first-class non-terminal `blocked`, recovery actions (`none` / `dispatch` / `resume` / `retry` / `rebind` / `reclaim` / `compensate` / `await_external` / `require_human`), expected next actions with typed internal/external/human authority, multi-dimensional ownership fencing with capability credential sanitization, liveness and forward progress tracking, failure taxonomy (`transient` / `recoverable` / `blocked_external` / `superseded` / `invariant_violation`), pure subsystem error mapping for Decision, Delivery, Web Driver, and Orchestrator with explicit unmapped diagnostic gap handling, and canonical stage descriptors. [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md); evidence in [conformance](conformance.md#execution-continuity-and-recovery-contracts-nest-130--146).
 
 ## 已完成能力
 
@@ -98,7 +104,7 @@
 
 - Dashboard consumer 与验收（#138–#139）、生产 HTTP lifecycle 装配（#140，SPEC §13.7）；
 - provider-native agent tools（SPEC §11.5）；
-- durable scheduler state / durable recovery；
+- 通用 durable scheduler DB / workflow engine；原生 handoff 和 retry 预约恢复已由下文 #149 覆盖；
 - SSH worker（Appendix A）；
 - 最终 provider-native credential / tool boundary：当前 GitHub Delivery 使用 host 的 `git` + `gh`，是显式、临时的 MVP trust boundary。
 
@@ -136,3 +142,65 @@
 - 开发环境与工程命令： [development.md](development.md)；
 - 测试策略与可复跑入口： [testing.md](testing.md)；
 - Agent / 贡献者规则： [AGENTS.md](../AGENTS.md)。
+
+## NEST-138 work-level liveness
+
+Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`. The Decision bridge only exposes fenced reclaim; it no longer makes context-free startup/timer recovery decisions. Certified pre-entry lock failures allow later compensation, while post-entry uncertainty remains suppressed. Merged runtime/plan conflicts are diagnosed without mutation. Launch admission now reads native sources for each poll/retry attempt and rechecks keyed tracker facts after remote I/O; inventory failures suppress dispatch, observation failures retain retry reservations through backoff, and remote PR/CI reads work without a local workspace.
+
+Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; NEST-134 / #150 adds the bounded policy and incidents described below, pending independent review. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+
+## NEST-132 Decision/Web continuity
+
+Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real Edge/Tampermonkey reload, Bridge auth/network faults, no-replay blocking, actual Review HEAD changes and native-host automatic reclaim have scoped 2026-10-22 evidence below; full browser-process restart and ChatGPT login/deleted-conversation categories remain unverified.
+
+
+PR #156 follow-up fixes active heartbeat auth reporting, authoritative lease recovery,
+and bound-conversation checks around recovered extraction. Heartbeat and first
+result acceptance now revalidate external target admission; accepted receipts remain
+readable after target changes. Automated no-replay coverage includes tab identity
+loss after Send. Scoped real-browser and final-gate evidence is recorded below;
+untested historical categories are not marked passed.
+
+2026-10-22 real-browser follow-up: Edge/Tampermonkey partial fault acceptance passed reload, active heartbeat 401, result 403, pre/post acceptance network loss, bounded no-replay tab-loss handling, two-tab single claim/result, route-drift blocking, supersede continuation and persistent Stop. Ten isolated Plan tasks produced eight result receipts, all claim generation 1. Lost-tab blocking used explicit fenced reclaim, not automatic host coordination. The later same-day final-gate run verifies actual Review HEAD change and native-host reclaim. ChatGPT auth/deleted-conversation recovery and browser-process restart remain pending; #148/#156 overall acceptance is not complete. See [evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
+
+2026-10-22 final gates: both requested blockers passed. Native host polling with real GitHub sources automatically reclaimed a pre-Send lost claim; a new page completed generation 2 and stale generation 1 was rejected. The same host automatically blocked uncertain post-Send loss without replay. Actual dogfood PR #25 HEAD A → B during Review caused production GitHub admission to reject A and block the old task; an explicitly superseding Review completed with an exact-B approve receipt without manual Start. The test branch was restored to original A, all workers/listeners were stopped. See [final-gate evidence and remaining scope](evidence/web-continuity/final-gates-2026-10-22.md).
+
+2026-10-22 closeout: inaccessible-conversation recovery additionally passed with automatic binding/claim generation 1 → 2 and a matching receipt. Standards review found one diagnostics-restoration metadata boundary defect, now fixed and re-reviewed; Spec review found no confirmed defect. PR #156 implementation closeout is complete within this bounded review scope. #148 remains open; remaining auth UI, permanent deletion/rebind exhaustion, full browser restart and heartbeat-403 live coverage stays tracked with existing #151. See [closeout evidence and build provenance](evidence/web-continuity/closeout-2026-10-22.md).
+
+PR #156 review follow-up: the DOM-windowing liveness mismatch is fixed by sharing a task-scoped response observer between the adapter waiter and Driver heartbeat. Prompt-submission recovery recognizes strict exact-task results as Send evidence. Fake-clock Driver→Decision authority regressions cover growth beyond ten minutes and reject stale/non-response changes; real HTTP recovery proves no repeated Send. Userscript build advances to 0.1.5. Fresh live-browser coverage of this change remains unperformed; #148/#151 stay open.
+
+Review-fix validation: full gate passed (2,042 tests, one existing opt-in skip; Web 216). See [review-fix evidence](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
+
+Later 2026-10-22, after the operator updated Userscript 0.1.5, scoped real-browser acceptance passed native response-growth reporting, active reload without repeated Send, and accepted-result acknowledgement loss resolved by receipt readback. Two Plan receipts retained claim/binding generation 1. Build metadata duplication is fixed: Vitest shutdown no longer prepends to the built file. Full gate remains green (2,042 passed, one opt-in skip). [Evidence and limits](evidence/web-continuity/live015-acceptance-2026-10-22.md) distinguish this run from the untriggered ten-minute DOM-windowing and Send/checkpoint crash-gap cases; #148/#151 stay open.
+
+### NEST-133 / #149 durable handoffs
+
+Implementation protects coordinator invocation, CI→Review, Review-result→Delivery,
+paused compensation, landing acknowledgement and retry→worker boundaries. Native
+host startup restores reservations/intent discovery; uncertain launch/repair/child
+outcomes are durable blocks. Local validation covers real child-process SIGKILL and
+restart, native host ticks and both landing paths. Implementation awaits independent
+review; real GitHub/Codex smoke is not claimed. See the
+[implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+
+### NEST-134 / #150 bounded recovery and incidents
+
+Implementation adds independent finite failure budgets, normalized SHA-256 fingerprints,
+capability-aware strategy selection, stable recovery epochs and durable host policy
+blocks. Native Decision/Web limits and fresh-admission/fencing remain authoritative.
+The CLI exposes incident list/detail and exact-ID policy authorization; its dedicated
+GitHub outbox verifies marker receipts and bounds reporting attempts without replaying
+unknown POSTs. Operations/Dashboard remain read-only.
+
+Automated policy, native retry, real filesystem/SIGKILL, cross-process exhaustion,
+concurrent reporter, ACK-loss and stale-target tests are included. Live GitHub/browser
+fault acceptance for this change has not been run. Independent review is pending.
+See [operator behavior](bounded-recovery.md) and the
+[decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
+
+NEST-134 review follow-up fixes three blockers: automatic unblock now requires an
+explicit modeled ownership condition; versioned native accounting separates legacy
+migration from new capacity/continuation waits; native needs-human/manual reasons
+produce durable deduplicated incidents without blocking Delivery report compensation.
+Focused real-authority/file-store and production-host regressions are included;
+independent re-review and external fault acceptance remain pending.

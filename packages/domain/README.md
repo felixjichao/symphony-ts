@@ -59,3 +59,16 @@ SPEC §13.1/§13.2 service/issue/session discriminated union uses stable snake_c
 ## Decision Plane extension (NEST-99 / GitHub #94)
 
 `DecisionSession`, `DecisionTask`, `DecisionResult`, `ExecutorBinding` 及纯身份、v1 校验、lease/lifecycle/rebind/精确 SHA 审批函数均由 `src/index.ts` 导出。详见 [协议](../../docs/decision-protocol.md) 与 [Note](../../notes/accepted/architecture/2026-10-08-decision-contracts.md)。没有 I/O、调度或 store；不修改 Core §7 状态机。
+
+## Execution Continuity extension (NEST-130 / GitHub #146)
+
+提供跨阶段执行连续性、所有权防御（fencing）与故障分类契约（`src/execution-continuity.ts`），由 `src/index.ts` 导出：
+- `ContinuityScope`: `work` / `task` / `attempt` / `binding` 显式区分；
+- `ContinuityState`: `running` / `retry_queued` / `recovering` / `blocked` / `completed` / `released`；`blocked` 为一等非终态；
+- `RecoveryAction`: `none` / `dispatch` / `resume` / `retry` / `rebind` / `reclaim` / `compensate` / `await_external` / `require_human`；
+- `ExpectedNextAction` + `ActionAuthority`: 区分内部协调责任方（`internal`）、外部系统等待（`external`）与人工介入（`human`）；
+- `OwnershipFence`: 保留多维原生 fencing 证据（retryToken、lifecycleGeneration、reconciliationEpoch、leaseGeneration、bindingGeneration、expectedHeadSha），`sanitizeOwnershipFence` 剥离 leaseToken 敏感凭据；
+- `LivenessMetadata`: 区分活动观测与有效进展（缺少进展显式为 `"unknown"`，heartbeat 不冒充进展）；
+- 故障分类与子系统映射纯函数：`transient` / `recoverable` / `blocked_external` / `superseded` / `invariant_violation` 五类，支持 Decision、Delivery、Web Driver、Orchestrator 故障映射，未充分诊断错误显式返回 `unmapped`。
+
+详见 [Execution Continuity Note](../../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md)。不引入第二套 workflow 状态机，不改写既有源权威。

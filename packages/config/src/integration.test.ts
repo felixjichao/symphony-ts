@@ -79,6 +79,7 @@ const DEFAULT_SERVICE_CONFIG = {
     maxConcurrentAgents: 10,
     maxTurns: 20,
     maxRetryBackoffMs: 300_000,
+        recovery: { maxAttempts: 6, maxStrategyAttempts: 2 },
     maxConcurrentAgentsByState: {},
   },
   codex: {
@@ -290,6 +291,7 @@ describe("M1 integration — complete front matter resolves through the public e
         maxConcurrentAgents: 4,
         maxTurns: 12,
         maxRetryBackoffMs: 600_000,
+        recovery: { maxAttempts: 6, maxStrategyAttempts: 2 },
         // key 经 normalizeIssueState；空 key 与非法值（Done: 0）被静默过滤。
         maxConcurrentAgentsByState: { blocked: 2, in_progress: 3 },
       },

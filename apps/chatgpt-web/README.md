@@ -130,3 +130,25 @@ curl -s -H "Authorization: Bearer secret-bridge-token" \
 - **Loopback Bridge Boundary**: Communicates with `symphony decision bridge` exclusively via `127.0.0.1` protected by bearer token authentication and origin validation (`--allowed-origins https://chatgpt.com`).
 - **Credential DOM Isolation**: The bridge bearer token is stored exclusively in Tampermonkey's private storage (`GM_setValue`) and memory closure. It is never placed into any page DOM element, attribute, or property, preventing third-party page scripts from accessing bridge credentials.
 - **Fail-Closed Result Verification**: Extracted results must be enclosed in ````symphony-result` blocks and strictly adhere to task revision and commit HEAD SHA identity. Stale or mismatched outputs are rejected.
+
+## Automatic continuity and blocking
+
+Start persists enabled intent per bridge URL in userscript storage. A configured ChatGPT page automatically starts after reload or browser reopen; Stop persists disabled intent, including for later pages. Concurrent tabs retain separate checkpoints and cannot take over a live lease. Losing tab identity does not authorize importing another tab's token or resending an uncertain prompt. No OS browser launch or automatic login is provided.
+
+Navigation and Send await an authoritative lease/binding check. Progress requires an advanced execution stage or growth in the new assistant response, with a ten-minute deadline. Native reclaim/rebind budgets persist across claims and restarts; transport recovery is additionally capped at six checkpoint failures. Receipt lookup still resolves accepted-but-unacknowledged results before budget handling. Auth/human barriers, inaccessible-session exhaustion and ambiguous lost execution become durable blocked facts. Bridge 401/403 stops mutations but retains enabled intent and periodically checks authorization through read-only requests. Stop cancels that recovery.
+
+Use the [Decision protocol](../../docs/decision-protocol.md#decisionweb-execution-facts) to inspect a blocked task and explicitly authorize recovery after checking the cause and possible prior effects. A browser with no runnable page is a host-visible browser-page wait, not a reason to silently restart coding. Fixture tests cover the native boundaries; real Tampermonkey/browser restart acceptance is separate.
+
+### Response waiting deadline
+
+Plan/Review and bootstrap response waits default to 15 minutes. The HUD's **Response timeout (minutes, 1–60)** is saved in Tampermonkey storage when Start is clicked and restored after reload; Stop/Start applies edits. This setting also applies when recovering an existing in-flight response. Navigation and composer waits retain their 3-minute default. Programmatic adapters accept `responseTimeoutMs`; an explicitly supplied legacy `timeoutMs` remains the fallback for compatibility. This does not extend the host delivery budget or revive failed tasks; the host's progress deadline can block execution first when no qualifying progress is observed. Rebuild and reinstall `dist/symphony-decision-driver.user.js` to update an installed driver.
+
+### Response recognition and diagnostics
+
+The driver merges supported assistant message selectors and deduplicates nested nodes. Plan/Review can complete even when DOM windowing reduces the message count, but only the latest canonically validated result for the exact task/revision/target may bypass count growth. A result already present before a fresh send cannot qualify through that fallback. Bootstrap replies retain count/identity fencing. Streaming and stabilization checks remain required.
+
+Expand **Driver diagnostics (last 50 events)** in the HUD to distinguish response waiting, result submission, accepted receipt, submission errors, and recorded task failures. Wait entries include baseline/current counts, the selected selectors, exact-task match, stop-button presence, elapsed time and the terminal blocker. These per-tab records survive refresh in Tampermonkey storage; only metadata is retained, with no Token, prompt/reply text or raw exceptions. Use userscript version 0.1.5 for this build; existing failed tasks are not automatically revived.
+
+Heartbeat progress and response waiting share a task-scoped observer. After DOM windowing, a new eligible assistant node must show append growth while generating; static count changes, pre-send messages and route drift do not advance progress. A restored sent checkpoint similarly observes growth on its current response. Strict exact-task results also confirm Send during prompt-submission recovery, without another click. Response snapshots remain in memory; no response text is added to diagnostics or checkpoints.
+
+The metadata declaration is emitted only when bundling. Running Vitest does not modify the built userscript; repeated builds retain a single declaration.

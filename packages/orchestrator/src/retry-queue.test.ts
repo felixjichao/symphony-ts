@@ -202,7 +202,7 @@ interface Harness {
 }
 
 function makeHarness(
-  overrides: Partial<Pick<OrchestratorAuthorityOptions, "policy">> = {},
+  overrides: Partial<Pick<OrchestratorAuthorityOptions, "policy" | "refreshDispatch" | "authorizeFailureRetry">> = {},
 ): Harness {
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 30_000, maxConcurrentAgents: 10 });
   const runner = new FakeRunner();
@@ -224,6 +224,8 @@ function makeHarness(
   const authority = new OrchestratorAuthority({
     state,
     policy: overrides.policy ?? POLICY,
+    refreshDispatch: overrides.refreshDispatch,
+    authorizeFailureRetry: overrides.authorizeFailureRetry,
     runner: runner.run,
     createAttemptOptions,
     tracker,
@@ -757,3 +759,75 @@ function makeHarnessWithCleanup(
     },
   };
 }
+
+describe("fresh native admission at dispatch commit", () => {
+  it("poll dispatch commits the refreshed issue and never the stale candidate snapshot", async () => {
+    const issue = makeIssue();
+    const fresh = { ...issue, title: "current authoritative title" };
+    const h = makeHarness({ refreshDispatch: async () => fresh });
+    try {
+      expect((await h.authority.dispatchIssueWithRefresh(issue)).kind).toBe("dispatched");
+      expect(h.state.running.get(issue.id)?.issue.title).toBe(fresh.title);
+      h.runner.last.resolve(h.runner.successResult(fresh));
+      await h.authority.waitForIdle();
+    } finally { await h.authority.shutdown(); }
+  });
+
+  it("retry commits refreshed source facts after native admission", async () => {
+    const issue = makeIssue();
+    const fresh = { ...issue, title: "retry authoritative title" };
+    const h = makeHarness({ refreshDispatch: async () => fresh });
+    try {
+      const { entry } = await enqueueFailureRetry(h, issue);
+      h.scheduler.fire(entry.timerHandle);
+      await flush();
+      expect(h.state.running.get(issue.id)?.issue.title).toBe(fresh.title);
+      h.runner.last.resolve(h.runner.successResult(fresh));
+      await h.authority.waitForIdle();
+    } finally { await h.authority.shutdown(); }
+  });
+
+  it("two overlapping poll admissions still commit only one native owner", async () => {
+    const issue = makeIssue();
+    const pending = deferred<Issue | null>();
+    const h = makeHarness({ refreshDispatch: () => pending.promise });
+    try {
+      const first = h.authority.dispatchIssueWithRefresh(issue);
+      const second = h.authority.dispatchIssueWithRefresh(issue);
+      pending.resolve(issue);
+      const results = await Promise.all([first, second]);
+      expect(results.filter(result => result.kind === "dispatched")).toHaveLength(1);
+      expect(h.state.running.size).toBe(1);
+      h.runner.last.resolve(h.runner.successResult(issue));
+      await h.authority.waitForIdle();
+    } finally { await h.authority.shutdown(); }
+  });
+});
+
+
+describe("bounded retry authority hook", () => {
+  it("preserves exponential delays but schedules no timer after recovery exhaustion", async () => {
+    let charges = 0;
+    const h = makeHarness({ authorizeFailureRetry: () => ++charges <= 2 });
+    const issue = makeIssue(); h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue);
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(h.scheduler.lastPending.delayMs).toBe(10_000);
+    h.scheduler.fire(h.scheduler.lastPending.id); await flush();
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(h.scheduler.lastPending.delayMs).toBe(20_000);
+    h.scheduler.fire(h.scheduler.lastPending.id); await flush();
+    h.runner.last.reject(new AgentError("port_exit", "failure")); await flush();
+    expect(charges).toBe(3); expect(h.scheduler.pending).toEqual([]);
+    expect(h.state.retryAttempts.size).toBe(0);
+  });
+  it("does not charge successful continuations or slot waits", async () => {
+    let charges = 0;
+    const h = makeHarness({ authorizeFailureRetry: () => { charges++; return true; } });
+    const issue = makeIssue(); h.tracker.issues.set(issue.id, issue);
+    h.authority.dispatchIssue(issue); h.runner.last.resolve(h.runner.successResult(issue)); await flush();
+    expect(charges).toBe(0);
+    h.authority.scheduleRetry({ issueId: issue.id, identifier: issue.identifier, attempt: 9, error: "slots", kind: "failure", reason: "no_available_slots" });
+    expect(charges).toBe(0);
+  });
+});

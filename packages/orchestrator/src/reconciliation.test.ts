@@ -312,6 +312,8 @@ function runningEntry(h: Harness, issueId: string): RunningEntry {
 }
 
 const UNKNOWN_TELEMETRY: AgentTelemetryState = {
+  lastProgressAt: null,
+  progressLifecycle: new Set(),
   threadId: null,
   turnId: null,
   turnCount: 0,
@@ -362,9 +364,9 @@ describe("reconciliation 纯判定", () => {
     expect(isWorkerStalled(entry, UNKNOWN_TELEMETRY, 1_501, 0)).toBe(false); // 禁用
   });
 
-  it("有 agent event 时以最近事件时间戳为基准（含身份未齐的暂存时间戳）", () => {
+  it("以有意义进展为基准，普通事件不能刷新活性", () => {
     const entry = entryWithStartedAt(1_000);
-    const telemetry: AgentTelemetryState = { ...UNKNOWN_TELEMETRY, pendingLastTimestamp: 1_900 };
+    const telemetry: AgentTelemetryState = { ...UNKNOWN_TELEMETRY, pendingLastTimestamp: 1_990, lastProgressAt: 1_900 };
     // startedAt 距今 1000ms，但事件时间戳距今 100ms → 不 stall。
     expect(stallElapsedMs(entry, telemetry, 2_000)).toBe(100);
     expect(isWorkerStalled(entry, telemetry, 2_000, 500)).toBe(false);
@@ -388,7 +390,7 @@ describe("reconciliation 纯判定", () => {
         turnCount: 1,
       },
     };
-    expect(stallElapsedMs(withSession, UNKNOWN_TELEMETRY, 2_000)).toBe(10);
+    expect(stallElapsedMs(withSession, UNKNOWN_TELEMETRY, 2_000)).toBe(1000);
   });
 });
 
@@ -538,18 +540,18 @@ describe("stall detection — 验收 07 / 08", () => {
     expect(h.state.claimed.has(issue.id)).toBe(true);
   });
 
-  it("stall 基准用 agent event 时间戳（含身份未齐的暂存时间戳）", async () => {
+  it("空通知不算进展，token 推进在身份齐全前也可防止误判", async () => {
     const h = makeHarness();
     h.setStall(500);
     const issue = makeIssue({ state: "Todo" });
     h.tracker.issues.set(issue.id, issue);
     h.authority.dispatchIssue(issue); // attempt.startedAt = 1_000_000
 
-    // 身份未齐事件也推进活动时间：事件时间戳距 now 仅 100ms，虽 startedAt 已过 1s，
-    // 仍不 stall。
+    // usage 是实际推进；单纯 notification 不再重置 stall。
     h.contexts[0]?.onEvent({
       event: "notification",
       timestamp: 1_999_900,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
       codexAppServerPid: null,
     });
     h.setUtc(2_000_000);

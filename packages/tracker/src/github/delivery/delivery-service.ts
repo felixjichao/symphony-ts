@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { LandingIntent, LandingIntentStorage } from "@symphony/domain";
 /**
  * GitHub delivery execution service (SPEC §11.5 / MVP.3).
  *
@@ -55,6 +57,7 @@ export interface PrChecksReport {
 }
 
 export interface LandPrOptions {
+  readonly landingStorage?: LandingIntentStorage | undefined;
   readonly optIn: boolean;
   readonly prNumber?: number | undefined;
   readonly expectedHeadSha?: string | undefined;
@@ -570,6 +573,11 @@ export class GitHubDeliveryService {
    * and post-merge verification.
    */
   async landPr(context: DeliveryContext, options: LandPrOptions): Promise<LandPrResult> {
+    if (options.landingStorage?.withExclusive) return options.landingStorage.withExclusive(storage =>
+      this.landPrLocked(context, { ...options, landingStorage: storage }));
+    return this.landPrLocked(context, options);
+  }
+  private async landPrLocked(context: DeliveryContext, options: LandPrOptions): Promise<LandPrResult> {
     if (!options.optIn) {
       throw new DeliveryError("Auto-merge refused: explicit opt-in (--opt-in) is required", {
         code: "opt_in_required",
@@ -585,12 +593,19 @@ export class GitHubDeliveryService {
     // 1. Read fresh PR state
     const pr = await this.readPr(context, { prNumber: options.prNumber });
 
+    const previousIntent = await options.landingStorage?.read();
     if (pr.state === "MERGED") {
+      if (options.expectedHeadSha && options.expectedHeadSha !== pr.headSha) {
+        throw new DeliveryError("Merged PR does not match the saved HEAD", { code: "head_changed" });
+      }
       if (!pr.mergeCommitSha || !pr.mergedAt) {
         throw new DeliveryError(`PR #${pr.number} is merged, but merge commit SHA or timestamp is missing`, {
           code: "verification_unknown",
         });
       }
+      await options.landingStorage?.write({ intentId: previousIntent?.intentId ?? randomUUID(), context,
+        prNumber: pr.number, headSha: pr.headSha, optIn: true, phase: "observed",
+        mergeCommitSha: pr.mergeCommitSha, mergedAt: pr.mergedAt });
       return {
         merged: true,
         prNumber: pr.number,
@@ -641,6 +656,10 @@ export class GitHubDeliveryService {
         },
       );
     }
+
+    const intent: LandingIntent = { intentId: previousIntent?.headSha === targetHeadSha && previousIntent.prNumber === pr.number
+      ? previousIntent.intentId : randomUUID(), context, prNumber: pr.number, headSha: targetHeadSha, optIn: true, phase: "intent" };
+    await options.landingStorage?.write(intent);
 
     // 2. Read checks and verify CI policy
     const checks = await this.readChecks(context, {
@@ -777,12 +796,16 @@ export class GitHubDeliveryService {
     }
 
     if (freshPr.state === "MERGED") {
+      if (freshPr.headSha !== targetHeadSha) throw new DeliveryError("PR HEAD changed before merge acknowledgement", { code: "head_changed" });
       if (!freshPr.mergeCommitSha || !freshPr.mergedAt) {
         throw new DeliveryError(
           `PR #${freshPr.number} was merged, but merge commit SHA or timestamp is missing`,
           { code: "verification_unknown" },
         );
       }
+
+      await options.landingStorage?.write({ ...intent, phase: "observed",
+        mergeCommitSha: freshPr.mergeCommitSha, mergedAt: freshPr.mergedAt });
 
       if (options.deleteBranch) {
         try {

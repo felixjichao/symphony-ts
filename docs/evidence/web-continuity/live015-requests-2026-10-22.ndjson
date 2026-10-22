@@ -1,0 +1,25 @@
+{"at": "2026-10-22T09:53:01.742Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/claim", "status": 200}
+{"at": "2026-10-22T09:53:01.882Z", "method": "GET", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/context", "status": 200}
+{"at": "2026-10-22T09:53:02.019Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "navigating", "responseLength": 0}}
+{"at": "2026-10-22T09:53:02.662Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "bootstrap_submitting", "responseLength": 0}}
+{"at": "2026-10-22T09:53:15.514Z", "method": "PUT", "path": "/v1/sessions/github%3Asymphony-acceptance%2Fpr156%23151/binding", "status": 200}
+{"at": "2026-10-22T09:53:15.640Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/start", "status": 200}
+{"at": "2026-10-22T09:53:16.271Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "prompt_submitting", "responseLength": 0}}
+{"at": "2026-10-22T09:53:22.056Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:53:42.030Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 5542}}
+{"at": "2026-10-22T09:54:02.085Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 11876}}
+{"at": "2026-10-22T09:54:09.815Z", "method": "GET", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1", "status": 200}
+{"at": "2026-10-22T09:54:10.059Z", "method": "GET", "path": "/v1/sessions/github%3Asymphony-acceptance%2Fpr156%23151", "status": 200}
+{"at": "2026-10-22T09:54:10.629Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:54:31.069Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:54:51.061Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:55:11.054Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:55:31.063Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 0}}
+{"at": "2026-10-22T09:55:50.435Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A1/result", "status": 200}
+{"at": "2026-10-22T09:58:09.982Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/claim", "status": 200}
+{"at": "2026-10-22T09:58:10.117Z", "method": "GET", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/context", "status": 200}
+{"at": "2026-10-22T09:58:10.869Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/start", "status": 200}
+{"at": "2026-10-22T09:58:11.506Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "prompt_submitting", "responseLength": 0}}
+{"at": "2026-10-22T09:58:21.766Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/result", "status": 200}
+{"at": "2026-10-22T09:58:21.766Z", "method": "POST", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/result", "action": "accepted_ack_dropped"}
+{"at": "2026-10-22T09:58:22.388Z", "method": "GET", "path": "/v1/tasks/github%253Asymphony-acceptance%252Fpr156%2523151%3Aplan%3A2/receipt", "status": 200}

@@ -9,7 +9,7 @@
  * 不碰 filesystem、不 import 任何调度状态。
  *
  * 时钟口径（§8.5 Part A / §13.5）：elapsed 基准是**同一 UTC 墙上时钟域**的
- * "最后一次 agent event 时间戳，否则 worker 启动时间"。单调时钟只用于运行时长与
+ * "最后一次有意义进展时间戳，否则 worker 启动时间"。单调时钟只用于运行时长与
  * retry `dueAtMs`，不得参与这里的减法。
  */
 import type { Issue, RunningEntry, UtcTimestampMs } from "@symphony/domain";
@@ -51,20 +51,14 @@ export function isStallDetectionEnabled(stallTimeoutMs: number): boolean {
   return Number.isFinite(stallTimeoutMs) && stallTimeoutMs > 0;
 }
 
-/**
- * stall elapsed 的基准时刻（UTC）：有 agent event 时取最近一次事件时间戳，否则取
- * worker 启动时间（§8.5 Part A）。
- *
- * 身份未齐时 `entry.session` 可能尚未物化，因此必须回退到 per-attempt 遥测里暂存的
- * `pendingLastTimestamp`——只读 `entry.session` 会漏掉握手期事件，把活跃 worker 误判
- * 为 stall。`RunAttempt.startedAt` 与事件时间戳同属 UTC 墙上时钟域。
+/** Meaningful progress (lifecycle or increased absolute usage), falling back to attempt start.
+ * Generic notifications, PID, heartbeat and repeated usage do not reset the deadline.
  */
 export function stallActivityBaselineMs(
   entry: RunningEntry,
   telemetry: AgentTelemetryState,
 ): UtcTimestampMs {
-  const sessionTimestamp = entry.session?.lastCodexTimestamp ?? null;
-  return sessionTimestamp ?? telemetry.pendingLastTimestamp ?? entry.attempt.startedAt;
+  return telemetry.lastProgressAt ?? entry.attempt.startedAt;
 }
 
 /** 当前 stall elapsed（毫秒）：`max(now - baseline, 0)`（负差值按 0 处理）。 */

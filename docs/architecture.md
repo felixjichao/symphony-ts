@@ -80,3 +80,37 @@ host stop 同步关闭 EffectiveRuntime 提交与 watcher，再调用既有 loop
 `@symphony/decision` provides durable task/session snapshot persistence, single-writer process lock (`store.lock`), lease coordination, and the localhost Web Agent Bridge HTTP server. Subpath `@symphony/decision/adapter` defines browser-safe executor adapter primitives, context strategies, and fail-closed result extraction. `apps/cli` exposes the bridge via `symphony decision bridge`. `apps/chatgpt-web` delivers the concrete browser-side userscript adapter and driver. See [Decision Note](../notes/accepted/architecture/2026-10-08-decision-contracts.md), [Decision Store & Bridge Note](../notes/accepted/architecture/2026-10-09-decision-store-bridge.md), [Executor Adapter Note](../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md), and [ChatGPT Web Adapter Note](../notes/accepted/architecture/2026-10-10-chatgpt-web-adapter.md).
 
 Operational source acquisition uses injected read-only ports. GitHub delivery supplies a marker-validated observation, runtime supplies the existing snapshot, Decision supplies a synchronous committed-state whitelist view, and executor supplies an explicit inventory or remains unknown. Freshness policy is source-specific; collection waits for all reads and retains independent failures. See [source readers note](../notes/accepted/architecture/2026-10-13-operational-source-readers.md).
+
+## Execution Continuity and recovery extension
+
+`@symphony/domain` 定义跨阶段执行连续性、所有权防御（fencing）与故障分类的共享语言（`src/execution-continuity.ts`，NEST-130 / GitHub #146），作为 §4 邻接的 recovery extension，并严格保持与既有 §7（调度状态机）、§8（调度与对账）、§14（重试与回退）以及 Decision Plane / Delivery 的单一权威事实边界一致：
+
+1. **权威边界不变**：GitHub 拥有 Issue / PR / CI 的远端事实权威；Orchestrator 拥有进程内调度与 worker 生命周期权威（§7、§8）；Decision 拥有计划/审查任务与租约所有权（NEST-99、NEST-100）；Delivery 拥有交接与分支合并确认权威（NEST-91、NEST-128）。Continuity 契约仅作为声明式的跨阶段观测与意图表达，不建立第二套持久化 store 或状态转移引擎。
+2. **状态与重试语义**：`ContinuityState`（`running`, `retry_queued`, `recovering`, `blocked`, `completed`, `released`）将 `blocked` 作为一等非终态（区别于 terminal failure 或 retry queued），解除后走重观测再决策。重试语义固定为 **re-observe + re-decide**，禁止盲目重放。
+3. **多维所有权防护（Fencing）**：保留 retry token、lifecycle generation、reconciliation epoch、Decision lease generation、binding generation 与 expected HEAD SHA 等多维原生证据，旧续体仅允许观察、禁止跨作用域突变当前工作。
+4. **子系统映射与缺口记录**：五类故障分类（`transient`, `recoverable`, `blocked_external`, `superseded`, `invariant_violation`）为现有错误提供显式归一；无充分上下文的错误（如裸 `execution_failed`）显式返回 `unmapped`，不隐式默认成可重试故障。详见 [Execution Continuity Note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md)。
+
+Work-level reconciliation (NEST-138 / #147) lives in `orchestrator/work-continuity.ts`, composed by the CLI host from native tracker/runtime/Decision/Delivery sources. It derives diagnostics rather than another lifecycle. Each bounded delegation is preceded by fresh observation and followed by readback; mutations remain with transactional Decision reclaim or the filesystem-locked Delivery authority. Uncertain side effects retain their native recovery identity across scans until authority evidence resolves them; clocks and unrelated changes cannot authorize replay. Managed merged PRs wait for tracker synchronization; other-target active Decision tasks remain conflicts. The bridge has no independent expired-claim sweep; the work-aware coordinator owns recovery policy. Certified pre-mutation refusals do not enter uncertain-commit suppression. After remote I/O, keyed tracker facts must still match admission, alongside Decision/Delivery checks. Merged is a stage boundary; live runtime/plan ownership is contradictory. Coding still uses the existing dispatch loop. `host.workContinuity.observations` exposes credential-free diagnoses. See [work-level continuity note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md) for stage support, lifecycle and deferred recovery boundaries.
+
+Poll inventory failure skips that tick's candidate dispatch. Host launches and retry timers use `OrchestratorAuthority.dispatchIssueWithRefresh` / the same injected native-source admission port, returning a current Issue for the existing synchronous commit rather than caching permission. Retry observation failure preserves its reservation through bounded backoff; explicit blockers deny execution. Remote PR/CI observation does not depend on local workspace existence. Shutdown and generation/retry-token fences are checked after source I/O.
+
+Decision/Web continuity adds optional task-scoped execution metadata to the existing Decision authority. Lease renewal consumes meaningful stage/response progress rather than heartbeat age; stalled renewal stops before the work-aware coordinator can reclaim an expired lease. Native recovery budgets and nonterminal blocks survive store restart. The Web adapter awaits fenced authorization before navigation/Send; userscript enabled/Stop intent survives page loss without sharing another tab's lease. Browser availability is an explicit host wait. See the [implementation decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md) and [protocol](decision-protocol.md#decisionweb-execution-facts). No browser supervisor, automatic login or Operations mutation path is added.
+
+The [native durable handoff implementation](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md)
+adds synchronous injected storage ports for recovery invocations and retry/launch
+reservations, and explicit continuation/landing markers in Delivery's existing state.
+The host restores native intents after preflight and re-observes current authority
+facts before action. Review receipts reuse the same plan/target round; stage recovery
+skips coding. Merge acknowledgements share the native Delivery lock and exact-target
+opt-in. Scheduled retries restore from UTC deadlines; uncertain worker launches,
+repairs and subprocesses remain explicitly blocked until operator verification.
+No second business lifecycle, supervisor or Operations mutation path is introduced.
+
+NEST-134 / #150 adds the [bounded recovery policy and incident boundary](bounded-recovery.md).
+Domain owns safe evidence contracts; orchestrator selects finite capability-aware
+strategies; CLI persists reservations/blocks/incidents atomically and composes a
+separate marker-verifying GitHub reporter. Native Decision/Web limits and ownership
+fences remain authoritative. Unknown effects block rather than replay. The reporter
+has a finite outbox budget and never recursively creates incidents. Operations and
+Dashboard gain no mutation authority. See the
+[decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).

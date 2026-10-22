@@ -30,6 +30,19 @@ beforeAll(async () => {
     ssr: fileURLToPath(new URL("../test-fixtures/lifecycle-harness.ts", import.meta.url)),
     outDir: harnessDir, target: "node20", rollupOptions: { output: { entryFileNames: "harness.mjs" } },
   } });
+  // The real executable now observes remote PR facts before provisioning. Keep
+  // the GitHub CLI boundary local and fail on any unexpected/mutating command.
+  await writeFile(path.join(harnessDir, "gh"), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "issue" && args[1] === "view" && args.includes("state,url")) {
+  process.stdout.write(JSON.stringify({ state: "OPEN", url: "https://github.com/acme/widget/issues/" + args[2] }));
+} else if (args[0] === "api" && args[1].startsWith("repos/acme/widget/pulls?")) {
+  process.stdout.write("[]");
+} else {
+  process.stderr.write("Unexpected GitHub CLI fixture command");
+  process.exitCode = 1;
+}
+`, { mode: 0o755 });
 }, 30000);
 afterAll(async () => { if (harnessDir) await rm(harnessDir, { recursive: true, force: true }); });
 
@@ -153,7 +166,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
     const workspace = path.join(root, "GH-1");
     const release = path.join(dir, "release-hook");
     await writeFile(path.join(dir, "WORKFLOW.md"), workflow(root, tracker.url, { command: command(signal === "SIGTERM" ? "--ignore-sigterm" : ""), afterRun: hook(release) }));
-    const proc = startProcess([], dir);
+    const proc = startProcess([], dir, binPath, { PATH: `${harnessDir}${path.delimiter}${process.env.PATH ?? ""}` });
     try {
       await proc.waitForOutput('event="session_started"');
       await waitFile(path.join(workspace, "world.json"));
@@ -188,7 +201,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
     const tracker = await httpsTracker(); tracker.holdStartup(); tracker.enableIssue();
     const root = path.join(dir, "work");
     await writeFile(path.join(dir, "WORKFLOW.md"), workflow(root, tracker.url, { command: command(), afterRun: hook() }));
-    const proc = startProcess([], dir);
+    const proc = startProcess([], dir, binPath, { PATH: `${harnessDir}${path.delimiter}${process.env.PATH ?? ""}` });
     try {
       await tracker.waitForRequest((url) => url.searchParams.get("state") === "closed");
       proc.child.kill("SIGTERM");
@@ -211,7 +224,7 @@ describe("real executable resource/race evidence (§17.6 / §17.7)", () => {
     const rootA = path.join(dir, "root-a"); const rootB = path.join(dir, "root-b");
     const file = path.join(dir, "WORKFLOW.md");
     await writeFile(file, workflow(rootA, tracker.url, { command: command(), afterRun: hook() }));
-    const proc = startProcess([], dir);
+    const proc = startProcess([], dir, binPath, { PATH: `${harnessDir}${path.delimiter}${process.env.PATH ?? ""}` });
     try {
       await proc.waitForOutput('event="session_started"');
       const worldA = readJson<{ pid: number; cwd: string }>(path.join(rootA, "GH-1", "world.json"));
