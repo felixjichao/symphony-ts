@@ -1,5 +1,4 @@
 import { defineConfig } from "vite";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,16 +37,16 @@ export default defineConfig({
   test: {
     environment: "node",
   },
-  plugins: [
-    {
-      name: "prepend-userscript-header",
-      closeBundle() {
-        const outPath = path.resolve(__dirname, "dist/symphony-decision-driver.user.js");
-        if (fs.existsSync(outPath)) {
-          const content = fs.readFileSync(outPath, "utf-8");
-          fs.writeFileSync(outPath, `${USERSCRIPT_BANNER}\n${content}`, "utf-8");
-        }
-      },
+  plugins: [{
+    name: "userscript-header",
+    generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk" || !output.isEntry) continue;
+        // Generate from the output chunk, not a post-build file that another hook
+        // can prepend again. Keep repeated invocation idempotent as well.
+        const code = output.code.replace(/^(?:\/\/ ==UserScript==\r?\n[\s\S]*?\/\/ ==\/UserScript==\s*)+/, "");
+        output.code = `${USERSCRIPT_BANNER}\n${code}`;
+      }
     },
-  ],
+  }],
 });
