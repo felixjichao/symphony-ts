@@ -74,3 +74,7 @@ npm run build -w @symphony/domain
 ## 决策记录
 
 架构 / 选型 / 跨包契约的决定要写 Agent Note（`notes/{lifecycle}/{class}/yyyy-mm-dd-topic.md`），模板与强制小节见 [notes/README.md](../notes/README.md)。
+
+## Dashboard workspace
+
+`@symphony/dashboard` lives in `apps/dashboard`. Run `npm run build -w @symphony/dashboard` then `npm run demo -w @symphony/dashboard`; use `npm run dev -w @symphony/dashboard` for Vite middleware mode. Both explicitly start controlled demo readers and the real query/HTTP chain on loopback; Ctrl-C closes both listeners. Build emits ignored `.contracts` declarations before browser tsc so public type barrels do not introduce Node ambient globals. There is one root lockfile. See [Dashboard instructions](../apps/dashboard/README.md).

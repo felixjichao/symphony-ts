@@ -138,3 +138,7 @@ node apps/cli/dist/bin/symphony.js ./WORKFLOW.md
 | [notes/](notes/README.md) | 架构 / 选型决策记录（Agent Notes） |
 
 Operational observation consumers can use the [operations readers](packages/operations/README.md) to collect GitHub/runtime/Decision/executor facts with per-source freshness and partial failure. Host wiring and explicit executor inventory are required; projection/query/transport remain future slices.
+
+## Read-only Dashboard
+
+[Dashboard](apps/dashboard/README.md) provides Overview and an attention-first Work list over the OperationalSnapshot HTTP endpoint. Run `npm run build -w @symphony/dashboard` then `npm run demo -w @symphony/dashboard` for loopback-only **演示数据**. This is a local demo; production source/lifecycle composition remains #140 and Work Detail remains #139.

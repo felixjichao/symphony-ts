@@ -129,3 +129,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [Task-bound Web response completion under DOM windowing](accepted/architecture/2026-10-17-task-bound-web-response-completion.md) — exact-task result matching, selector union and bounded local diagnostics.
 
 - [Bounded recovery and durable incidents](proposed/architecture/2026-10-22-bounded-recovery-incidents.md) — NEST-134 finite policy, epochs, native authority, durable reports and no-replay outbox.
+
+- [Read-only Dashboard consumer](accepted/architecture/2026-10-22-dashboard-consumer.md) — NEST-125 / #138: DOM/Vite consumer, optional v1 counts, exact same-origin demo and presentation guards.
