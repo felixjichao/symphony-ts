@@ -5,6 +5,8 @@ Baseline: `main@627daa2164f2a8cdbad67b05d860300ecb822db2` (PR #158 squash).
 This ledger separates credential-free production-equivalent tests from live acceptance.
 A passing fixture does not close a live gap. Parent #145 is **not ready to close**.
 
+The matrix contains **29 scenario IDs**, matching the machine-readable results.
+
 ## Scenario matrix
 
 Suite names below are source basenames (`src/<name>.test.ts` for CLI, Decision,
@@ -23,13 +25,13 @@ This inventory is not a claim that any row has current live evidence.
 | H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | not run |
 | H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run |
 | W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run |
-| W02 | Reload during navigation/execution | Web full suite | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | not run |
-| W03 | Driver/service restart with checkpoint | Web full suite; Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | not run |
-| W04 | Bridge timeout after accepted result | Decision continuity; Web full suite | accepted receipt after admission changes | receipt-first completion | passed (see run record) | not run |
-| W05 | Bridge unavailable before acceptance | Web full suite | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
+| W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | not run |
+| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | not run |
+| W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | not run |
+| W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
 | W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run |
 | W07 | Stale binding after rebind | Decision continuity | idempotent rebind | old binding progress rejected | passed (see run record) | not run |
-| W08 | Supersede during recovery | Decision continuity; Web full suite | admission barrier / supersede | revalidate current task | passed (see run record) | not run |
+| W08 | Supersede during recovery | [Exact supersede test](#web-test-index-w02-w05-w08); Decision continuity | admission barrier / supersede | revalidate current task | passed (see run record) | not run |
 | W09 | PR HEAD changes | CLI durable-delivery, decision-web-admission; Decision continuity | HEAD drift during downtime/admission | old target cannot approve/merge | passed (see run record) | not run |
 | W10 | Auth/human path | CLI work-continuity, review-regressions; Decision continuity | native block / host reconstruction | blocked; queryable deduplicated incident | passed (see run record) | not run |
 | L01 | Worker stops progress | orchestrator workflow-integration | stall with real subprocess | old process exits before retry | passed (see run record) | not run |
@@ -45,6 +47,28 @@ This inventory is not a claim that any row has current live evidence.
 | R02 | Continuation/capacity budget isolation | CLI recovery-review-regressions | six waits; restart; first failed worker | zero wait charge; first failure counts once | passed (see run record) | not run |
 | R03 | Native Review/Delivery human block | CLI review-regressions, recovery-review-regressions | real needs-human / manual pause | queryable incident; compensation cannot bypass pause | passed (see run record) | not run |
 | A01 | Observation Plane remains read-only | operations full suite | boundaries / source readers | no retry/resume/merge authority | passed (see run record) | not run |
+
+## Web test index (W02-W05, W08)
+
+Names below are exact `it` titles, not paraphrased acceptance claims. Paths are
+relative to the repository root. These tests ran in the original 216-test Web
+suite; a later focused rerun is recorded in the [review follow-up](run-2026-10-22.md#review-follow-up).
+
+| IDs | File | Exact test name | Evidence boundary |
+|---|---|---|---|
+| W02 | [driver.test.ts](../../../apps/chatgpt-web/test/driver.test.ts) | `recovers waiting_response checkpoint by waiting for existing response without resending prompt (R3)` | Reconstructed checkpoint/driver, fixture adapter; no real browser reload |
+| W02 | [fixture-e2e.test.ts](../../../apps/chatgpt-web/test/fixture-e2e.test.ts) | `recovers from navigating checkpoint across tab destruction and new tab reconstitution with real bridge (E2E)` | Real HTTP Bridge, fixture DOM/tab; no browser process restart |
+| W03 | [userscript-entry.test.ts](../../../apps/chatgpt-web/test/userscript-entry.test.ts) | `auto-starts across reconstruction, consumes checkpoint, and completes work against controlled bridge` | Reconstructed userscript controller, real Bridge/store, fixture DOM; not a service-process restart |
+| W03 | [continuity.test.ts](../../../packages/decision/src/continuity.test.ts) | `recovery budget survives reclaim and store reopen, then converges to blocked` | Same store object closed/reopened; not a Decision/Bridge process restart |
+| W04 | [review-continuity-regressions.test.ts](../../../apps/chatgpt-web/test/review-continuity-regressions.test.ts) | `a receipt that already accepted the candidate completes without another submission` | Native accepted result plus injected transport; receipt-first no-resubmit proof |
+| W04 | [continuity.test.ts](../../../packages/decision/src/continuity.test.ts) | `returns an already accepted result receipt after admission changes` | Native service receipt idempotency, not a real provider timeout |
+| W05 | [driver.test.ts](../../../apps/chatgpt-web/test/driver.test.ts) | `preserves candidateResult in checkpoint and does not call /fail on network transport error (S3)` | Injected transport failure; candidate retained |
+| W05 | [review-continuity-regressions.test.ts](../../../apps/chatgpt-web/test/review-continuity-regressions.test.ts) | `stops re-submitting at the budget, verifies the receipt first and blocks with the candidate retained` | Finite transport budget and native block; no real network outage |
+| W08 | [driver.test.ts](../../../apps/chatgpt-web/test/driver.test.ts) | `resolves supersede race on checkpoint resume candidate result submission (V1)` | Injected race, stale continuation rejected; not live UI evidence |
+
+The CLI host reconstruction test also retains the same DecisionService/store. It
+proves host recreation and durable ledger/query wiring, not Decision, Bridge or
+browser process restart. W03's full process-boundary acceptance remains not run.
 
 ## Cross-cutting assertions
 

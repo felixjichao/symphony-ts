@@ -42,3 +42,36 @@ Pending current-build live items: browser-process restart, driver/host restart w
 installed artifact identity, real provider/report ACK ambiguity, authentication/human
 UI, deleted conversation and native exhaustion. Historical tests narrow investigation;
 they do not resolve these current-composition gaps. Parent #145 stays open.
+
+## Environment required to resume
+
+Review follow-up on 2026-10-22 did not establish a usable live environment. No
+browser-control tool or authenticated page/Bridge address was supplied to this run.
+A local headless DevTools MCP process is present, but its existence establishes
+neither an accessible logged-in ChatGPT/Tampermonkey page nor current installation
+identity. No unrelated browser/profile or account store was opened or modified.
+Historical 4040/4041 loopback listeners were explicitly shut down in their evidence;
+their addresses are not a reusable live environment contract.
+
+The operator needs to supply or confirm:
+
+- A dedicated logged-in ChatGPT browser profile/page, enabled Tampermonkey script,
+  and a reachable browser-control connection (or an operator to perform the UI
+  interventions). Confirm the installed artifact hash and ability to restart that
+  isolated browser without affecting ordinary work.
+- Bridge base URL reachable from that page and this host, isolated Decision/store
+  and workspace paths, allowed origin, and a secure credential-file handoff. Do
+  not paste tokens in issue comments or commit authentication stores.
+- Disposable GitHub Issue/PR/repository and permitted fault operations. Historical
+  `felixjichao/symphony-delivery-dogfood` #24/#25 are candidates only until their
+  current ownership/availability is confirmed; do not assume old branch values.
+- Isolated driver/host launch and stop handles, expected retry/lease/progress
+  configuration, and permission to exercise auth/human/deleted-conversation and
+  finite exhaustion cases on that test account/profile.
+
+After these are available, repeat preflight at the latest PR head, execute each
+applicable pending row with template readbacks, and request review only after new
+live evidence exists. Keep PR #159 Draft and unmerged meanwhile. Its task-key link
+can auto-complete NEST-135 on merge; changing closing text alone does not disable
+that association. A partial merge would require explicit maintainer acceptance
+and handling of automatic completion settings first.
