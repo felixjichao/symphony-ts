@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "scripts/cleanup-polluted-tasks.mjs"],
+    ignores: ["**/dist/**", "**/.contracts/**", "**/node_modules/**", "scripts/cleanup-polluted-tasks.mjs"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

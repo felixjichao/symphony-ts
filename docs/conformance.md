@@ -501,3 +501,16 @@ It also verifies persistent path/other invariant blocks, conservative legacy unb
 invalid accounting schema rejection, exact human-reason incident/list/report dedup
 and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
 completed needs-human Review and paused Delivery facts through the production host.
+
+## §13 adjacent: Dashboard shell (#138 / NEST-125)
+
+| Capability | Implementation / validation | Scope |
+|---|---|---|
+| Optional v1 summary counts | domain operations contracts; `dashboard-summary.test.ts` checks exact degraded attention, final deduped anomalies, input permutation and zeros | Existing health/attention rules unchanged |
+| Overview / Work list | `apps/dashboard/src/view.ts`; DOM eight-state matrix and frozen inconsistent projections | Display only; no Work Detail/evidence explanations |
+| Four-state freshness / exact HEAD | per-source text; separate approval labels; keyboard details retain full HEAD, targets, task IDs/revisions | Observation, never merge authorization |
+| WorkKey / refresh / fault isolation | tuple routes, cross-repository same-number tests, bounded single-request poller, last-success preservation | No workflow action or persistent cache |
+| Same-origin real composition | `tests/integration.test.ts`: controlled readers → real query → real #137 HTTP → exact proxy; 200/404/405/500/502 and cleanup | Local demo, not production live acceptance |
+| No frontend domain derivation | Dashboard Vitest: AST/type checking, closed helpers, graph/capability/bundle guards, negative cases, semantic pass-through | Root gate runs the workspace tests |
+
+Real Chromium smoke is an explicit built-product check, separate from DOM tests; reproducible invocation and evidence are in [Dashboard README](../apps/dashboard/README.md). Production lifecycle/scope/live acceptance remains #140; #139 owns explanation/evidence/anomaly detail. Existing continuity pending evidence is unchanged.

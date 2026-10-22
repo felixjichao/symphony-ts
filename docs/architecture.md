@@ -114,3 +114,9 @@ fences remain authoritative. Unknown effects block rather than replay. The repor
 has a finite outbox budget and never recursively creates incidents. Operations and
 Dashboard gain no mutation authority. See the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
+
+## Dashboard observation consumer (#138)
+
+`apps/dashboard` is an app workspace with DOM components and Vite, downstream of operations. Browser imports are type-only from the public operations contract; Node-only `examples/` inject controlled SourceReaders into the real query service and #137 HTTP server. A separate loopback static host proxies only `/api/operations/snapshot` without JSON transformation or CORS. Production CLI is unchanged. Removing the Dashboard cannot affect scheduling.
+
+Only operations derives phase, waiting, attention, health, approval and counts. `degradedWork?` counts exactly degraded attention; `anomalyCount?` comes from final canonical anomaly deduplication. UI displays missing optional counts explicitly. Dependency/import graphs, capability/AST/type guards, closed helper fingerprints, negative fixtures, production bundle inspection and frozen inconsistent-projection tests protect this boundary. See [decision](../notes/accepted/architecture/2026-10-22-dashboard-consumer.md).

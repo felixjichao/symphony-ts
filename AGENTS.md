@@ -41,6 +41,7 @@ npm 是唯一 canonical 包管理器（npm workspaces + `package-lock.json`）�
 | 结构化日志、状态出口（dashboard / HTTP surface） | `packages/observability` | §13 |
 | Decision 任务与会话持久化、Web Agent Bridge | `packages/decision` | §4、Decision 扩展 |
 | Operational Read Model 只读事实 / 投影契约（未来 source reader / projector） | `packages/domain`（契约唯一权威）+ `packages/operations`（facade） | §13 邻接、#108 扩展 |
+| Dashboard shell / Overview / Work list（只读展示，无领域派生） | `apps/dashboard` | §13 邻接、#138 |
 | CLI 子命令、进程装配 / 生命周期 | `apps/cli` | §17、§18 |
 
 依赖方向（下游可依赖上游，反向禁止）：
@@ -54,6 +55,7 @@ agent               → domain + config + workspace
 orchestrator        → domain + config + tracker + workspace + agent
 observability       → domain + operations（只读 runtime snapshot 与 HTTP transport）
 operations          → domain（只读 operational facts / 投影契约；源包不得反向 import）
+apps/dashboard      → operations（浏览器仅类型）；Node-only demo → operations + observability
 apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability + decision
 ```
 

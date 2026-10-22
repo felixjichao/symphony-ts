@@ -151,3 +151,7 @@ NEST-134 review regressions additionally run with
 real authority → six slot waits → worker failure, accounting provenance across restart,
 non-ownership invariant retention, modeled-condition migration, and actual native
 Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.
+
+## Dashboard validation
+
+`npm test -w @symphony/dashboard` runs unit, jsdom mount, real loopback composition, AST/type/graph/capability guards, negative fixtures, frozen semantic pass-through and production module-graph inspection. It is included by root `npm run gate`. Domain/operations tests cover additive optional v1 counts; observability retains its complete JSON transport regressions. Run the [built Chromium smoke](../apps/dashboard/README.md#real-browser-smoke) separately with an already installed browser. It checks load, WorkKey routing, keyboard full SHA, GET-only requests, transport disconnect/recovery and prints artifact hashes. DOM tests alone are not browser or production live evidence.

@@ -12,7 +12,7 @@
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
-- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard / history / operator mutation 仍是独立后续能力。
+- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard shell / Overview / Work list 由 #138 提供；Work Detail / 生产装配 / history / operator mutation 仍是独立后续能力。
 - **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
@@ -204,3 +204,7 @@ migration from new capacity/continuation waits; native needs-human/manual reason
 produce durable deduplicated incidents without blocking Delivery report compensation.
 Focused real-authority/file-store and production-host regressions are included;
 independent re-review and external fault acceptance remain pending.
+
+## Dashboard shell — NEST-125 / GitHub #138
+
+`apps/dashboard` adds a replaceable TypeScript DOM consumer of #137: Overview, attention-first Work list, full WorkKey routes, distinct source freshness, explicit current/stale HEAD approval and observational polling errors. Schema v1 summary adds optional `degradedWork` / `anomalyCount`; new projectors always output them, using final canonical anomalies. The independent Node-only same-origin demo uses real query/HTTP and controlled readers, visibly marked 演示数据. Production CLI/source/lifecycle composition (#140), Work Detail/evidence/anomaly explanation (#139), and production live acceptance remain pending. This delivery does not depend on NEST-135 / Draft #159 or change its continuity acceptance status.
