@@ -12,7 +12,7 @@ import { BOOTSTRAP_PROMPT } from "../src/prompts";
 import { MockDocument, MockElement, MockWindow } from "./mock-dom";
 
 describe("bootstrap typed error recovery", () => {
-  it("preserves human_required and nonretryable receipt for bootstrap authentication failure", async () => {
+  it("persists nonterminal human-required blocking for bootstrap authentication failure", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-bootstrap-unrelated-"));
     const store = new DurableDecisionStore({ storeDir: dir });
     await store.open();
@@ -72,12 +72,12 @@ describe("bootstrap typed error recovery", () => {
       const outcome = await driver.runOnce();
 
       expect.soft(sends).toBe(0);
-      expect.soft(outcome?.status).toBe("failed");
-      expect.soft((outcome as { failure?: { error?: string } })?.failure?.error).toBe("human_required");
+      expect.soft(outcome?.status).toBe("blocked");
+      expect.soft(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
       expect.soft(service.getSession(session.id)?.binding).toBeNull();
       expect.soft(service.getSession(session.id)?.bindingGeneration).toBe(1);
-      expect.soft(service.getReceipt(task.id)?.payload as { error?: string } | undefined).toMatchObject({ error: "human_required" });
-      expect.soft((service.getReceipt(task.id)?.payload as { retryable?: boolean })?.retryable).toBe(false);
+      expect.soft(service.getReceipt(task.id)).toBeNull();
+      expect.soft(service.getExecution(task.id)?.blocked?.unblock).toContain("explicitly authorize");
       expect.soft(cp.get()).toBeNull();
     } finally { await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
   });

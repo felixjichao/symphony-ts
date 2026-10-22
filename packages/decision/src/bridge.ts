@@ -53,11 +53,13 @@ export class DecisionBridge {
       const storeConfig: DecisionStoreConfig = {
         storeDir: serviceOrConfig.storeDir,
         clock: serviceOrConfig.clock,
+        authorizeExecution: serviceOrConfig.authorizeExecution,
         defaultClaimTtlMs: serviceOrConfig.defaultClaimTtlMs,
       };
       const store = new DurableDecisionStore(storeConfig);
       this.service = new DecisionService(store, {
         clock: serviceOrConfig.clock,
+        authorizeExecution: serviceOrConfig.authorizeExecution,
         defaultClaimTtlMs: serviceOrConfig.defaultClaimTtlMs,
       });
       this.host = serviceOrConfig.host ?? "127.0.0.1";
@@ -234,6 +236,22 @@ export class DecisionBridge {
       this.sendJson(res, 200, { reclaimed });
       return;
     }
+    if (method === "POST" && pathname === "/v1/continuity/unblock") {
+      const body = await this.readJsonBody(req) as Record<string, unknown> | null;
+      // `leaseExpiresAtMs: null` is the explicit fence for a pending task that owns no lease.
+      const leaseExpiresAtMs = body?.["leaseExpiresAtMs"];
+      if (!body || typeof body["taskId"] !== "string" ||
+        !["revision", "claimGeneration", "bindingGeneration", "blockedAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0) ||
+        (leaseExpiresAtMs !== null && !(Number.isSafeInteger(leaseExpiresAtMs) && (leaseExpiresAtMs as number) >= 0))) {
+        throw new DecisionValidationError("Invalid unblock fence");
+      }
+      const unblocked = await this.service.unblockExecution({ taskId: body["taskId"],
+        revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
+        bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: leaseExpiresAtMs as number | null,
+        blockedAtMs: body["blockedAtMs"] as number });
+      this.sendJson(res, 200, { unblocked });
+      return;
+    }
 
     // Route matching
     // GET /v1/tasks/next
@@ -287,6 +305,26 @@ export class DecisionBridge {
       return;
     }
 
+    const blockMatch = /^\/v1\/tasks\/([^/]+)\/block$/.exec(pathname);
+    if (method === "POST" && blockMatch) {
+      const b = await this.readJsonBody(req) as Record<string, unknown>;
+      if (!b || typeof b["owner"] !== "string" || typeof b["token"] !== "string"
+        || typeof b["generation"] !== "number" || typeof b["reason"] !== "string") throw new DecisionValidationError("Invalid block request");
+      await this.service.blockExecution(decodeURIComponent(blockMatch[1]!), {
+        owner: b["owner"], token: b["token"], generation: b["generation"], reason: b["reason"],
+      });
+      this.sendJson(res, 200, { blocked: true });
+      return;
+    }
+
+    const executionMatch = /^\/v1\/tasks\/([^/]+)\/execution$/.exec(pathname);
+    if (method === "GET" && executionMatch) {
+      const id = decodeURIComponent(executionMatch[1]!);
+      if (!this.service.getTask(id)) throw new DecisionNotFoundError("Task not found");
+      this.sendJson(res, 200, { execution: this.service.getExecution(id) });
+      return;
+    }
+
     // POST /v1/tasks/:id/heartbeat
     const hbMatch = /^\/v1\/tasks\/([^/]+)\/heartbeat$/.exec(pathname);
     if (method === "POST" && hbMatch) {
@@ -302,6 +340,7 @@ export class DecisionBridge {
         token: b["token"],
         generation: b["generation"],
         ttlMs: typeof ttlMs === "number" ? ttlMs : undefined,
+        ...(b["progress"] !== undefined ? { progress: parseExecutionProgress(b["progress"]) } : {}),
       });
       this.sendJson(res, 200, result);
       return;
@@ -417,7 +456,7 @@ export class DecisionBridge {
       const id = decodeURIComponent(taskGetMatch[1]!);
       const task = this.service.getTask(id);
       if (!task) throw new DecisionNotFoundError(`Task "${id}" not found`);
-      this.sendJson(res, 200, { task });
+      this.sendJson(res, 200, { task, execution: this.service.getExecution(id) });
       return;
     }
 
@@ -787,4 +826,12 @@ export class DecisionBridge {
       res.end(JSON.stringify({ error: { code, message } }));
     }
   }
+}
+
+function parseExecutionProgress(value: unknown): { phase: string; responseLength: number } {
+  if (!value || typeof value !== "object" || !("phase" in value) || !("responseLength" in value)
+    || typeof value.phase !== "string" || typeof value.responseLength !== "number") {
+    throw new DecisionValidationError("Invalid execution progress");
+  }
+  return { phase: value.phase, responseLength: value.responseLength };
 }

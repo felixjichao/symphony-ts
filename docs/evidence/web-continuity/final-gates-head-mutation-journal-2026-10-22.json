@@ -1,0 +1,16 @@
+{
+  "repository": "felixjichao/symphony-delivery-dogfood",
+  "prNumber": 25,
+  "branch": "codex/nest-120-invoice-summary",
+  "originalHead": "d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+  "base": "main",
+  "baseSha": "2525eb4412f24601226a1efbd539f8a697b14980",
+  "testHead": "ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+  "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+  "intentAtMs": 1792650944843,
+  "stateBefore": "running",
+  "receiptBefore": false,
+  "pushed": true,
+  "readbackHead": "ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+  "readbackAtMs": 1792650949010
+}

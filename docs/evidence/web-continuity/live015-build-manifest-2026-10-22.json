@@ -1,0 +1,23 @@
+{
+  "sourceHead": "ea5c9887f4457a656b704d5daa4f2541494bb333",
+  "userscriptVersion": "0.1.5",
+  "installationProvenance": "Operator confirmed update; installed bytes not independently extracted. Fresh Edge page loaded the driver.",
+  "previousBuildSha256": "a1b24a992f51e2b6c6dc9d7a8f9116d758c545d705230690b6a7cd3889068c00",
+  "fixedHeaderBuildSha256": "46ef99b266c3bba575788556171451fb839c49421cb9d87e863a3e93b9f00a47",
+  "runtimePayloadSha256": "5afa3c8e819642588d9b3060a58cfb4217e3596b55a0d5e70e580b7fe8d7a740",
+  "fixedHeaderCount": 1,
+  "reconstructedOldDoubleHeaderBuildMatches": true,
+  "headerVerification": "Two consecutive builds and complete gate leave one header; old build plus Vitest diagnostics run produces two.",
+  "scope": "Synthetic materialized Plans only, real ChatGPT/Edge/Tampermonkey and production Decision authority; no GitHub mutation or coding host.",
+  "limits": [
+    "No direct live windowed visible response growth beyond ten minutes",
+    "No live prompt_submitting crash-gap/exact-result Send confirmation",
+    "No new auth UI, browser-process restart or recovery-budget exhaustion coverage"
+  ],
+  "cleanup": {
+    "driverStopped": true,
+    "bridgeStopped": true,
+    "ports4040And4041Closed": true
+  },
+  "workingTreeChange": "vite.config.ts metadata-header emission only; runtime payload unchanged"
+}

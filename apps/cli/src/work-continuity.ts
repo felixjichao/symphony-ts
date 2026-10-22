@@ -78,8 +78,11 @@ export function createHostWorkContinuity(options: {
         ...(task.target ? { expectedHeadSha: task.target.headSha } : {}) };
       facts = { ...facts, stage: task.kind, expectedFence: fence, target: task.target ?? undefined, taskRef: { taskId: task.id, revision: task.revision },
         contradictions: runtime ? ["runtime_and_decision_ownership_overlap"] : facts.contradictions,
+        blocked: task.execution?.blocked ? `${task.execution.blocked.reason}: ${task.execution.blocked.unblock}` : facts.blocked,
+        externalWait: !task.owner ? { system: "browser", condition: "enabled_configured_chatgpt_page_required" } : facts.externalWait,
         owner: task.owner && task.leaseExpiresAtMs !== null ? { id: task.owner, fence: { ...fence, bindingGeneration: task.claimBindingGeneration ?? decision.bindingGeneration },
-          leaseExpiresAt: task.leaseExpiresAtMs, liveness: { startedAt: task.createdAtMs, lastProgressAt: "unknown", lastObservedAt: observedAt } } : null };
+          leaseExpiresAt: task.leaseExpiresAtMs, liveness: { startedAt: task.execution?.startedAtMs ?? task.createdAtMs, lastProgressAt: task.execution && task.execution.phase !== "claimed" && task.execution.phase !== "unknown" ? task.execution.lastProgressAtMs : "unknown", lastObservedAt: observedAt,
+            ...(task.execution ? { deadlineAt: task.execution.deadlineAtMs } : {}) } } : null };
     } else if (planningGate && !runtime && !delivery?.isPaused) {
       const eligible = await planningGate.verifyPlanEligibility(decisionSessionId(key), { title: issue.title, body: issue.description ?? "" });
       if (!eligible.eligible) facts = { ...facts, stage: "plan", blocked: eligible.reason ?? "planning_admission_denied" };
@@ -133,7 +136,7 @@ export function createHostWorkContinuity(options: {
       facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "delivery_changed_during_observation"] };
     }
     const version = JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
-      github, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
+      github, execution: task?.execution, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
       policy: controller.current.scheduling.policy, config: controller.current.serviceConfig });
     const observation = { ...facts, version };
     options.onObservation?.(observation);

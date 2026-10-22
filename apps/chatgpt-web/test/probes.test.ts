@@ -6,6 +6,7 @@ import {
   findSendButton,
   findStopButton,
   findLatestAssistantTurn,
+  getAllAssistantTurns,
   extractCodeBlocksFromTurn,
   extractConversationIdFromUrl,
   extractFormalConversationIdFromUrl,
@@ -99,6 +100,16 @@ describe("DOM Probes and URL utilities", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.language).toBe("symphony-result");
     expect(blocks[0]?.content).toBe('{"verdict":"approve"}');
+  });
+
+  it("deduplicates nested legacy and modern assistant markers in DOM order", () => {
+    const doc = new MockDocument();
+    const outer = new MockElement("div", { "data-message-author-role": "assistant" });
+    outer.appendChild(new MockElement("div", { "data-markdown-text-style": "assistant-message" }));
+    const next = new MockElement("div", { "data-markdown-text-style": "assistant-message" });
+    doc.body.appendChild(outer);
+    doc.body.appendChild(next);
+    expect(getAllAssistantTurns(doc as unknown as Document)).toEqual([outer, next]);
   });
 
   it("reads current ChatGPT assistant markdown and labeled code surfaces", () => {

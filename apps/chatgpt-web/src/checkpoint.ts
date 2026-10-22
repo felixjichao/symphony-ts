@@ -41,6 +41,7 @@ export interface DriverCheckpoint {
   readonly navigationStartedAtMs?: number | undefined;
   readonly navigationDeadlineMs?: number | undefined;
   readonly navigationAttempts?: number | undefined;
+  readonly recoveryFailures?: number | undefined;
 }
 
 export interface CheckpointStore {

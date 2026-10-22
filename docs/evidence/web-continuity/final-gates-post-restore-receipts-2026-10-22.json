@@ -1,0 +1,16 @@
+[
+  {
+    "label": "review-head-A",
+    "httpStatus": 404
+  },
+  {
+    "label": "review-head-B",
+    "httpStatus": 200,
+    "receiptTarget": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 25,
+      "headSha": "ca8ace51ca38307d1a4333de0fb6071bde8cc0b5"
+    },
+    "verdict": "approve"
+  }
+]

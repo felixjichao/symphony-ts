@@ -1,1 +1,6 @@
-export type { DecisionContinuityTask, DecisionContinuityWork, ReclaimDecisionClaim } from "@symphony/domain";
+export type {
+  DecisionContinuityTask,
+  DecisionContinuityWork,
+  ReclaimDecisionClaim,
+  UnblockDecisionExecution,
+} from "@symphony/domain";

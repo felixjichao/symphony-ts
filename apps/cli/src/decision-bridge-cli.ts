@@ -1,3 +1,4 @@
+import { authorizeDecisionWebExecution } from "./decision-web-admission";
 import { DecisionBridge } from "@symphony/decision";
 
 export interface DecisionBridgeCliIo {
@@ -100,6 +101,7 @@ export async function runDecisionBridgeCli(
   try {
     bridge = new DecisionBridge({
       storeDir: parsed.storeDir,
+      authorizeExecution: authorizeDecisionWebExecution,
       port: parsed.port ?? 4040,
       host: "127.0.0.1",
       authToken: token,

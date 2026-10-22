@@ -5,3 +5,5 @@
 export * from "./decision";
 export * from "./decision-context";
 export * from "./decision-executor";
+export * from "./decision-continuity";
+export { mapDecisionAdapterFailure, mapWebDriverFailure } from "./execution-continuity";

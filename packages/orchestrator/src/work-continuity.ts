@@ -36,6 +36,7 @@ export function deriveWorkContinuity(f: WorkContinuityObservation): WorkContinui
     const l = f.owner.liveness;
     if (f.owner.leaseExpiresAt !== undefined) {
       if (f.observedAt >= f.owner.leaseExpiresAt) return result("stranded", ["execution_lease_expired"], "reclaim");
+      if (l.deadlineAt !== undefined && f.observedAt > l.deadlineAt) return result("stalled", ["progress_deadline_exceeded_awaiting_lease_expiry"]);
       return result(l.lastProgressAt === "unknown" ? "unknown" : "healthy", ["valid_execution_lease"]);
     }
     const baseline = l.lastProgressAt === "unknown" ? l.startedAt : l.lastProgressAt;
