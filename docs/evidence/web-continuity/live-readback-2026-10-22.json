@@ -1,0 +1,154 @@
+{
+  "userscriptSha256": "c08b9ad494f101a2c4197c0666a33e21c76af8e74a309c5c49e5ffd251114154",
+  "installationEvidence": "operator confirmed current dist file update; no independent installed-byte hash",
+  "tasks": [
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:1",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 1475,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649088764,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:2",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 5219,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649142680,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:3",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 6804,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649230129,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:4",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 7421,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649301112,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:5",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 0,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649346356,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:6",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 0,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649432022,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23148:plan:7",
+      "statusAtFinalReadback": "running",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "prompt_submitting",
+      "responseLength": 0,
+      "blockedReason": "human_required",
+      "receipt": null
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23149:plan:1",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 12300,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649638120,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23149:plan:2",
+      "statusAtFinalReadback": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 6773,
+      "blockedReason": "human_required",
+      "receipt": null
+    },
+    {
+      "taskId": "github%3Asymphony-acceptance%2Fpr156%23149:plan:3",
+      "statusAtFinalReadback": "completed",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "phase": "waiting_response",
+      "responseLength": 4291,
+      "blockedReason": null,
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792649813847,
+        "verdict": "ready",
+        "claimGenerationMatches": true
+      }
+    }
+  ]
+}

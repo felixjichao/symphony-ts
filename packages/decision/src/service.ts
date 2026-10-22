@@ -1295,7 +1295,7 @@ export class DecisionService {
     taskId: string,
     params: { owner: string; token: string; generation: number; ttlMs?: number | undefined; progress?: { phase: string; responseLength: number } | undefined }
   ): Promise<HeartbeatTaskResponse> {
-    if (params.progress && ["navigating", "prompt_submitting", "bootstrap_submitting"].includes(params.progress.phase)) {
+    if (this.authorizeExecution) {
       const task = this.store.getTask(taskId);
       if (task && this.authorizeExecution && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
     }
@@ -1365,6 +1365,11 @@ export class DecisionService {
     taskId: string,
     params: { owner: string; token: string; generation: number; result: DecisionResult }
   ): Promise<SubmitResultResponse> {
+    // Receipt readback remains idempotent even after the external target changes.
+    if (this.authorizeExecution && !this.store.getReceipt(taskId)) {
+      const task = this.store.getTask(taskId);
+      if (task && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
+    }
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);

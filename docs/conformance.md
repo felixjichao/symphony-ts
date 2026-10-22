@@ -401,6 +401,33 @@ The host uses the existing marker/HEAD-bound Delivery observer and does not weak
 
 | Contract | Implementation / automated evidence | Real environment |
 |---|---|---|
-| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Browser close/reopen pending |
-| SPEC §7/§8/§14 adjacency: native-source host diagnosis and safe reclaim | `apps/cli/src/work-continuity.test.ts`, `review-regressions.test.ts`: real store/host tick, blocked admission, explicit browser-page wait, exact-HEAD conflicts | Real host/browser fault injection pending |
-| Web navigation/send fencing, receipt-first recovery and persistent intent/Stop | `apps/chatgpt-web/test/driver.test.ts`, `userscript-entry.test.ts`, `review-bootstrap.test.ts`, `review-round11.test.ts` | Real Tampermonkey/auth/network acceptance pending |
+| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Real reload/close no-replay and natural host reclaim/block passed; full browser-process restart pending — [evidence](evidence/web-continuity/final-gates-2026-10-22.md) |
+| SPEC §7/§8/§14 adjacency: native-source host diagnosis and safe reclaim | `apps/cli/src/work-continuity.test.ts`, `review-regressions.test.ts`: real store/host tick, blocked admission, explicit browser-page wait, exact-HEAD conflicts | Real GitHub tracker + native host poll reclaimed before-Send loss and blocked after-Send loss; actual Review HEAD change fenced — [evidence](evidence/web-continuity/final-gates-2026-10-22.md) |
+| Web navigation/send fencing, receipt-first recovery and persistent intent/Stop | `apps/chatgpt-web/test/driver.test.ts`, `userscript-entry.test.ts`, `review-bootstrap.test.ts`, `review-round11.test.ts` | Real Edge/Tampermonkey reload, Bridge auth/network recovery, no-replay and Stop passed; actual login/deleted-conversation categories remain — [scenarios](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run) |
+
+PR #156 active-response fixes (SPEC §4 / §13 adjacent):
+`apps/chatgpt-web/test/review-followup-regressions.test.ts` covers active heartbeat
+401/403 reporting, interruption without a failure receipt, authoritative renewed
+expiry, and conversation drift before/during recovery extraction.
+`packages/decision/src/continuity.test.ts` covers review admission denial during
+waiting/result acceptance, idempotent accepted receipts after admission changes,
+and no claim-generation rollover after tab identity loss following Send.
+These fixtures alone do not close the failed real-browser acceptance recorded in
+[PR #156](https://github.com/felixjichao/symphony-ts/pull/156#issuecomment-6315625918).
+See the [recovery fencing note](../notes/accepted/architecture/2026-10-21-active-web-response-fencing.md).
+
+### Decision Web response deadline (Decision extension, §4 / §13 adjacent)
+
+Browser response waits default to 15 minutes and have a persisted HUD setting (1–60 minutes). Navigation/composer timeouts and host delivery budgets are unchanged. `apps/chatgpt-web/test/adapter.test.ts` exercises real execution and checkpoint-response extraction after four simulated minutes, an explicit shorter deadline, and invalid adapter values; `userscript-entry.test.ts` covers saved settings and invalid UI input.
+
+### Decision Web result recognition under DOM windowing
+
+`apps/chatgpt-web/test/response-wait-regression.test.ts` reproduces completed exact-task results timing out when counts shrink or the restored baseline exceeds current DOM count, and mixed-selector masking. It validates count-independent exact-task recognition, in-place node replacement, timeout metadata, and rejection of stale revision, wrong task/SHA, unknown fields, pre-send replies and active streaming. Existing extraction/receipt/lease regression suites retain their strict fencing. `diagnostics.test.ts` validates the 50-event bound, reload retention, metadata-only storage and best-effort failures. Real #137 revision 3 captured baseline 5/current 4 at completion and a Bridge-accepted changes_requested result; the host automatically entered repair 1/3. See [live recovery evidence](evidence/self-hosting/driver-result-recovery-2026-10-17.md). Historical revisions lack the corresponding DOM trace. See the [decision note](../notes/accepted/architecture/2026-10-17-task-bound-web-response-completion.md).
+
+PR #156 follow-up automated verification (2026-10-22): full host gate passed with 2,019 tests and one existing opt-in skip; real-browser acceptance remains pending. See [validation evidence](evidence/web-continuity/automated-validation-2026-10-22.md).
+
+PR #156 real-browser follow-up (2026-10-22): actual Edge/Tampermonkey reload, heartbeat-401 recovery, result-403 recovery, result request/ack loss, no-replay blocking after tab loss, two enabled tabs, route-drift blocking, supersede continuation and durable Stop were exercised. Ten isolated Plan tasks produced eight matching result receipts, all at claim generation 1. That initial run left actual Review HEAD changes and host-owned reclaim pending; the [final-gate run](evidence/web-continuity/final-gates-2026-10-22.md) now verifies both. Browser-process/auth UI failures remain outside the completed scope; see [scenario evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
+
+PR #156 final gates (2026-10-22): real GitHub-backed host polling automatically reclaimed pre-Send Web loss (generation 1 → 2 → matching receipt) and blocked post-Send uncertainty without replay. During an actual dogfood PR #25 HEAD A → B change, production GitHub admission rejected A, and a superseding B Review completed with an exact-B receipt. The test branch was restored to A with expected-head protection. See [final-gate evidence](evidence/web-continuity/final-gates-2026-10-22.md).
+
+PR #156 closeout (2026-10-22): an inaccessible bound conversation automatically rolled over binding and claim generation 1 → 2 and completed with a matching receipt. Final diagnostics restoration uses validated metadata only; 14 focused regressions passed and the P2 review finding was resolved. Remaining live categories and installed-versus-final-build provenance are explicit in the [closeout record](evidence/web-continuity/closeout-2026-10-22.md); #148 remains open.

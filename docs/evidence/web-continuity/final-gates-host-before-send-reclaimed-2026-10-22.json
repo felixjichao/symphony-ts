@@ -1,0 +1,16 @@
+{
+  "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:plan:1",
+  "status": "pending",
+  "claimGeneration": 1,
+  "execution": {
+    "revision": 1,
+    "startedAtMs": 1792650330191,
+    "lastProgressAtMs": 1792650330191,
+    "deadlineAtMs": 1792650930191,
+    "phase": "claimed",
+    "responseLength": 0,
+    "recoveryAttempts": 1,
+    "blocked": null
+  },
+  "observedAtMs": 1792650478236
+}

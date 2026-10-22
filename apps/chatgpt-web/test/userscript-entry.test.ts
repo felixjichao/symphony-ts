@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,12 +54,37 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     if (activeController) {
       activeController.stop();
       activeController = null;
     }
     (globalThis as unknown as { window: unknown }).window = originalWindow;
     (globalThis as unknown as { document: unknown }).document = originalDocument;
+  });
+
+  it("restores and saves the response timeout when starting the driver", async () => {
+    const saved = vi.fn();
+    vi.stubGlobal("GM_getValue", (key: string, fallback: unknown) => key === "symphony_response_timeout_minutes" ? 20 : fallback);
+    vi.stubGlobal("GM_setValue", saved);
+    activeController = initSymphonyUserscript();
+    const input = mockDoc.getElementById("symphony-response-timeout-input") as unknown as HTMLInputElement;
+    expect(input.value).toBe("20");
+    input.value = "25";
+    await activeController.start();
+    expect(saved).toHaveBeenCalledWith("symphony_response_timeout_minutes", 25);
+    expect(activeController.getDriver()).not.toBeNull();
+  });
+
+  it.each(["0", "61", "1.5", ""]) ("rejects invalid timeout input %s before starting", async (value) => {
+    activeController = initSymphonyUserscript();
+    const input = mockDoc.getElementById("symphony-response-timeout-input") as unknown as HTMLInputElement;
+    input.value = value;
+    await activeController.start();
+    expect(activeController.isRunning()).toBe(false);
+    expect(activeController.getDriver()).toBeNull();
+    expect(sessionStorage.getItem("symphony_driver_enabled")).toBeNull();
+    expect(mockDoc.getElementById("symphony-driver-status")?.textContent).toContain("1 to 60");
   });
 
   it("initializes in Idle state without auto-starting when sessionStorage is empty", () => {

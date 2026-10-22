@@ -20,6 +20,7 @@
 
 ## Decision Plane extension
 
+
 本扩展是 §4（domain contracts）旁的 provider-neutral extension（GitHub #93 / NEST-98），不是上游 Symphony SPEC Core requirement，不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义；逐项能力与证据矩阵见 [conformance.md](conformance.md#decision-plane-extension-evidence-nest-99--94-nest-100--95-nest-101--96-nest-102--97-nest-103--98--nest-104--99)。
 
 - GitHub #94–#99（NEST-99–NEST-104）全部完成并已合入 `main`：`100c570`（#94 / NEST-99 契约）、`a0a6ecf`（#95 / NEST-100 存储与 Bridge）、`3760812`（#96 / NEST-101 adapter 抽象）、`73f055c`（#97 / NEST-102 ChatGPT Web adapter）、`314d05c`（#98 / NEST-103 review gate）、`a9d114c`（#99 / NEST-104 planning workflow）。
@@ -146,4 +147,18 @@ Uncertain recovery calls/readbacks now suppress repeat delegation across scans u
 
 ## NEST-132 Decision/Web continuity
 
-Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real ChatGPT + Tampermonkey reload/close/reopen, auth and network fault acceptance is pending; fixture success does not close that acceptance item.
+Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real Edge/Tampermonkey reload, Bridge auth/network faults, no-replay blocking, actual Review HEAD changes and native-host automatic reclaim have scoped 2026-10-22 evidence below; full browser-process restart and ChatGPT login/deleted-conversation categories remain unverified.
+
+
+PR #156 follow-up fixes active heartbeat auth reporting, authoritative lease recovery,
+and bound-conversation checks around recovered extraction. Heartbeat and first
+result acceptance now revalidate external target admission; accepted receipts remain
+readable after target changes. Automated no-replay coverage includes tab identity
+loss after Send. Scoped real-browser and final-gate evidence is recorded below;
+untested historical categories are not marked passed.
+
+2026-10-22 real-browser follow-up: Edge/Tampermonkey partial fault acceptance passed reload, active heartbeat 401, result 403, pre/post acceptance network loss, bounded no-replay tab-loss handling, two-tab single claim/result, route-drift blocking, supersede continuation and persistent Stop. Ten isolated Plan tasks produced eight result receipts, all claim generation 1. Lost-tab blocking used explicit fenced reclaim, not automatic host coordination. The later same-day final-gate run verifies actual Review HEAD change and native-host reclaim. ChatGPT auth/deleted-conversation recovery and browser-process restart remain pending; #148/#156 overall acceptance is not complete. See [evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
+
+2026-10-22 final gates: both requested blockers passed. Native host polling with real GitHub sources automatically reclaimed a pre-Send lost claim; a new page completed generation 2 and stale generation 1 was rejected. The same host automatically blocked uncertain post-Send loss without replay. Actual dogfood PR #25 HEAD A → B during Review caused production GitHub admission to reject A and block the old task; an explicitly superseding Review completed with an exact-B approve receipt without manual Start. The test branch was restored to original A, all workers/listeners were stopped. See [final-gate evidence and remaining scope](evidence/web-continuity/final-gates-2026-10-22.md).
+
+2026-10-22 closeout: inaccessible-conversation recovery additionally passed with automatic binding/claim generation 1 → 2 and a matching receipt. Standards review found one diagnostics-restoration metadata boundary defect, now fixed and re-reviewed; Spec review found no confirmed defect. PR #156 implementation closeout is complete within this bounded review scope. #148 remains open; remaining auth UI, permanent deletion/rebind exhaustion, full browser restart and heartbeat-403 live coverage stays tracked with existing #151. See [closeout evidence and build provenance](evidence/web-continuity/closeout-2026-10-22.md).

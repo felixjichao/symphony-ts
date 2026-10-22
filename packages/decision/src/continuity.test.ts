@@ -6,14 +6,16 @@ import { describe, expect, it } from "vitest";
 import { githubDecisionRoot } from "@symphony/domain";
 import { DecisionBridge, DecisionBridgeClient, DecisionService, DurableDecisionStore, type ReclaimDecisionClaim } from "./index";
 
-async function fixture(authorizeExecution?: () => Promise<boolean>) {
+async function fixture(authorizeExecution?: () => Promise<boolean>, review = false) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "continuity-"));
   let now = 1000;
   const store = new DurableDecisionStore({ storeDir: dir });
   await store.open();
   const service = new DecisionService(store, { clock: () => now, authorizeExecution });
   const session = await service.createSession(githubDecisionRoot("owner", "repo", 1));
-  const task = await service.createPlanTask(session.id);
+  const task = review
+    ? await service.createReviewTask(session.id, { target: { repository: "owner/repo", prNumber: 1, headSha: "a".repeat(40) } })
+    : await service.createPlanTask(session.id);
   const claimed = await service.claimTask(task.id, { owner: "web", ttlMs: 1000 });
   const expected: ReclaimDecisionClaim = { taskId: task.id, revision: task.revision,
     claimGeneration: claimed.task.claimGeneration, bindingGeneration: 0,
@@ -289,5 +291,58 @@ it("rejects corrupted progress phases while preserving compatibility with pre-me
     const legacy = f.store.getState();
     delete (legacy as { executions?: unknown }).executions;
     expect(() => validateStoreRecord(legacy)).not.toThrow();
+  } finally { await f.cleanup(); }
+});
+
+
+it("revalidates review admission while waiting and before accepting a result", async () => {
+  let admitted = true;
+  const f = await fixture(async () => admitted, true);
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: 1 };
+    await f.service.startTask(f.expected.taskId, credentials);
+    const progress = { phase: "waiting_response", responseLength: 10 };
+    await f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress });
+    const before = f.service.getTask(f.expected.taskId);
+    admitted = false;
+    await expect(f.service.heartbeatTask(f.expected.taskId, { ...credentials, progress }))
+      .rejects.toThrow("target is no longer current");
+    await expect(f.service.submitResult(f.expected.taskId, { ...credentials, result: {
+      schemaVersion: 1, taskId: f.expected.taskId, sessionId: f.claimed.session.id,
+      kind: "review", revision: 1, verdict: "approve", createdAtMs: 1000,
+      target: { repository: "owner/repo", prNumber: 1, headSha: "a".repeat(40) }, findings: [],
+    } })).rejects.toThrow("target is no longer current");
+    expect(f.service.getTask(f.expected.taskId)).toEqual(before);
+    expect(f.service.getReceipt(f.expected.taskId)).toBeNull();
+  } finally { await f.cleanup(); }
+});
+
+it("tab identity loss after Send never releases a task for another prompt", async () => {
+  const f = await fixture();
+  try {
+    await f.service.heartbeatTask(f.expected.taskId, { owner: "web", token: f.claimed.lease.token,
+      generation: 1, ttlMs: 1000, progress: { phase: "prompt_submitting", responseLength: 0 } });
+    f.setTime(2001);
+    expect(await f.service.reclaimExpiredClaim(f.expected)).toBe(true);
+    expect(f.service.getExecution(f.expected.taskId)?.blocked?.reason).toBe("human_required");
+    await expect(f.service.claimTask(f.expected.taskId, { owner: "new-tab" })).rejects.toThrow();
+    expect(f.service.getTask(f.expected.taskId)?.claimGeneration).toBe(1);
+    expect(await f.service.getNextTask()).toBeNull();
+  } finally { await f.cleanup(); }
+});
+
+
+it("returns an already accepted result receipt after admission changes", async () => {
+  let admitted = true;
+  const f = await fixture(async () => admitted);
+  try {
+    const credentials = { owner: "web", token: f.claimed.lease.token, generation: 1 };
+    await f.service.startTask(f.expected.taskId, credentials);
+    const result = { schemaVersion: 1 as const, taskId: f.expected.taskId, sessionId: f.claimed.session.id,
+      kind: "plan" as const, revision: 1, verdict: "ready" as const, createdAtMs: 1000,
+      content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+    const accepted = await f.service.submitResult(f.expected.taskId, { ...credentials, result });
+    admitted = false;
+    expect(await f.service.submitResult(f.expected.taskId, { ...credentials, result })).toEqual(accepted);
   } finally { await f.cleanup(); }
 });

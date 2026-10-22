@@ -1,10 +1,12 @@
+import { DriverDiagnostics } from "./diagnostics";
+import { getOrCreateTabId } from "./checkpoint";
 /**
  * Tampermonkey userscript entrypoint.
  * Injects a floating control HUD into ChatGPT Web and orchestrates DecisionTabDriver.
  */
 import { GmBridgeTransport, FetchBridgeTransport, BridgeHttpError, type BridgeTransport } from "./transport";
 import { GmCheckpointStore, type CheckpointStore } from "./checkpoint";
-import { ChatGptWebAdapter } from "./adapter";
+import { ChatGptWebAdapter, DEFAULT_RESPONSE_TIMEOUT_MS } from "./adapter";
 import { DecisionTabDriver } from "./driver";
 
 function createTransport(bridgeBaseUrl: string, authToken?: string): BridgeTransport {
@@ -51,6 +53,9 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   let token =
     options?.authToken ??
     (typeof GM_getValue === "function" ? GM_getValue<string>("symphony_bridge_token", "") : "");
+
+  const savedResponseMinutes = typeof GM_getValue === "function"
+    ? GM_getValue<number>("symphony_response_timeout_minutes", 15) : 15;
 
   // Create HUD container
   const hud = document.createElement("div");
@@ -185,6 +190,19 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   settingsContainer.appendChild(urlInput);
   settingsContainer.appendChild(tokenRow);
 
+  const timeoutLabel = document.createElement("label");
+  timeoutLabel.textContent = "Response timeout (minutes, 1–60)";
+  const timeoutInput = document.createElement("input");
+  timeoutInput.id = "symphony-response-timeout-input";
+  timeoutInput.type = "number";
+  timeoutInput.min = "1";
+  timeoutInput.max = "60";
+  timeoutInput.step = "1";
+  timeoutInput.value = String(Number.isInteger(savedResponseMinutes) && savedResponseMinutes >= 1 && savedResponseMinutes <= 60
+    ? savedResponseMinutes : DEFAULT_RESPONSE_TIMEOUT_MS / 60_000);
+  timeoutLabel.appendChild(timeoutInput);
+  settingsContainer.appendChild(timeoutLabel);
+
   const btnRow = document.createElement("div");
   btnRow.style.display = "flex";
   btnRow.style.gap = "8px";
@@ -210,6 +228,18 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   hud.appendChild(settingsContainer);
   hud.appendChild(btnRow);
   document.body.appendChild(hud);
+
+  const diagnosticPanel = document.createElement("details");
+  const diagnosticTitle = document.createElement("summary");
+  diagnosticTitle.textContent = "Driver diagnostics (last 50 events)";
+  const diagnosticText = document.createElement("pre");
+  diagnosticText.id = "symphony-driver-diagnostics";
+  Object.assign(diagnosticText.style, { maxHeight: "200px", overflow: "auto", fontSize: "10px", whiteSpace: "pre-wrap" });
+  diagnosticPanel.appendChild(diagnosticTitle);
+  diagnosticPanel.appendChild(diagnosticText);
+  hud.appendChild(diagnosticPanel);
+  const diagnostics = new DriverDiagnostics(`symphony_driver_diagnostics_${getOrCreateTabId(typeof window !== "undefined" ? window : null)}`,
+    text => { diagnosticText.textContent = text; });
 
   let currentDriver: DecisionTabDriver | null = null;
   let isRunning = false;
@@ -265,6 +295,13 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
     try {
       const generation = ++enableGeneration;
       if (authProbeTimer) clearTimeout(authProbeTimer);
+      const responseMinutes = Number(timeoutInput.value);
+      if (!Number.isInteger(responseMinutes) || responseMinutes < 1 || responseMinutes > 60) {
+        throw new Error("Response timeout must be an integer from 1 to 60 minutes");
+      }
+      if (typeof GM_setValue === "function") {
+        GM_setValue("symphony_response_timeout_minutes", responseMinutes);
+      }
       if (currentDriver) {
         currentDriver.stop();
         currentDriver = null;
@@ -279,7 +316,9 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
 
       const transport = options?.transport ?? createTransport(bridgeUrl, token);
       const checkpointStore = options?.checkpointStore ?? new GmCheckpointStore();
-      const adapter = options?.adapter ?? new ChatGptWebAdapter();
+      const adapter = options?.adapter ?? new ChatGptWebAdapter({ responseTimeoutMs: responseMinutes * 60_000,
+        onResponseWaitState: ({ taskId, kind, revision, ...wait }) => diagnostics.record({ stage: "response_wait", taskId, kind, revision, wait }),
+      });
 
       currentDriver = new DecisionTabDriver({
         transport,
@@ -287,6 +326,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
         adapter,
         shouldRun: isDriverEnabledInTab,
         ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
+        onDiagnostic: entry => diagnostics.record(entry),
         onError: (err: Error) => {
           // Auth failures are fatal: polling would loop on 401/403 until credentials
           // are fixed by the operator, so stop and surface the error.

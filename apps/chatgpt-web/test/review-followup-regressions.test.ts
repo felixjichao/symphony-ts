@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
 } from "@symphony/domain/decision";
 import { DecisionTabDriver } from "../src/driver";
 import { MemoryCheckpointStore } from "../src/checkpoint";
-import { FetchBridgeTransport, type BridgeTransport } from "../src/transport";
+import { BridgeHttpError, FetchBridgeTransport, type BridgeTransport } from "../src/transport";
 import { ChatGptWebAdapter } from "../src/adapter";
 import { MockDocument, MockElement, MockWindow } from "./mock-dom";
 
@@ -241,4 +241,145 @@ describe("candidate evidence survives an unresolved block", () => {
       expect(cp.get()?.candidateResult).toBeUndefined();
     } finally { await f.close(); }
   });
+});
+
+
+describe("PR156 active response recovery", () => {
+  it.each([401, 403])("reports active heartbeat authentication failure %s immediately", async status => {
+    const f = await realChain(31);
+    const errors: Error[] = [];
+    const auth = new BridgeHttpError("Unauthorized", "unauthorized", status);
+    const driver = new DecisionTabDriver({
+      transport: { baseUrl: f.baseUrl, authToken: undefined, request: async () => { throw auth; } },
+      heartbeatIntervalMs: 10, onError: error => errors.push(error),
+    });
+    vi.useFakeTimers();
+    try {
+      driver.startHeartbeat(f.task, f.claim.lease);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(errors).toEqual([auth]);
+      await expect(driver.submitFailure(f.task.id, { ...f.claim.lease, error: "execution_failed" }))
+        .rejects.toBe(auth);
+    } finally { driver.stop(); vi.useRealTimers(); await f.close(); }
+  });
+
+  it("uses authoritative renewed expiry instead of dropping a stale local waiting checkpoint", async () => {
+    const f = await realChain(32);
+    try {
+      await f.service.startTask(f.task.id, f.claim.lease);
+      const cp = new MemoryCheckpointStore();
+      cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+        leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token,
+        leaseGeneration: 1, leaseExpiresAtMs: Date.now() - 1, bindingGeneration: 1,
+        step: "waiting_response", baselineCount: 0, attemptId: "a", savedAtMs: Date.now() });
+      const p = page("https://chatgpt.com/c/conv-1");
+      const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+      const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+        kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+        content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+      const wait = vi.spyOn(adapter, "waitForExistingResponse").mockResolvedValue({ result });
+      const driver = new DecisionTabDriver({ transport: new FetchBridgeTransport({ baseUrl: f.baseUrl }), checkpointStore: cp, adapter });
+      expect((await driver.runOnce())?.status).toBe("completed");
+      expect(wait).toHaveBeenCalledOnce();
+      expect(f.service.getReceipt(f.task.id)?.claimGeneration).toBe(1);
+      expect(p.sends()).toBe(0);
+    } finally { await f.close(); }
+  });
+
+  it.each(["before", "during"])("blocks conversation drift %s response extraction without resending", async timing => {
+    const f = await realChain(33);
+    try {
+      await f.service.startTask(f.task.id, f.claim.lease);
+      const cp = new MemoryCheckpointStore();
+      cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+        leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token,
+        leaseGeneration: 1, leaseExpiresAtMs: f.claim.lease.expiresAtMs, bindingGeneration: 1,
+        step: "waiting_response", baselineCount: 0, attemptId: "a", savedAtMs: Date.now() });
+      const p = page(timing === "before" ? "https://chatgpt.com/c/unrelated" : "https://chatgpt.com/c/conv-1");
+      const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+      const wait = vi.spyOn(adapter, "waitForExistingResponse").mockImplementation(async () => {
+        p.win.location.href = "https://chatgpt.com/c/unrelated";
+        return { result: { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+          kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+          content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } } };
+      });
+      const driver = new DecisionTabDriver({ transport: new FetchBridgeTransport({ baseUrl: f.baseUrl }), checkpointStore: cp, adapter });
+      expect((await driver.runOnce())?.status).toBe("blocked");
+      expect(wait).toHaveBeenCalledTimes(timing === "before" ? 0 : 1);
+      expect(p.sends()).toBe(0);
+      expect(f.service.getReceipt(f.task.id)).toBeNull();
+      expect(f.service.getExecution(f.task.id)?.blocked?.reason).toBe("human_required");
+    } finally { await f.close(); }
+  });
+});
+
+
+it("preserves active response evidence on heartbeat auth interruption without a failure receipt", async () => {
+  const f = await realChain(34);
+  try {
+    await f.service.startTask(f.task.id, f.claim.lease);
+    const cp = new MemoryCheckpointStore();
+    cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+      leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token,
+      leaseGeneration: 1, leaseExpiresAtMs: f.claim.lease.expiresAtMs, bindingGeneration: 1,
+      step: "waiting_response", baselineCount: 0, attemptId: "a", savedAtMs: Date.now() });
+    const p = page("https://chatgpt.com/c/conv-1");
+    const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+    let waiting = false;
+    vi.spyOn(adapter, "waitForExistingResponse").mockImplementation(async (_task, options) => {
+      waiting = true;
+      return new Promise((_resolve, reject) => options.signal?.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
+    });
+    const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+    const auth = new BridgeHttpError("Unauthorized", "unauthorized", 401);
+    const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+      request: async <T>(method: string, url: string, body?: unknown, options?: { allow204?: boolean; signal?: AbortSignal }): Promise<T> => {
+        if (waiting && url.endsWith("/heartbeat")) throw auth;
+        return inner.request<T>(method, url, body, options);
+      } };
+    const errors: Error[] = [];
+    const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter,
+      heartbeatIntervalMs: 5, onError: error => { errors.push(error); driver.stop(); } });
+    await expect(driver.runOnce()).rejects.toThrow("Aborted");
+    expect(errors).toEqual([auth]);
+    expect(cp.get()?.step).toBe("waiting_response");
+    expect(f.service.getReceipt(f.task.id)).toBeNull();
+    expect(f.service.getTask(f.task.id)?.status).toBe("running");
+    expect(p.sends()).toBe(0);
+    waiting = false;
+    const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+      kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+      content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+    vi.mocked(adapter.waitForExistingResponse).mockResolvedValueOnce({ result });
+    expect((await driver.runOnce())?.status).toBe("completed");
+    expect(f.service.getReceipt(f.task.id)?.claimGeneration).toBe(1);
+    expect(p.sends()).toBe(0);
+  } finally { await f.close(); }
+});
+
+
+it("retains an actually expired sent checkpoint across native human blocking", async () => {
+  const f = await realChain(35);
+  try {
+    await f.service.startTask(f.task.id, f.claim.lease);
+    await f.service.heartbeatTask(f.task.id, { ...f.claim.lease, progress: { phase: "waiting_response", responseLength: 0 } });
+    const task = f.service.getTask(f.task.id)!;
+    const cp = new MemoryCheckpointStore();
+    cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+      leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token,
+      leaseGeneration: 1, leaseExpiresAtMs: task.lease!.expiresAtMs, bindingGeneration: 1,
+      step: "waiting_response", baselineCount: 0, attemptId: "a", savedAtMs: Date.now() });
+    const driver = new DecisionTabDriver({ transport: new FetchBridgeTransport({ baseUrl: f.baseUrl }), checkpointStore: cp });
+    const now = vi.spyOn(Date, "now").mockReturnValue(task.lease!.expiresAtMs + 1);
+    try {
+      expect((await driver.runOnce())?.status).toBe("blocked");
+      expect(cp.get()?.step).toBe("waiting_response");
+      expect(await f.service.reclaimExpiredClaim({ taskId: task.id, revision: task.revision,
+        claimGeneration: 1, bindingGeneration: 1, leaseExpiresAtMs: task.lease!.expiresAtMs })).toBe(true);
+      expect((await driver.runOnce())?.status).toBe("blocked");
+      expect(cp.get()?.step).toBe("waiting_response");
+      expect(f.service.getTask(task.id)?.claimGeneration).toBe(1);
+      expect(f.service.getReceipt(task.id)).toBeNull();
+    } finally { now.mockRestore(); }
+  } finally { await f.close(); }
 });

@@ -1,3 +1,4 @@
+import { canonicalJsonStringify } from "./canonical-json";
 /**
  * ChatGPT Web implementation of DecisionExecutorAdapter.
  * Drives ChatGPT Web UI within browser / Tampermonkey context.
@@ -51,11 +52,15 @@ function isResultTurn(turn: HTMLElement): boolean {
   ) || /```symphony-result\s/i.test(turn.textContent || "");
 }
 
+export const DEFAULT_RESPONSE_TIMEOUT_MS = 15 * 60_000;
+
 export interface ChatGptWebAdapterOptions {
   readonly origin?: string | undefined;
   readonly doc?: Document | undefined;
   readonly win?: Window | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly responseTimeoutMs?: number | undefined;
+  readonly onResponseWaitState?: ((state: import("./probes").ResponseWaitState & { taskId: string; kind: "plan" | "review"; revision: number }) => void) | undefined;
   readonly stabilizationMs?: number | undefined;
   readonly checkIntervalMs?: number | undefined;
 }
@@ -78,6 +83,8 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
   private readonly docSupplier: () => Document;
   private readonly winSupplier: () => Window | null;
   private readonly timeoutMs: number;
+  private readonly responseTimeoutMs: number;
+  private readonly onResponseWaitState: ChatGptWebAdapterOptions["onResponseWaitState"];
   private readonly stabilizationMs: number;
   private readonly checkIntervalMs: number;
   private stepListener: ((step: DriverStep, meta?: Record<string, unknown>) => void | Promise<void>) | null = null;
@@ -152,6 +159,11 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     this.docSupplier = () => options.doc ?? (typeof document !== "undefined" ? document : (null as unknown as Document));
     this.winSupplier = () => options.win ?? (typeof window !== "undefined" ? window : null);
     this.timeoutMs = options.timeoutMs ?? 180_000;
+    this.onResponseWaitState = options.onResponseWaitState;
+    this.responseTimeoutMs = options.responseTimeoutMs ?? options.timeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.responseTimeoutMs) || this.responseTimeoutMs <= 0 || this.responseTimeoutMs > 2_147_483_647) {
+      throw new Error("responseTimeoutMs must be a positive integer <= 2147483647");
+    }
     this.stabilizationMs = options.stabilizationMs ?? 1000;
     this.checkIntervalMs = options.checkIntervalMs ?? 500;
   }
@@ -211,7 +223,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       doc,
       baselineCount: options.baselineCount,
       baselineTurn: options.baselineTurn ?? null,
-      timeoutMs: this.timeoutMs,
+      timeoutMs: this.responseTimeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
@@ -714,6 +726,10 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     const baselineCount = initialTurns.length;
     const baselineTurn = initialTurns[initialTurns.length - 1] ?? null;
 
+    const baselineResults = new Set(initialTurns.flatMap(turn => {
+      try { return [canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))]; } catch { return []; }
+    }));
+
     // Report prompt submitting step to listener (e.g. driver checkpoint)
     await this.stepListener?.("prompt_submitting", { baselineCount });
 
@@ -745,11 +761,15 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       doc,
       baselineCount,
       baselineTurn,
-      timeoutMs: this.timeoutMs,
+      timeoutMs: this.responseTimeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
       isCompletionCandidate: isResultTurn,
+      matchesExpectedResult: turn => {
+        try { return !baselineResults.has(canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))); } catch { return false; }
+      },
+      onState: state => this.onResponseWaitState?.({ ...state, taskId: task.id, kind: task.kind, revision: task.revision }),
     });
 
     // Extract structured result
@@ -778,11 +798,15 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       doc,
       baselineCount: options.baselineCount,
       baselineTurn: options.baselineTurn,
-      timeoutMs: this.timeoutMs,
+      timeoutMs: this.responseTimeoutMs,
       stabilizationMs: this.stabilizationMs,
       checkIntervalMs: this.checkIntervalMs,
       signal: options.signal,
       isCompletionCandidate: isResultTurn,
+      matchesExpectedResult: turn => {
+        try { extractResultFromAssistantTurn(turn, task); return true; } catch { return false; }
+      },
+      onState: state => this.onResponseWaitState?.({ ...state, taskId: task.id, kind: task.kind, revision: task.revision }),
     });
 
     const result = extractResultFromAssistantTurn(assistantTurn, task);

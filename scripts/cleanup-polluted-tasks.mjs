@@ -1603,7 +1603,7 @@ class DecisionService {
     });
   }
   async heartbeatTask(taskId, params) {
-    if (params.progress && ["navigating", "prompt_submitting", "bootstrap_submitting"].includes(params.progress.phase)) {
+    if (this.authorizeExecution) {
       const task = this.store.getTask(taskId);
       if (task && this.authorizeExecution && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
     }
@@ -1663,6 +1663,10 @@ class DecisionService {
     });
   }
   async submitResult(taskId, params) {
+    if (this.authorizeExecution && !this.store.getReceipt(taskId)) {
+      const task = this.store.getTask(taskId);
+      if (task && !await this.authorizeExecution(task)) throw new DecisionConflictError("Execution target is no longer current");
+    }
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);

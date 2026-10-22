@@ -89,14 +89,22 @@ export function findStopButton(doc: Document = document): HTMLButtonElement | nu
   return null;
 }
 
-export function getAllAssistantTurns(doc: Document = document): HTMLElement[] {
-  for (const selector of SELECTORS.assistantTurn) {
-    const turns = doc.querySelectorAll<HTMLElement>(selector);
-    if (turns.length > 0) {
-      return Array.from(turns);
+export function observeAssistantTurns(doc: Document = document): { selector: string | null; turns: HTMLElement[] } {
+  // A legacy selector must not hide modern messages further down the same page.
+  const matched = SELECTORS.assistantTurn.filter(selector => doc.querySelectorAll(selector).length > 0);
+  const all = Array.from(doc.querySelectorAll<HTMLElement>(SELECTORS.assistantTurn.join(", ")));
+  const set = new Set(all);
+  const turns = all.filter(turn => {
+    for (let parent = turn.parentElement; parent; parent = parent.parentElement) {
+      if (set.has(parent)) return false;
     }
-  }
-  return [];
+    return true;
+  });
+  return { selector: matched.length ? matched.join(", ") : null, turns };
+}
+
+export function getAllAssistantTurns(doc: Document = document): HTMLElement[] {
+  return observeAssistantTurns(doc).turns;
 }
 
 export function countAssistantTurns(doc: Document = document): number {
@@ -208,10 +216,25 @@ export function isChatGPTOrigin(originOrUrl: string): boolean {
   }
 }
 
+export interface ResponseWaitState {
+  readonly phase: "waiting" | "completed" | "timeout" | "aborted";
+  readonly reason: "no_new_turn" | "generating" | "empty_turn" | "ineligible_result" | "stabilizing" | "ready";
+  readonly selector: string | null;
+  readonly baselineCount: number;
+  readonly currentCount: number;
+  readonly candidateFound: boolean;
+  readonly matchingTaskResult: boolean;
+  readonly stopPresent: boolean;
+  readonly elapsedMs: number;
+}
+
 export interface WaitForCompletionOptions {
   readonly doc?: Document | undefined;
   readonly baselineCount?: number | undefined;
   readonly baselineTurn?: HTMLElement | null | undefined;
+  /** Only a fully validated result for the exact task may bypass count growth. Never use for unstructured bootstrap replies. */
+  readonly matchesExpectedResult?: ((turn: HTMLElement) => boolean) | undefined;
+  readonly onState?: ((state: ResponseWaitState) => void) | undefined;
   readonly isCompletionCandidate?: ((turn: HTMLElement) => boolean) | undefined;
   readonly checkIntervalMs?: number | undefined;
   readonly stabilizationMs?: number | undefined;
@@ -239,17 +262,32 @@ export async function waitForStreamingCompletion(
   const start = Date.now();
   let lastText = "";
   let lastChangeAt = Date.now();
-  let turnObserved = false;
+  let lastCandidate: HTMLElement | null = null;
+  let lastStateKey = "";
+  let lastState: ResponseWaitState = { phase: "waiting", reason: "no_new_turn", selector: null,
+    baselineCount, currentCount: 0, candidateFound: false, matchingTaskResult: false, stopPresent: false, elapsedMs: 0 };
+  const report = (state: ResponseWaitState) => {
+    lastState = state;
+    const key = JSON.stringify({ ...state, elapsedMs: 0 });
+    if (key !== lastStateKey) {
+      lastStateKey = key;
+      // Diagnostics must never interfere with response execution.
+      try { options.onState?.(state); } catch { /* Best effort local diagnostics. */ }
+    }
+  };
 
   while (true) {
     options.onPoll?.();
-
+    const elapsedMs = Date.now() - start;
     if (signal?.aborted) {
+      report({ ...lastState, phase: "aborted", elapsedMs });
       throw new Error("Aborted while waiting for assistant completion");
     }
-
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`Timeout waiting for ChatGPT response after ${timeoutMs}ms`);
+    if (elapsedMs > timeoutMs) {
+      report({ ...lastState, phase: "timeout", elapsedMs });
+      throw new DecisionAdapterError({ code: "execution_failed", suggestedAction: "fail_closed", retryable: false,
+        message: `Timeout waiting for ChatGPT response after ${timeoutMs}ms (${lastState.reason})`,
+        rawDetails: { reason: "timeout" } });
     }
 
     if (detectConversationNotFound(doc, options.ignoredConversationNotFoundSignals)) {
@@ -268,43 +306,32 @@ export async function waitForStreamingCompletion(
       });
     }
 
-    const turns = getAllAssistantTurns(doc);
+    const { selector, turns } = observeAssistantTurns(doc);
     const stopButton = findStopButton(doc);
-
-    // Target turn MUST strictly be a newly appeared turn belonging to this send attempt:
-    // 1. Total turn count must strictly exceed baselineCount
-    // 2. The turn must not match baselineTurn if a baselineTurn was captured
-    let targetTurn: HTMLElement | null = null;
-    if (turns.length > baselineCount) {
-      const candidate = turns[turns.length - 1] ?? null;
-      if (candidate && (!baselineTurn || candidate !== baselineTurn)) {
-        targetTurn = candidate;
-      }
-    }
-
+    const candidate = turns[turns.length - 1] ?? null;
+    const matchingTaskResult = candidate !== null && Boolean(options.matchesExpectedResult?.(candidate));
+    // Count growth is useful for unstructured responses, but DOM windowing and selector
+    // changes can shrink the list. An exact task-bound result is stronger evidence.
+    const newTurn = candidate !== null && turns.length > baselineCount && candidate !== baselineTurn;
+    const targetTurn = newTurn || matchingTaskResult ? candidate : null;
+    let reason: ResponseWaitState["reason"] = "no_new_turn";
     if (targetTurn) {
       const currentText = targetTurn.textContent || "";
-      if (!turnObserved) {
-        turnObserved = true;
-        lastText = currentText;
-        lastChangeAt = Date.now();
-      } else if (currentText !== lastText) {
+      if (targetTurn !== lastCandidate || currentText !== lastText) {
+        lastCandidate = targetTurn;
         lastText = currentText;
         lastChangeAt = Date.now();
       }
-
-      // Completion conditions:
-      // 1. Stop button is not active (model has finished generating/streaming)
-      // 2. We have non-empty assistant text
-      // 3. The text has remained stable for at least stabilizationMs
-      if (!stopButton && currentText.trim().length > 0 &&
-          (!options.isCompletionCandidate || options.isCompletionCandidate(targetTurn))) {
-        const stableDuration = Date.now() - lastChangeAt;
-        if (stableDuration >= stabilizationMs) {
-          return targetTurn;
-        }
-      }
+      reason = stopButton ? "generating" : !currentText.trim() ? "empty_turn"
+        : options.isCompletionCandidate && !options.isCompletionCandidate(targetTurn) ? "ineligible_result"
+          : Date.now() - lastChangeAt < stabilizationMs ? "stabilizing" : "ready";
+    } else {
+      lastCandidate = null;
     }
+    report({ phase: reason === "ready" ? "completed" : "waiting", reason, selector, baselineCount,
+      currentCount: turns.length, candidateFound: targetTurn !== null, matchingTaskResult,
+      stopPresent: stopButton !== null, elapsedMs });
+    if (targetTurn && reason === "ready") return targetTurn;
 
     await new Promise((r) => setTimeout(r, intervalMs));
   }
