@@ -1,3 +1,4 @@
+import { FileLandingIntentStorage, createNativeDeliveryService } from "./landing-storage";
 /**
  * CLI runner for GitHub delivery commands (SPEC §11.5 / MVP.3):
  *   symphony pr ensure ...
@@ -165,7 +166,7 @@ export function parseDeliveryArgs(argv: readonly string[]): ParsedDeliveryArgs {
 export async function runDeliveryCli(argv: readonly string[], options: RunDeliveryCliOptions = {}): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
-  const service = options.service ?? new GitHubDeliveryService();
+  const service = options.service ?? createNativeDeliveryService();
 
   const args = parseDeliveryArgs(argv);
 
@@ -326,6 +327,7 @@ export async function runDeliveryCli(argv: readonly string[], options: RunDelive
         }
 
         const result = await service.landPr(context, {
+          landingStorage: new FileLandingIntentStorage(process.cwd()),
           optIn: true,
           prNumber: args.prNumber,
           expectedHeadSha: args.expectedHeadSha,

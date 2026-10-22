@@ -155,4 +155,4 @@ export type {
 
 export type { OrchestratorEvent, RetryEventReason } from "./events";
 export { deriveWorkContinuity, WorkContinuityCoordinator } from "./work-continuity";
-export type { WorkContinuityPorts, WorkContinuityReconciliation } from "./work-continuity";
+export type { WorkRecoveryStorage, WorkContinuityPorts, WorkContinuityReconciliation } from "./work-continuity";

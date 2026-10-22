@@ -322,7 +322,9 @@ it('resolves a lost reclaim response only after native task readback proves rele
     expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
     now = 100000;
     expect((await f.host.workContinuity.reconcile())[0]?.result).toBe('unverified');
-    expect(attempts).toBe(1);
+    // Fresh native claim/lease evidence permits the same fenced primitive to
+    // retry; time alone still does not acknowledge it or create a new owner.
+    expect(attempts).toBe(2);
     expect(service.getTask(task.id)?.status).toBe('claimed');
     // An independent native authority resolves the old action, then a new claim is a new target.
     await reclaim({ taskId: task.id, revision: task.revision, claimGeneration: service.getTask(task.id)!.claimGeneration,
@@ -330,10 +332,10 @@ it('resolves a lost reclaim response only after native task readback proves rele
     const next = await service.claimTask(task.id, { owner: 'new-web', ttlMs: 1000 });
     now = next.task.lease!.expiresAtMs; commit = true;
     await f.host.workContinuity.reconcile();
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(3);
     expect(service.getTask(task.id)?.status).toBe('pending');
     await f.host.workContinuity.reconcile();
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(3);
   } finally { await f.cleanup(); await store.close(); await fs.rm(storeDir, { recursive: true, force: true }); }
 });
 
@@ -532,6 +534,10 @@ it('retries compensation after certified lock contention without suppressing an 
   const remote = { labels: ['ready'], comments: [] as string[] };
   const gh = vi.spyOn(DefaultDeliveryGitGhRunner.prototype, 'gh').mockImplementation(async args => {
     if (args[1] === 'edit') remote.labels = [];
+    else if (args.includes('labels,state')) return { exitCode: 0, stderr: '', stdout: JSON.stringify({ state: 'OPEN', labels: remote.labels }) };
+    else if (args.includes('body,headRefOid,headRefName,baseRefName')) return { exitCode: 0, stderr: '', stdout: JSON.stringify({
+      body: 'Fixes #42\n\n<!-- symphony-delivery-marker: {"schemaVersion":1,"workspaceKey":"GH-42","issueNumber":42,"repo":"owner/repo","headBranch":"symphony/GH-42","baseBranch":"main"} -->',
+      headRefOid: 'a'.repeat(40), headRefName: 'symphony/GH-42', baseRefName: 'main' }) };
     else if (args[1] === 'view') return { exitCode: 0, stderr: '', stdout: JSON.stringify({ comments: remote.comments.map(body => ({ body })) }) };
     else if (args[1] === 'comment') remote.comments.push(args[args.length - 1]!);
     else throw new Error('unexpected GitHub command');

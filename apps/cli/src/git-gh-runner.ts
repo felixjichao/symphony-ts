@@ -1,3 +1,4 @@
+import { beginDeliverySubprocess } from "./file-authority";
 import { spawn } from "node:child_process";
 import {
   sanitizeCredentials,
@@ -46,6 +47,7 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
     extraEnv?: Record<string, string>,
   ): Promise<DeliverySubprocessResult> {
     return new Promise((resolve, reject) => {
+      const settleSubprocess = beginDeliverySubprocess();
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(command, [...args], {
@@ -55,6 +57,7 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
           env: { ...process.env, ...extraEnv },
         });
       } catch (err) {
+        settleSubprocess();
         reject(new Error(`Failed to spawn ${command}: ${sanitizeCredentials(String(err))}`));
         return;
       }
@@ -103,6 +106,7 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
       }
 
       child.on("error", (err) => {
+        try { settleSubprocess(); } catch (error) { reject(error); return; }
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
@@ -111,6 +115,7 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
       });
 
       child.on("close", (code) => {
+        try { settleSubprocess(); } catch (error) { reject(error); return; }
         if (settled) return;
         if (timedOut) {
           finish({

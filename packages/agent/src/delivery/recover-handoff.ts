@@ -1,5 +1,6 @@
 import {
   formatDeliveryHandoffMarkdown,
+  validatePrOwnership,
   type DeliveryHandoff,
   type PersistedDeliveryState,
 } from "@symphony/domain";
@@ -120,27 +121,56 @@ async function recoverDeliveryHandoffLocked(
     "symphony-ready";
   const reason = (currentState.pauseReason as DeliveryHandoff["reason"]) ?? "manual_intervention_required";
   const prNumber = currentState.handoff?.prNumber ?? null;
+  let reportDestination = currentState.handoff?.reportDestination ?? (prNumber !== null ? "pr" : "issue");
 
-  // 2. Ready label removal compensation
-  let readyLabelRemoved = currentState.readyLabelRemoved ?? false;
-  if (!readyLabelRemoved) {
-    try {
-      const editRes = await runner.gh(
-        ["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel],
-        cwd,
-      );
-      if (editRes.exitCode === 0) {
-        readyLabelRemoved = true;
-        log(`[delivery-recovery] Successfully removed label '${effectiveReadyLabel}' from issue #${issueNumber}`);
-      } else {
-        readyLabelRemoved = false;
-        log(`[delivery-recovery] Warning: Failed to remove label '${effectiveReadyLabel}': ${editRes.stderr}`);
+  // Re-observe authoritative identity/labels; old step flags never grant permission.
+  const readLabels = async (): Promise<boolean> => {
+    const result = await runner.gh(["issue", "view", String(issueNumber), "--repo", repo, "--json", "labels,state"], cwd);
+    if (result.exitCode !== 0) throw new Error("Current issue labels unavailable");
+    const value = JSON.parse(result.stdout) as { state?: string; labels?: Array<{ name: string } | string> };
+    if (!["OPEN", "CLOSED"].includes(value.state ?? "") || !Array.isArray(value.labels)) throw new Error("Invalid current issue facts");
+    return !value.labels.some(label => (typeof label === "string" ? label : label.name) === effectiveReadyLabel);
+  };
+  let readyLabelRemoved = false;
+  try {
+    readyLabelRemoved = await readLabels();
+    const handoff = currentState.handoff;
+    if (prNumber !== null && handoff) {
+      const result = await runner.gh(["pr", "view", String(prNumber), "--repo", repo,
+        "--json", "body,headRefOid,headRefName,baseRefName"], cwd);
+      if (result.exitCode !== 0) throw new Error("Current handoff PR unavailable");
+      const pr = JSON.parse(result.stdout) as { body?: string; headRefOid?: string; headRefName?: string; baseRefName?: string };
+      const valid = validatePrOwnership(pr.body ?? "", { repo, issueNumber, workspaceKey: currentState.workspaceKey,
+        headBranch: handoff.headBranch, baseBranch: currentState.continuation?.baseBranch ?? currentState.landing?.context.baseBranch ?? "main" });
+      if (!valid.valid || pr.headRefName !== handoff.headBranch || handoff.headSha && pr.headRefOid !== handoff.headSha) {
+        throw new Error("Handoff PR ownership/HEAD changed; old compensation refused");
       }
-    } catch (err) {
-      readyLabelRemoved = false;
-      log(`[delivery-recovery] Warning: Exception while removing label: ${String(err)}`);
     }
+    // Earlier halt snapshots retained a PR target but reported on the Issue.
+    // With a stable receipt marker, inspect both collections before choosing a
+    // legacy destination. Unavailable evidence blocks rather than duplicating.
+    if (handoff && !handoff.reportDestination && handoff.handoffId && prNumber !== null && !currentState.commentPosted) {
+      for (const [kind, number] of [["pr", prNumber], ["issue", issueNumber]] as const) {
+        const result = await runner.gh([kind, "view", String(number), "--repo", repo, "--json", "comments"], cwd);
+        if (result.exitCode !== 0) throw new Error("Legacy report destination unavailable");
+        const value = JSON.parse(result.stdout) as { comments?: { body?: string }[] };
+        if (!Array.isArray(value.comments)) throw new Error("Legacy report comments unavailable");
+        if (value.comments.some(comment => typeof comment.body === "string" && hasHandoffMarker(comment.body, handoff.handoffId!))) {
+          reportDestination = kind;
+        }
+      }
+      currentState = { ...currentState, handoff: { ...handoff, reportDestination } };
+      await stateStorage.writeState(currentState);
+    }
+    if (!readyLabelRemoved) {
+      await runner.gh(["issue", "edit", String(issueNumber), "--repo", repo, "--remove-label", effectiveReadyLabel], cwd);
+      readyLabelRemoved = await readLabels();
+    }
+  } catch (error) {
+    return { success: false, error: String(error), readyLabelRemoved, commentPosted: false,
+      commentVerifyStatus: "unverified", pendingCompensation: true };
   }
+  await stateStorage.writeState({ ...currentState, readyLabelRemoved, pendingCompensation: true, lastUpdated: new Date().toISOString() });
 
   // 3. Comment post / verify compensation
   let commentPosted = currentState.commentPosted ?? false;
@@ -150,11 +180,12 @@ async function recoverDeliveryHandoffLocked(
   const handoffId = currentState.handoff?.handoffId;
   const headSha = currentState.handoff?.headSha;
 
-  const viewTargetArgs = prNumber !== null
+  const reportToPr = reportDestination === "pr";
+  const viewTargetArgs = reportToPr
     ? ["pr", "view", String(prNumber), "--repo", repo, "--json", "comments"]
     : ["issue", "view", String(issueNumber), "--repo", repo, "--json", "comments"];
 
-  const commentTargetArgs = prNumber !== null
+  const commentTargetArgs = reportToPr
     ? ["pr", "comment", String(prNumber), "--repo", repo]
     : ["issue", "comment", String(issueNumber), "--repo", repo];
 
@@ -174,7 +205,7 @@ async function recoverDeliveryHandoffLocked(
           if (handoffId) {
             canUniquelyVerify = true;
             alreadyPosted = parsedView.comments.some(
-              (c: { body?: string }) => typeof c.body === "string" && c.body.includes(handoffId),
+              (c: { body?: string }) => typeof c.body === "string" && hasHandoffMarker(c.body, handoffId),
             );
           } else {
             // 没有 handoffId 的旧状态：严格筛选真正的交接报告（普通提及 commit 的评论不是交接报告）
@@ -289,6 +320,7 @@ async function recoverDeliveryHandoffLocked(
       handoffToPost = {
         ...baseHandoff,
         handoffId: baseHandoff.handoffId ?? generatedHandoffId,
+        reportDestination: reportToPr ? "pr" : "issue",
       };
 
       // 关键核心修复（Blocker 1）：在发起任何远端评论网络请求之前，必须立即将补齐 handoffId 的完整 handoff 持久化落盘！
@@ -342,4 +374,14 @@ async function recoverDeliveryHandoffLocked(
     commentVerifyStatus,
     pendingCompensation,
   };
+}
+
+function hasHandoffMarker(body: string, id: string): boolean {
+  for (const match of body.matchAll(/<!--\s*symphony:handoff-id:\s*(.*?)\s*-->/g)) {
+    if (match[1]?.trim() === id) return true;
+  }
+  for (const match of body.matchAll(/<!--\s*symphony-delivery-handoff:\s*(.*?)\s*-->/g)) {
+    try { if ((JSON.parse(match[1] ?? "") as { handoffId?: string }).handoffId === id) return true; } catch { /* malformed legacy marker */ }
+  }
+  return false;
 }

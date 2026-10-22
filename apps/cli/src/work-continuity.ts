@@ -1,7 +1,10 @@
+import { deliveryAuthorityBlock } from "./file-authority";
+import { createHash } from "node:crypto";
+import { FileWorkRecoveryStorage } from "./recovery-storage";
 /** Composition of authoritative sources. No operations/read-model dependency. */
 import fs from "node:fs";
 import path from "node:path";
-import { recoverDeliveryHandoff } from "@symphony/agent";
+import { recoverDeliveryHandoff, runDeliverySkill } from "@symphony/agent";
 import { githubDecisionRoot, decisionSessionId, parseDecisionSessionRootFromId,
   type Issue, type WorkKey, type WorkContinuityObservation, type WorkRecoveryRequest, type WorkRecoveryResult,
 } from "@symphony/domain";
@@ -16,6 +19,8 @@ export function createHostWorkContinuity(options: {
   controller: EffectiveRuntimeController;
   authority: OrchestratorAuthority;
   planningGate: DecisionPlanningGate | null;
+  reviewGate?: import("@symphony/domain").DeliveryReviewGate | undefined;
+  runner?: import("@symphony/agent").DeliveryGitGhRunner | undefined;
   resolveSession: (issue: Issue) => string | null;
   now: () => number;
   github?: Pick<GitHubDeliveryService, "observeWork"> | undefined;
@@ -23,7 +28,7 @@ export function createHostWorkContinuity(options: {
 }) {
   const { controller, authority, planningGate, resolveSession, now } = options;
   const identities = new Map<string, { key: WorkKey; issueId: string | null; workspace: string | null }>();
-  const runner = new DefaultDeliveryGitGhRunner();
+  const runner = options.runner ?? new DefaultDeliveryGitGhRunner();
   const add = (key: WorkKey, issueId: string | null, workspace: string | null) => {
     const id = decisionSessionId(key);
     const old = identities.get(id);
@@ -49,14 +54,14 @@ export function createHostWorkContinuity(options: {
     // The original scheduler retains actual timer ownership (including due/in-flight refresh).
     let facts: WorkContinuityObservation = { ...base, active: isActiveState(issue.state, controller.current.scheduling.policy), owner: runtime,
       expectedFence: runtime?.fence ?? {}, scheduled: authority.continuitySchedule(issue.id),
-      blocked: delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null };
+      blocked: authority.continuityBlock(issue.id) ?? (delivery?.isPaused ? delivery.pauseReason ?? "delivery_paused" : null) };
     const pendingTasks = decision?.tasks.filter(t => t.status === "pending" || t.status === "claimed" || t.status === "running") ?? [];
     let github: Awaited<ReturnType<GitHubDeliveryService["observeWork"]>> | null = null;
     if (key.provider === "github") {
       const split = key.key.lastIndexOf("#");
       github = await (options.github ?? new GitHubDeliveryService()).observeWork({ repo: key.key.slice(0, split),
         issueNumber: Number(key.key.slice(split + 1)), workspaceKey: delivery?.workspaceKey ?? issue.identifier,
-        headBranch: delivery?.handoff?.headBranch ?? `symphony/${issue.identifier}`, baseBranch: "main" });
+        headBranch: delivery?.continuation?.headBranch ?? delivery?.landing?.context.headBranch ?? delivery?.handoff?.headBranch ?? `symphony/${issue.identifier}`, baseBranch: delivery?.continuation?.baseBranch ?? delivery?.landing?.context.baseBranch ?? "main" });
     }
     const matchesTarget = (target: import("@symphony/domain").DecisionReviewTarget | null) => !!target && !!github?.pullRequest
       && target.headSha === github.pullRequest.headSha && target.prNumber === github.pullRequest.number
@@ -91,7 +96,7 @@ export function createHostWorkContinuity(options: {
     if (github?.pullRequest?.state === "merged" && facts.stage !== "handoff") {
       facts = { ...facts, stage: "merge",
         target: { repository: key.key.slice(0, key.key.lastIndexOf("#")), prNumber: github.pullRequest.number, headSha: github.pullRequest.headSha },
-        externalWait: { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" },
+        externalWait: delivery?.landing?.phase === "intent" ? null : { system: "tracker", condition: "merged_pull_request_waiting_for_tracker_sync" },
         contradictions: runtime || pendingTasks.some(t => t.kind === "plan")
           ? [...facts.contradictions, "merged_pull_request_has_conflicting_executor"] : facts.contradictions };
     } else if (!delivery?.isPaused && !runtime && github?.pullRequest && !task) {
@@ -109,6 +114,14 @@ export function createHostWorkContinuity(options: {
         facts = { ...facts, stage: review?.verdict === "changes_requested" ? "repair" : review?.verdict === "approve" ? "delivery" : "review",
           blocked: review?.verdict === "needs_human" ? "review_requires_human" : facts.blocked };
       }
+    }
+    if (delivery?.landing?.phase === "intent" && github?.pullRequest
+      && (github.pullRequest.headSha !== delivery.landing.headSha || github.pullRequest.number !== delivery.landing.prNumber)) {
+      facts = { ...facts, blocked: "landing_target_superseded: explicit authorization for current HEAD required" };
+    }
+    if (delivery?.continuation?.phase === "ready" && !delivery.continuation.optInLand
+      && facts.stage === "delivery" && !facts.blocked) {
+      facts = { ...facts, externalWait: { system: "human", condition: "explicit_merge_opt_in_required" } };
     }
     if (github?.issue.state === "closed" && facts.active) facts = { ...facts, available: false,
       unavailableSources: [...facts.unavailableSources, "remote_issue_closed_tracker_active"] };
@@ -131,19 +144,36 @@ export function createHostWorkContinuity(options: {
         facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "decision_changed_during_observation"] };
       }
     }
+    const lockBlock = deliveryAuthorityBlock(path.join(workspace, ".symphony", "delivery-authority.lock"));
+    if (lockBlock) facts = { ...facts, stage: "delivery", blocked: lockBlock };
     const latestDelivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
     if (JSON.stringify(latestDelivery) !== JSON.stringify(delivery)) {
       facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "delivery_changed_during_observation"] };
     }
-    const version = JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
+    const version = createHash("sha256").update(JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
       github, execution: task?.execution, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
-      policy: controller.current.scheduling.policy, config: controller.current.serviceConfig });
+      policy: controller.current.scheduling.policy, config: controller.current.serviceConfig })).digest("hex");
     const observation = { ...facts, version };
     options.onObservation?.(observation);
     return { observation, issue };
   };
   const observe = async (key: WorkKey) => (await read(key)).observation;
   const coordinator = new WorkContinuityCoordinator({
+    recoveryStorage: new FileWorkRecoveryStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "recovery.json")),
+    canResumeRecovery(request, current) {
+      if (request.action === "reclaim") return current.stage === request.stage && !!current.owner
+        && current.taskRef?.taskId === request.taskRef?.taskId && current.taskRef?.revision === request.taskRef?.revision
+        && current.owner.leaseExpiresAt === request.leaseExpiresAt && current.observedAt >= (request.leaseExpiresAt ?? Infinity);
+      const identity = identities.get(decisionSessionId(request.workKey));
+      if (request.action === "compensate") {
+        if (!identity?.workspace || !request.handoffRef) return false;
+        const state = new FileDeliveryStateStorage(path.join(identity.workspace, ".symphony", "delivery-state.json")).readState();
+        return !!state?.isPaused && !!state.pendingCompensation
+          && state.handoff?.handoffId === request.handoffRef.handoffId && state.handoff.headSha === request.handoffRef.headSha;
+      }
+      return request.action === "dispatch" && !current.blocked && current.contradictions.length === 0
+        && ["review", "delivery", "repair", "ci", "merge"].includes(current.stage);
+    },
     async isRecoveryResolved(request) {
       if (request.action === "reclaim" && request.taskRef && planningGate) {
         const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
@@ -152,6 +182,24 @@ export function createHostWorkContinuity(options: {
         return task.status !== "claimed" && task.status !== "running"
           || task.revision !== request.taskRef.revision || task.claimGeneration !== request.fence.leaseGeneration
           || work.bindingGeneration !== request.fence.bindingGeneration || task.leaseExpiresAtMs !== request.leaseExpiresAt;
+      }
+      if (request.action === "dispatch") {
+        const identity = identities.get(decisionSessionId(request.workKey));
+        if (identity?.workspace) {
+          const state = new FileDeliveryStateStorage(path.join(identity.workspace, ".symphony", "delivery-state.json")).readState();
+          if (state && `${state.repo.toLowerCase()}#${state.issueNumber}` === request.workKey.key.toLowerCase()) {
+            if (state.isPaused && state.handoff?.handoffId) return true;
+            if (state.landing?.phase === "observed" && state.landing.headSha === request.fence.expectedHeadSha) return true;
+            const c = state.continuation;
+            if (c && c.headSha === request.fence.expectedHeadSha && c.phase === "ready") return true;
+            if (c && c.headSha === request.fence.expectedHeadSha && c.reviewTaskId && planningGate) {
+              const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
+              const task = work?.tasks.find(t => t.id === c.reviewTaskId);
+              if (task?.kind === "review" && task.revision === c.reviewRevision && task.target?.headSha === c.headSha
+                && task.target.prNumber === c.prNumber) return true;
+            }
+          }
+        }
       }
       const identity = identities.get(decisionSessionId(request.workKey));
       if (request.action === "compensate" && request.handoffRef && identity?.workspace) {
@@ -171,6 +219,7 @@ export function createHostWorkContinuity(options: {
         }
       }
       for (const retry of authority.continuityRetryReferences()) {
+        if (retry.workKey) add(retry.workKey, retry.issueId, null);
         const match = retry.url?.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)$/);
         if (match?.[1] && match[2] && match[3]) add(githubDecisionRoot(match[1], match[2], Number(match[3])), retry.issueId, null);
       }
@@ -202,7 +251,7 @@ export function createHostWorkContinuity(options: {
       try {
         const fresh = await observe(request.workKey);
         if (!canCommit()) return "stopped";
-        if (fresh.version !== request.version || !fresh.available) return "stale";
+        if (fresh.version !== request.version || !fresh.available || fresh.stage !== request.stage) return "stale";
         if (request.action === "reclaim" && request.taskRef && planningGate) {
           const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));
           const task = work?.tasks.find(t => t.id === request.taskRef?.taskId);
@@ -222,10 +271,57 @@ export function createHostWorkContinuity(options: {
             const storage = new FileDeliveryStateStorage(path.join(identity.workspace!, ".symphony", "delivery-state.json"), true);
             const delivery = storage.readState();
             if (!delivery?.handoff?.handoffId || !delivery.isPaused || !delivery.pendingCompensation) return "unsupported";
+            if (request.handoffRef && request.handoffRef.handoffId !== delivery.handoff.handoffId) return "stale";
             mutationMayHaveStarted = true;
             const result = await recoverDeliveryHandoff({ cwd: identity.workspace!, repo: delivery.repo,
               issueNumber: delivery.issueNumber, workspaceKey: delivery.workspaceKey, stateStorage: storage, runner });
             return result.success ? "applied" : "unverified";
+          });
+        }
+        if (request.action === "dispatch" && identity?.workspace
+          && (options.reviewGate || request.stage === "merge")
+          && ["review", "delivery", "repair", "ci", "merge"].includes(request.stage)) {
+          return await withDeliveryAuthority(identity.workspace, async () => {
+            const locked = await read(request.workKey);
+            if (!canCommit()) return "stopped";
+            if (locked.observation.version !== request.version || !locked.observation.available
+              || locked.observation.blocked || locked.observation.owner || !locked.issue) return "stale";
+            const storage = new FileDeliveryStateStorage(path.join(identity.workspace!, ".symphony", "delivery-state.json"), true);
+            const delivery = storage.readState();
+            if (delivery?.isPaused) return "stale";
+            let plan: import("@symphony/domain").DecisionMaterializedPlan | undefined;
+            if (planningGate) {
+              const eligibility = await planningGate.verifyPlanEligibility(decisionSessionId(request.workKey),
+                { title: locked.issue.title, body: locked.issue.description ?? "" });
+              if (!eligibility.eligible || !canCommit()) return "stale";
+              const record = await planningGate.getLatestPlan(decisionSessionId(request.workKey));
+              if (record?.result?.verdict === "ready") plan = { taskId: record.taskId, revision: record.revision,
+                ...record.result.content, clarifications: record.requirements.clarifications };
+            }
+            if (request.stage === "merge" && delivery?.landing?.phase === "intent") {
+              const { FileLandingIntentStorage, createNativeDeliveryService } = await import("./landing-storage");
+              mutationMayHaveStarted = true;
+              const intent = delivery.landing;
+              const pr = await createNativeDeliveryService().readPr(intent.context, { prNumber: intent.prNumber });
+              if (!canCommit()) return "stopped";
+              if (pr.state !== "MERGED" || pr.headSha !== intent.headSha || !pr.mergeCommitSha || !pr.mergedAt) return "stale";
+              new FileLandingIntentStorage(identity.workspace!, true).write({ ...intent, phase: "observed", mergeCommitSha: pr.mergeCommitSha, mergedAt: pr.mergedAt });
+              return "applied";
+            }
+            const saved = delivery?.continuation;
+            const split = request.workKey.key.lastIndexOf("#");
+            mutationMayHaveStarted = true;
+            await runDeliverySkill({ cwd: identity.workspace!, runner, stateStorage: storage,
+              repo: request.workKey.key.slice(0, split), issueNumber: Number(request.workKey.key.slice(split + 1)),
+              workspaceKey: delivery?.workspaceKey ?? locked.issue.identifier,
+              headBranch: saved?.headBranch ?? delivery?.landing?.context.headBranch ?? `symphony/${locked.issue.identifier}`,
+              baseBranch: saved?.baseBranch ?? delivery?.landing?.context.baseBranch ?? "main",
+              optInLand: saved?.optInLand ?? delivery?.landing?.optIn ?? false,
+              requiredChecks: saved?.requiredChecks, readyLabel: saved?.readyLabel,
+              maxRepairAttempts: saved?.maxRepairAttempts, maxWaitSeconds: saved?.maxWaitSeconds,
+              repairCommand: saved?.repairCommand, validationCommand: saved?.validationCommand,
+              reviewGate: options.reviewGate, canCommit, plan, resumeStageOnly: true, yieldOnWait: true });
+            return "applied";
           });
         }
         // Coding is admitted by the normal dispatch loop; browser/repair/merge recovery

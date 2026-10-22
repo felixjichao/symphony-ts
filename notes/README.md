@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Native durable handoffs and startup recovery](proposed/architecture/2026-10-22-durable-recovery-invocations.md) — NEST-133: native stage/landing intents, retry/launch reservations, crash-lock safety and restart evidence.
+
 
 - [Active Web response recovery fencing](accepted/architecture/2026-10-21-active-web-response-fencing.md) — PR #156 活跃认证中断、权威 lease、会话校验与结果 admission。
 

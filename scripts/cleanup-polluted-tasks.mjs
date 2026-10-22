@@ -1255,7 +1255,7 @@ class DecisionService {
         throw new DecisionConflictError(`Cannot create task for session in status "${session.status}"`);
       }
       const now = this.clock();
-      const isExplicitNewRound = Boolean(params.forceNewRevision || params.operationKey && !draft.operationReceipts[params.operationKey]);
+      const isExplicitNewRound = Boolean(params.forceNewRevision || params.operationKey && !params.reuseCompleted && !draft.operationReceipts[params.operationKey]);
       const existingTask = Object.values(draft.tasks).find(
         (t) => {
           if (t.sessionId !== sessionId || t.kind !== "review" || t.target.repository.toLowerCase() !== params.target.repository.toLowerCase() || t.target.prNumber !== params.target.prNumber || t.target.headSha !== params.target.headSha) {
@@ -1288,7 +1288,7 @@ class DecisionService {
         }
       );
       if (existingTask) {
-        if (params.operationKey && !draft.operationReceipts[params.operationKey]) {
+        if (params.operationKey && !params.reuseCompleted && !draft.operationReceipts[params.operationKey]) {
           draft.operationReceipts[params.operationKey] = {
             schemaVersion: 1,
             operationKey: params.operationKey,

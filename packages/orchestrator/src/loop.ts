@@ -238,6 +238,7 @@ export class OrchestratorLoop {
       throw new OrchestratorStartupError(reason);
     }
 
+    this.authority.restoreRetries();
     this.status = "running";
     this.scheduleNext(0); // §16.1：immediate first tick
   }

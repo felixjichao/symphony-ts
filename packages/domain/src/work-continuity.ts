@@ -41,6 +41,8 @@ export interface WorkContinuityDiagnosis {
   readonly recovery: RecoveryAction;
 }
 export interface WorkRecoveryRequest {
+  /** Unique invocation identity: a stale acknowledgement cannot clear its successor. */
+  readonly invocationId?: string;
   readonly workKey: WorkKey;
   readonly version: string;
   readonly stage: WorkContinuityStage;

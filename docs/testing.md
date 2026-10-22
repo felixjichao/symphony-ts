@@ -120,3 +120,17 @@ Delivery review recovery: `npm test -w @symphony/cli -- src/delivery-review-reco
 Real acceptance additionally requires an enabled Tampermonkey page plus authenticated ChatGPT/Bridge: reload mid-response, close/reopen with tab identity loss, recover bridge authorization, interrupt before/after result acceptance, invalidate a conversation, change review HEAD and exercise competing tabs. Record interventions, native receipt/claim/binding readbacks and Stop persistence. Fixture results cannot substitute for those browser/environment checks.
 
 `apps/cli/src/decision-web-admission.test.ts` checks exact current PR HEAD/open-state admission and fail-closed GitHub errors. Decision continuity tests verify that external admission refusal cannot mutate a lease/binding and native supersede is revalidated after admission.
+
+The #149 native recovery entries are `apps/cli/src/durable-delivery.test.ts`,
+`durable-retry.test.ts`, `landing-recovery.test.ts`, `recovery-storage.test.ts` and
+`work-continuity.test.ts`. They use real temporary files, native authorities and a
+bundled separate Node process for SIGKILL, replacing only external GitHub/Codex or
+time/scheduler boundaries. Recovery is verified at intent/effect/acknowledgement,
+with drift, unavailable sources, duplicate calls and stale ownership. Full validation
+uses `npm run gate`; local fixtures do not substitute for real GitHub/Codex smoke.
+
+Delivery cleanup/halt regression: `npx vitest run apps/cli/src/delivery-cleanup.test.ts`
+uses real host startup sweeps and the formal halt CLI with native file storage.
+It covers merge auto-close before acknowledgement, deletion/recreation exclusion,
+unknown child and legacy/corrupt evidence, and preservation of repair/landing
+steps through every halt checkpoint.

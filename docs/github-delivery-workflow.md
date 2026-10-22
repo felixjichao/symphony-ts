@@ -274,3 +274,46 @@ machine inside the orchestrator. The end-to-end real GitHub + real Codex dogfood
 is implemented as an opt-in harness; see
 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md) and the target
 [template](../examples/github-delivery-dogfood/README.md).
+
+### Durable stage recovery and operator verification
+
+The host keeps invocation/retry records in `<workspace.root>/.symphony-host/`, outside
+individual workspace cleanup. Delivery keeps continuation, landing, pause and budget
+facts in `.symphony/delivery-state.json`. Restart refreshes GitHub, Decision and native
+ownership before acting; it does not rerun initial validation/commit/push. Pending CI
+and Review yield to later ticks. Already-merged PRs only gain local acknowledgement;
+an open Issue waits for tracker synchronization, without an automatic Issue close.
+Review needs-human and paused compensation never silently restart coding.
+
+Scheduled retry reservations retain attempt and UTC expiry; overdue work still
+refreshes stage/admission. A killed worker launch becomes `worker_launch_unverified`.
+A killed repair remains `repair_outcome_unverified`. A lock with uncertain child
+activity remains blocked. These conditions deliberately require verification instead
+of starting a second possible executor. Clean dead-owner locks without subprocess
+uncertainty can be reclaimed automatically; no lock is stolen by age.
+
+For an ambiguous launch/repair/child: stop affected hosts, identify the old executor/process group for that WorkKey/workspace and verify its
+identity before terminating it, inspect local
+and remote HEAD/PR/Decision/merge/comment facts, and preserve the snapshots for audit.
+Only after proving the old executor cannot continue may an operator release that
+exact blocked reservation/lock in the stopped host's state. Never remove a newer
+token/nonce or reset budgets to make recovery proceed. Keep unresolved intent records
+until native evidence resolves them. Then restart for fresh stage/admission reads;
+use explicit `delivery-skill run --resume` only to authorize resuming paused work.
+A changed HEAD invalidates an old one-shot `pr land` authorization; issue a new explicit
+opt-in for the current target. Corrupt/legacy state and interrupted reclaim metadata
+require the same conservative verification, not automatic deletion.
+
+Delivery cleanup also shares an outside-workspace lifecycle mutex in the workspace
+parent's `.symphony-host/delivery-authorities/`. Preserve this directory along with
+host recovery state when migrating workspace roots. Terminal Issue cleanup refuses
+active owners, unknown subprocess outcomes, corrupt state and unacknowledged
+Delivery/landing steps; merge auto-closing an Issue does not acknowledge the local
+intent. Use native observation/recovery before cleanup. Explicit `delivery-skill
+halt` preserves these steps and rejects corrupt or mismatched state.
+
+Auto-land's approved `result_observed` continuation is settled for cleanup only
+by an observed merge commit for the same PR, HEAD and branches. A handoff's
+`reportDestination` records whether its receipt lives on the Issue or PR;
+retaining a business PR target does not change the destination of an explicit
+halt report. Recovery queries that same comment collection before posting.

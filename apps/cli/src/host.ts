@@ -1,3 +1,5 @@
+import { withDeliveryCleanupAuthority } from "./delivery-cleanup";
+import { FileRetryReservationStorage } from "./recovery-storage";
 import { createHostWorkContinuity } from "./work-continuity";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,6 +13,7 @@ import {
 } from "@symphony/config";
 import {
   decisionSessionId,
+  parseDecisionSessionRootFromId,
   githubDecisionRoot,
   type DecisionMaterializedPlan,
   type Issue,
@@ -19,6 +22,7 @@ import {
 import {
   DecisionBridgeClient,
   DecisionPlanningGate,
+  DecisionReviewGate,
   DecisionService,
   DurableDecisionStore,
 } from "@symphony/decision";
@@ -113,6 +117,8 @@ export interface CreateHostOptions {
   readonly watcherIntervalMs?: number | undefined;
   readonly canDispatch?: ((issue: Issue, context: { readonly isRetry: boolean }) => boolean) | undefined;
   readonly getPlanForIssue?: ((issue: Issue) => DecisionMaterializedPlan | null | undefined) | undefined;
+  readonly continuityRunner?: Parameters<typeof createHostWorkContinuity>[0]["runner"] | undefined;
+  readonly continuityReviewGate?: import("@symphony/domain").DeliveryReviewGate | undefined;
   readonly continuityGitHub?: Parameters<typeof createHostWorkContinuity>[0]["github"] | undefined;
   readonly enablePlanning?: boolean | undefined;
   readonly decisionStoreDir?: string | undefined;
@@ -185,6 +191,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     envPlanningEnabled === "true";
 
   let planningGate: DecisionPlanningGate | null = options.planningGate ?? null;
+  let reviewGate: import("@symphony/domain").DeliveryReviewGate | undefined = options.continuityReviewGate;
   let ownedStore: DurableDecisionStore | null = null;
 
   if (!planningGate && !isExplicitlyDisabled) {
@@ -196,14 +203,17 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       await ownedStore.open();
       const service = new DecisionService(ownedStore);
       planningGate = new DecisionPlanningGate(service);
+      reviewGate = new DecisionReviewGate(service);
     } else if (explicitBridgeUrl !== undefined) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
       const client = new DecisionBridgeClient(explicitBridgeUrl, { ...(token ? { authToken: token } : {}) });
       planningGate = new DecisionPlanningGate(client);
+      reviewGate = new DecisionReviewGate(client);
     } else if (envBridgeUrl) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
       const client = new DecisionBridgeClient(envBridgeUrl, { ...(token ? { authToken: token } : {}) });
       planningGate = new DecisionPlanningGate(client);
+      reviewGate = new DecisionReviewGate(client);
     } else if (envStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
       const storeDir = envStoreDir ?? defaultStoreDir;
       if (!fs.existsSync(storeDir)) {
@@ -213,6 +223,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       await ownedStore.open();
       const service = new DecisionService(ownedStore);
       planningGate = new DecisionPlanningGate(service);
+      reviewGate = new DecisionReviewGate(service);
     }
   }
 
@@ -254,10 +265,13 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       removeWorkspace: (identifier: string) => cleanupWorkspace.removeWorkspaceForIssue!({ issueId: null, identifier }),
       removeWorkspaceForIssue: async (context: WorkspaceCleanupIssueContext) => {
         const { manager, release } = workspaceCoordinator.resolveForCleanup(context);
-        const result = await manager.removeWorkspace(context.identifier, {
+        const workspacePath = manager.resolveWorkspacePath(context.identifier);
+        // Validate containment before touching native state or creating a mutex.
+        await manager.assertWorkspacePathSafe(workspacePath);
+        const result = await withDeliveryCleanupAuthority(workspacePath, () => manager.removeWorkspace(context.identifier, {
           hooks: controller.current.serviceConfig.hooks,
           onHookEvent: observers.onHookEventForIssue(context),
-        });
+        }));
         if (result.status === "removed" || result.status === "missing") {
           release();
         }
@@ -326,6 +340,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     };
 
     const authority = new OrchestratorAuthority({
+      resolveWorkKey: issue => { const id = resolveIssueSessionId(issue, getEffectiveRepo()); return id ? parseDecisionSessionRootFromId(id) : null; },
+      retryStorage: new FileRetryReservationStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "retries.json")),
       state,
       policy: controller.current.scheduling.policy,
       tracker: trackerProxy,
@@ -355,8 +371,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     controller.setAuthority(authority);
 
     continuity = createHostWorkContinuity({ controller, authority, planningGate,
-      resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now,
-      github: options.continuityGitHub });
+      resolveSession: issue => resolveIssueSessionId(issue, getEffectiveRepo()), now, reviewGate,
+      github: options.continuityGitHub, runner: options.continuityRunner });
     const workContinuity = continuity.coordinator;
     const loop = new OrchestratorLoop({
       authority,

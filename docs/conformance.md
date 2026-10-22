@@ -437,3 +437,31 @@ PR #156 review 5611917646 follow-up (SPEC §4 Decision extension, §17/§18): `a
 The review follow-up passed the full gate with 2,042 tests (Web 216); see [reproduction, safeguards and build provenance](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
 
 Userscript 0.1.5 live follow-up (2026-10-22): real Edge/Tampermonkey response growth advanced native progress; active reload resumed generation 1 without repeated Send and accepted a matching receipt. Lost success acknowledgement recovered through receipt readback with one result POST. The metadata duplication caused by Vitest calling `closeBundle` is fixed and reproduced/verified through real builds. See [live evidence and explicit limits](evidence/web-continuity/live015-acceptance-2026-10-22.md); the >10-minute growing-windowed-response and Send/checkpoint crash-gap combinations remain automated-only.
+
+### #149 durable handoff recovery evidence
+
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: native intents persist before effect,
+authoritative readback precedes acknowledgement, startup discovers incomplete work,
+and native fences/locks refuse stale ownership. `durable-delivery.test.ts` covers
+SIGKILL before/after Review and merge effects, repair ambiguity, paused compensation,
+remote receipt deduplication, target changes and lock races. `durable-retry.test.ts`
+covers reservation/launch SIGKILL, wall-clock restoration, attempt/token preservation,
+admission drift, source outage and failed persistence. `landing-recovery.test.ts`
+covers the tracker path with real durable state. `work-continuity.test.ts` exercises
+native host startup/ticks and result consumption without coding replay. Existing
+Decision generation/lease regressions remain authoritative. See the
+[boundary/evidence mapping](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+Real GitHub/Codex integration remains unverified by these local fixtures.
+
+`apps/cli/src/delivery-cleanup.test.ts` adds native host terminal-sweep coverage
+for Delivery ownership during merge auto-close, unknown children, legacy/corrupt
+evidence, unfinished intents and cleanup/recreation exclusion. Its formal halt
+CLI cases verify all checkpoints preserve recovery targets and budgets, and reject
+corrupt/foreign state before remote calls (§8/§9/§17 extensions).
+
+The cleanup regression additionally runs the real Delivery skill and durable
+Decision store through auto-merge, then passes its unmodified `result_observed`
+plus `landing.observed` output into the real host terminal sweep. Negative cases
+retain mismatched/unverified merges. Formal halt/recover tests maintain distinct
+Issue and PR comment collections and lose the first Issue response: the persisted
+report destination yields one receipt without discarding the business PR target.

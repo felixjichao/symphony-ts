@@ -30,7 +30,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     sessionId: string,
     target: DecisionReviewTarget,
     context?: DecisionContextBundle,
-    options?: { operationKey?: string; forceNewRevision?: boolean },
+    options?: { operationKey?: string; forceNewRevision?: boolean; reuseCompleted?: boolean },
   ): Promise<DecisionTask> {
     if (this.service) {
       // In-service path
@@ -45,6 +45,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         ...(context !== undefined ? { context } : {}),
         ...(options?.operationKey !== undefined ? { operationKey: options.operationKey } : {}),
         supersedeSessionReviews: true,
+        ...(options?.reuseCompleted ? { reuseCompleted: true } : {}),
         ...(options?.forceNewRevision !== undefined ? { forceNewRevision: options.forceNewRevision } : {}),
       });
     }
@@ -65,6 +66,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         ...(context !== undefined ? { context } : {}),
         ...(options?.operationKey !== undefined ? { operationKey: options.operationKey } : {}),
         supersedeSessionReviews: true,
+        ...(options?.reuseCompleted ? { reuseCompleted: true } : {}),
         ...(options?.forceNewRevision !== undefined ? { forceNewRevision: options.forceNewRevision } : {}),
       });
       return res.task;
