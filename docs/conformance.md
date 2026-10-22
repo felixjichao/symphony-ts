@@ -437,3 +437,12 @@ PR #156 review 5611917646 follow-up (SPEC §4 Decision extension, §17/§18): `a
 The review follow-up passed the full gate with 2,042 tests (Web 216); see [reproduction, safeguards and build provenance](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
 
 Userscript 0.1.5 live follow-up (2026-10-22): real Edge/Tampermonkey response growth advanced native progress; active reload resumed generation 1 without repeated Send and accepted a matching receipt. Lost success acknowledgement recovered through receipt readback with one result POST. The metadata duplication caused by Vitest calling `closeBundle` is fixed and reproduced/verified through real builds. See [live evidence and explicit limits](evidence/web-continuity/live015-acceptance-2026-10-22.md); the >10-minute growing-windowed-response and Send/checkpoint crash-gap combinations remain automated-only.
+
+### #149 partial foundation evidence (not acceptance)
+
+`apps/cli/src/recovery-storage.test.ts` covers persisted invocation discovery after
+SIGKILL, ambiguous effect suppression across restart, stale acknowledgements,
+competing store instances, failed writes and invalid schema. Existing
+`packages/orchestrator/src/work-continuity.test.ts` remains the native fencing and
+readback regression. Full durable handoff/retry acceptance is outstanding;
+[dispatch ownership design gap](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).

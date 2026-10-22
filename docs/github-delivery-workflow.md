@@ -274,3 +274,16 @@ machine inside the orchestrator. The end-to-end real GitHub + real Codex dogfood
 is implemented as an opt-in harness; see
 [docs/github-delivery-dogfood.md](github-delivery-dogfood.md) and the target
 [template](../examples/github-delivery-dogfood/README.md).
+
+### Outstanding recovery invocations (partial #149 foundation)
+
+The host retains unresolved authority requests in
+`<workspace.root>/.symphony-host/recovery.json`, separately from individual
+Delivery budget/pause files. Restart observes their native targets before allowing
+another delegation. Missing authority evidence keeps the work `unverified` and
+requires operator verification; it does not authorize repeating the old command.
+A corrupt snapshot or leftover `recovery.json.lock` fails closed. Before removing
+a leftover lock, verify the writer is stopped and inspect the snapshot and native
+authority; never use file age as proof. Preserve unresolved requests until native
+completion/invalidation can be established. Delivery crash-lock reclamation and
+automatic stage/retry continuation are not provided by this partial foundation.

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { FileWorkRecoveryStorage } from "./recovery-storage";
 /** Composition of authoritative sources. No operations/read-model dependency. */
 import fs from "node:fs";
 import path from "node:path";
@@ -135,15 +137,16 @@ export function createHostWorkContinuity(options: {
     if (JSON.stringify(latestDelivery) !== JSON.stringify(delivery)) {
       facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "delivery_changed_during_observation"] };
     }
-    const version = JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
+    const version = createHash("sha256").update(JSON.stringify({ issue, stage: facts.stage, blocked: facts.blocked, fence: facts.expectedFence,
       github, execution: task?.execution, owner: facts.owner?.id, lease: facts.owner?.leaseExpiresAt, task: facts.taskRef, delivery,
-      policy: controller.current.scheduling.policy, config: controller.current.serviceConfig });
+      policy: controller.current.scheduling.policy, config: controller.current.serviceConfig })).digest("hex");
     const observation = { ...facts, version };
     options.onObservation?.(observation);
     return { observation, issue };
   };
   const observe = async (key: WorkKey) => (await read(key)).observation;
   const coordinator = new WorkContinuityCoordinator({
+    recoveryStorage: new FileWorkRecoveryStorage(path.join(controller.current.serviceConfig.workspace.root, ".symphony-host", "recovery.json")),
     async isRecoveryResolved(request) {
       if (request.action === "reclaim" && request.taskRef && planningGate) {
         const work = (await planningGate.continuityWork()).find(w => decisionSessionId(w.workKey) === decisionSessionId(request.workKey));

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /** Thin work-level reconciliation; authorities alone commit mutations (§7/§8/§14). */
 import { sanitizeOwnershipFence, validateOwnershipFence, formatWorkKey,
   type ExpectedNextAction, type WorkContinuityObservation, type WorkContinuityDiagnosis,
@@ -49,7 +50,16 @@ export function deriveWorkContinuity(f: WorkContinuityObservation): WorkContinui
   return result("stranded", ["no_executor_or_scheduled_recovery"], next.action);
 }
 
+/** Synchronous commits are required before crossing an authority boundary (§4/§8).
+ * Implementations must serialize writers and reject stale clears by exact request identity. */
+export interface WorkRecoveryStorage {
+  load(): readonly WorkRecoveryRequest[];
+  put(request: WorkRecoveryRequest): void;
+  remove(request: WorkRecoveryRequest): void;
+}
 export interface WorkContinuityPorts {
+  readonly recoveryStorage?: WorkRecoveryStorage;
+
   /** Union of active tracker work and known source identities. Never only running workers. */
   listWork(): Promise<readonly WorkKey[]>;
   /** Fresh source reads, not operations projections. Missing essential facts must fail closed. */
@@ -71,8 +81,27 @@ export class WorkContinuityCoordinator {
   get observations(): readonly WorkContinuityReconciliation[] { return this.latest; }
   private active: Promise<readonly WorkContinuityReconciliation[]> | null = null;
   private readonly uncertain = new Map<string, WorkRecoveryRequest>();
-  hasUnverifiedRecovery(work: WorkKey): boolean { return this.uncertain.has(formatWorkKey(work)); }
-  constructor(private readonly ports: WorkContinuityPorts) {}
+  hasUnverifiedRecovery(work: WorkKey): boolean {
+    this.refreshStoredRequests();
+    return this.uncertain.has(formatWorkKey(work));
+  }
+  constructor(private readonly ports: WorkContinuityPorts) {
+    this.refreshStoredRequests();
+  }
+  private refreshStoredRequests(): void {
+    for (const request of this.ports.recoveryStorage?.load() ?? []) {
+      const key = formatWorkKey(request.workKey);
+      const previous = this.uncertain.get(key);
+      if (previous && JSON.stringify(previous) !== JSON.stringify(request)) {
+        throw new Error("Conflicting durable recovery requests");
+      }
+      this.uncertain.set(key, request);
+    }
+  }
+  private settle(request: WorkRecoveryRequest): void {
+    this.ports.recoveryStorage?.remove(request);
+    this.uncertain.delete(formatWorkKey(request.workKey));
+  }
   reconcile(): Promise<readonly WorkContinuityReconciliation[]> {
     if (this.stopping) return Promise.resolve([]);
     if (this.active) return this.active;
@@ -86,6 +115,7 @@ export class WorkContinuityCoordinator {
     await this.active;
   }
   private async scan(): Promise<readonly WorkContinuityReconciliation[]> {
+    this.refreshStoredRequests();
     const results: WorkContinuityReconciliation[] = [];
     const seen = new Set<string>();
     for (const workKey of [...await this.ports.listWork(), ...[...this.uncertain.values()].map(request => request.workKey)]) {
@@ -100,7 +130,7 @@ export class WorkContinuityCoordinator {
         diagnosis = deriveWorkContinuity(first);
         const pending = this.uncertain.get(key);
         if (pending) {
-          if (first.available && await this.ports.isRecoveryResolved?.(pending)) this.uncertain.delete(key);
+          if (first.available && await this.ports.isRecoveryResolved?.(pending)) this.settle(pending);
           else {
             results.push({ workKey, diagnosis: first.available ? this.unverified(diagnosis) : diagnosis, result: "unverified" });
             continue;
@@ -115,20 +145,21 @@ export class WorkContinuityCoordinator {
           results.push({ workKey, diagnosis: decision, result: "stale" }); continue;
         }
         acted = true;
-        const request: WorkRecoveryRequest = { workKey, version: fresh.version, stage: fresh.stage,
+        const request: WorkRecoveryRequest = { invocationId: randomUUID(), workKey, version: fresh.version, stage: fresh.stage,
           action: decision.recovery, authority: decision.next.authority, fence: fresh.expectedFence, taskRef: fresh.taskRef,
           handoffRef: fresh.handoffRef, leaseExpiresAt: fresh.owner?.leaseExpiresAt };
         // Record before crossing the authority boundary: a rejected promise may follow a commit.
+        this.ports.recoveryStorage?.put(request);
         this.uncertain.set(key, request);
         let result: WorkRecoveryResult;
         try { result = await this.ports.recover(request, () => !this.stopping); }
         catch { result = "unverified"; }
-        if (result === "stale" || result === "unsupported" || result === "stopped") this.uncertain.delete(key);
+        if (result === "stale" || result === "unsupported" || result === "stopped") this.settle(request);
         // Always re-observe, including refused/unsupported actions. Never replay on read failure.
         const after = await this.ports.observe(workKey);
         diagnosis = deriveWorkContinuity(after);
         if (after.available && (result === "applied" || (result === "unverified" && await this.ports.isRecoveryResolved?.(request)))) {
-          this.uncertain.delete(key);
+          this.settle(request);
         }
         if (this.uncertain.has(key)) {
           result = "unverified";

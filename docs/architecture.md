@@ -93,3 +93,11 @@ Work-level reconciliation (NEST-138 / #147) lives in `orchestrator/work-continui
 Poll inventory failure skips that tick's candidate dispatch. Host launches and retry timers use `OrchestratorAuthority.dispatchIssueWithRefresh` / the same injected native-source admission port, returning a current Issue for the existing synchronous commit rather than caching permission. Retry observation failure preserves its reservation through bounded backoff; explicit blockers deny execution. Remote PR/CI observation does not depend on local workspace existence. Shutdown and generation/retry-token fences are checked after source I/O.
 
 Decision/Web continuity adds optional task-scoped execution metadata to the existing Decision authority. Lease renewal consumes meaningful stage/response progress rather than heartbeat age; stalled renewal stops before the work-aware coordinator can reclaim an expired lease. Native recovery budgets and nonterminal blocks survive store restart. The Web adapter awaits fenced authorization before navigation/Send; userscript enabled/Stop intent survives page loss without sharing another tab's lease. Browser availability is an explicit host wait. See the [implementation decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md) and [protocol](decision-protocol.md#decisionweb-execution-facts). No browser supervisor, automatic login or Operations mutation path is added.
+
+The proposed [durable invocation foundation](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md)
+adds an injected synchronous recovery-request storage port to the existing work
+coordinator. The CLI stores outstanding invocations outside issue workspaces,
+loads them at startup and retains ambiguous outcomes until native evidence resolves
+them. This is durable suppression, not a new workflow lifecycle or permission to
+replay. Retry-to-worker dispatch ownership and the remaining #149 stage handoffs
+are still pending design/implementation.

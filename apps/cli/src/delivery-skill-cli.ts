@@ -1,3 +1,4 @@
+import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -71,16 +72,7 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
   }
 
   writeState(state: PersistedDeliveryState): void {
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const tmpFile = path.join(
-      dir,
-      `.delivery-state.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
-    );
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmpFile, this.filePath);
+    writeDurableJson(this.filePath, state);
   }
 }
 

@@ -168,3 +168,12 @@ PR #156 review follow-up: the DOM-windowing liveness mismatch is fixed by sharin
 Review-fix validation: full gate passed (2,042 tests, one existing opt-in skip; Web 216). See [review-fix evidence](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
 
 Later 2026-10-22, after the operator updated Userscript 0.1.5, scoped real-browser acceptance passed native response-growth reporting, active reload without repeated Send, and accepted-result acknowledgement loss resolved by receipt readback. Two Plan receipts retained claim/binding generation 1. Build metadata duplication is fixed: Vitest shutdown no longer prepends to the built file. Full gate remains green (2,042 passed, one opt-in skip). [Evidence and limits](evidence/web-continuity/live015-acceptance-2026-10-22.md) distinguish this run from the untriggered ten-minute DOM-windowing and Send/checkpoint crash-gap cases; #148/#151 stay open.
+
+### NEST-133 / #149 implementation foundation (incomplete)
+
+A draft foundation persists unresolved work-recovery invocations and fsyncs atomic
+Delivery state writes. Startup retains suppression until native evidence resolves
+the exact invocation. This does **not** complete #149: Review/Delivery continuation,
+landing acknowledgement, retry restoration and crash-lock reclamation remain open.
+The retry-to-coding dispatch boundary needs an amended executor ownership design;
+see the [proposed note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
