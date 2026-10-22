@@ -487,3 +487,7 @@ It also verifies persistent path/other invariant blocks, conservative legacy unb
 invalid accounting schema rejection, exact human-reason incident/list/report dedup
 and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
 completed needs-human Review and paused Delivery facts through the production host.
+
+## Execution-continuity fault acceptance (#151)
+
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close.

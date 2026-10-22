@@ -112,3 +112,5 @@ fences remain authoritative. Unknown effects block rather than replay. The repor
 has a finite outbox budget and never recursively creates incidents. Operations and
 Dashboard gain no mutation authority. See the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
+
+Acceptance of these boundaries is indexed in the [execution-continuity ledger](evidence/execution-continuity/README.md). Durable intent → effect → acknowledgement preserves native ownership; unknown outcomes block. Bounded convergence includes explicit external waits and human blocks, not guaranteed business completion during unlimited outages. Neither the ledger nor Observation Plane grants mutation authority.

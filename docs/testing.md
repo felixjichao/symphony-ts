@@ -151,3 +151,7 @@ NEST-134 review regressions additionally run with
 real authority → six slot waits → worker failure, accounting provenance across restart,
 non-ownership invariant retention, modeled-condition migration, and actual native
 Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.
+
+## Execution-continuity acceptance profile
+
+See the [scenario matrix and commands](evidence/execution-continuity/README.md), [per-run template](evidence/execution-continuity/template.json), and independent [live procedure](evidence/execution-continuity/live-procedure.md). Host restart tests query the durable authentication incident through the real recovery CLI and preserve it across tracker outage/recovery. R01–R03 explicitly retain the NEST-134 review regressions. Default gate success does not imply live browser/provider acceptance.
