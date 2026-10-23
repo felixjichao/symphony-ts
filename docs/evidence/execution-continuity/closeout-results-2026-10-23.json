@@ -160,5 +160,20 @@
     "Web rebind/exhaustion combinations",
     "seamless browser-session restore, alternate policies, browser crash/SIGKILL"
   ],
-  "closureCondition": "closeout gate, review and PR merge; then #151 closure and #145 final maintainer acceptance"
+  "closureCondition": "closeout gate, review and PR merge; then #151 closure and #145 final maintainer acceptance",
+  "validation": {
+    "command": "npm run gate",
+    "exitCode": 0,
+    "passed": 2311,
+    "skipped": 2,
+    "validationCommit": "d6686be2ce68d1de616afe4c21211a754c5afd2d",
+    "runtimeSourceCommit": "7e10c91d5693ef63f438490cbfd1886105b22225",
+    "environment": "Linux x64; v22.23.1; npm 10.9.8",
+    "logSha256": "22f4b2c6687095664fc8a11bdc9ad7f9ee2fae05635137951c4635d54e642f9e",
+    "skippedReasons": [
+      "root chmod-000 permission semantics",
+      "opt-in gh compatibility without repository target"
+    ],
+    "finalChanges": "evidence-only validation metadata; docs-check and diff-check rerun"
+  }
 }
