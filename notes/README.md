@@ -135,3 +135,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [Read-only Dashboard consumer](accepted/architecture/2026-10-22-dashboard-consumer.md) — NEST-125 / #138: DOM/Vite consumer, optional v1 counts, exact same-origin demo and presentation guards.
 
 - [Work Detail diagnostics](accepted/architecture/2026-10-22-work-detail-diagnostics.md) — NEST-126 / #139: structured evidence, WorkKey isolation, exact targets and closed presentation guards.
+
+- [Bounded-continuity acceptance closeout](accepted/testing/2026-10-23-bounded-continuity-closeout.md) — maintainer-approved coverage profile, W03 bounded block and deferred seamless/live variants.
