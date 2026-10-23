@@ -1,11 +1,21 @@
 # Execution-continuity acceptance ledger
 
 Scope: NEST-135 / GitHub #151, parent #145; SPEC §4 adjacent, §7/§8/§14/§17/§18.
-Baseline: `main@627daa2164f2a8cdbad67b05d860300ecb822db2` (PR #158 squash).
-This ledger separates credential-free production-equivalent tests from live acceptance.
-A passing fixture does not close a live gap. Parent #145 is **not ready to close**.
+Initial test baseline: `main@627daa2164f2a8cdbad67b05d860300ecb822db2` (PR #158 squash).
+Closeout baseline: `main@7e10c91d5693ef63f438490cbfd1886105b22225` (PR #163 merge).
 
-The matrix contains **29 scenario IDs**, matching the machine-readable results.
+**W03 bounded convergence is accepted**: installed Driver 0.1.6 and the complete
+host move a restored page from Waiting to Blocked, without replay, after browser
+quit/reopen. Seamless browser-session resume remains unaccepted/deferred. #162 is
+closed through merged PR #163. The [closeout assessment](closeout-2026-10-23.md)
+reconciles #159 → #162 → #163 evidence with the maintainer's approved support boundary.
+After this documentation closeout passes gate, review and merge, #151 is ready for
+closure and parent #145 for final acceptance/closure; neither is closed by this ledger.
+
+Credential-free production-equivalent tests and scoped live evidence remain distinct.
+Unexercised live combinations below are explicitly deferred, never relabeled live passed.
+
+The matrix contains **29 scenario IDs**. [Current assessment JSON](closeout-results-2026-10-23.json) records the accepted support boundary; the dated original results retain their historical run identities.
 
 ## Scenario matrix
 
@@ -14,39 +24,39 @@ orchestrator and agent). “Web full suite” means `npm test -w @symphony/chatg
 Each automated result must be read with the exact run identity in [run record](run-2026-10-22.md).
 Automated passed identifies suite evidence for the stated invariant, not exhaustive
 production-composition or live acceptance of every interruption variant.
-Current live evidence is limited to the explicitly recorded variants; it does not imply exhaustive acceptance of a row.
+Current live evidence is limited to the explicitly recorded variants; it does not imply exhaustive acceptance of a row. Each row has scoped automated evidence for the supported invariant. Additional live combinations are non-exhaustive/deferred under the [accepted coverage profile](closeout-2026-10-23.md#coverage-and-deferred-variants).
 
 | ID | Required interruption | Native entry / suites | Injection / observation | Required convergence | Automated result | Current live result |
 |---|---|---|---|---|---|---|
-| H01 | Kill after intent, before effect | CLI durable-delivery | review_intent / merge_intent | same Review receipt; one merge | passed (see run record) | not run |
-| H02 | Kill after effect, before ACK | CLI durable-delivery | review_effect / merge_effect | remote readback; no repeated effect | passed (see run record) | not run |
-| H03 | Kill after ACK, before cleanup | CLI durable-delivery | review_ack / merge_ack | native continuation completes | passed (see run record) | not run |
-| H04 | Restart pending compensation | CLI durable-delivery, landing-recovery | report ACK loss / target drift | marker dedupe or stale refusal | passed (see run record) | not run |
-| H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | blocked-host restart/deduplicated incident passed ([core run](core-acceptance-2026-10-23.md)); other variants pending |
-| H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run |
-| W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run |
-| W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | reload during generation passed ([2026-10-23](run-2026-10-23.md)); other variants pending |
-| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | host variants passed ([core run](core-acceptance-2026-10-23.md)); full browser quit/reopen attempted, automatic resume **not accepted** ([failure evidence](browser-process-acceptance-2026-10-23.md)) |
+| H01 | Kill after intent, before effect | CLI durable-delivery | review_intent / merge_intent | same Review receipt; one merge | passed (see run record) | not run live; additional live variants deferred |
+| H02 | Kill after effect, before ACK | CLI durable-delivery | review_effect / merge_effect | remote readback; no repeated effect | passed (see run record) | not run live; additional live variants deferred |
+| H03 | Kill after ACK, before cleanup | CLI durable-delivery | review_ack / merge_ack | native continuation completes | passed (see run record) | not run live; additional live variants deferred |
+| H04 | Restart pending compensation | CLI durable-delivery, landing-recovery | report ACK loss / target drift | marker dedupe or stale refusal | passed (see run record) | not run live; additional live variants deferred |
+| H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | blocked-host restart/deduplicated incident passed ([core run](core-acceptance-2026-10-23.md)); other live variants deferred |
+| H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run live; additional live variants deferred |
+| W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run live; additional live variants deferred |
+| W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | reload during generation passed ([2026-10-23](run-2026-10-23.md)); other live variants deferred |
+| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | safe resume or explicit bounded block; no repeated Send | passed (see run record) | **bounded convergence accepted** ([Driver 0.1.6](recovery-hud-fix-2026-10-23.md), [native readback](recovery-hud-result-2026-10-23.json)); host restart passed ([core run](core-acceptance-2026-10-23.md)); seamless resume deferred |
 | W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | accepted-result ACK loss passed with real ChatGPT ([2026-10-23](run-2026-10-23.md)) |
-| W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
-| W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run |
-| W07 | Stale binding after rebind | Decision continuity | idempotent rebind | old binding progress rejected | passed (see run record) | not run |
-| W08 | Supersede during recovery | [Exact supersede test](#web-test-index-w02-w05-w08); Decision continuity | admission barrier / supersede | revalidate current task | passed (see run record) | not run |
-| W09 | PR HEAD changes | CLI durable-delivery, decision-web-admission; Decision continuity | HEAD drift during downtime/admission | old target cannot approve/merge | passed (see run record) | not run |
-| W10 | Auth/human path | CLI work-continuity, review-regressions; Decision continuity | native block / host reconstruction | blocked; queryable deduplicated incident | passed (see run record) | not run |
-| L01 | Worker stops progress | orchestrator workflow-integration | stall with real subprocess | old process exits before retry | passed (see run record) | not run |
-| L02 | Child ignores normal exit | agent transport | SIGTERM refusal | SIGKILL; PID disappearance | passed (see run record) | not run |
-| L03 | Tracker outage during reconcile | CLI work-continuity, review-regressions | source failure / recovery | owner and block retained; fresh re-observation | passed (see run record) | not run |
-| L04 | Restart loses retry timer | CLI durable-retry | SIGKILL / new monotonic clock | restore UTC due and fresh admission | passed (see run record) | not run |
-| P01 | Repeated failure escalates | orchestrator recovery-policy | capability/strategy budget | finite supported strategies only | passed (see run record) | not run |
-| P02 | Budget exhaustion | CLI recovery-ledger, recovery-review-regressions | independent processes / native worker failures | durable recovery_exhausted; no timer | passed (see run record) | native worker budget + full host restart passed ([core run](core-acceptance-2026-10-23.md)); Web strategies pending |
-| P03 | One incident per epoch/fingerprint | CLI recovery-ledger, host-recovery | ACK loss / concurrent reporters | one incident; ambiguous POST never blindly resent | passed (see run record) | not run |
-| P04 | Authoritative target/generation changes | CLI host-recovery; Decision continuity | new HEAD/task vs binding only | new scope only for semantic target; old callbacks fenced | passed (see run record) | not run |
-| P05 | Blocked condition changes | CLI host-recovery, recovery-review-regressions | modeled ownership / explicit authorization | only modeled ownership conflict auto-clears | passed (see run record) | not run |
-| R01 | Non-ownership invariant retention | CLI recovery-review-regressions | invalid_workspace_cwd / legacy incident | ordinary observation cannot clear epoch | passed (see run record) | not run |
-| R02 | Continuation/capacity budget isolation | CLI recovery-review-regressions | six waits; restart; first failed worker | zero wait charge; first failure counts once | passed (see run record) | not run |
-| R03 | Native Review/Delivery human block | CLI review-regressions, recovery-review-regressions | real needs-human / manual pause | queryable incident; compensation cannot bypass pause | passed (see run record) | not run |
-| A01 | Observation Plane remains read-only | operations full suite | boundaries / source readers | no retry/resume/merge authority | passed (see run record) | not run |
+| W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run live; additional live variants deferred |
+| W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run live; additional live variants deferred |
+| W07 | Stale binding after rebind | Decision continuity | idempotent rebind | old binding progress rejected | passed (see run record) | not run live; additional live variants deferred |
+| W08 | Supersede during recovery | [Exact supersede test](#web-test-index-w02-w05-w08); Decision continuity | admission barrier / supersede | revalidate current task | passed (see run record) | not run live; additional live variants deferred |
+| W09 | PR HEAD changes | CLI durable-delivery, decision-web-admission; Decision continuity | HEAD drift during downtime/admission | old target cannot approve/merge | passed (see run record) | not run live; additional live variants deferred |
+| W10 | Auth/human path | CLI work-continuity, review-regressions; Decision continuity | native block / host reconstruction | blocked; queryable deduplicated incident | passed (see run record) | API-injected auth block survives full host restart ([core run](core-acceptance-2026-10-23.md)); actual login/human UI deferred |
+| L01 | Worker stops progress | orchestrator workflow-integration | stall with real subprocess | old process exits before retry | passed (see run record) | not run live; additional live variants deferred |
+| L02 | Child ignores normal exit | agent transport | SIGTERM refusal | SIGKILL; PID disappearance | passed (see run record) | not run live; additional live variants deferred |
+| L03 | Tracker outage during reconcile | CLI work-continuity, review-regressions | source failure / recovery | owner and block retained; fresh re-observation | passed (see run record) | not run live; additional live variants deferred |
+| L04 | Restart loses retry timer | CLI durable-retry | SIGKILL / new monotonic clock | restore UTC due and fresh admission | passed (see run record) | not run live; additional live variants deferred |
+| P01 | Repeated failure escalates | orchestrator recovery-policy | capability/strategy budget | finite supported strategies only | passed (see run record) | not run live; additional live variants deferred |
+| P02 | Budget exhaustion | CLI recovery-ledger, recovery-review-regressions | independent processes / native worker failures | durable recovery_exhausted; no timer | passed (see run record) | native worker budget + full host restart passed ([core run](core-acceptance-2026-10-23.md)); Web live strategies deferred |
+| P03 | One incident per epoch/fingerprint | CLI recovery-ledger, host-recovery | ACK loss / concurrent reporters | one incident; ambiguous POST never blindly resent | passed (see run record) | not run live; additional live variants deferred |
+| P04 | Authoritative target/generation changes | CLI host-recovery; Decision continuity | new HEAD/task vs binding only | new scope only for semantic target; old callbacks fenced | passed (see run record) | not run live; additional live variants deferred |
+| P05 | Blocked condition changes | CLI host-recovery, recovery-review-regressions | modeled ownership / explicit authorization | only modeled ownership conflict auto-clears | passed (see run record) | not run live; additional live variants deferred |
+| R01 | Non-ownership invariant retention | CLI recovery-review-regressions | invalid_workspace_cwd / legacy incident | ordinary observation cannot clear epoch | passed (see run record) | not run live; additional live variants deferred |
+| R02 | Continuation/capacity budget isolation | CLI recovery-review-regressions | six waits; restart; first failed worker | zero wait charge; first failure counts once | passed (see run record) | not run live; additional live variants deferred |
+| R03 | Native Review/Delivery human block | CLI review-regressions, recovery-review-regressions | real needs-human / manual pause | queryable incident; compensation cannot bypass pause | passed (see run record) | not run live; additional live variants deferred |
+| A01 | Observation Plane remains read-only | operations full suite | boundaries / source readers | no retry/resume/merge authority | passed (see run record) | not run live; additional live variants deferred |
 
 ## Web test index (W02-W05, W08)
 
@@ -116,23 +126,24 @@ is a live pass of the current host + driver + userscript composition.
 
 ## 2026-10-23 follow-up
 
-[Merge and environment verification](run-2026-10-23.md) records a real isolated Bridge SIGKILL/restart and exact durable HTTP readback. The operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. Full browser/host restart and remaining provider/UI faults are pending.
+[Merge and environment verification](run-2026-10-23.md) records a real isolated Bridge SIGKILL/restart and exact durable HTTP readback. The operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. This earlier run did not cover full host/browser restart. Later core and #162 records below supply those scoped boundaries; additional provider/UI variants remain deferred.
 
 ## Core follow-up on 2026-10-23
 
-[Complete host restart and native budget exhaustion](core-acceptance-2026-10-23.md) use real GitHub reads, isolated production createHost/Bridge processes and genuine fail-fast worker exits. The auth block and incident survive SIGKILL; an exhausted retry budget remains blocked after another full host restart. Browser-process restart and provider/UI variants remain pending.
+[Complete host restart and native budget exhaustion](core-acceptance-2026-10-23.md) use real GitHub reads, isolated production createHost/Bridge processes and genuine fail-fast worker exits. The auth block and incident survive SIGKILL; an exhausted retry budget remains blocked after another full host restart. The later #162/PR #163 evidence below accepts browser-process bounded blocking; additional provider/UI variants remain deferred.
 
-## Full browser quit/reopen follow-up
+## Initial full browser quit/reopen attempt (historical)
 
-[W03 browser-process acceptance](browser-process-acceptance-2026-10-23.md) was executed with operator permission. Old process absence and a new PID were verified through native UI. Automatic resume was not established: restored home tab, empty diagnostics, original task still waiting_response and receipt 404. No root cause is assigned yet; browser/tool tab restoration must be separated from Driver persistence before a fix. This is not a live pass.
+[W03 browser-process acceptance](browser-process-acceptance-2026-10-23.md) was executed with operator permission. Old process absence and a new PID were verified through native UI. Automatic resume was not established: restored home tab, empty diagnostics, original task still waiting_response and receipt 404. This initial attempt did not prove safe resume and remains unaccepted for seamless resume. The later complete-host and Driver 0.1.6 runs below supersede its closeout posture by proving bounded visible blocking; the original readback is retained unchanged.
 
 ## #162 bounded-convergence follow-up — 2026-10-23
 
 [Complete-host browser follow-up](bounded-browser-acceptance-2026-10-23.md) observes a
 native-created test window losing its executor after clean quit/reopen, then a durable
 human-required block 27.296 seconds after the last lease expired, with no result POST.
-W03 bounded-convergence evidence is partial; seamless session restoration and the
-current-run agent-tab comparison are not accepted. The matching automatic check is
+This was the initial bounded-convergence observation; the agent-tab comparison and
+Driver 0.1.6 installed-version run below complete the accepted conservative path.
+Seamless session restoration remains unaccepted/deferred. The matching automatic check is
 `apps/cli/src/work-continuity.test.ts` → `W03: full host and authenticated Bridge block a lost waiting_response owner at lease expiry without replay`.
 
 
@@ -153,3 +164,10 @@ remains unaccepted and storage durability has not been disproved.
 [Repair and current-install verification](recovery-hud-fix-2026-10-23.md) fixes the
 restored page's misleading Running state. Waiting/Blocked are observed from native
 Bridge facts, with no ownership adoption or replay. Seamless resume is not implied.
+
+The final installed-version run measured 22.913 seconds from lease expiry to native
+block, with Waiting → Blocked visible on the restored page, claim/binding generation
+1, receipt 404, zero Driver POSTs after quit and HTTP 409 for old heartbeat/replacement
+claim. This is the accepted W03 outcome. Earlier empty-diagnostics evidence is a
+preserved pre-fix observation, not the current #162 status. See the
+[closeout assessment](closeout-2026-10-23.md) for proof, timing limits and deferred variants.

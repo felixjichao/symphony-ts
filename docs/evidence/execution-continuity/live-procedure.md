@@ -1,5 +1,10 @@
 # Isolated live profile (opt-in)
 
+Current disposition: see [closeout assessment](closeout-2026-10-23.md). #162/PR #163
+accept W03 bounded blocking; seamless session resume and unexercised additional live
+combinations are deferred. The prerequisite and gap inventories below are historical
+run notes, not current blockers to the supported bounded-convergence acceptance.
+
 Original 2026-10-22 result: **not run**. This environment has no supplied authenticated browser,
 page/Bridge endpoint or approved isolated live target. GitHub bot credentials alone
 are not evidence of a usable ChatGPT page. No product PR/Issue was fault-injected.
@@ -71,7 +76,7 @@ The operator needs to supply or confirm:
 
 After these are available, repeat preflight at the latest PR head, execute each
 applicable pending row with template readbacks, and request review only after new
-live evidence exists. Keep PR #159 Draft and unmerged meanwhile. Its task-key link
+live evidence exists. This was the pre-merge instruction for PR #159, which is now merged. Its task-key link
 can auto-complete NEST-135 on merge; changing closing text alone does not disable
 that association. A partial merge would require explicit maintainer acceptance
 and handling of automatic completion settings first.
@@ -87,3 +92,13 @@ The earlier environment inventory above is historical. A controllable authentica
 ## Browser-process attempt
 
 The operator authorized exiting/reopening current Edge. [Actual quit/reopen evidence](browser-process-acceptance-2026-10-23.md) verifies an absent old process and new PID, but automatic task resume was not established. This is now an attempted, unaccepted scenario rather than only an environment prerequisite. Do not label it passed or copy another tab's checkpoint/lease to manufacture success. Reproduce with a native user-created tab to distinguish session/tool restoration from Driver behavior.
+
+## Final scope after #163
+
+The earlier browser-process attempt is preserved as evidence that seamless resume
+was not established. Complete-host follow-ups and installed Driver 0.1.6 subsequently
+proved visible Waiting → Blocked, with old execution rejected and no replay; see
+[recovery verification](recovery-hud-fix-2026-10-23.md). #162 is closed. Remaining
+procedures are opt-in reproduction/deferred coverage, not a requirement to exhaust
+all account/provider/UI combinations before #151 closes under the maintainer's
+[approved coverage decision](closeout-2026-10-23.md#coverage-and-deferred-variants).

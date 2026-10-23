@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "assessment": "supported_bounded_convergence_accepted_pending_documentation_review_and_merge",
+  "baselineCommit": "7e10c91d5693ef63f438490cbfd1886105b22225",
+  "decision": "https://github.com/felixjichao/symphony-ts/issues/151#issuecomment-6365077503",
+  "newLiveExperiments": false,
+  "seamlessBrowserSessionResume": "unaccepted_deferred",
+  "historicalResultsRewritten": false,
+  "scenarioResults": {
+    "H01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "H02": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "H03": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "H04": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "H05": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "blocked-host restart/deduplicated incident passed ([core run](core-acceptance-2026-10-23.md)); other live variants deferred"
+    },
+    "H06": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W02": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "reload during generation passed ([2026-10-23](run-2026-10-23.md)); other live variants deferred"
+    },
+    "W03": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "**bounded convergence accepted** ([Driver 0.1.6](recovery-hud-fix-2026-10-23.md), [native readback](recovery-hud-result-2026-10-23.json)); host restart passed ([core run](core-acceptance-2026-10-23.md)); seamless resume deferred"
+    },
+    "W04": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "accepted-result ACK loss passed with real ChatGPT ([2026-10-23](run-2026-10-23.md))"
+    },
+    "W05": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W06": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W07": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W08": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W09": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "W10": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "API-injected auth block survives full host restart ([core run](core-acceptance-2026-10-23.md)); actual login/human UI deferred"
+    },
+    "L01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "L02": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "L03": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "L04": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "P01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "P02": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "native worker budget + full host restart passed ([core run](core-acceptance-2026-10-23.md)); Web live strategies deferred"
+    },
+    "P03": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "P04": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "P05": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "R01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "R02": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "R03": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    },
+    "A01": {
+      "supportedInvariant": "accepted_scoped_evidence",
+      "automatedEvidence": "README.md; original source/run identities retained",
+      "liveEvidenceAndLimits": "not run live; additional live variants deferred"
+    }
+  },
+  "deferredLiveVariants": [
+    "growing browser response across full host restart",
+    "external incident-provider ACK ambiguity",
+    "actual auth/human/deleted-conversation UI",
+    "Web rebind/exhaustion combinations",
+    "seamless browser-session restore, alternate policies, browser crash/SIGKILL"
+  ],
+  "closureCondition": "closeout gate, review and PR merge; then #151 closure and #145 final maintainer acceptance",
+  "validation": {
+    "command": "npm run gate",
+    "exitCode": 0,
+    "passed": 2311,
+    "skipped": 2,
+    "validationCommit": "d6686be2ce68d1de616afe4c21211a754c5afd2d",
+    "runtimeSourceCommit": "7e10c91d5693ef63f438490cbfd1886105b22225",
+    "environment": "Linux x64; v22.23.1; npm 10.9.8",
+    "logSha256": "22f4b2c6687095664fc8a11bdc9ad7f9ee2fae05635137951c4635d54e642f9e",
+    "skippedReasons": [
+      "root chmod-000 permission semantics",
+      "opt-in gh compatibility without repository target"
+    ],
+    "finalChanges": "evidence-only validation metadata; docs-check and diff-check rerun"
+  }
+}
