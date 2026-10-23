@@ -23,6 +23,8 @@ Production composition is `apps/cli/src/status.ts`, used by `createHost` and the
 | Architecture / read-only HTTP | status-boundaries negative fixtures, existing package/browser dependency guards and bundle scan; POST/PUT/DELETE/PATCH/HEAD 405, unknown API 404 |
 | Packaged executable | Chromium launches actual built CLI with an isolated HTTPS tracker, different cwd and empty scope, checks production assets, then signals clean stop |
 
+[Gate results](validation.json) record the implementation commit, full command, workspace results and the earlier default-concurrency failures. No failing test, timeout or skip policy was relaxed.
+
 `browser.json` records the browser version, static asset SHA-256, scenario results and GET-only network result. It distinguishes controlled production composition scenarios from the actual executable packaging smoke. The source commit identifies the checkout at invocation; the candidate marker explicitly identifies uncommitted candidate runs. The final implementation commit and validation are recorded in the PR. This is automated/local acceptance, **not authenticated public GitHub/Decision live acceptance**. No external workflow was modified, no real ChatGPT session was required, and no #159 live evidence is borrowed. An optional external read-only smoke remains unrun; #140 allows automated or durable evidence for representative faults.
 
 ## Reproduce
