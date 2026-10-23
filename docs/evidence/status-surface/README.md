@@ -19,6 +19,7 @@ Production composition is `apps/cli/src/status.ts`, used by `createHost` and the
 | Domain pass-through / no browser conclusions | wire equals real operations query; DOM matches phase/attention/waiting/freshness; existing frozen inconsistent projections and AST/type/graph/module guards remain |
 | Status failure has no authority effect | host.test.ts disabled/missing-assets/rejected-source/enabled: same real worker failure, first retry reservation and clean stop, no host.failure |
 | Decision read-only / exact-HEAD safety | real temporary shared store and authenticated Bridge read equality, persisted bytes unchanged, expired lease retained, no token/context/receipt, current-HEAD approval remains refused before/after observation and store close |
+| Credential origin / reload | `status-credentials.test.ts`: real host + public GitHub profile + production HTTP; GHES/alternate API bases/other providers start no subprocess; public default/trailing-slash origin works; reload blocks unsupported sources, recovers with the new public token and preserves the old validated token for an in-flight read |
 | Bounded I/O / teardown | real stalled Bridge body abort; bounded GitHub runner commands; status stop fences admission and drains disconnected reads; bind/asset rollback |
 | Architecture / read-only HTTP | status-boundaries negative fixtures, existing package/browser dependency guards and bundle scan; POST/PUT/DELETE/PATCH/HEAD 405, unknown API 404 |
 | Packaged executable | Chromium launches actual built CLI with an isolated HTTPS tracker, different cwd and empty scope, checks production assets, then signals clean stop |
@@ -32,7 +33,7 @@ Production composition is `apps/cli/src/status.ts`, used by `createHost` and the
 ```sh
 npm ci
 npm run build -w @symphony/cli
-npm test -w @symphony/cli -- src/status.test.ts src/status-boundaries.test.ts src/host.test.ts
+npm test -w @symphony/cli -- src/status.test.ts src/status-boundaries.test.ts src/status-credentials.test.ts src/host.test.ts
 npm test -w @symphony/dashboard
 npm test -w @symphony/operations
 npm test -w @symphony/observability

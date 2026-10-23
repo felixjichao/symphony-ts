@@ -29,7 +29,8 @@ export function parseStatusWork(value: string): WorkKey {
   if (key.provider !== "github" || formatWorkKey(key) !== value) throw new TypeError("Expected canonical github:owner/repo#N");
   return key;
 }
-/** Existing verified naming convention; marker + branch + repository checks stay in observeWork. */
+/** Public GitHub only: host must validate provider/API origin before supplying credentials.
+ * Existing verified naming convention; marker + branch + repository checks stay in observeWork. */
 export function githubStatusSource(runner: GhRunner = new DefaultGhRunner()): (key: WorkKey) => Promise<GitHubObservation> {
   return async key => {
     const deadline = Date.now() + 3000;

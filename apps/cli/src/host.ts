@@ -486,14 +486,25 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
                   statusSurface = await startStatusSurface(options.status!, {
                     runtime: () => tryProjectObservabilitySnapshot(state, clock),
                     decision: decisionObservation,
-                    github: githubStatusSource({ exec: (args, execOptions) => {
+                    github: key => {
+                      // Capture and validate one effective source before any subprocess.
+                      // Reload must not change credentials midway through an observation.
                       const current = controller.current;
-                      const provider = current.serviceConfig.tracker.provider ?? {};
-                      const resolved = current.profile?.resolveProviderConfig?.(provider, options.env ?? process.env) ?? provider;
-                      const token = typeof resolved["token"] === "string" ? resolved["token"] : undefined;
-                      return new DefaultGhRunner().exec(args, { ...execOptions,
-                        ...(token ? { env: { GH_TOKEN: token, GH_HOST: "github.com" } } : {}) });
-                    } }),
+                      if (current.serviceConfig.tracker.kind !== "github" || current.profile?.kind !== "github") {
+                        throw new Error("Unsupported status source");
+                      }
+                      const resolved = current.profile.resolveProviderConfig?.(
+                        current.serviceConfig.tracker.provider, options.env ?? process.env);
+                      if (resolved?.["api_url"] !== "https://api.github.com" ||
+                          typeof resolved["token"] !== "string" || !resolved["token"]) {
+                        throw new Error("Unsupported status source origin");
+                      }
+                      const token = resolved["token"];
+                      return githubStatusSource({ exec: (args, execOptions) =>
+                        new DefaultGhRunner().exec(args, { ...execOptions,
+                          env: { GH_TOKEN: token, GH_HOST: "github.com" } }),
+                      })(key);
+                    },
                     clock: now,
                     ...options.statusSources,
                   });
