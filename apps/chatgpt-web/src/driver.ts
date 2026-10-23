@@ -78,7 +78,8 @@ export interface DecisionTabDriverOptions {
   readonly maxNavigationAttempts?: number | undefined;
   readonly shouldRun?: (() => boolean) | undefined;
   readonly onDiagnostic?: ((entry: DriverDiagnostic) => void) | undefined;
-  /** Read-only idle observation; never supplies credentials or authorizes recovery. */
+  /** Read-only idle facts; transport supplies Bridge authentication.
+   * No task lease credentials are exposed or adopted; this never authorizes recovery. */
   readonly onContinuity?: ((work: readonly DecisionContinuityWork[]) => void) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 }

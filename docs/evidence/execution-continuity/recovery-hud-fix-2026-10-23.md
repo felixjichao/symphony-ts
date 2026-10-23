@@ -17,9 +17,11 @@ page kept showing Running / empty diagnostics. Two new real-Bridge/store userscr
 regressions first failed with `expected Waiting/Blocked, received Running`.
 
 When checkpoint recovery has nothing local to resume and `/next` returns no claimable
-task, `DecisionTabDriver` now reads the credential-free `/v1/continuity` facts if its
-HUD observer is attached. The page displays unfinished owned work as Waiting with
-an explicit no-local-checkpoint instruction; native execution blocks as Blocked with
+task, `DecisionTabDriver` now reads the read-only `/v1/continuity` facts if its
+HUD observer is attached. When the Bridge has an `authToken` configured, the transport
+must supply Bridge Bearer authentication. The response exposes no task lease
+credentials, and observing these facts does not authorize lease adoption. The page
+displays unfinished owned work as Waiting with an explicit no-local-checkpoint instruction; native execution blocks as Blocked with
 task ID, reason and operator inspection instruction. Terminal history is ignored.
 The page cannot claim another tab's lease, infer success, reclaim or unblock from
 these observations. Existing checkpoint/receipt recovery retains priority.
