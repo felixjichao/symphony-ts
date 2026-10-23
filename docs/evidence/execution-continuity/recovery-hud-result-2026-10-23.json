@@ -1,0 +1,147 @@
+{
+  "source": "uncommitted #162 repair atop 937e9d6d9e74c90f736137d897efdca856444594; artifact hash in recovery-hud-validation",
+  "atMs": 1792746216025,
+  "variant": "Driver 0.1.6 native clean quit, explicit reopen, Waiting then Blocked HUD",
+  "browserBefore": {
+    "atMs": 1792746007148,
+    "mainPid": 32189,
+    "agentTabId": "34635492",
+    "preQuitConversation": "https://chatgpt.com/c/6adb21bd-7414-83e9-9564-760349206ee3",
+    "installedHudVersion": "0.1.6"
+  },
+  "browserExited": {
+    "atMs": 1792746007148,
+    "oldPid": 32189,
+    "oldPidAbsent": true,
+    "noEdgeMainProcess": true,
+    "inspection": "read-only process table after native menu Quit"
+  },
+  "browserReopened": {
+    "recordedAtMs": 1792746116338,
+    "newPid": 16774,
+    "oldPid": 32189,
+    "sameAgentTabId": "34635492",
+    "restoredUrl": "https://chatgpt.com/",
+    "installedHudVersion": "0.1.6",
+    "observedState": "Waiting",
+    "oldPidAbsenceObserved": true
+  },
+  "taskId": "github%3Afelixjichao%2Fsymphony-ts%23162:plan:1",
+  "status": "running",
+  "owner": "chatgpt-web-driver-xeulyw",
+  "claimGeneration": 1,
+  "bindingGeneration": 1,
+  "leaseExpiresAtMs": 1792746097036,
+  "execution": {
+    "revision": 1,
+    "startedAtMs": 1792745916775,
+    "lastProgressAtMs": 1792745977036,
+    "deadlineAtMs": 1792746577036,
+    "phase": "waiting_response",
+    "responseLength": 7867,
+    "recoveryAttempts": 0,
+    "blocked": {
+      "reason": "human_required",
+      "unblock": "Verify conversation/result receipt before authorizing another prompt",
+      "atMs": 1792746119949
+    }
+  },
+  "httpStatus": {
+    "receipt": 404,
+    "next": 204,
+    "replacementClaim": 409,
+    "oldHeartbeat": 409
+  },
+  "resultPostCount": 0,
+  "startPostCount": 1,
+  "claimPostCount": 1,
+  "blockAfterLeaseMs": 22913,
+  "firstBlockObservedAtMs": 1792746120269,
+  "incident": {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-ts#162"
+    },
+    "expectedAction": "plan:recover",
+    "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23162:plan:1\",\"revision\":1},null,null,0]",
+    "owner": "chatgpt-web-driver-xeulyw",
+    "fence": {
+      "leaseGeneration": 1,
+      "bindingGeneration": 1,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": 1792745977036,
+    "failure": {
+      "classification": "human_required",
+      "reason": "human_required"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "2f6840d4f2cfe3844cfb5058c2ae28eb685c874096c9ffe2656e1af683c8178c",
+    "fingerprint": "157d3d0c6d0a68aa91a63ccf3ee9ea20e3a968ffc6cbcd3084754d2b0cf69db3",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [
+      "reclaim"
+    ],
+    "blockedReason": "human_required",
+    "createdAt": 1792746124334
+  },
+  "hostDiagnosis": [
+    {
+      "workKey": {
+        "provider": "github",
+        "key": "felixjichao/symphony-ts#162"
+      },
+      "diagnosis": {
+        "workKey": {
+          "provider": "github",
+          "key": "felixjichao/symphony-ts#162"
+        },
+        "observedAt": 1792746194868,
+        "status": "blocked",
+        "next": {
+          "action": "require_human",
+          "description": "plan: human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+          "authority": {
+            "kind": "human",
+            "role": "operator",
+            "instruction": "human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize"
+          },
+          "taskRef": {
+            "taskId": "github%3Afelixjichao%2Fsymphony-ts%23162:plan:1",
+            "revision": 1
+          }
+        },
+        "owner": {
+          "id": "chatgpt-web-driver-xeulyw",
+          "fence": {
+            "leaseGeneration": 1,
+            "bindingGeneration": 1,
+            "hasLeaseToken": false
+          },
+          "liveness": {
+            "startedAt": 1792745916775,
+            "lastProgressAt": 1792745977036,
+            "lastObservedAt": 1792746194868,
+            "deadlineAt": 1792746577036
+          }
+        },
+        "reasons": [
+          "human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize"
+        ],
+        "recovery": "none"
+      },
+      "result": "unchanged"
+    }
+  ],
+  "checkpointAvailability": "no local checkpoint reported in HUD; no lease adopted",
+  "limitations": [
+    "Installed userscript bytes not independently extracted",
+    "Remote reporting disabled; local incident verified",
+    "This accepts recovery-state visibility and bounded blocking; no transparent resume claim"
+  ],
+  "hudWaiting": "Symphony Decision Driver 0.1.6\n\u25cf Waiting\nWaiting github%3Afelixjichao%2Fsymphony-ts%23162:plan:1: no local checkpoint. Await the current owner or host reconciliation; do not resend the task.\nToken: Configured\nChange Token\nResponse timeout (minutes, 1\u201360)\nStop Driver\nDriver diagnostics (last 50 events)",
+  "hudBlocked": "Symphony Decision Driver 0.1.6\n\u25cf Blocked\nBlocked github%3Afelixjichao%2Fsymphony-ts%23162:plan:1: human_required. Verify conversation/result receipt before authorizing another prompt\nToken: Configured\nChange Token\nResponse timeout (minutes, 1\u201360)\nStop Driver\nDriver diagnostics (last 50 events)",
+  "continuityReadCount": 93,
+  "driverPostCountAfterQuit": 0
+}

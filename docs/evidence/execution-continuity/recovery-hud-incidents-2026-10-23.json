@@ -1,0 +1,31 @@
+[
+  {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-ts#162"
+    },
+    "expectedAction": "plan:recover",
+    "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23162:plan:1\",\"revision\":1},null,null,0]",
+    "owner": "chatgpt-web-driver-xeulyw",
+    "fence": {
+      "leaseGeneration": 1,
+      "bindingGeneration": 1,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": 1792745977036,
+    "failure": {
+      "classification": "human_required",
+      "reason": "human_required"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "2f6840d4f2cfe3844cfb5058c2ae28eb685c874096c9ffe2656e1af683c8178c",
+    "fingerprint": "157d3d0c6d0a68aa91a63ccf3ee9ea20e3a968ffc6cbcd3084754d2b0cf69db3",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [
+      "reclaim"
+    ],
+    "blockedReason": "human_required",
+    "createdAt": 1792746124334
+  }
+]

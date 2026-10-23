@@ -1,0 +1,149 @@
+{
+  "source": "937e9d6d9e74c90f736137d897efdca856444594 plus type-only HeartbeatTaskRequest correction",
+  "atMs": 1792745214894,
+  "variant": "agent-managed tab, native clean quit and explicit reopen",
+  "browserBefore": {
+    "atMs": 1792744534467,
+    "mainPid": 8768,
+    "agentTabId": "34634957",
+    "initialUrl": "https://chatgpt.com/",
+    "driverInitiallyIdle": true
+  },
+  "browserExited": {
+    "atMs": 1792744625953,
+    "oldPid": 8768,
+    "oldPidAbsent": true,
+    "noEdgeMainProcess": true,
+    "inspection": "read-only ps after native menu Quit; no shell termination"
+  },
+  "browserReopened": {
+    "atMs": 1792744721079,
+    "newPid": 32189,
+    "oldPid": 8768,
+    "sameAgentTabId": "34634957",
+    "restoredUrl": "https://chatgpt.com/",
+    "preQuitConversation": "https://chatgpt.com/c/6adb1c4e-3928-83ea-8421-7e937f236d0b",
+    "driver": "Running",
+    "diagnostics": []
+  },
+  "sessionIdentityAfter": {
+    "key": "symphony_tab_id",
+    "value": "tab_1792744643640_szml5m5a",
+    "source": "Native DevTools Application / Session storage / https://chatgpt.com, filtered symphony; read only"
+  },
+  "taskId": "github%3Afelixjichao%2Fsymphony-ts%23162:plan:1",
+  "status": "running",
+  "owner": "chatgpt-web-driver-fbbrwq",
+  "claimGeneration": 1,
+  "bindingGeneration": 1,
+  "leaseExpiresAtMs": 1792744725858,
+  "execution": {
+    "revision": 1,
+    "startedAtMs": 1792744525577,
+    "lastProgressAtMs": 1792744605858,
+    "deadlineAtMs": 1792745205858,
+    "phase": "waiting_response",
+    "responseLength": 21589,
+    "recoveryAttempts": 0,
+    "blocked": {
+      "reason": "human_required",
+      "unblock": "Verify conversation/result receipt before authorizing another prompt",
+      "atMs": 1792744748877
+    }
+  },
+  "httpStatus": {
+    "receipt": 404,
+    "next": 204,
+    "replacementClaim": 409,
+    "oldHeartbeat": 409
+  },
+  "resultPostCount": 0,
+  "startPostCount": 1,
+  "claimPostCount": 1,
+  "blockAfterLeaseMs": 23019,
+  "firstBlockObservedAtMs": 1792744749160,
+  "incident": {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-ts#162"
+    },
+    "expectedAction": "plan:recover",
+    "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23162:plan:1\",\"revision\":1},null,null,0]",
+    "owner": "chatgpt-web-driver-fbbrwq",
+    "fence": {
+      "leaseGeneration": 1,
+      "bindingGeneration": 1,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": 1792744605858,
+    "failure": {
+      "classification": "human_required",
+      "reason": "human_required"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "2f6840d4f2cfe3844cfb5058c2ae28eb685c874096c9ffe2656e1af683c8178c",
+    "fingerprint": "157d3d0c6d0a68aa91a63ccf3ee9ea20e3a968ffc6cbcd3084754d2b0cf69db3",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [
+      "reclaim"
+    ],
+    "blockedReason": "human_required",
+    "createdAt": 1792744755507
+  },
+  "hostDiagnosis": [
+    {
+      "workKey": {
+        "provider": "github",
+        "key": "felixjichao/symphony-ts#162"
+      },
+      "diagnosis": {
+        "workKey": {
+          "provider": "github",
+          "key": "felixjichao/symphony-ts#162"
+        },
+        "observedAt": 1792745188612,
+        "status": "blocked",
+        "next": {
+          "action": "require_human",
+          "description": "plan: human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+          "authority": {
+            "kind": "human",
+            "role": "operator",
+            "instruction": "human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize"
+          },
+          "taskRef": {
+            "taskId": "github%3Afelixjichao%2Fsymphony-ts%23162:plan:1",
+            "revision": 1
+          }
+        },
+        "owner": {
+          "id": "chatgpt-web-driver-fbbrwq",
+          "fence": {
+            "leaseGeneration": 1,
+            "bindingGeneration": 1,
+            "hasLeaseToken": false
+          },
+          "liveness": {
+            "startedAt": 1792744525577,
+            "lastProgressAt": 1792744605858,
+            "lastObservedAt": 1792745188612,
+            "deadlineAt": 1792745205858
+          }
+        },
+        "reasons": [
+          "human_required: Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize"
+        ],
+        "recovery": "none"
+      },
+      "result": "unchanged"
+    }
+  ],
+  "checkpointAvailability": "lookup did not resume; old GM checkpoint namespace not directly inspected",
+  "limitations": [
+    "Installed userscript bytes not independently extracted",
+    "Old symphony_tab_id not recorded directly before quit; post-reopen ID embeds creation timestamp after old process exit",
+    "Remote reporting disabled; local incident verified",
+    "Native comparison used a separate native window; tab/window topology differs"
+  ]
+}

@@ -1,0 +1,8 @@
+{"at": 1792741672177, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/claim", "status": 200}
+{"at": 1792741672313, "method": "GET", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/context", "status": 200}
+{"at": 1792741673086, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/start", "status": 200}
+{"at": 1792741673745, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "prompt_submitting", "responseLength": 0}}
+{"at": 1792741692468, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 4403}}
+{"at": 1792741712461, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 11034}}
+{"at": 1792741732481, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 17656}}
+{"at": 1792741752457, "method": "POST", "path": "/v1/tasks/github%253Afelixjichao%252Fsymphony-ts%2523162%3Aplan%3A2/heartbeat", "status": 200, "progress": {"phase": "waiting_response", "responseLength": 23985}}
