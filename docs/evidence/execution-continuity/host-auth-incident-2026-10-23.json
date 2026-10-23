@@ -1,0 +1,29 @@
+[
+  {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-delivery-dogfood#24"
+    },
+    "expectedAction": "plan:recover",
+    "target": "infrastructure:0",
+    "owner": "core-acceptance-auth-block",
+    "fence": {
+      "leaseGeneration": 1,
+      "bindingGeneration": 0,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": "unknown",
+    "failure": {
+      "classification": "auth_required",
+      "reason": "auth_required"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "4cb2c9828eff3c1e9b3f2ffe37ed2267f15d38541ea825a8347a71bc4c8bcf55",
+    "fingerprint": "71eaff9d67f8524f000977f888341db392283187830a6a87ef8c892caa53972c",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [],
+    "blockedReason": "auth_required",
+    "createdAt": 1792720469014
+  }
+]

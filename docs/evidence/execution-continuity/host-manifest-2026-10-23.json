@@ -1,0 +1,13 @@
+{
+  "sourceCommit": "ad5b08e7790563f8de2d0bf0f4eb660518ca6b21",
+  "node": "v24.15.0",
+  "harnessSha256": "09719370423e8e28bb6c7046e2e32e61d147e4889a1f7c9f7ad930c868ac2f9f",
+  "bundleSha256": "5db35bb749040998a08e48da2802ecfe8655e3475ad829bb92b9e9defe4528e3",
+  "harnessStrictTypecheck": {
+    "command": "node_modules/.bin/tsc -p /private/tmp/symphony-pr159-core-20261023/tsconfig.json",
+    "exitCode": 0
+  },
+  "buildCommand": "NODE_PATH=/Volumes/Data/symphony-ts/node_modules node_modules/.bin/esbuild host.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --alias:@symphony/cli=/Volumes/Data/symphony-ts/apps/cli/src/index.ts --alias:@symphony/decision=/Volumes/Data/symphony-ts/packages/decision/src/index.ts --alias:@symphony/tracker=/Volumes/Data/symphony-ts/packages/tracker/src/index.ts --alias:@symphony/observability=/Volumes/Data/symphony-ts/packages/observability/src/index.ts --outfile=host.mjs",
+  "runCommand": "node host.mjs <isolated-mode-directory> blocked|exhausted",
+  "remoteEffects": "real GitHub reads; remote reporting unavailable through injected port, no GitHub writes"
+}

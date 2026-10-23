@@ -1,0 +1,35 @@
+{
+  "atUtc": "2026-10-23T01:58:02.553939+00:00",
+  "sourceCommit": "ad5b08e7790563f8de2d0bf0f4eb660518ca6b21",
+  "oldPid": 37159,
+  "newPid": 37770,
+  "workKey": {
+    "provider": "github",
+    "key": "felixjichao/symphony-delivery-dogfood#24"
+  },
+  "maxAttempts": 1,
+  "maxStrategyAttempts": 1,
+  "workerCommand": "false",
+  "nativeWorkerStarts": 2,
+  "initialStarts": 1,
+  "retryStarts": 1,
+  "additionalStartsAfterRestart": 0,
+  "incidentCount": 1,
+  "incidentId": "33be5640bcbf124f1e66e8a468d405202ab888eab7a2f0ee6481af0fd36a34dc",
+  "blockedReason": "recovery_exhausted",
+  "attempts": 1,
+  "actions": [
+    "retry"
+  ],
+  "cliListExactlyPreserved": true,
+  "cliShowMatchesIncident": true,
+  "restartObservedFromUtc": "2026-10-23T01:56:52.364Z",
+  "restartLastBlockedObservationUtc": "2026-10-23T01:57:51.467Z",
+  "postRestartBlockedObservations": 5,
+  "postRestartAllRunningAndRetryCountsZero": true,
+  "limitations": [
+    "real fail-fast subprocess, not a successful coding model session",
+    "remote reporting deliberately unavailable, no remote comment sent",
+    "only native retry strategy exercised"
+  ]
+}

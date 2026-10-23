@@ -1,0 +1,32 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {createHost} from '@symphony/cli';
+import {DecisionBridge} from '@symphony/decision';
+import {createGitHubAdapterProfile, type TrackerAdapterProfile} from '@symphony/tracker';
+import {createStructuredLogger} from '@symphony/observability';
+const dir=process.argv[2]!;
+const mode=process.argv[3]!;
+fs.mkdirSync(dir,{recursive:true});
+const log=(file:string,entry:Record<string,unknown>)=>fs.appendFileSync(path.join(dir,file),JSON.stringify({at:new Date().toISOString(),pid:process.pid,...entry})+'\n');
+const credential=execFileSync('gh',['auth','token'],{encoding:'utf8'}).trim();
+process.env.GITHUB_TOKEN=credential;
+process.env.GH_TOKEN=credential;
+const authToken=fs.readFileSync('/private/tmp/symphony-pr156-reacceptance-token','utf8').trim();
+const bridge=new DecisionBridge({storeDir:path.join(dir,'store'),host:'127.0.0.1',port:4040,authToken,allowedOrigins:['https://chatgpt.com']});
+await bridge.start();
+const base=createGitHubAdapterProfile();
+const profile:TrackerAdapterProfile={...base,createAdapter(context){
+ const adapter=base.createAdapter(context);
+ const scope=(issues:Awaited<ReturnType<typeof adapter.fetchIssuesByStates>>)=>issues.filter(i=>i.nativeRef?.repo==='felixjichao/symphony-delivery-dogfood'&&i.nativeRef.number===24);
+ return {kind:adapter.kind,fetchIssuesByStates:async(states)=>{const issues=scope(await adapter.fetchIssuesByStates(states));log('tracker.ndjson',{operation:'states',count:issues.length});return issues;},fetchIssuesByIds:async(ids)=>{const issues=scope(await adapter.fetchIssuesByIds(ids));log('tracker.ndjson',{operation:'ids',count:issues.length});return issues;}};
+}};
+const host=await createHost({workflowPath:path.join(dir,'WORKFLOW.md'),trackerProfiles:[profile],
+ ...(mode==='blocked'?{decisionBridgeUrl:'http://127.0.0.1:4040',decisionBridgeToken:authToken,canDispatch:()=>false}:{enablePlanning:false}),
+ continuityRunner:{gh:async()=>{log('reporting.ndjson',{action:'external_reporting_disabled'});return {exitCode:1,stdout:'',stderr:'isolated acceptance: reporting unavailable'};},git:async()=>{throw new Error('unexpected delivery git');},exec:async()=>{throw new Error('unexpected delivery exec');}},
+ logger:createStructuredLogger({sinks:[{write(line){fs.appendFileSync(path.join(dir,'host-events.ndjson'),line+'\n');}}]})});
+await host.start();
+log('lifecycle.ndjson',{event:'started',mode});
+let previous='';
+const timer=setInterval(()=>{const observation={running:host.state.running.size,retrying:host.state.retryAttempts.size,observations:host.workContinuity.observations};const value=JSON.stringify(observation);if(value!==previous){previous=value;log('snapshots.ndjson',observation);}},250);
+process.on('SIGTERM',async()=>{clearInterval(timer);await host.stop();await bridge.stop();log('lifecycle.ndjson',{event:'stopped'});process.exit(0);});

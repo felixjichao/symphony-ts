@@ -79,3 +79,7 @@ and handling of automatic completion settings first.
 ## 2026-10-23 environment update
 
 The earlier environment inventory above is historical. A controllable authenticated Edge page with the Driver HUD and configured Token is now available; an isolated current-source Bridge was successfully restarted after SIGKILL. [Current follow-up](run-2026-10-23.md) records the exact boundary. Tampermonkey editor access is blocked by browser security policy, so current installation must be confirmed by the operator. The operator subsequently confirmed installing the current artifact; real ChatGPT generation/reload and accepted-result ACK-loss variants passed. Installed bytes were not independently extracted. See the current follow-up for readbacks and remaining gaps.
+
+## Core host follow-up
+
+[Core acceptance](core-acceptance-2026-10-23.md) supplies complete createHost + Bridge process SIGKILL/restart with a native auth block, plus genuine worker retry budget exhaustion retained after another host restart. These use real GitHub reads and private stores, with remote reporting unavailable by design. Full browser-process restart and actual auth/human UI, Web strategy exhaustion and provider report ACK ambiguity are still pending.

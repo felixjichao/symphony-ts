@@ -1,0 +1,25 @@
+{
+  "atUtc": "2026-10-23T01:55:19.031693+00:00",
+  "sourceCommit": "ad5b08e7790563f8de2d0bf0f4eb660518ca6b21",
+  "workKey": {
+    "provider": "github",
+    "key": "felixjichao/symphony-delivery-dogfood#24"
+  },
+  "oldPid": 36566,
+  "newPid": 36893,
+  "fault": "SIGKILL entire createHost + Bridge process",
+  "realTracker": true,
+  "realGitHubObservation": true,
+  "nativeTaskAndExecutionExactlyPreserved": true,
+  "cliListExactlyPreserved": true,
+  "cliShowMatchesIncident": true,
+  "incidentCount": 1,
+  "incidentId": "4cb2c9828eff3c1e9b3f2ffe37ed2267f15d38541ea825a8347a71bc4c8bcf55",
+  "blockedReason": "auth_required",
+  "allObservedWorkerAndRetryCountsZero": true,
+  "limitations": [
+    "native auth block injected through API, not real login UI",
+    "coding dispatch denied in this scenario",
+    "remote reporting unavailable by test port; no remote comment sent"
+  ]
+}

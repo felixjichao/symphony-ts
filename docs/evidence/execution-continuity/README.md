@@ -22,11 +22,11 @@ Current live evidence is limited to the explicitly recorded variants; it does no
 | H02 | Kill after effect, before ACK | CLI durable-delivery | review_effect / merge_effect | remote readback; no repeated effect | passed (see run record) | not run |
 | H03 | Kill after ACK, before cleanup | CLI durable-delivery | review_ack / merge_ack | native continuation completes | passed (see run record) | not run |
 | H04 | Restart pending compensation | CLI durable-delivery, landing-recovery | report ACK loss / target drift | marker dedupe or stale refusal | passed (see run record) | not run |
-| H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | not run |
+| H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | blocked-host restart/deduplicated incident passed ([core run](core-acceptance-2026-10-23.md)); other variants pending |
 | H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run |
 | W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run |
 | W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | reload during generation passed ([2026-10-23](run-2026-10-23.md)); other variants pending |
-| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | partial: real Bridge SIGKILL/restart; full browser/host pending ([run](run-2026-10-23.md)) |
+| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | partial: real Bridge and complete blocked-host SIGKILL/restart passed; full browser restart pending ([core run](core-acceptance-2026-10-23.md)) |
 | W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | accepted-result ACK loss passed with real ChatGPT ([2026-10-23](run-2026-10-23.md)) |
 | W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
 | W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run |
@@ -39,7 +39,7 @@ Current live evidence is limited to the explicitly recorded variants; it does no
 | L03 | Tracker outage during reconcile | CLI work-continuity, review-regressions | source failure / recovery | owner and block retained; fresh re-observation | passed (see run record) | not run |
 | L04 | Restart loses retry timer | CLI durable-retry | SIGKILL / new monotonic clock | restore UTC due and fresh admission | passed (see run record) | not run |
 | P01 | Repeated failure escalates | orchestrator recovery-policy | capability/strategy budget | finite supported strategies only | passed (see run record) | not run |
-| P02 | Budget exhaustion | CLI recovery-ledger, recovery-review-regressions | independent processes / native worker failures | durable recovery_exhausted; no timer | passed (see run record) | not run |
+| P02 | Budget exhaustion | CLI recovery-ledger, recovery-review-regressions | independent processes / native worker failures | durable recovery_exhausted; no timer | passed (see run record) | native worker budget + full host restart passed ([core run](core-acceptance-2026-10-23.md)); Web strategies pending |
 | P03 | One incident per epoch/fingerprint | CLI recovery-ledger, host-recovery | ACK loss / concurrent reporters | one incident; ambiguous POST never blindly resent | passed (see run record) | not run |
 | P04 | Authoritative target/generation changes | CLI host-recovery; Decision continuity | new HEAD/task vs binding only | new scope only for semantic target; old callbacks fenced | passed (see run record) | not run |
 | P05 | Blocked condition changes | CLI host-recovery, recovery-review-regressions | modeled ownership / explicit authorization | only modeled ownership conflict auto-clears | passed (see run record) | not run |
@@ -116,3 +116,7 @@ is a live pass of the current host + driver + userscript composition.
 ## 2026-10-23 follow-up
 
 [Merge and environment verification](run-2026-10-23.md) records a real isolated Bridge SIGKILL/restart and exact durable HTTP readback. The operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. Full browser/host restart and remaining provider/UI faults are pending.
+
+## Core follow-up on 2026-10-23
+
+[Complete host restart and native budget exhaustion](core-acceptance-2026-10-23.md) use real GitHub reads, isolated production createHost/Bridge processes and genuine fail-fast worker exits. The auth block and incident survive SIGKILL; an exhausted retry budget remains blocked after another full host restart. Browser-process restart and provider/UI variants remain pending.
