@@ -73,5 +73,24 @@
   },
   "browser": "browser.json",
   "authenticatedExternalLive": "not run",
-  "ci": "not collected; delivery does not wait for external CI"
+  "ci": "not collected; delivery does not wait for external CI",
+  "credentialOriginReviewFix": {
+    "sourceCommit": "f8621928c554d1f92d86f5d695c6cef626203466",
+    "reviewedHead": "1ee7d340983afb55d2b5c16aaae0cd5e5064da64",
+    "regressions": {
+      "file": "apps/cli/src/status-credentials.test.ts",
+      "passed": 7,
+      "externalBoundary": "Only gh runner intercepted; real host, GitHub profile, reload and production status HTTP"
+    },
+    "gate": {
+      "command": "VITEST_MAX_THREADS=1 VITEST_MIN_THREADS=1 VITEST_MAX_FORKS=1 VITEST_MIN_FORKS=1 npm run gate",
+      "exitCode": 0,
+      "cli": "377 passed, 1 existing opt-in skip",
+      "dashboard": "131 passed",
+      "typecheck": "passed",
+      "lint": "passed",
+      "docsCheck": "passed"
+    },
+    "browserEvidence": "Reused prior Chromium evidence for unchanged frontend; current built static asset SHA-256 matches browser.json. No new authenticated external live run."
+  }
 }
