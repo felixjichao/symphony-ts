@@ -14,7 +14,7 @@ orchestrator and agent). “Web full suite” means `npm test -w @symphony/chatg
 Each automated result must be read with the exact run identity in [run record](run-2026-10-22.md).
 Automated passed identifies suite evidence for the stated invariant, not exhaustive
 production-composition or live acceptance of every interruption variant.
-This inventory is not a claim that any row has current live evidence.
+Current live evidence is limited to the explicitly recorded variants; it does not imply exhaustive acceptance of a row.
 
 | ID | Required interruption | Native entry / suites | Injection / observation | Required convergence | Automated result | Current live result |
 |---|---|---|---|---|---|---|
@@ -25,9 +25,9 @@ This inventory is not a claim that any row has current live evidence.
 | H05 | Duplicate startup | CLI work-continuity, durable-retry | host startup / UTC due restoration | one Review; no coding replay | passed (see run record) | not run |
 | H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run |
 | W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run |
-| W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | not run |
-| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | not run |
-| W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | not run |
+| W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | reload during generation passed ([2026-10-23](run-2026-10-23.md)); other variants pending |
+| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | partial: real Bridge SIGKILL/restart; full browser/host pending ([run](run-2026-10-23.md)) |
+| W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | accepted-result ACK loss passed with real ChatGPT ([2026-10-23](run-2026-10-23.md)) |
 | W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
 | W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run |
 | W07 | Stale binding after rebind | Decision continuity | idempotent rebind | old binding progress rejected | passed (see run record) | not run |
@@ -112,3 +112,7 @@ Do not commit lease tokens, auth stores, raw conversations or account sidebars.
 [userscript 0.1.5 acceptance](../web-continuity/live015-acceptance-2026-10-22.md)
 remain scoped historical evidence. Their build restrictions remain in force; neither
 is a live pass of the current host + driver + userscript composition.
+
+## 2026-10-23 follow-up
+
+[Merge and environment verification](run-2026-10-23.md) records a real isolated Bridge SIGKILL/restart and exact durable HTTP readback. The operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. Full browser/host restart and remaining provider/UI faults are pending.

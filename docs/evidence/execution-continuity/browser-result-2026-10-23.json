@@ -1,0 +1,23 @@
+{
+  "sourceCommit": "285ff58399ea1d8206a6f4758d9d378abaf65c19",
+  "observedAtUtc": "2026-10-23T01:39:30.294858+00:00",
+  "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+  "status": "completed",
+  "claimGeneration": 1,
+  "bindingGeneration": 1,
+  "recoveryAttempts": 0,
+  "receiptType": "result",
+  "verdict": "ready",
+  "taskPromptSubmittingEvents": 1,
+  "acceptedResultPosts": 1,
+  "reloadAtUtc": "2026-10-23T01:37:44.339Z",
+  "beforeReloadConversationTextLength": 9659,
+  "beforeReloadStopButtonVisible": true,
+  "acceptedAckDroppedAtUtc": "2026-10-23T01:38:26.262Z",
+  "receiptRecoveredAtUtc": "2026-10-23T01:38:26.888Z",
+  "installationIdentity": "operator confirmed current build installed; installed bytes not independently extracted",
+  "limitations": [
+    "synthetic materialized Plan on real ChatGPT; no coding host/GitHub mutations",
+    "no full browser process restart, actual auth/human UI, deleted conversation or budget exhaustion"
+  ]
+}

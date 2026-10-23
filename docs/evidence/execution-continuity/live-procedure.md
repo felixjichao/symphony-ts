@@ -1,6 +1,6 @@
 # Isolated live profile (opt-in)
 
-Current result: **not run**. This environment has no supplied authenticated browser,
+Original 2026-10-22 result: **not run**. This environment has no supplied authenticated browser,
 page/Bridge endpoint or approved isolated live target. GitHub bot credentials alone
 are not evidence of a usable ChatGPT page. No product PR/Issue was fault-injected.
 
@@ -75,3 +75,7 @@ live evidence exists. Keep PR #159 Draft and unmerged meanwhile. Its task-key li
 can auto-complete NEST-135 on merge; changing closing text alone does not disable
 that association. A partial merge would require explicit maintainer acceptance
 and handling of automatic completion settings first.
+
+## 2026-10-23 environment update
+
+The earlier environment inventory above is historical. A controllable authenticated Edge page with the Driver HUD and configured Token is now available; an isolated current-source Bridge was successfully restarted after SIGKILL. [Current follow-up](run-2026-10-23.md) records the exact boundary. Tampermonkey editor access is blocked by browser security policy, so current installation must be confirmed by the operator. The operator subsequently confirmed installing the current artifact; real ChatGPT generation/reload and accepted-result ACK-loss variants passed. Installed bytes were not independently extracted. See the current follow-up for readbacks and remaining gaps.

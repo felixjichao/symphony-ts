@@ -207,7 +207,7 @@ independent re-review approved these fixes in PR #158. External fault acceptance
 
 ### NEST-135 / #151 fault acceptance
 
-The [scenario ledger](evidence/execution-continuity/README.md) indexes native crash windows, stale ownership, local cleanup, budgets and reporting. Current-run evidence and explicit live gaps are recorded separately. Current-composition browser/provider acceptance remains incomplete; parent #145 is not ready to close.
+The [scenario ledger](evidence/execution-continuity/README.md) indexes native crash windows, stale ownership, local cleanup, budgets and reporting. Current-run evidence and explicit live gaps are recorded separately. Current-composition browser/provider acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 verification](evidence/execution-continuity/run-2026-10-23.md) adds real isolated Bridge process and HTTP evidence; operator-confirmed current Driver also passed real ChatGPT reload and accepted-result ACK loss. Remaining browser/host/provider/UI acceptance is pending.
 
 ## Dashboard shell — NEST-125 / GitHub #138
 

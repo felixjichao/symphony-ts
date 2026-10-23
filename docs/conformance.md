@@ -504,7 +504,7 @@ completed needs-human Review and paused Delivery facts through the production ho
 
 ## Execution-continuity fault acceptance (#151)
 
-SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close.
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 follow-up](evidence/execution-continuity/run-2026-10-23.md) adds real local Bridge SIGKILL/restart and accepted-result ACK-loss readbacks (partial W03/W04); operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. Full browser/host restart and other provider/UI acceptance remain pending.
 
 ## §13 adjacent: Dashboard shell (#138 / NEST-125)
 
