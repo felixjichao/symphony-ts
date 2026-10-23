@@ -51,7 +51,7 @@ describe("mechanical observation boundaries", () => {
   });
   it("locks approved shape/format/rank helpers to a closed implementation", () => {
     // Updating these fingerprints requires reviewing the helper and its negative cases.
-    const approved: Record<string, string> = {"identity.ts": "88a2cea6ce61287e55c5958c533f7c5c4d4cdbe71f5220944d45f9d8b4b8de61", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "d769d5359aeef8082711cd6a8d8dfaea57aae89f8e1222e89cbb9173ac386d7f", "evidence.ts": "f6a8de7a108591e774e15bea3b9a3b0bf903723ec9f67065dd8658e251536f1e", "anomaly.ts": "494432b621796e9e5ec2332e0da713a8d66deafbc126416e5cdc800bf69d2c79"};
+    const approved: Record<string, string> = {"identity.ts": "2af61b5fe8f2c864f2e0e164a86ad2b4e26740e3fb1d85f5e2d864414ad9d6bc", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "b32a3768063921b63efa52069d8516a9c95b45fa3db6f826baa9ac414a999013", "evidence.ts": "f8e3990874bbdeed5ab4b69cb6e6f344cf688b9bc76659ac9ae005f6308e472c", "anomaly.ts": "07ab0a49d780a1b13161e641c7043d69d8adaac081d4d3010aede8c5e13487a2"};
     for (const [name, digest] of Object.entries(approved)) expect(createHash("sha256").update(readFileSync(path.join(root, "apps/dashboard/src", name))).digest("hex"), name).toBe(digest);
   });
   it("checks every browser module, including local helpers", () => {

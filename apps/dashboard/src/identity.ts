@@ -37,3 +37,25 @@ export function evidenceGroups(items: readonly ProjectionEvidence[]): readonly (
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
+
+// Presentation identity only. Observation/entity timestamps change on each query round.
+export function evidenceIdentity(item: ProjectionEvidence): string {
+  return JSON.stringify([item.source, item.instance, item.code, item.role, item.ruleId,
+    item.workKey?.provider, item.workKey?.key, item.sessionId, item.taskId, item.resultId,
+    item.revision, item.target?.repository, item.target?.prNumber, item.target?.headSha,
+    item.headSha, item.field, item.value === undefined, item.value, item.detail, item.freshnessStatus]);
+}
+export function anomalyIdentity(item: OperationalAnomaly): string {
+  return JSON.stringify([item.workKey?.provider, item.workKey?.key, item.code, item.message]);
+}
+let ambiguousRender = 0;
+export function diagnosticIds(identities: readonly string[], namespace: string): readonly string[] {
+  const counts = new Map<string, number>();
+  for (const identity of identities) counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  return identities.map(identity => {
+    // Identical breadcrumbs have no independent durable identity. Do not transfer
+    // focus/open state between indistinguishable occurrences across snapshots.
+    const occurrence = counts.get(identity) === 1 ? "stable" : `ambiguous-${++ambiguousRender}`;
+    return `diagnostic-${encodeURIComponent(JSON.stringify([namespace, identity, occurrence]))}`;
+  });
+}

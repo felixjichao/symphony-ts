@@ -19,6 +19,6 @@ export function workDetail(work: WorkProjection, snapshot: OperationalSnapshot):
   for (const source of globalSources(snapshot.sources)) section.append(el("p", `${source.source} / ${source.instance}: ${freshness(source.freshness)}`));
   section.append(el("h3", "关联 Executor · 按完整 WorkKey"));
   for (const item of scopedExecutors(snapshot.executors, work.key)) section.append(el("p", `${item.id} · ${item.role ?? "未报告角色"} · ${item.adapter} · ${item.status} · 心跳 ${timestamp(item.lastHeartbeatAt)}`));
-  section.append(el("h3", "Why · 投影证据（非完整规则执行轨迹）"), evidenceList(work.evidence, work.key), anomalyCards(snapshot.anomalies, work.key));
+  section.append(el("h3", "Why · 投影证据（非完整规则执行轨迹）"), evidenceList(work.evidence, work.key, "projection"), anomalyCards(snapshot.anomalies, work.key));
   return section;
 }

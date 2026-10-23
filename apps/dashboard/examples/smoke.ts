@@ -29,6 +29,19 @@ try {
   await pane.getByText("review_result_target_mismatch", { exact: true }).first().waitFor();
   const raw = pane.locator("summary").first(); await raw.focus(); await page.keyboard.press("Enter");
   assert.ok(await pane.locator("details[open] pre").count() > 0);
+  await page.locator("details").evaluateAll((nodes: HTMLDetailsElement[]) => nodes.forEach(node => { node.open = false; }));
+  const anomaly = pane.locator("article").filter({ has: page.locator("h4", { hasText: /^review_result_target_mismatch$/ }) });
+  const targetFact = anomaly.locator("article").filter({ has: page.locator("h5", { hasText: /^review_result_target$/ }) });
+  const targetSummary = targetFact.locator("summary"); await targetSummary.focus(); await page.keyboard.press("Enter");
+  const focusedId = await targetSummary.getAttribute("id");
+  const previousNotice = await page.getByRole("status").first().innerText();
+  await page.waitForResponse((response: { url(): string }) => response.url().endsWith("/api/operations/snapshot"), { timeout: 25_000 });
+  await page.waitForFunction((previous: string) => document.querySelector('[role="status"]')?.textContent !== previous, previousNotice);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), focusedId);
+  assert.equal(await page.locator("details[open]").count(), 1);
+  assert.equal(await targetSummary.evaluate((node: HTMLElement) => document.activeElement === node), true);
+  const ids = await page.locator("[id]").evaluateAll((nodes: HTMLElement[]) => nodes.map(node => node.id));
+  assert.equal(new Set(ids).size, ids.length);
   await page.locator("tbody a").nth(1).click();
   assert.ok((await pane.innerText()).includes("demo/beta#1") && !(await pane.innerText()).includes("demo/alpha#1"));
   await page.goBack(); await pane.getByRole("heading", { name: "Work Detail · github:demo/alpha#1", exact: true }).waitFor();
@@ -47,5 +60,5 @@ try {
   assert.ok(network.length >= 3 && network.every(method => method === "GET") && endpoints.every(path => path === "/api/operations/snapshot"));
   const assets = await readdir(new URL("../dist/assets/", import.meta.url));
   const hashes = await Promise.all(assets.map(async file => ({ file, sha256: createHash("sha256").update(await readFile(new URL(`../dist/assets/${file}`, import.meta.url))).digest("hex") })));
-  console.log(JSON.stringify({ mode: "built", browser: await browser.version(), scenarios: ["load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
+  console.log(JSON.stringify({ mode: "built", browser: await browser.version(), scenarios: ["load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "anomaly evidence focus/open retained across real 15s poll", "unique diagnostic IDs", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
 } finally { await browser?.close(); if (recovered) await close(recovered); await demo.stop(); }
