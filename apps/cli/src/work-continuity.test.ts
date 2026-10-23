@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { githubDecisionRoot, type Issue } from "@symphony/domain";
 import { DecisionPlanningGate, DecisionService, DurableDecisionStore } from "@symphony/decision";
 import { createHost } from "./host";
+import { FileRecoveryLedger } from "./recovery-ledger";
+import { runRecoveryCli } from "./recovery-cli";
 import { createStructuredLogger } from "@symphony/observability";
 import type { TrackerAdapterProfile } from "@symphony/tracker";
 import { FileDeliveryStateStorage, withDeliveryAuthority, runDeliverySkillCli } from "./delivery-skill-cli";
@@ -30,10 +32,11 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
   const workflowPath = path.join(dir, "WORKFLOW.md");
   await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: echo unused\n---\nPrompt\n`);
   let tick: (() => void) | undefined;
-  const host = await createHost({ workflowPath, trackerProfiles: [profile], planningGate: new DecisionPlanningGate(service), now: () => now,
+  const create = () => createHost({ workflowPath, trackerProfiles: [profile], planningGate: new DecisionPlanningGate(service), now: () => now,
     logger: createStructuredLogger({ sinks: [{ write() {} }] }),
     continuityRunner: { gh: async () => ({ exitCode: 1, stdout: "", stderr: "fixture offline" }), git: async () => { throw new Error("unexpected git"); }, exec: async () => { throw new Error("unexpected exec"); } },
     continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: "open", url: issue.url! }, pullRequest: null, ci: null }) }, scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} } });
+  let host = await create();
   try {
     await host.start();
     tick!(); await host.loop.settled();
@@ -52,10 +55,34 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
     tick!(); await host.loop.settled();
     expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("blocked");
     expect(host.state.running.size).toBe(0);
+    // Reconstruct the production host from durable files, not a recovery helper.
+    const ledgerFile = path.join(dir, "workspaces", ".symphony-host", "recovery-ledger.json");
+    const before = new FileRecoveryLedger(ledgerFile).incidents();
+    expect(before).toHaveLength(1);
+    expect(before[0]?.blockedReason).toBe("auth_required");
+    const blockedTask = service.getTask(task.id);
+    await host.stop();
+    host = await create();
+    await host.start(); tick!(); await host.loop.settled();
+    expect(new FileRecoveryLedger(ledgerFile).incidents()).toEqual(before);
+    expect(service.getTask(task.id)).toEqual(blockedTask);
+    expect(host.state.running.size).toBe(0);
+    let output = "";
+    expect(runRecoveryCli(["show", ledgerFile, before[0]!.id], {
+      stdout: { write: text => { output += text; } }, stderr: { write() {} },
+    })).toBe(0);
+    expect(JSON.parse(output)).toEqual(before[0]);
     now = 4000; offline = true;
     tick!(); await host.loop.settled();
     expect(service.getTask(task.id)?.lease?.owner).toBe("new-web");
     expect(host.workContinuity.observations[0]?.result).toBe("observation_unavailable");
+    expect(new FileRecoveryLedger(ledgerFile).incidents()).toEqual(before);
+    expect(service.getTask(task.id)).toEqual(blockedTask);
+    offline = false;
+    tick!(); await host.loop.settled();
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("blocked");
+    expect(new FileRecoveryLedger(ledgerFile).incidents()).toEqual(before);
+    expect(host.state.running.size).toBe(0);
     await host.stop();
     expect(await host.workContinuity.reconcile()).toEqual([]);
   } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }

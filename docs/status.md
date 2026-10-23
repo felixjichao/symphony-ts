@@ -147,7 +147,7 @@
 
 Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`. The Decision bridge only exposes fenced reclaim; it no longer makes context-free startup/timer recovery decisions. Certified pre-entry lock failures allow later compensation, while post-entry uncertainty remains suppressed. Merged runtime/plan conflicts are diagnosed without mutation. Launch admission now reads native sources for each poll/retry attempt and rechecks keyed tracker facts after remote I/O; inventory failures suppress dispatch, observation failures retain retry reservations through backoff, and remote PR/CI reads work without a local workspace.
 
-Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; NEST-134 / #150 adds the bounded policy and incidents described below, pending independent review. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; NEST-134 / #150 adds the bounded policy and incidents described below, merged in PR #158. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
 
 ## NEST-132 Decision/Web continuity
 
@@ -179,8 +179,7 @@ Implementation protects coordinator invocation, CI→Review, Review-result→Del
 paused compensation, landing acknowledgement and retry→worker boundaries. Native
 host startup restores reservations/intent discovery; uncertain launch/repair/child
 outcomes are durable blocks. Local validation covers real child-process SIGKILL and
-restart, native host ticks and both landing paths. Implementation awaits independent
-review; real GitHub/Codex smoke is not claimed. See the
+restart, native host ticks and both landing paths. Implementation is merged in PR #157; real GitHub/Codex smoke is not claimed. See the
 [implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
 
 ### NEST-134 / #150 bounded recovery and incidents
@@ -194,7 +193,8 @@ unknown POSTs. Operations/Dashboard remain read-only.
 
 Automated policy, native retry, real filesystem/SIGKILL, cross-process exhaustion,
 concurrent reporter, ACK-loss and stale-target tests are included. Live GitHub/browser
-fault acceptance for this change has not been run. Independent review is pending.
+fault acceptance for this change has not been run. Independent review approved PR #158,
+squash-merged as `627daa2164f2a8cdbad67b05d860300ecb822db2`.
 See [operator behavior](bounded-recovery.md) and the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
 
@@ -203,7 +203,11 @@ explicit modeled ownership condition; versioned native accounting separates lega
 migration from new capacity/continuation waits; native needs-human/manual reasons
 produce durable deduplicated incidents without blocking Delivery report compensation.
 Focused real-authority/file-store and production-host regressions are included;
-independent re-review and external fault acceptance remain pending.
+independent re-review approved these fixes in PR #158. External fault acceptance remains pending.
+
+### NEST-135 / #151 fault acceptance
+
+The [scenario ledger](evidence/execution-continuity/README.md) indexes native crash windows, stale ownership, local cleanup, budgets and reporting. Current-run evidence and explicit live gaps are recorded separately. Current-composition browser/provider acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 verification](evidence/execution-continuity/run-2026-10-23.md) adds real isolated Bridge process and HTTP evidence; operator-confirmed current Driver also passed real ChatGPT reload and accepted-result ACK loss. [Core acceptance](evidence/execution-continuity/core-acceptance-2026-10-23.md) also passes complete host restart with a native block and actual worker retry exhaustion retained across process restart. [Full browser quit/reopen was attempted](evidence/execution-continuity/browser-process-acceptance-2026-10-23.md), but automatic resume was not accepted: the restored test tab had empty diagnostics and the original task remained running without a receipt. Next work is to separate native tab/session restoration from agent-tab lifecycle and Driver checkpoint lookup. Other provider/UI variants remain pending.
 
 ## Dashboard shell — NEST-125 / GitHub #138
 

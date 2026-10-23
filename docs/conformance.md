@@ -502,6 +502,10 @@ invalid accounting schema rejection, exact human-reason incident/list/report ded
 and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
 completed needs-human Review and paused Delivery facts through the production host.
 
+## Execution-continuity fault acceptance (#151)
+
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 follow-up](evidence/execution-continuity/run-2026-10-23.md) adds real local Bridge SIGKILL/restart and accepted-result ACK-loss readbacks (partial W03/W04); operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. [Core acceptance](evidence/execution-continuity/core-acceptance-2026-10-23.md) additionally verifies complete blocked-host SIGKILL/restart, native worker retry exhaustion and budget retention after full host restart with real GitHub reads. [Full browser quit/reopen acceptance](evidence/execution-continuity/browser-process-acceptance-2026-10-23.md) was attempted but automatic resume was not established (restored home/empty diagnostics, running task/receipt 404). Browser/tool restore versus Driver checkpoint causes are not isolated. Other provider/UI variants remain pending.
+
 ## §13 adjacent: Dashboard shell (#138 / NEST-125)
 
 | Capability | Implementation / validation | Scope |

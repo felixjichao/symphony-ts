@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "285ff58",
+  "observedAtUtc": "2026-10-23T01:35:10.676524+00:00",
+  "taskId": "github%3Asymphony-acceptance%2Fpr159-ack%23151:plan:1",
+  "acceptedResultPosts": 1,
+  "downstreamAckDropped": true,
+  "receiptExactlyPreservedAfterProcessRestart": true,
+  "statusAfterRestart": "completed",
+  "boundary": "real loopback HTTP transport and production DecisionBridge; synthetic client/result, no browser or external provider"
+}

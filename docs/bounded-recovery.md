@@ -92,3 +92,7 @@ Review `review_requires_human` and Delivery `manual_intervention_required`, rath
 than matching error-message substrings. A native Delivery human-block incident is
 reported under its own stable action/target identity; native pause still prevents
 execution, while pending report compensation retains its separate finite budget.
+
+## Restart preflight and acceptance
+
+Retain native Decision/Delivery state, retry reservations and `.symphony-host` ledger/outbox together. Before restarting, inspect incident list/show and uncertain launch/Send/merge evidence; do not delete records or replay commands to force progress. After startup, verify fresh native owner/target, next action or explicit wait/block. A remote comment can be absent after reporter exhaustion while the local incident remains actionable. Use the [acceptance matrix](evidence/execution-continuity/README.md) and [isolated live procedure](evidence/execution-continuity/live-procedure.md) to distinguish tested recovery from pending real-environment checks.

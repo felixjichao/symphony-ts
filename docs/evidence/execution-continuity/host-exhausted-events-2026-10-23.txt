@@ -1,0 +1,30 @@
+timestamp="2026-10-23T01:55:30.444Z" severity="info" event="startup" outcome="started" reason="startup_started"
+timestamp="2026-10-23T01:55:30.445Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:55:31.506Z" severity="info" event="startup" outcome="completed" reason="startup_completed"
+timestamp="2026-10-23T01:55:31.508Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:55:50.067Z" severity="info" event="dispatch_committed" outcome="started" reason="dispatch_committed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=null
+timestamp="2026-10-23T01:55:50.069Z" severity="info" event="worker_started" outcome="started" reason="worker_started" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=null
+timestamp="2026-10-23T01:55:50.101Z" severity="warn" event="startup_failed" outcome="failed" reason="startup_failed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=null codex_app_server_pid="37334"
+timestamp="2026-10-23T01:55:50.102Z" severity="warn" event="worker_finished" outcome="failed" reason="failed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=null status="failed" duration_ms=47.65879099999802
+timestamp="2026-10-23T01:55:50.127Z" severity="info" event="retry_scheduled" outcome="retrying" reason="worker_failure" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=1 retry_in_ms=1000 retry_kind="failure"
+timestamp="2026-10-23T01:55:52.074Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:55:54.571Z" severity="info" event="dispatch_committed" outcome="started" reason="dispatch_committed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=1
+timestamp="2026-10-23T01:55:54.571Z" severity="info" event="worker_started" outcome="started" reason="worker_started" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=1
+timestamp="2026-10-23T01:55:54.591Z" severity="warn" event="startup_failed" outcome="failed" reason="startup_failed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=1 codex_app_server_pid="37380"
+timestamp="2026-10-23T01:55:54.591Z" severity="warn" event="worker_finished" outcome="failed" reason="failed" issue_id="24" issue_identifier="GH-24" issue_url="https://github.com/felixjichao/symphony-delivery-dogfood/issues/24" attempt=1 status="failed" duration_ms=37.016499999997905
+timestamp="2026-10-23T01:56:04.794Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:56:19.606Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:56:32.239Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:56:45.322Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:56:51.338Z" severity="info" event="startup" outcome="started" reason="startup_started"
+timestamp="2026-10-23T01:56:51.339Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:56:52.363Z" severity="info" event="startup" outcome="completed" reason="startup_completed"
+timestamp="2026-10-23T01:56:52.366Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:57:05.282Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:57:18.754Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:57:31.308Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:57:44.030Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:57:56.718Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:58:09.259Z" severity="info" event="workflow_reload" outcome="completed" reason="watcher_version_accepted"
+timestamp="2026-10-23T01:58:13.980Z" severity="info" event="shutdown" outcome="started" reason="shutdown_started"
+timestamp="2026-10-23T01:58:16.921Z" severity="info" event="shutdown" outcome="completed" reason="shutdown_completed"

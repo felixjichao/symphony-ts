@@ -1,0 +1,23 @@
+---
+tracker:
+  kind: github
+  provider:
+    repo: felixjichao/symphony-delivery-dogfood
+    token: $GITHUB_TOKEN
+  required_labels: []
+  active_states: [open]
+  terminal_states: [closed]
+polling:
+  interval_ms: 2000
+workspace:
+  root: /private/tmp/symphony-pr159-core-20261023/exhausted/workspaces
+agent:
+  max_concurrent_agents: 1
+  max_retry_backoff_ms: 1000
+  recovery:
+    max_attempts: 1
+    max_strategy_attempts: 1
+codex:
+  command: "false"
+---
+Isolated acceptance: no code or delivery effects. Worker exits immediately.

@@ -1,0 +1,28 @@
+{
+  "sourceCommit": "ae8538d9774c6e25e8e6c9c22b886362d21761f1",
+  "atUtc": "2026-10-23T02:30:58.466731+00:00",
+  "scenarioId": "W03",
+  "result": "failed_auto_resume",
+  "taskId": "github%3Asymphony-acceptance%2Fpr159-browser-process%23151:plan:1",
+  "status": "running",
+  "claimGeneration": 1,
+  "phase": "waiting_response",
+  "nativeBlock": null,
+  "receiptHttpStatus": 404,
+  "taskPromptSubmittingEventsBeforeExit": 1,
+  "resultPosts": 0,
+  "lastSuccessfulHeartbeatUtc": "2026-10-23T02:25:07.343Z",
+  "driverAfterRestart": "Running, polling; diagnostics []",
+  "restoredTestTabUrl": "https://chatgpt.com/",
+  "oldMainPid": 44029,
+  "newMainPid": 44752,
+  "oldProcessAbsentObservedBeforeReopen": true,
+  "beforeExitStopButtonVisible": true,
+  "boundary": [
+    "native Edge Quit/reopen; Activity Monitor UI verifies PID change",
+    "original agent-created test tab restored at home with empty diagnostic history",
+    "isolated Bridge without full host reconciliation; no claim-expiry/block-convergence conclusion",
+    "no duplicate task Send observed, but full browser automatic recovery was not established",
+    "underlying cause and browser/tool session-restore contribution are not determined"
+  ]
+}

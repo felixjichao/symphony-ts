@@ -1,0 +1,14 @@
+from api import request,p
+from urllib.parse import quote
+from urllib.error import HTTPError
+import json,sys,datetime
+x=json.loads((p/'long.json').read_text());route='/v1/tasks/'+quote(x['taskId'],safe='');a=request(route)
+try:
+ receipt=request(route+'/receipt');receiptStatus=200
+except HTTPError as e:
+ receiptStatus=e.code
+before=json.loads((p/'before-quit.json').read_text());hud=before['hud'];events=json.loads(hud[hud.index('[\n'):]);sends=sum(e['stage']=='prompt_submitting' for e in events)
+trace=[json.loads(l) for l in (p/'requests.ndjson').read_text().splitlines()];posts=[e for e in trace if e.get('method')=='POST' and e.get('path')==route+'/result'];beats=[e for e in trace if e.get('method')=='POST' and e.get('path')==route+'/heartbeat' and e.get('status')==200]
+result={'sourceCommit':'ae8538d9774c6e25e8e6c9c22b886362d21761f1','atUtc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scenarioId':'W03','result':'failed_auto_resume','taskId':x['taskId'],'status':a['task']['status'],'claimGeneration':a['task']['claimGeneration'],'phase':a['execution']['phase'],'nativeBlock':a['execution'].get('blocked'),'receiptHttpStatus':receiptStatus,'taskPromptSubmittingEventsBeforeExit':sends,'resultPosts':len(posts),'lastSuccessfulHeartbeatUtc':beats[-1]['at'] if beats else None,'driverAfterRestart':'Running, polling; diagnostics []','restoredTestTabUrl':'https://chatgpt.com/','oldMainPid':44029,'newMainPid':44752,'oldProcessAbsentObservedBeforeReopen':True,'beforeExitStopButtonVisible':before['stopVisible'],'boundary':['native Edge Quit/reopen; Activity Monitor UI verifies PID change','original agent-created test tab restored at home with empty diagnostic history','isolated Bridge without full host reconciliation; no claim-expiry/block-convergence conclusion','no duplicate task Send observed, but full browser automatic recovery was not established','underlying cause and browser/tool session-restore contribution are not determined']}
+(p/'browser-process-result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
+if a['task']['status']!='completed':sys.exit(1)

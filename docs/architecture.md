@@ -115,6 +115,8 @@ has a finite outbox budget and never recursively creates incidents. Operations a
 Dashboard gain no mutation authority. See the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
 
+Acceptance of these boundaries is indexed in the [execution-continuity ledger](evidence/execution-continuity/README.md). Durable intent → effect → acknowledgement preserves native ownership; unknown outcomes block. Bounded convergence includes explicit external waits and human blocks, not guaranteed business completion during unlimited outages. Neither the ledger nor Observation Plane grants mutation authority.
+
 ## Dashboard observation consumer (#138)
 
 `apps/dashboard` is an app workspace with DOM components and Vite, downstream of operations. Browser imports are type-only from the public operations contract; Node-only `examples/` inject controlled SourceReaders into the real query service and #137 HTTP server. A separate loopback static host proxies only `/api/operations/snapshot` without JSON transformation or CORS. Production CLI is unchanged. Removing the Dashboard cannot affect scheduling.
