@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "ae8538d9774c6e25e8e6c9c22b886362d21761f1",
+  "userscriptSha256": "1ced74f4e363a24cb48f651cc9b04f33fb896d0be594e6f9cfe3f198345d9ff5",
+  "bridgeHarnessSha256": "f6d1b2862001b14e2b20eefc31bb0a750bed3ee1713b39bb47bb40925148d7b8",
+  "bridgeBundleSha256": "2cc2326231c43dd524c0d3c267f84ab83fc8f961d32626c3a6754bd7f9edcc9f",
+  "verificationCommand": "python3 /private/tmp/symphony-pr159-browser-process-20261023/verify.py",
+  "verificationExitCode": 1,
+  "verificationMeaning": "original task was not completed after native browser quit/reopen",
+  "installation": "operator confirmed current Driver earlier; installed bytes not independently extracted",
+  "cleanup": {
+    "isolatedTaskStatus": "cancelled",
+    "driverStopped": true,
+    "productionWorkMutated": false
+  }
+}

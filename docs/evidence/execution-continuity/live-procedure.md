@@ -83,3 +83,7 @@ The earlier environment inventory above is historical. A controllable authentica
 ## Core host follow-up
 
 [Core acceptance](core-acceptance-2026-10-23.md) supplies complete createHost + Bridge process SIGKILL/restart with a native auth block, plus genuine worker retry budget exhaustion retained after another host restart. These use real GitHub reads and private stores, with remote reporting unavailable by design. Full browser-process restart and actual auth/human UI, Web strategy exhaustion and provider report ACK ambiguity are still pending.
+
+## Browser-process attempt
+
+The operator authorized exiting/reopening current Edge. [Actual quit/reopen evidence](browser-process-acceptance-2026-10-23.md) verifies an absent old process and new PID, but automatic task resume was not established. This is now an attempted, unaccepted scenario rather than only an environment prerequisite. Do not label it passed or copy another tab's checkpoint/lease to manufacture success. Reproduce with a native user-created tab to distinguish session/tool restoration from Driver behavior.

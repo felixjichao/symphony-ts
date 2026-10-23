@@ -26,7 +26,7 @@ Current live evidence is limited to the explicitly recorded variants; it does no
 | H06 | Concurrent recovery | CLI durable-delivery, recovery-ledger | independent lock / reporter claims | exclusive commit; successor nonce retained | passed (see run record) | not run |
 | W01 | Claimed Web executor disappears | CLI work-continuity; Decision continuity | expired claim / lost execution | pre-Send reclaim; uncertain Send blocks | passed (see run record) | not run |
 | W02 | Reload during navigation/execution | [Exact Web tests](#web-test-index-w02-w05-w08) | checkpoint / receipt reconstruction | fenced resume or explicit block | passed (see run record) | reload during generation passed ([2026-10-23](run-2026-10-23.md)); other variants pending |
-| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | partial: real Bridge and complete blocked-host SIGKILL/restart passed; full browser restart pending ([core run](core-acceptance-2026-10-23.md)) |
+| W03 | Driver/service restart with checkpoint | [Exact Web tests and boundary](#web-test-index-w02-w05-w08); Decision continuity | store reopen / rebuilt driver | no repeated Send | passed (see run record) | host variants passed ([core run](core-acceptance-2026-10-23.md)); full browser quit/reopen attempted, automatic resume **not accepted** ([failure evidence](browser-process-acceptance-2026-10-23.md)) |
 | W04 | Bridge timeout after accepted result | [Exact receipt tests](#web-test-index-w02-w05-w08) | accepted receipt after admission changes | receipt-first completion | passed (see run record) | accepted-result ACK loss passed with real ChatGPT ([2026-10-23](run-2026-10-23.md)) |
 | W05 | Bridge unavailable before acceptance | [Exact transport tests](#web-test-index-w02-w05-w08) | transport unavailable / result retry | bounded retry or block | passed (see run record) | not run |
 | W06 | Stale lease returns after reclaim | Decision continuity | expired generation / stale reclaim | stale mutation rejected | passed (see run record) | not run |
@@ -120,3 +120,7 @@ is a live pass of the current host + driver + userscript composition.
 ## Core follow-up on 2026-10-23
 
 [Complete host restart and native budget exhaustion](core-acceptance-2026-10-23.md) use real GitHub reads, isolated production createHost/Bridge processes and genuine fail-fast worker exits. The auth block and incident survive SIGKILL; an exhausted retry budget remains blocked after another full host restart. Browser-process restart and provider/UI variants remain pending.
+
+## Full browser quit/reopen follow-up
+
+[W03 browser-process acceptance](browser-process-acceptance-2026-10-23.md) was executed with operator permission. Old process absence and a new PID were verified through native UI. Automatic resume was not established: restored home tab, empty diagnostics, original task still waiting_response and receipt 404. No root cause is assigned yet; browser/tool tab restoration must be separated from Driver persistence before a fix. This is not a live pass.
