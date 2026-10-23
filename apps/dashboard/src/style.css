@@ -12,3 +12,10 @@ dl { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; } dt { co
 summary { cursor: pointer; margin-top: 10px; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 36em; }
 :focus-visible { outline: 2px solid #ffce85; outline-offset: 4px; }
 [role=status] { padding: 8px 0; color: #ffce85; } main { overflow-x: auto; }
+
+#detail dl { display: grid; grid-template-columns: minmax(10em, 1fr) minmax(0, 3fr); gap: 8px 20px; }
+#detail dd { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+#detail article { border-left: 3px solid #49616a; padding: 8px 18px; margin: 14px 0; background: #162329; }
+#detail h3 { margin-top: 30px; border-bottom: 1px solid #49616a; padding-bottom: 8px; }
+#detail h4, #detail h5 { margin: 12px 0; }
+@media (max-width: 640px) { body { padding: 14px; } #detail dl { grid-template-columns: 1fr; } }

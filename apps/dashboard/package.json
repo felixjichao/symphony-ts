@@ -10,15 +10,16 @@
     "dev": "tsx examples/main.ts --dev"
   },
   "dependencies": {
-    "@symphony/operations": "*",
-    "@symphony/observability": "*"
+    "@symphony/observability": "*",
+    "@symphony/operations": "*"
   },
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.7.0",
+    "jsdom": "^25.0.1",
+    "tsx": "^4.19.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.21",
-    "vitest": "^2.1.1",
-    "jsdom": "^25.0.1",
-    "tsx": "^4.19.1"
+    "vitest": "^2.1.1"
   }
 }

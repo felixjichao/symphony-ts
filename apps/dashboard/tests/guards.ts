@@ -1,12 +1,16 @@
 /** Restricted presentation language guard, not a proof of arbitrary JS semantics. */
 import ts from "typescript";
-const sensitive = /\b(ci|review|pullRequest|task|result|outcome|target|headSha|anomalies|evidence|execution|planning)\b/;
+const sensitive = /\b(ci|review|pullRequest|task|result|outcome|target|headSha|anomalies|evidence|execution|planning|freshness|freshnessStatus|observedAt|lastAttemptAt|field|value|role|ruleId|severity|code)\b/;
 const globalMembers: Record<string, readonly string[]> = {
   window: ["location", "addEventListener", "removeEventListener"],
   globalThis: [], self: [],
 };
 function referenceName(node: ts.Node): string | undefined {
   if (ts.isIdentifier(node) || ts.isStringLiteral(node)) return node.text;
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = referenceName(node.left), right = referenceName(node.right);
+    if (left !== undefined && right !== undefined) return left + right;
+  }
   return undefined;
 }
 function isNullOrKindTest(node: ts.Expression): boolean {
@@ -16,12 +20,21 @@ function isNullOrKindTest(node: ts.Expression): boolean {
   if (node.right.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node.right) && node.right.text === "undefined")) return true;
   return ts.isPropertyAccessExpression(node.left) && node.left.name.text === "kind" && ts.isStringLiteral(node.right) && node.right.text === "review";
 }
-const semantics = new Set(["phase", "attention", "health", "approval", "reason", "degradedWork", "anomalyCount"]);
+const semantics = new Set(["phase", "attention", "health", "approval", "reason", "degradedWork", "anomalyCount", "freshnessStatus", "severity", "code"]);
 export function browserErrors(name: string, source: string): string[] {
   const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
   const errors: string[] = [];
   const tainted = new Set<string>();
-  const isSensitive = (node: ts.Node): boolean => sensitive.test(node.getText(file)) || [...tainted].some(v => new RegExp(`\\b${v}\\b`).test(node.getText(file)));
+  const isSensitive = (node: ts.Node): boolean => {
+    let found = false;
+    const read = (part: ts.Node) => {
+      if (ts.isFunctionExpression(part) || ts.isArrowFunction(part) || ts.isMethodDeclaration(part)) return;
+      if (ts.isIdentifier(part) && (sensitive.test(part.text) || tainted.has(part.text))) found = true;
+      if (ts.isElementAccessExpression(part) && sensitive.test(referenceName(part.argumentExpression) ?? "")) found = true;
+      ts.forEachChild(part, read);
+    };
+    read(node); return found;
+  };
   // Reach a fixed point over bindings, including destructuring and later writes.
   const markBinding = (binding: ts.BindingName) => {
     if (ts.isIdentifier(binding)) tainted.add(binding.text);
@@ -31,7 +44,7 @@ export function browserErrors(name: string, source: string): string[] {
   while (previousSize !== tainted.size) {
     previousSize = tainted.size;
     const propagate = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.initializer && isSensitive(node.initializer)) markBinding(node.name);
+      if (ts.isVariableDeclaration(node) && node.initializer && (isSensitive(node.name) || !(ts.isCallExpression(node.initializer) && ["el", "workDetail", "evidenceList", "anomalyCards"].includes(node.initializer.expression.getText(file))) && isSensitive(node.initializer))) markBinding(node.name);
       if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(node.left) && isSensitive(node.right)) tainted.add(node.left.text);
       ts.forEachChild(node, propagate);
     };
@@ -43,7 +56,7 @@ export function browserErrors(name: string, source: string): string[] {
       if (specifier && ts.isStringLiteral(specifier)) {
         const value = specifier.text;
         if (!value.startsWith("./") && !(value === "@symphony/operations" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly)) errors.push("browser import boundary");
-        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|style\.css)$/.test(value)) errors.push("unapproved local module");
+        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|style\.css)$/.test(value)) errors.push("unapproved local module");
         if (value.includes("examples") || value.includes("tests")) errors.push("Node/test graph in browser");
       }
     }
@@ -62,25 +75,34 @@ export function browserErrors(name: string, source: string): string[] {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) errors.push("dynamic import");
       if (node.expression.getText(file) === "fetch" && name !== "transport.ts") errors.push("fetch outside transport");
     }
-    if (name !== "validate.ts") {
+    if (!["validate.ts", "identity.ts", "presentation.ts"].includes(name)) {
+      // These shape/identity/format helpers are separately fingerprinted, never arbitrary extensions.
+      const registered: Record<string, readonly string[]> = { "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards"], "dom.ts": ["el"] };
+      if (registered[name] && ts.isFunctionDeclaration(node) && !registered[name]?.includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
       if (name === "view.ts" && ts.isFunctionDeclaration(node) && !["el", "reviewDetails", "workTable", "mount"].includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
-      if (name === "view.ts" && ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && node.name.getText(file) !== "locate") errors.push("unregistered presentation callback");
+      if (name === "view.ts" && ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && node.name.getText(file) !== "locate" && node.name.getText(file) !== "navigate") errors.push("unregistered presentation callback");
       const condition = ts.isConditionalExpression(node) ? node.condition : ts.isIfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ? node.expression : ts.isForStatement(node) ? node.condition : ts.isSwitchStatement(node) ? node.expression : undefined;
-      if (condition && isSensitive(condition) && !isNullOrKindTest(condition)) errors.push("source-dependent control flow");
+      if (condition && isSensitive(condition) && !isNullOrKindTest(condition)) errors.push(`source-dependent control flow: ${condition.getText(file)}`);
       if (ts.isPrefixUnaryExpression(node) && isSensitive(node.operand) && !isNullOrKindTest(node.operand)) errors.push("source truthiness/computation");
-      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append"].includes(node.expression.getText(file))) errors.push("source passed to unapproved helper");
-      if (ts.isReturnStatement(node) && node.expression && isSensitive(node.expression)) errors.push("returning source-derived value");
+      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "scopedSources", "globalSources", "scopedExecutors", "freshness", "timestamp", "Object.entries", "String", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
+      if (ts.isReturnStatement(node) && node.expression && isSensitive(node.expression)) errors.push(`returning source-derived value: ${node.expression.getText(file)}`);
       if (ts.isPropertyAssignment(node) && semantics.has(node.name.getText(file))) errors.push("constructing derived field");
       if (ts.isBinaryExpression(node)) {
         const text = node.getText(file);
         const nullCheck = isNullOrKindTest(node);
         const kindCheck = ts.isPropertyAccessExpression(node.left) && node.left.name.text === "kind" && ts.isStringLiteral(node.right);
-        const fallback = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && (node.right.kind === ts.SyntaxKind.NullKeyword || (ts.isStringLiteral(node.right) && ["未提供 CI 信号", "未报告原因"].includes(node.right.text)));
+        const fallback = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && (node.right.kind === ts.SyntaxKind.NullKeyword || ts.isArrayLiteralExpression(node.right) && node.right.elements.length === 0 || ts.isStringLiteral(node.right) && ["未提供 CI 信号", "未报告原因", "detail 未提供", "未报告角色", "未报告标题"].includes(node.right.text));
         const assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
         if (assignment && ts.isPropertyAccessExpression(node.left) && semantics.has(node.left.name.text)) errors.push("assigning derived field");
         if (isSensitive(node) && !nullCheck && !kindCheck && !fallback && !assignment) errors.push(`source computation: ${text}`);
       }
-      if ((ts.isPropertyAccessExpression(node) && ["anomalies", "evidence"].includes(node.name.text)) || (ts.isElementAccessExpression(node) && ["anomalies", "evidence"].includes(referenceName(node.argumentExpression) ?? ""))) errors.push("anomaly/evidence consumption");
+      if ((ts.isPropertyAccessExpression(node) && ["anomalies", "evidence"].includes(node.name.text)) || (ts.isElementAccessExpression(node) && ["anomalies", "evidence"].includes(referenceName(node.argumentExpression) ?? ""))) {
+        // Only direct reads at reviewed renderer selection calls are allowed.
+        const parent = node.parent;
+        const permitted = ts.isCallExpression(parent) && ["evidenceList", "anomalyCards"].includes(parent.expression.getText(file));
+        const optionalEvidence = ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && ts.isArrayLiteralExpression(parent.right) && parent.right.elements.length === 0 && ts.isCallExpression(parent.parent) && parent.parent.expression.getText(file) === "evidenceList";
+        if (!permitted && !optionalEvidence) errors.push("anomaly/evidence consumption");
+      }
       if (ts.isReturnStatement(node) && node.expression && ts.isStringLiteral(node.expression) && ["review", "coding", "approved_current_head", "degraded", "healthy"].includes(node.expression.text)) errors.push("returning domain conclusion");
     }
     ts.forEachChild(node, visit);
