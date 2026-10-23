@@ -1,4 +1,5 @@
 import type { DriverDiagnostic } from "./diagnostics";
+import type { DecisionContinuityWork } from "@symphony/domain";
 /**
  * Decision Tab Driver.
  * Manages the client-side execution loop: polling, claim, lease heartbeat,
@@ -77,6 +78,9 @@ export interface DecisionTabDriverOptions {
   readonly maxNavigationAttempts?: number | undefined;
   readonly shouldRun?: (() => boolean) | undefined;
   readonly onDiagnostic?: ((entry: DriverDiagnostic) => void) | undefined;
+  /** Read-only idle facts; transport supplies Bridge authentication.
+   * No task lease credentials are exposed or adopted; this never authorizes recovery. */
+  readonly onContinuity?: ((work: readonly DecisionContinuityWork[]) => void) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 }
 
@@ -94,6 +98,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   readonly onError?: ((error: Error) => void) | undefined;
 
   private readonly onDiagnostic: DecisionTabDriverOptions["onDiagnostic"];
+  private readonly onContinuity: DecisionTabDriverOptions["onContinuity"];
   private isRunning = false;
   private activeAbortController: AbortController | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -115,6 +120,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.onError = options.onError;
     this.shouldRun = options.shouldRun;
     this.onDiagnostic = options.onDiagnostic;
+    this.onContinuity = options.onContinuity;
 
     if (this.adapter instanceof ChatGptWebAdapter) {
       this.adapter.setStepListener((step, meta) => {
@@ -2069,7 +2075,15 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 2. Poll & claim next task
     const claimed = await this.claimNextTask();
-    if (!claimed) return null;
+    if (!claimed) {
+      // #162 / SPEC §13 adjacent: a restored page can have no checkpoint while
+      // native work still owns a lease or a durable block. Surface facts without adoption.
+      if (this.onContinuity) {
+        const response = await this.transport.request<{ work: DecisionContinuityWork[] }>("GET", "/v1/continuity");
+        this.onContinuity(response.work);
+      }
+      return null;
+    }
 
     // 3. Fetch context
     const context = await this.fetchContext(claimed.task.id);

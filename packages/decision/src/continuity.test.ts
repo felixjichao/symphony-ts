@@ -347,3 +347,24 @@ it("returns an already accepted result receipt after admission changes", async (
     expect(await f.service.submitResult(f.expected.taskId, { ...credentials, result })).toEqual(accepted);
   } finally { await f.cleanup(); }
 });
+
+// #162 / SPEC §4 adjacent, §10/§12: the exported HTTP request must carry progress.
+it("typed Bridge heartbeat preserves progress without manufacturing it on renewal", async () => {
+  const f = await fixture();
+  const bridge = new DecisionBridge(f.service, { port: 0, authToken: "progress-test" });
+  try {
+    const { port } = await bridge.start();
+    const client = new DecisionBridgeClient(`http://127.0.0.1:${port}`, { authToken: "progress-test" });
+    const request: import("./types").HeartbeatTaskRequest = {
+      owner: "web", token: f.claimed.lease.token, generation: f.claimed.lease.generation,
+      progress: { phase: "waiting_response", responseLength: 10 },
+    };
+    f.setTime(1100);
+    await client.heartbeatTask(f.expected.taskId, request);
+    const progress = f.service.getExecution(f.expected.taskId);
+    expect(progress).toMatchObject({ phase: "waiting_response", responseLength: 10, lastProgressAtMs: 1100 });
+    f.setTime(1200);
+    await client.heartbeatTask(f.expected.taskId, request);
+    expect(f.service.getExecution(f.expected.taskId)).toEqual(progress);
+  } finally { await bridge.stop(); await f.cleanup(); }
+});

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { githubDecisionRoot, type Issue } from "@symphony/domain";
-import { DecisionPlanningGate, DecisionService, DurableDecisionStore } from "@symphony/decision";
+import { DecisionBridge, DecisionBridgeClient, DecisionPlanningGate, DecisionService, DurableDecisionStore } from "@symphony/decision";
 import { createHost } from "./host";
 import { FileRecoveryLedger } from "./recovery-ledger";
 import { runRecoveryCli } from "./recovery-cli";
@@ -86,6 +86,83 @@ it("real host tick scans without workers, reclaims an expired claim once, and fa
     await host.stop();
     expect(await host.workContinuity.reconcile()).toEqual([]);
   } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+// #162 / SPEC §4 adjacent, §7/§8/§14, §17/§18: sent-task convergence through the host tick.
+it("W03: full host and authenticated Bridge block a lost waiting_response owner at lease expiry without replay", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "host-continuity-"));
+  const store = new DurableDecisionStore({ storeDir: path.join(dir, "decision") });
+  await store.open();
+  let now = 1000;
+  const service = new DecisionService(store, { clock: () => now });
+  const session = await service.createSession(githubDecisionRoot("owner", "repo", 42));
+  const task = await service.createPlanTask(session.id);
+  const bridge = new DecisionBridge(service, { port: 0, authToken: "w03-test" });
+  await bridge.start();
+  let client = new DecisionBridgeClient(`http://127.0.0.1:${bridge.getPort()}`, { authToken: "w03-test" });
+  const claim = await client.claimTask(task.id, { owner: "web", ttlMs: 1000 });
+  await client.startTask(task.id, claim.lease);
+  await client.heartbeatTask(task.id, { ...claim.lease, ttlMs: 1000,
+    progress: { phase: "waiting_response", responseLength: 10 } });
+  const issue: Issue = { id: "42", identifier: "GH-42", title: "plan", description: "", state: "open",
+    nativeRef: { repo: "owner/repo", number: 42 }, priority: 1, branchName: null,
+    url: "https://github.com/owner/repo/issues/42", assigneeId: null, labels: [], blockedBy: [], dispatchable: true, createdAt: 0, updatedAt: 0 };
+  const profile: TrackerAdapterProfile = { kind: "fixture", documentation: "fixture", secretProviderKeys: [], secretEnvVars: [],
+    defaultActiveStates: ["open"], defaultTerminalStates: ["closed"], createAdapter: () => ({ kind: "fixture",
+      fetchIssuesByStates: async states => states.includes("open") ? [issue] : [],
+      fetchIssuesByIds: async () => [issue] }) };
+  const workflowPath = path.join(dir, "WORKFLOW.md");
+  await fs.writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/workspaces\ncodex:\n  command: echo unused\n---\nPrompt\n`);
+  let tick: (() => void) | undefined;
+  const create = () => createHost({ workflowPath, trackerProfiles: [profile], decisionBridgeUrl: `http://127.0.0.1:${bridge.getPort()}`, decisionBridgeToken: "w03-test", canDispatch: () => false, now: () => now,
+    logger: createStructuredLogger({ sinks: [{ write() {} }] }),
+    continuityRunner: { gh: async () => ({ exitCode: 1, stdout: "", stderr: "fixture offline" }), git: async () => { throw new Error("unexpected git"); }, exec: async () => { throw new Error("unexpected exec"); } },
+    continuityGitHub: { observeWork: async () => ({ workKey: session.root, issue: { state: "open", url: issue.url! }, pullRequest: null, ci: null }) }, scheduler: { schedule: (_delay, callback) => { tick = callback; return callback; }, cancel() {} } });
+  let host = await create();
+  const ledgerFile = path.join(dir, "workspaces", ".symphony-host", "recovery-ledger.json");
+  try {
+    await host.start();
+    const tickHost = async () => { tick!(); await host.loop.settled(); };
+    await tickHost();
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("healthy");
+    now = 1999;
+    await tickHost();
+    expect(service.getExecution(task.id)?.blocked).toBeNull();
+    expect(service.getTask(task.id)?.lease).toEqual(claim.lease);
+    now = 2000; // Exact last heartbeat lease expiry; no browser/checkpoint is available.
+    await tickHost();
+    expect(host.workContinuity.observations[0]?.result).toBe("applied");
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("blocked");
+    expect(service.getTask(task.id)?.status).toBe("running");
+    expect(service.getExecution(task.id)?.blocked?.reason).toBe("human_required");
+    expect(service.getTask(task.id)?.claimGeneration).toBe(1);
+    expect(service.getSession(session.id)?.bindingGeneration).toBe(0);
+    expect(service.getReceipt(task.id)).toBeNull();
+    expect(await client.getNextTask()).toBeNull();
+    await expect(client.claimTask(task.id, { owner: "replacement-tab" })).rejects.toThrow();
+    await expect(client.heartbeatTask(task.id, claim.lease)).rejects.toThrow();
+    const incidents = new FileRecoveryLedger(ledgerFile).incidents();
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]?.blockedReason).toBe("human_required");
+    const blockedTask = service.getTask(task.id);
+    const blockedExecution = service.getExecution(task.id);
+    // Reopen durable Decision records and reconstruct the complete host. No helper recovery call.
+    await host.stop();
+    await bridge.stop();
+    await store.close(); await store.open();
+    await bridge.start();
+    client = new DecisionBridgeClient(`http://127.0.0.1:${bridge.getPort()}`, { authToken: "w03-test" });
+    host = await create();
+    now = blockedExecution!.deadlineAtMs + 1;
+    await host.start();
+    await tickHost(); await tickHost();
+    expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("blocked");
+    expect(service.getTask(task.id)).toEqual(blockedTask);
+    expect(service.getExecution(task.id)).toEqual(blockedExecution);
+    expect(new FileRecoveryLedger(ledgerFile).incidents()).toEqual(incidents);
+    expect(host.state.running.size).toBe(0);
+    expect(await client.getNextTask()).toBeNull();
+  } finally { await host.stop(); await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 describe("Delivery filesystem authority", () => {

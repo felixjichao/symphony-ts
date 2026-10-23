@@ -1,0 +1,16 @@
+{
+  "command": "TMPDIR=/private/tmp npm run gate",
+  "exitCode": 0,
+  "passed": 2309,
+  "skipped": 1,
+  "environment": "macOS, unrestricted process supervision; canonical TMPDIR",
+  "initialRunLimits": [
+    "Sandbox denies process inspection/signals",
+    "macOS /var and /private/var alias mismatch in existing workspace hook assertions"
+  ],
+  "affectedChecks": [
+    "CLI work-continuity: 5 passed",
+    "Decision continuity: 18 passed"
+  ],
+  "runtimePolicyChanged": false
+}

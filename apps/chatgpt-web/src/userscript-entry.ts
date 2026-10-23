@@ -84,7 +84,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   titleRow.style.display = "flex";
   titleRow.style.justifyContent = "space-between";
   titleRow.style.alignItems = "center";
-  titleRow.textContent = "Symphony Decision Driver";
+  titleRow.textContent = `Symphony Decision Driver ${typeof __SYMPHONY_DRIVER_VERSION__ === "undefined" ? "dev" : __SYMPHONY_DRIVER_VERSION__}`;
 
   const statusIndicator = document.createElement("span");
   statusIndicator.id = "symphony-status-pill";
@@ -244,11 +244,11 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   let currentDriver: DecisionTabDriver | null = null;
   let isRunning = false;
 
-  const updateUI = (running: boolean, message?: string, isError = false) => {
+  const updateUI = (running: boolean, message?: string, isError = false, phase: "Running" | "Waiting" | "Blocked" = "Running") => {
     isRunning = running;
     if (running) {
-      statusIndicator.textContent = "● Running";
-      statusIndicator.style.color = "#a6e3a1";
+      statusIndicator.textContent = `● ${phase}`;
+      statusIndicator.style.color = phase === "Blocked" ? "#f38ba8" : phase === "Waiting" ? "#f9e2af" : "#a6e3a1";
       toggleBtn.textContent = "Stop Driver";
       toggleBtn.style.background = "#f38ba8";
       if (message) {
@@ -326,7 +326,25 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
         adapter,
         shouldRun: isDriverEnabledInTab,
         ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
-        onDiagnostic: entry => diagnostics.record(entry),
+        onDiagnostic: entry => {
+          diagnostics.record(entry);
+          if (generation === enableGeneration && isDriverEnabledInTab()) updateUI(true, `Executing ${entry.taskId}: ${entry.stage}`);
+        },
+        onContinuity: work => {
+          // Ignore an idle read that finished after Stop or a replacement driver.
+          if (generation !== enableGeneration || !isDriverEnabledInTab()) return;
+          const tasks = work.flatMap(item => item.tasks).filter(task =>
+            task.status === "pending" || task.status === "claimed" || task.status === "running");
+          const blocked = tasks.find(task => task.execution?.blocked);
+          const owned = tasks.find(task => task.owner !== null);
+          if (blocked?.execution?.blocked) {
+            updateUI(true, `Blocked ${blocked.id}: ${blocked.execution.blocked.reason}. ${blocked.execution.blocked.unblock}`, false, "Blocked");
+          } else if (owned) {
+            updateUI(true, `Waiting ${owned.id}: no local checkpoint. Await the current owner or host reconciliation; do not resend the task.`, false, "Waiting");
+          } else {
+            updateUI(true, "Polling for Decision tasks");
+          }
+        },
         onError: (err: Error) => {
           // Auth failures are fatal: polling would loop on 401/403 until credentials
           // are fixed by the operator, so stop and surface the error.
@@ -355,7 +373,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
           // lease expiry): keep polling. Checkpoint recovery and the bridge's lease /
           // supersede semantics own reconciliation; stopping here would require a
           // manual Start for every transient conflict.
-          updateUI(true, err.message.startsWith("Blocked:") ? err.message : `Recovered from error: ${err.message}`);
+          updateUI(true, err.message.startsWith("Blocked:") ? err.message : `Recovered from error: ${err.message}`, false, err.message.startsWith("Blocked:") ? "Blocked" : "Running");
         },
       });
 

@@ -55,6 +55,7 @@ import type {
   SubmissionReceipt,
   OperationReceipt,
   ClaimTaskResponse,
+  HeartbeatTaskRequest,
   HeartbeatTaskResponse,
   SubmitResultResponse,
   SubmitFailureResponse,
@@ -1297,7 +1298,7 @@ export class DecisionService {
 
   async heartbeatTask(
     taskId: string,
-    params: { owner: string; token: string; generation: number; ttlMs?: number | undefined; progress?: { phase: string; responseLength: number } | undefined }
+    params: HeartbeatTaskRequest
   ): Promise<HeartbeatTaskResponse> {
     if (this.authorizeExecution) {
       const task = this.store.getTask(taskId);

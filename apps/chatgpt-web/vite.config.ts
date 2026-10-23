@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const DRIVER_VERSION = "0.1.6";
+
 const USERSCRIPT_BANNER = `// ==UserScript==
 // @name         Symphony Decision Driver (ChatGPT Web)
 // @namespace    https://github.com/felixjichao/symphony-ts
-// @version      0.1.5
+// @version      ${DRIVER_VERSION}
 // @description  Tampermonkey driver for Symphony Decision execution via ChatGPT Web
 // @author       Symphony Contributors
 // @match        https://chatgpt.com/*
@@ -24,6 +26,7 @@ const USERSCRIPT_BANNER = `// ==UserScript==
 `;
 
 export default defineConfig({
+  define: { __SYMPHONY_DRIVER_VERSION__: JSON.stringify(DRIVER_VERSION) },
   build: {
     lib: {
       entry: path.resolve(__dirname, "src/userscript-entry.ts"),

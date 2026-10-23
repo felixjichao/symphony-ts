@@ -129,11 +129,13 @@ export interface StartTaskRequest {
   readonly generation: number;
 }
 
+/** SPEC §4 adjacent / §10 / §12: progress carried by both native and HTTP clients. */
 export interface HeartbeatTaskRequest {
   readonly owner: string;
   readonly token: string;
   readonly generation: number;
   readonly ttlMs?: number | undefined;
+  readonly progress?: Pick<DecisionExecution, "phase" | "responseLength"> | undefined;
 }
 
 export interface HeartbeatTaskResponse {

@@ -531,3 +531,44 @@ Real Chromium smoke is an explicit built-product check, separate from DOM tests;
 | Diagnostic shape validation and compatible unknown fields/codes | `detail.test.ts`: malformed evidence/anomaly inputs; existing transport/polling retain previous success on invalid snapshots |
 
 Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced. #140 and parent #136 remain open.
+
+
+### #162 bounded-convergence follow-up (2026-10-23)
+
+SPEC §4 adjacent / §7 / §8 / §10 / §12 / §14 / §17 / §18: [new evidence](evidence/execution-continuity/bounded-browser-acceptance-2026-10-23.md)
+uses complete production host + authenticated Bridge, real GitHub reads, isolated
+Decision records and the installed Driver. A lost native-created test window's
+`waiting_response` execution blocked 27.296 seconds after lease expiry, preserving
+claim/binding generation 1 with receipt 404 and zero result POSTs. This narrows the
+correctness concern for that composition; it does not establish seamless restoration
+or complete #162/#145/#151. The [subsequent agent-tab quit comparison](evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md)
+completed: old PID absence/new PID verified; the same browser tab restored at home
+with a newly created `symphony_tab_id` and empty diagnostics. Host block arrived
+23.019 seconds after lease expiry, with local CLI-visible incident, receipt 404,
+zero result POSTs and 409 for replacement claim/old heartbeat. Both variants now
+show bounded blocking, while seamless resume remains unaccepted; the earlier
+native-window comparison differs in window topology, and old GM checkpoint
+persistence was not directly inspected.
+CLI host-tick regression covers expiry, no replacement claim and durable block/incident
+retention after host/Bridge reconstruction and store reopen. Decision's exported
+`HeartbeatTaskRequest` now includes progress from the domain execution contract,
+matching the already-supported service/HTTP payload; typed Bridge regression verifies
+real progress and unchanged repeated progress. No recovery-policy change was required.
+
+
+### #162 recovery visibility repair — Driver 0.1.6 (2026-10-23)
+
+SPEC §13 adjacent / §10 / §12 / §17 / §18: [repair evidence](evidence/execution-continuity/recovery-hud-fix-2026-10-23.md).
+A restored page without a local checkpoint now reads native continuity facts when
+`/next` has no claimable task, displaying Waiting for an outstanding owner or Blocked
+with native task/reason/instruction. This is read-only observation: no lost identity
+is reconstructed and no lease is adopted, reclaimed or unblocked by the page.
+The HUD displays the build version from the same source as userscript metadata.
+Regression uses a real HTTP Bridge/store seam for waiting/block
+facts, terminal clearing and no mutation, plus late-response-after-Stop fencing.
+Transparent browser-session resume remains outside the proven boundary.
+Operator-confirmed 0.1.6 and its HUD version were verified during actual generation
+and complete Edge quit/reopen (old PID 32189 absent, new PID 16774). The restored
+home page displayed Waiting then Blocked automatically; host block followed expiry
+by 22.913 seconds, with generation 1, receipt 404, zero Driver POSTs after quit,
+and stale heartbeat/replacement claim 409. Gate passed: 2312 tests, one opt-in skip.

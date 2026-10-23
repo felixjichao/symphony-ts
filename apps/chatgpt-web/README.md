@@ -133,7 +133,7 @@ curl -s -H "Authorization: Bearer secret-bridge-token" \
 
 ## Automatic continuity and blocking
 
-Start persists enabled intent per bridge URL in userscript storage. A configured ChatGPT page automatically starts after reload or browser reopen; Stop persists disabled intent, including for later pages. Concurrent tabs retain separate checkpoints and cannot take over a live lease. Losing tab identity does not authorize importing another tab's token or resending an uncertain prompt. No OS browser launch or automatic login is provided.
+Start persists enabled intent per bridge URL in userscript storage. A configured ChatGPT page automatically starts after reload or browser reopen; Stop persists disabled intent, including for later pages. Concurrent tabs retain separate checkpoints and cannot take over a live lease. Losing tab identity does not authorize importing another tab's token or resending an uncertain prompt. No OS browser launch or automatic login is provided. Browser reopen auto-start does not guarantee restoration of the original conversation or tab identity. If the browser reconstructs a fresh document/session identity, its per-tab checkpoint lookup cannot adopt the previous identity's lease. With the complete host and available authoritative sources, expired sent execution is conservatively blocked for operator inspection. A standalone Bridge does not run that recovery policy. See [process-boundary evidence](../../docs/evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md).
 
 Navigation and Send await an authoritative lease/binding check. Progress requires an advanced execution stage or growth in the new assistant response, with a ten-minute deadline. Native reclaim/rebind budgets persist across claims and restarts; transport recovery is additionally capped at six checkpoint failures. Receipt lookup still resolves accepted-but-unacknowledged results before budget handling. Auth/human barriers, inaccessible-session exhaustion and ambiguous lost execution become durable blocked facts. Bridge 401/403 stops mutations but retains enabled intent and periodically checks authorization through read-only requests. Stop cancels that recovery.
 
@@ -145,9 +145,19 @@ Plan/Review and bootstrap response waits default to 15 minutes. The HUD's **Resp
 
 ### Response recognition and diagnostics
 
+Userscript 0.1.6 shows the installed version in the HUD. When no local checkpoint or
+claimable task exists, idle polls read the Bridge's read-only continuity facts.
+When the Bridge has an `authToken` configured, these requests require Bridge Bearer
+authentication; no task lease credentials are exposed or adopted. In the HUD,
+unfinished owned tasks show **Waiting** with an explicit no-checkpoint instruction;
+native execution blocks show **Blocked**, task ID, reason and inspection instruction.
+Terminal history is ignored and the message clears when no unfinished work remains.
+Polling remains enabled so fresh tasks can still be received; Stop stays available.
+This status observation neither adopts another tab's lease nor triggers recovery.
+
 The driver merges supported assistant message selectors and deduplicates nested nodes. Plan/Review can complete even when DOM windowing reduces the message count, but only the latest canonically validated result for the exact task/revision/target may bypass count growth. A result already present before a fresh send cannot qualify through that fallback. Bootstrap replies retain count/identity fencing. Streaming and stabilization checks remain required.
 
-Expand **Driver diagnostics (last 50 events)** in the HUD to distinguish response waiting, result submission, accepted receipt, submission errors, and recorded task failures. Wait entries include baseline/current counts, the selected selectors, exact-task match, stop-button presence, elapsed time and the terminal blocker. These per-tab records survive refresh in Tampermonkey storage; only metadata is retained, with no Token, prompt/reply text or raw exceptions. Use userscript version 0.1.5 for this build; existing failed tasks are not automatically revived.
+Expand **Driver diagnostics (last 50 events)** in the HUD to distinguish response waiting, result submission, accepted receipt, submission errors, and recorded task failures. Wait entries include baseline/current counts, the selected selectors, exact-task match, stop-button presence, elapsed time and the terminal blocker. These per-tab records survive refresh in Tampermonkey storage; only metadata is retained, with no Token, prompt/reply text or raw exceptions. Existing failed tasks are not automatically revived.
 
 Heartbeat progress and response waiting share a task-scoped observer. After DOM windowing, a new eligible assistant node must show append growth while generating; static count changes, pre-send messages and route drift do not advance progress. A restored sent checkpoint similarly observes growth on its current response. Strict exact-task results also confirm Send during prompt-submission recovery, without another click. Response snapshots remain in memory; no response text is added to diagnostics or checkpoints.
 

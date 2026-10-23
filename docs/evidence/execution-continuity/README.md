@@ -68,7 +68,8 @@ suite; a later focused rerun is recorded in the [review follow-up](run-2026-10-2
 
 The CLI host reconstruction test also retains the same DecisionService/store. It
 proves host recreation and durable ledger/query wiring, not Decision, Bridge or
-browser process restart. W03's full process-boundary acceptance remains not run.
+browser process restart. Subsequent full-process host evidence and the unaccepted browser
+resume attempt are recorded below; neither is implied by this reconstruction test.
 
 ## Cross-cutting assertions
 
@@ -124,3 +125,31 @@ is a live pass of the current host + driver + userscript composition.
 ## Full browser quit/reopen follow-up
 
 [W03 browser-process acceptance](browser-process-acceptance-2026-10-23.md) was executed with operator permission. Old process absence and a new PID were verified through native UI. Automatic resume was not established: restored home tab, empty diagnostics, original task still waiting_response and receipt 404. No root cause is assigned yet; browser/tool tab restoration must be separated from Driver persistence before a fix. This is not a live pass.
+
+## #162 bounded-convergence follow-up — 2026-10-23
+
+[Complete-host browser follow-up](bounded-browser-acceptance-2026-10-23.md) observes a
+native-created test window losing its executor after clean quit/reopen, then a durable
+human-required block 27.296 seconds after the last lease expired, with no result POST.
+W03 bounded-convergence evidence is partial; seamless session restoration and the
+current-run agent-tab comparison are not accepted. The matching automatic check is
+`apps/cli/src/work-continuity.test.ts` → `W03: full host and authenticated Bridge block a lost waiting_response owner at lease expiry without replay`.
+
+
+## #162 agent-tab quit/reopen comparison — 2026-10-23
+
+[Agent-managed tab follow-up](agent-browser-acceptance-2026-10-23.md) completes the
+previously interrupted process-boundary experiment: old PID 8768 absent, new PID
+32189, same browser tab restored at home with Running / diagnostics []. Native
+DevTools readback shows `symphony_tab_id` created after reopen. The complete host
+blocked the missing executor 23.019 seconds after lease expiry; receipt 404, zero
+result POSTs, and replacement claim / old heartbeat rejected with 409. Native-window
+and agent-tab variants now both have bounded-block observations; seamless resume
+remains unaccepted and storage durability has not been disproved.
+
+
+## #162 recovery visibility repair — Driver 0.1.6
+
+[Repair and current-install verification](recovery-hud-fix-2026-10-23.md) fixes the
+restored page's misleading Running state. Waiting/Blocked are observed from native
+Bridge facts, with no ownership adoption or replay. Seamless resume is not implied.
