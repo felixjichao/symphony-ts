@@ -4,3 +4,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .symphony/
+# Dashboard type-only browser contract build
+apps/dashboard/.contracts/

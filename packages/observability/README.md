@@ -26,7 +26,7 @@ host 注入双时钟，monotonic 必须与 authority 同源。每次各采样一
 
 ## Known limitations
 
-同步入口没有获取层 timeout；timeout 留未来异步/远程获取层。HTTP/dashboard 属于可选扩展。projection 不做 tracker/fs/network I/O、不 await、不参与调度。跨包决定见 [snapshot note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
+同步入口没有获取层 timeout；timeout 留未来异步/远程获取层。OperationalSnapshot HTTP API 见下；Dashboard 与生产 lifecycle 装配仍待后续任务。projection 不做 tracker/fs/network I/O、不 await、不参与调度。跨包决定见 [snapshot note](../../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。
 
 ## Structured logging (§13.1 / §13.2)
 
@@ -49,4 +49,24 @@ Redaction precedes escaped UTF-8 truncation: reason 128 bytes, message 896, erro
 
 `npm test -w @symphony/cli -- src/bin.test.ts` verifies `rejects %s startup preflight with nonzero safe diagnostics`, issue/session identity in `waits for agent termination and after_run on %s, deduplicating mixed signals`, and operator-visible recoverable reload in `keeps live invalid reload recoverable, applies valid reload to a new real agent, and stops both roots`. Snapshot, token/rate-limit aggregation and sink-isolation files, exact case names and commands are indexed in [M6 Core conformance](../../docs/conformance.md#m65-core-证据索引). Runtime facts remain read-only observer inputs; snapshots/log lines are never scheduler authority or a fatal-error channel. Host supplies an independent failure promise to the shell.
 
-M0–M6 Core is complete: all five M6 submilestones are merged and main CI passed; completion evidence is recorded in [conformance](../../docs/conformance.md#m65-core-证据索引). The executable CLI host is production-composed; M7 §15 hardening has not started. HTTP §13.7 and richer §13.6 humanization remain optional/conditional; synchronous snapshot timeout is not applicable to this local projector. These fixtures do not establish §17.8 external Real Integration, which is verified separately by the opt-in dogfood harness (#83 / PR #88); overall progress is tracked in [status.md](../../docs/status.md).
+M0–M6 Core is complete: all five M6 submilestones are merged and main CI passed; completion evidence is recorded in [conformance](../../docs/conformance.md#m65-core-证据索引). The executable CLI host is production-composed; M7 §15 hardening has not started. OperationalSnapshot HTTP §13.7 is available as an explicit transport; production composition and richer §13.6 humanization remain deferred; synchronous snapshot timeout is not applicable to this local projector. These fixtures do not establish §17.8 external Real Integration, which is verified separately by the opt-in dogfood harness (#83 / PR #88); overall progress is tracked in [status.md](../../docs/status.md).
+
+## Operational Snapshot HTTP（§13.7 / #137）
+
+```ts
+import { startOperationsHttpServer } from "@symphony/observability";
+
+// queryService is a host-constructed @symphony/operations OperationalQueryService.
+const server = await startOperationsHttpServer(queryService, { port: 8080 });
+// await fetch("http://127.0.0.1:8080/api/operations/snapshot").then(r => r.json());
+// Owner closes explicitly during teardown:
+server.close();
+```
+
+默认 `host: "127.0.0.1"`、`port: 0`（OS 分配端口，可通过 `server.address()` 获取）。无 import 启动副作用；本 issue 不接入生产 CLI/orchestrator lifecycle（#140）。可显式覆盖 host，但此入口仅适用于受信本机 operator；无 auth/RBAC 或跨域 CORS 配置，不应公开到非受信网络。浏览器可在同源下消费 JSON，独立前端的部署/代理配置留后续 consumer 工作。
+
+仅 `GET /api/operations/snapshot` 调用一次查询服务，直接返回完整 `OperationalSnapshot`，不重映射、不推导状态。`Content-Type: application/json; charset=utf-8`、`Cache-Control: no-store`。degraded/partial 快照仍为 200；fresh/stale/unknown/unavailable、WorkKey、review task/result target 和 exact HEAD approval、evidence/anomalies 原样保留。
+
+查询或序列化异常为 500 `{"error":"operational_snapshot_failed"}`，不暴露异常详情、不伪造 snapshot；未知路径为 404 `not_found`；目标路径其他方法为 405 `method_not_allowed` + `Allow: GET`，不调用查询。启动 bind 失败拒绝启动 Promise，由调用方处理；持续保留非致命 server `error` 监听器，隔离启动后的 transport 错误；HTTP 失败不调用 scheduler、Decision 或 workflow control。无写路由、持久缓存、后台轮询、重试、SSE/WebSocket。
+
+运行 `npm test -w @symphony/observability -- src/operations-http.test.ts src/operations-http-boundaries.test.ts` 验证真实 loopback 请求、真实 operations partial-failure 链路与静态能力边界。跨包决定见 [HTTP transport Note](../../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。

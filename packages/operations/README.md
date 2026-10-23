@@ -35,7 +35,7 @@ import {
 
 ## Extension points
 
-source reader 与 deterministic projector 均已在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、observability、tracker 是真实入口测试的 devDependencies。
+source reader 与 deterministic projector 均已在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、tracker 是真实入口测试的 devDependencies；observability 是允许依赖 operations 的下游只读 HTTP consumer（#137），operations 不反向依赖 observability。
 
 ## Readers
 

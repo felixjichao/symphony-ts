@@ -1427,8 +1427,10 @@ export function deriveSnapshotSummary(work: readonly WorkProjection[]): Operatio
   let waiting = 0;
   let retrying = 0;
   let needsHuman = 0;
+  let degradedWork = 0;
 
   for (const item of work) {
+    if (item.attention === "degraded") degradedWork++;
     if (item.phase !== "completed" && item.phase !== "unknown") {
       active++;
     }
@@ -1447,7 +1449,7 @@ export function deriveSnapshotSummary(work: readonly WorkProjection[]): Operatio
     }
   }
 
-  return { active, waiting, retrying, needsHuman };
+  return { active, waiting, retrying, needsHuman, degradedWork };
 }
 
 /**
@@ -1523,7 +1525,7 @@ export function projectOperationalSnapshot(input: ProjectSnapshotInput): Operati
   });
   const anomalies = sortAndDeduplicateAnomalies(input.anomalies ?? []);
 
-  const summary = deriveSnapshotSummary(work);
+  const summary = { ...deriveSnapshotSummary(work), anomalyCount: anomalies.length };
   const health = deriveSystemHealth({ sources, work, anomalies });
 
   return {

@@ -36,8 +36,8 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/workspace` | Workspace Manager | §9 | 隔离目录 provisioning、containment 校验、lifecycle hooks | domain（`config` 仅为 devDependency，见下） |
 | `packages/agent` | Agent Runner | §10、§12 | prompt / 上下文组装、coding agent 子进程控制、session 事件流 | domain, config, workspace |
 | `packages/orchestrator` | Orchestrator | §7、§8、§14、§16 | 状态机、polling / scheduling / reconciliation、retry / backoff、单一权威 runtime state | domain, config, tracker, workspace, agent |
-| `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、状态出口 | domain |
-| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader、确定性 projector、跨源异常检测与进程内查询服务 | domain（Decision / observability / tracker 为测试 devDependencies） |
+| `packages/observability` | Logging + Status Surface | §13 | 结构化日志、只读 runtime snapshot、OperationalSnapshot HTTP transport | domain + operations |
+| `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader、确定性 projector、跨源异常检测与进程内查询服务 | domain（Decision / tracker 为测试 devDependencies） |
 | `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务、执行器适配层 | domain |
 | `apps/chatgpt-web` | —（Decision 执行器） | Decision 扩展 | ChatGPT Web 执行器适配器与 Tampermonkey 浏览器决策驱动器 | domain, decision |
 | `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
@@ -53,6 +53,8 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 `observability` 对 orchestrator state 的消费是**只读 snapshot 契约**（类型归属 domain），不回写、不参与调度。
 
+#137 的浏览器读取路径为 `source ports → @symphony/operations → @symphony/observability read-only HTTP transport → browser consumer`。HTTP 只调用注入的 `OperationalQueryService.getOperationalSnapshot()`，不读源、不推导状态、不回写；同步 runtime projector 仍独立保持 domain-only。默认 loopback + 临时端口，显式启动/关闭，异常仅影响 HTTP response。源包不得反向依赖 operations；observability 是允许的下游 consumer。依赖图展示 Core 包关系，新增 operations transport 依赖以上表为准。决策见 [HTTP transport Note](../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。
+
 `operations` 是 **Observation Plane / 只读投影与查询层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader、确定性 projector、跨源异常检测与进程内查询服务（`createOperationalQueryService`）在 `@symphony/operations` 实现，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
 
 ## 历史：M0 协议栈 scaffold 已删除
@@ -61,7 +63,7 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 
 ## 只读 snapshot
 
-`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；生产 CLI host 通过相同 ports 装配；HTTP 属 optional extension。
+`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；生产 CLI host 通过相同 ports 装配；OperationalSnapshot HTTP transport 已由 #137 提供；生产 CLI lifecycle 接线留 #140。
 
 ## Executable lifecycle
 
@@ -114,3 +116,13 @@ Dashboard gain no mutation authority. See the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
 
 Acceptance of these boundaries is indexed in the [execution-continuity ledger](evidence/execution-continuity/README.md). Durable intent → effect → acknowledgement preserves native ownership; unknown outcomes block. Bounded convergence includes explicit external waits and human blocks, not guaranteed business completion during unlimited outages. Neither the ledger nor Observation Plane grants mutation authority.
+
+## Dashboard observation consumer (#138)
+
+`apps/dashboard` is an app workspace with DOM components and Vite, downstream of operations. Browser imports are type-only from the public operations contract; Node-only `examples/` inject controlled SourceReaders into the real query service and #137 HTTP server. A separate loopback static host proxies only `/api/operations/snapshot` without JSON transformation or CORS. Production CLI is unchanged. Removing the Dashboard cannot affect scheduling.
+
+Only operations derives phase, waiting, attention, health, approval and counts. `degradedWork?` counts exactly degraded attention; `anomalyCount?` comes from final canonical anomaly deduplication. UI displays missing optional counts explicitly. Dependency/import graphs, capability/AST/type guards, closed helper fingerprints, negative fixtures, production bundle inspection and frozen inconsistent-projection tests protect this boundary. See [decision](../notes/accepted/architecture/2026-10-22-dashboard-consumer.md).
+
+## Work Detail diagnostics (#139)
+
+The [Work Detail decision](../notes/accepted/architecture/2026-10-22-work-detail-diagnostics.md) keeps the existing WorkKey hash and v1 snapshot. `detail.ts`, `evidence.ts` and `anomaly.ts` render supplied data; `identity.ts` selects by full provider/key and groups by source/role without changing entries. Foreign embedded evidence is hidden; work-scoped sources, global sources, associated executors and global anomalies remain distinct. Exact targets and result verdict are independently inspectable. The list raw HEAD foldout remains available. Wire shape validation, registered presentation calls, pinned reviewed helpers/renderers, type/capability/graph guards and negative fixtures preserve operations as the sole semantic owner. There is no workflow command or production assembly.

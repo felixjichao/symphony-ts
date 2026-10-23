@@ -50,7 +50,7 @@
 | §14 / §16 | retry / backoff（参考算法对齐） | `packages/orchestrator` | implemented | Core Conformance — `npm test -w @symphony/orchestrator`（`src/backoff.test.ts`：§8.4 continuation 固定 1000 ms、failure `min(10000 * 2^(attempt - 1), max_retry_backoff_ms)` 的基数 / 指数 / cap / 单调性；**M5.3** `src/retry-queue.test.ts`：normal exit → attempt 1 / 1s / error null / claim 保留、failure 10 / 20 / 40s 指数增长、cap 用当前 effective `max_retry_backoff_ms`（含低于基数与运行时换值）、`RetryEntry` 六字段完整且 `dueAtMs` 用单调时钟、同 issue 新 retry 取消 / 替换旧 timer、stale / canceled timer 与替换后迟到回调不产生 duplicate dispatch、refresh missing / inactive / unroutable 释放 claim（不 cleanup）、refresh terminal 安全 cleanup + 释放、global / per-state slot 不足精确记录 `no available orchestrator slots`、fetch 失败不丢 claim 并以 `retry refresh failed` 重排、await 期间被替换则丢弃迟到 refresh、suppressRetry（reconciliation）不入队；`src/retry-workspace.test.ts` 用**真实** `WorkspaceManager` + 真实临时文件系统验证 terminal refresh 删除真实目录，以及 workspace 换成逃逸 symlink 时 `refused`、出根目标无损且只记诊断；同文件另覆盖审查 blocker 1——替换 retry 不得在旧 terminal cleanup 删除期间启动新 worker（cleanup 与后续 launch 串行）；`src/retry-scheduler.test.ts` 覆盖审查 blocker 2——默认 scheduler 对超过 `2^31 - 1` ms 的合法 backoff 分段保时、分段期间 cancel 不触发；`src/retry-agent-integration.test.ts` 用真实 `runAgentAttempt` + app-server fixture 子进程跑 `outcome → fake timer → refresh → 新 worker`，并以 `--record-startup` / `--record-world` 记录两次 attempt 的不同 PID、`cwd === workspace.path`，用进程存活检查确认 attempt 结束后子进程已退出，同时以 workspace marker 内容保留验证复用不清空） |
 | §13.1 / §13.2 | 结构化日志、required context、安全预算与失败隔离 | `packages/observability` + CLI helpers | implemented（helpers + production host） | `npm test -w @symphony/observability`；`npm test -w @symphony/cli -- src/logging.test.ts`；`npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts` |
 | §13.6 | richer AgentEvent humanization（conditional） | `packages/observability` | deferred | MVP 固定 event/outcome/reason 与生命周期模板，不复制自由 summary |
-| §13.7 | HTTP / dashboard status surface（optional extension） | `packages/observability` | deferred extension | 不属于 M6 Core 完成条件 |
+| §13.7 | OperationalSnapshot HTTP / dashboard status surface（optional extension） | `packages/observability` | HTTP transport implemented（#137）；Dashboard shell/detail implemented（#138–#139）；production wiring deferred（#140） | `operations-http.test.ts` + `operations-http-boundaries.test.ts`；不属于 M6 Core 完成条件 |
 | §17.7 / §18.1 | CLI lifecycle、组件装配与动态热重载（initial effective runtime host + bin executable 契约 + M6.4 EffectiveRuntime authority / live reload / secret boundary） | `apps/cli` | implemented | Core Conformance — `npm test -w @symphony/cli`（`src/args.test.ts` 纯逻辑解析 argv 与 fallback；`src/host.test.ts` in-process `createHost` 构造/装配/start/stop/preflight 校验；`src/bin.test.ts` 真实子进程 `package.json` bin contract、显式/CWD 默认 WORKFLOW.md、缺失/错误配置洁净退出 1 与 SIGINT/SIGTERM 优雅停机；`src/effective-runtime.test.ts` 单一权威原子 `accept` 与 fail-fast 回滚；`src/host-reload.test.ts` 动态热重载全语义、单 timer 链与调度器更新、运行中 worker 保持、workspace root 迁移与精准清理；`src/secret-boundary.test.ts` 子进程敏感环境变量安全过滤与宿主 tracker 凭据隔离；`src/lifecycle.test.ts` 与正式 bin/harness 覆盖 M6.5 exit-code matrix） |
 | §15 | 安全与运维安全加固 | 跨包（orchestrator / workspace 主导） | planned M7 | — |
 | App. A | SSH worker 扩展（可选） | 待定 | planned M7（可选） | — |
@@ -158,9 +158,9 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | before_remove cleanup diagnostics | implemented helpers | CLI logging suite — real temp fs failure/timeout emits issue-bound hook warning, deletion continues, payload/secret omitted; throwing hook observer preserves removed result；event-boundaries — explicit cleanup identity port and legacy compatibility |
 | watcher reload and lifecycle log adapters | implemented helpers | CLI logging suite — temp filesystem invalid reload preserves watcher current, success means watcher acceptance, shutdown completion after loop stop; production runtime commit/signals additionally covered by host-reload/bin/lifecycle suites |
 | package dependency direction, observability never scheduler input | implemented | `npm test -w @symphony/orchestrator -- src/boundaries.test.ts`；`logger-boundaries.test.ts` + `snapshot-boundaries.test.ts` |
-| host/status surface 最终闭环 | host implemented（M6.3–M6.5），HTTP deferred extension | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP status surface 为 optional extension |
+| host/status surface 最终闭环 | host implemented（M6.3–M6.5），OperationalSnapshot HTTP implemented；production wiring deferred | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP transport 见 #137 证据 |
 
-上述为 snapshot/logging Core 证据；HTTP 与 richer humanization 为未实现的 optional/conditional 项，同步 projector 没有获取层 timeout。M6 Core 已完成并通过验收（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 保持为范围外 extension。
+上述为 snapshot/logging Core 证据；OperationalSnapshot HTTP 已实现（#137），production wiring 与 richer humanization 为 deferred 项，同步 projector 没有获取层 timeout。M6 Core 已完成并通过验收（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 保持为范围外 extension。
 
 ## §17.7 / §18.1 分项证据（M6.3 CLI host 与可执行契约）
 
@@ -309,7 +309,7 @@ Pure, deterministic projection layer adjacent to §13. Converts normalized facts
 | Purity, immutability (deep freeze), and deterministic array shuffle invariance | same suite: Purity, immutability & deterministic array order |
 | Zero I/O, domain-only dependencies, and absence of mutation APIs (`setWorkPhase`, `setWaitingReason`, etc.) | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) has moved to the next section; query transport remains unverified / unimplemented.
+Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) has moved to the next section; HTTP transport 证据见下方 #137；该历史 slice 不含 transport。
 
 ## Cross-source anomaly detection and projection explanations (NEST-116 / #112)
 
@@ -328,7 +328,7 @@ Pure, deterministic cross-source anomaly detection and structured projection evi
 | Attention degradation to `degraded` and system health degradation when anomalies exist | same suite: integration with deriveAttention and deriveSystemHealth |
 | Zero I/O, domain-only imports, and absence of mutation APIs | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) has moved to the next section; query transport remains unverified / unimplemented.
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) has moved to the next section; HTTP transport 证据见下方 #137；该历史 slice 不含 transport。
 
 ## Operational query service and integration acceptance (NEST-117 / #113)
 
@@ -350,6 +350,20 @@ Stable in-process Operational Query Service and full multi-source integration ac
 
 Validation: `npm test -w @symphony/operations`, `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Transports (HTTP/SSE/WebSocket) and Web Dashboard remain out of scope for #108 acceptance.
 
+## OperationalSnapshot HTTP transport（#137 / §13.7）
+
+Thin Observation Plane transport，完整快照直接委托 `@symphony/operations`；不改变 #108 查询语义，不完成父任务 #136。见 [HTTP transport Note](../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。
+
+| Acceptance | Evidence |
+|---|---|
+| Full serialization, deterministic mapping, schema/time/health/summary/executors | `packages/observability/src/operations-http.test.ts`: fixed snapshot repeated GET deep equivalence |
+| Actual query service, partial failure, four freshness variants, multiple isolated WorkKeys | `operations-http.test.ts`: real query boundary with read-only SourceReaders |
+| Current PR HEAD, task/result targets, taskId/revision, all three review mismatch anomalies and evidence survive | `operations-http.test.ts`: real query boundary exact-HEAD assertions |
+| Sanitized query/serialization rejection, disconnected clients, active-request shutdown, recovery, no workflow control; no write routes | `operations-http.test.ts`: failure and unsupported methods/unknown routes |
+| Bind failure rejects startup; repeated post-listen server errors remain non-fatal | `operations-http.test.ts`: bind conflict and runtime error isolation with subsequent successful GET |
+| Only operations + Node HTTP capabilities; independent synchronous domain-only projector | `operations-http-boundaries.test.ts`, `snapshot-boundaries.test.ts`; `packages/operations/src/boundaries.test.ts` prohibits source reverse imports |
+
+Validation commands: `npm test -w @symphony/operations`, `npm test -w @symphony/observability`, `npm run typecheck`, `npm run docs:check`, and `npm run gate`. Production lifecycle (#140), Dashboard (#138–#139), history, streaming and commands remain outside this transport slice.
 ## Execution continuity and recovery contracts (NEST-130 / #146)
 
 Provider-neutral execution continuity, ownership fencing, and failure taxonomy contracts adjacent to §4. Establishes the shared language used by Orchestrator, Decision, Web Driver, Delivery, and future reconciliation code before adding automated recovery behaviors (#147–#151). [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md).
@@ -491,3 +505,29 @@ completed needs-human Review and paused Delivery facts through the production ho
 ## Execution-continuity fault acceptance (#151)
 
 SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close.
+
+## §13 adjacent: Dashboard shell (#138 / NEST-125)
+
+| Capability | Implementation / validation | Scope |
+|---|---|---|
+| Optional v1 summary counts | domain operations contracts; `dashboard-summary.test.ts` checks exact degraded attention, final deduped anomalies, input permutation and zeros | Existing health/attention rules unchanged |
+| Overview / Work list | `apps/dashboard/src/view.ts`; DOM eight-state matrix and frozen inconsistent projections | Display only; no Work Detail/evidence explanations |
+| Four-state freshness / exact HEAD | per-source text; separate approval labels; keyboard details retain full HEAD, targets, task IDs/revisions | Observation, never merge authorization |
+| WorkKey / refresh / fault isolation | tuple routes, cross-repository same-number tests, bounded single-request poller, last-success preservation | No workflow action or persistent cache |
+| Same-origin real composition | `tests/integration.test.ts`: controlled readers → real query → real #137 HTTP → exact proxy; 200/404/405/500/502 and cleanup; dev loopback listeners, real HMR upgrade, failure/stop/restart | Local demo, not production live acceptance |
+| No frontend domain derivation | Dashboard Vitest: AST/type checking, closed helpers, graph/capability/bundle guards, negative cases, semantic pass-through; fetch binding aliases and source-dependent conditional/local-return cases | Root gate runs the workspace tests |
+
+Real Chromium smoke is an explicit built-product check, separate from DOM tests; reproducible invocation and evidence are in [Dashboard README](../apps/dashboard/README.md). Production lifecycle/scope/live acceptance remains #140; #139 detail evidence is recorded below. Existing continuity pending evidence is unchanged.
+
+## §13 adjacent: Work Detail (#139 / NEST-126)
+
+| Acceptance | Evidence |
+|---|---|
+| Stable WorkKey detail, navigation, stale/error retention, focus | Dashboard `detail.test.ts`, existing `ui.test.ts` / `polling.test.ts`; explicit Chromium smoke |
+| Derived state distinct from supplied facts/evidence/freshness | `detail.test.ts`: matching review and contradictory supplied conclusions, four freshness states, empty/legacy roles |
+| Severity/context and exact independent PR/task/result targets | `detail.test.ts`: all eight codes plus unknown code, three full SHAs, fallback labeling, malicious strings |
+| Partial failure and cross-work isolation | `detail.test.ts`: foreign embedded evidence/source/executor/anomaly; `detail-integration.test.ts`: real query/HTTP/proxy/DOM diagnostic matrix |
+| No frontend projector, freshness inference or workflow mutation | `guards.test.ts`: capability/import/bundle/type guards, diagnostic negative cases and pinned renderers/helpers |
+| Diagnostic shape validation and compatible unknown fields/codes | `detail.test.ts`: malformed evidence/anomaly inputs; existing transport/polling retain previous success on invalid snapshots |
+
+Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced. #140 and parent #136 remain open.
