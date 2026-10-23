@@ -11,7 +11,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build && npm rebuild @symphony/cli",
+    "build": "npm run build -w @symphony/dashboard && tsc -p tsconfig.json && vite build && npm rebuild @symphony/cli",
     "test": "vitest run"
   },
   "dependencies": {
@@ -22,7 +22,8 @@
     "@symphony/observability": "*",
     "@symphony/orchestrator": "*",
     "@symphony/tracker": "*",
-    "@symphony/workspace": "*"
+    "@symphony/workspace": "*",
+    "@symphony/operations": "*"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

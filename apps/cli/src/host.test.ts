@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ import {
   type Issue,
   type TimerHandle,
 } from "@symphony/domain";
-import { DurableDecisionStore, DecisionService, DecisionPlanningGate } from "@symphony/decision";
+import { DurableDecisionStore, DecisionService, DecisionPlanningGate, DecisionBridge } from "@symphony/decision";
 import type { RetryScheduler } from "@symphony/orchestrator";
 import { SymphonyConfigError } from "@symphony/config";
 import { createStructuredLogger } from "@symphony/observability";
@@ -751,3 +751,70 @@ describe("createHost in-process composition", () => {
   });
 });
 
+
+
+describe("status failures are observational during native worker/retry progression", () => {
+  it.each(["disabled", "assets-missing", "source-rejection", "enabled"])("preserves dispatch/outcome/retry/stop: %s", async mode => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "host-status-isolation-"));
+    const lines: string[] = [];
+    let host: Awaited<ReturnType<typeof createHost>> | undefined;
+    try {
+      const workflowPath = path.join(dir, "WORKFLOW.md");
+      await writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/work\ncodex:\n  command: "${process.execPath} ${appServerFixture} --turn-status failed"\n---\nPrompt\n`);
+      host = await createHost({ workflowPath, cwd: dir, enablePlanning: false,
+        scheduler: { schedule: () => ({}), cancel: () => {} },
+        retryScheduler: { schedule: () => ({}), cancel: () => {} }, trackerProfiles: [fixtureProfile()], logger: createMemoryLogger(lines),
+        ...(mode === "disabled" ? {} : { status: { workKeys: [], assets: mode === "assets-missing" ? path.join(dir, "missing") : fileURLToPath(new URL("../dist/status-assets", import.meta.url)) } }),
+        ...(mode === "source-rejection" ? { statusSources: { runtime: () => { throw new Error("credential-secret"); } } } : {}),
+      });
+      let failed = false; void host.failure.then(() => { failed = true; });
+      await host.start();
+      if (mode === "enabled" || mode === "source-rejection") {
+        expect(host.statusUrl).toMatch(/^http:\/\/127.0.0.1:/);
+        const response = await fetch(`${host.statusUrl}/api/operations/snapshot`); expect(response.status).toBe(200);
+        const body = await response.text(); expect(body).not.toContain("credential-secret");
+        if (mode === "source-rejection") expect(body).toContain("unavailable");
+      }
+      if (mode === "assets-missing") expect(lines.join(" ")).toContain("status_start_failed");
+      const issue = makeIssue("STATUS-ISOLATION");
+      expect((await host.authority.dispatchIssue(issue)).kind).toBe("dispatched");
+      await waitFor(() => host!.state.retryAttempts.has(issue.id));
+      expect(host.state.running.size).toBe(0);
+      expect(host.state.retryAttempts.get(issue.id)?.attempt).toBe(1);
+      expect(host.state.retryAttempts.get(issue.id)?.error).toBeTruthy();
+      expect(failed).toBe(false);
+      await host.stop(); expect(failed).toBe(false);
+      expect(host.state.running.size).toBe(0);
+    } finally { await host?.stop(); await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+
+it.each(["local", "bridge-with-planning-disabled"])("host status observes configured Decision backend: %s", async mode => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "host-status-backend-"));
+  const storeDir = path.join(dir, "decision"); const key = githubDecisionRoot("acceptance", "alpha", 1);
+  const store = new DurableDecisionStore({ storeDir }); await store.open();
+  const service = new DecisionService(store); const session = await service.createSession(key);
+  await service.createReviewTask(session.id, { target: { repository: "acceptance/alpha", prNumber: 2, headSha: "b".repeat(40) } });
+  let bridge: DecisionBridge | undefined; let host: Awaited<ReturnType<typeof createHost>> | undefined;
+  try {
+    let backend: Partial<Parameters<typeof createHost>[0]> = { decisionStoreDir: storeDir };
+    if (mode === "local") await store.close();
+    else {
+      bridge = new DecisionBridge(service, { port: 0, authToken: "controlled-token" });
+      const { port } = await bridge.start(); backend = { decisionBridgeUrl: `http://127.0.0.1:${port}`, decisionBridgeToken: "controlled-token", enablePlanning: false };
+    }
+    const workflowPath = path.join(dir, "WORKFLOW.md");
+    await writeFile(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${dir}/work\ncodex:\n  command: "echo test"\n---\nPrompt\n`);
+    host = await createHost({ ...backend, workflowPath, cwd: dir, trackerProfiles: [fixtureProfile()], logger: createMemoryLogger([]),
+      scheduler: { schedule: () => ({}), cancel: () => {} },
+      status: { workKeys: [key], assets: fileURLToPath(new URL("../dist/status-assets", import.meta.url)) },
+      statusSources: { github: async () => ({ workKey: key, issue: { state: "open", url: "https://github.com/acceptance/alpha/issues/1" },
+        pullRequest: { number: 2, state: "open", headSha: "a".repeat(40), url: "https://github.com/acceptance/alpha/pull/2", isDraft: false }, ci: { status: "success", headSha: "a".repeat(40) } }) },
+    });
+    const bytes = await readFile(path.join(storeDir, "store.json"), "utf8");
+    await host.start(); const body = await fetch(`${host.statusUrl}/api/operations/snapshot`).then(response => response.text());
+    expect(body).toContain("review_target_head_mismatch"); expect(body).not.toContain("controlled-token");
+    expect(await readFile(path.join(storeDir, "store.json"), "utf8")).toBe(bytes);
+  } finally { await host?.stop(); await bridge?.stop(); await store.close(); await rm(dir, { recursive: true, force: true }); }
+});

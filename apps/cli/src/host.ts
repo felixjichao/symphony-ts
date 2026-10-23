@@ -1,3 +1,4 @@
+import { startStatusSurface, githubStatusSource, type StatusOptions, type StatusSources } from "./status";
 import { createHostRecovery } from "./host-recovery";
 import { FileRecoveryLedger } from "./recovery-ledger";
 import { withDeliveryCleanupAuthority } from "./delivery-cleanup";
@@ -75,6 +76,7 @@ import {
   type WorkspaceCleanupIssueContext,
 } from "@symphony/orchestrator";
 import {
+  DefaultGhRunner,
   createGitHubAdapterProfile,
   TrackerAdapterRegistry,
   type TrackerAdapter,
@@ -87,6 +89,7 @@ import { createRuntimeLogObservers } from "./logging";
 import { WorkspaceLifecycleCoordinator } from "./workspace-lifecycle";
 
 export interface SymphonyHost {
+  readonly statusUrl: string | null;
   readonly workflowPath: string;
   readonly effective: EffectiveWorkflow;
   readonly state: OrchestratorRuntimeState;
@@ -106,6 +109,8 @@ export interface SymphonyHost {
 }
 
 export interface CreateHostOptions {
+  readonly status?: StatusOptions | undefined;
+  readonly statusSources?: Partial<StatusSources> | undefined;
   readonly workflowPath?: string | undefined;
   readonly cwd?: string | undefined;
   readonly env?: TrackerEnv | undefined;
@@ -194,6 +199,17 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
   let planningGate: DecisionPlanningGate | null = options.planningGate ?? null;
   let reviewGate: import("@symphony/domain").DeliveryReviewGate | undefined = options.continuityReviewGate;
+  let decisionObservation: StatusSources["decision"];
+  // Explicitly disabled/custom gates do not grant a second store. A configured but
+  // inaccessible local backend is unavailable rather than silently unconfigured.
+  const observationBridgeUrl = explicitBridgeUrl ?? envBridgeUrl;
+  if (observationBridgeUrl) {
+    const token = options.decisionBridgeToken ?? envBridgeToken;
+    const client = new DecisionBridgeClient(observationBridgeUrl, { ...(token ? { authToken: token } : {}) });
+    decisionObservation = key => client.observeWork(key);
+  } else if (explicitStoreDir !== undefined || envStoreDir || planningGate || fs.existsSync(defaultStoreDir)) {
+    decisionObservation = () => { throw new Error("Decision observation port unavailable"); };
+  }
   let ownedStore: DurableDecisionStore | null = null;
 
   if (!planningGate && !isExplicitlyDisabled) {
@@ -204,16 +220,19 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       ownedStore = new DurableDecisionStore({ storeDir: explicitStoreDir });
       await ownedStore.open();
       const service = new DecisionService(ownedStore);
+      decisionObservation = key => service.observeWork(key);
       planningGate = new DecisionPlanningGate(service);
       reviewGate = new DecisionReviewGate(service);
     } else if (explicitBridgeUrl !== undefined) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
       const client = new DecisionBridgeClient(explicitBridgeUrl, { ...(token ? { authToken: token } : {}) });
+      decisionObservation = key => client.observeWork(key);
       planningGate = new DecisionPlanningGate(client);
       reviewGate = new DecisionReviewGate(client);
     } else if (envBridgeUrl) {
       const token = options.decisionBridgeToken ?? envBridgeToken;
       const client = new DecisionBridgeClient(envBridgeUrl, { ...(token ? { authToken: token } : {}) });
+      decisionObservation = key => client.observeWork(key);
       planningGate = new DecisionPlanningGate(client);
       reviewGate = new DecisionReviewGate(client);
     } else if (envStoreDir || isExplicitlyEnabled || fs.existsSync(defaultStoreDir)) {
@@ -224,6 +243,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       ownedStore = new DurableDecisionStore({ storeDir });
       await ownedStore.open();
       const service = new DecisionService(ownedStore);
+      decisionObservation = key => service.observeWork(key);
       planningGate = new DecisionPlanningGate(service);
       reviewGate = new DecisionReviewGate(service);
     }
@@ -396,6 +416,11 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       onDiagnostic: observers.onDiagnostic,
     });
 
+    let statusSurface: Awaited<ReturnType<typeof startStatusSurface>> | undefined;
+    let statusStarting: Promise<void> = Promise.resolve();
+    const statusDiagnostic = (reason: string, failed = false) => {
+      try { logger.emit({ scope: "service", severity: failed ? "warn" : "info", event: "status_surface", outcome: failed ? "failed" : "completed", reason }); } catch { /* Sink is observational. */ }
+    };
     let stopping = false;
     let startPromise: Promise<void> | undefined;
     let stopPromise: Promise<void> | undefined;
@@ -405,6 +430,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       let resolveStop!: () => void;
       let rejectStop!: (error: unknown) => void;
       stopPromise = new Promise<void>((resolve, reject) => { resolveStop = resolve; rejectStop = reject; });
+      // Fence new observations before native shutdown; drain before closing their store.
+      const statusStopped = statusSurface?.stop().catch(() => { statusDiagnostic("status_cleanup_failed", true); });
       controller.close();
       observers.lifecycle({ event: "shutdown", outcome: "started" });
       const errors: unknown[] = [];
@@ -414,6 +441,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       try { shutdown = loop.stop(); } catch (error) { shutdown = Promise.reject(error); }
       void (async () => {
         try { await shutdown; } catch (error) { errors.push(error); }
+        try { await statusStopped; await statusStarting; await statusSurface?.stop(); }
+        catch { statusDiagnostic("status_cleanup_failed", true); }
         if (ownedStore) {
           try { await ownedStore.close(); } catch (error) { errors.push(error); }
         }
@@ -426,6 +455,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
 
     return {
       workflowPath,
+      get statusUrl() { return statusSurface?.url ?? null; },
       get effective() {
         return controller.current.effectiveWorkflow;
       },
@@ -450,6 +480,29 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
             watcher.startMonitoring();
             if (stopping) return;
             await loop.start();
+            if (!stopping && options.status) {
+              statusStarting = (async () => {
+                try {
+                  statusSurface = await startStatusSurface(options.status!, {
+                    runtime: () => tryProjectObservabilitySnapshot(state, clock),
+                    decision: decisionObservation,
+                    github: githubStatusSource({ exec: (args, execOptions) => {
+                      const current = controller.current;
+                      const provider = current.serviceConfig.tracker.provider ?? {};
+                      const resolved = current.profile?.resolveProviderConfig?.(provider, options.env ?? process.env) ?? provider;
+                      const token = typeof resolved["token"] === "string" ? resolved["token"] : undefined;
+                      return new DefaultGhRunner().exec(args, { ...execOptions,
+                        ...(token ? { env: { GH_TOKEN: token, GH_HOST: "github.com" } } : {}) });
+                    } }),
+                    clock: now,
+                    ...options.statusSources,
+                  });
+                  if (stopping) await statusSurface.stop();
+                  else statusDiagnostic(statusSurface.url);
+                } catch { statusDiagnostic("status_start_failed", true); }
+              })();
+              await statusStarting;
+            }
             if (!stopping) observers.lifecycle({ event: "startup", outcome: "completed" });
           } catch (error) {
             observers.lifecycle({ event: "startup", outcome: "failed" });

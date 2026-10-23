@@ -30,6 +30,7 @@ export default defineConfig({
     {
       name: "make-executable",
       closeBundle() {
+        fs.cpSync(path.resolve(__dirname, "../dashboard/dist"), path.resolve(__dirname, "dist/status-assets"), { recursive: true });
         const binPath = path.resolve(__dirname, "dist/bin/symphony.js");
         try {
           fs.chmodSync(binPath, 0o755);

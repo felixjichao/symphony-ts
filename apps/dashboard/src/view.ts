@@ -46,8 +46,8 @@ function workTable(snapshot: OperationalSnapshot): HTMLElement {
   }
   table.append(body); section.append(table); return section;
 }
-export function mount(root: HTMLElement): { update: (state: Observation) => void; destroy: () => void } {
-  const header = el("header"); header.append(el("p", "SYMPHONY / OBSERVATION PLANE"), el("h1", "运营状态"), el("strong", "演示数据 · 只读 · 非生产状态面"));
+export function mount(root: HTMLElement, mode: string = "demo"): { update: (state: Observation) => void; destroy: () => void } {
+  const header = el("header"); header.append(el("p", "SYMPHONY / OBSERVATION PLANE"), el("h1", "运营状态"), el("strong", mode === "production" ? "当前生产只读观测 · 显式 WorkKey scope（非全局清单）" : "演示数据 · 只读 · 非生产状态面"));
   const nav = el("nav"); nav.setAttribute("aria-label", "状态视图");
   const overviewLink = el("a", "Overview"); overviewLink.href = "#overview";
   const workLink = el("a", "Work list"); workLink.href = "#work";

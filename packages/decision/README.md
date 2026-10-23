@@ -77,3 +77,8 @@ Expired-claim recovery policy belongs to the work-aware host coordinator. Bridge
 - Single writer per store directory: concurrent instances on the same directory fail startup with `DecisionStoreLockError`.
 - Whole JSON snapshot format: designed for local single-node workflows without external database dependencies. High-throughput multi-writer scenarios require migrating to a relational database (see [Agent Note](../../notes/accepted/architecture/2026-10-09-decision-store-bridge.md)).
 - Does not implement DOM automation, browser scripts, or orchestrator state machine wiring (see [Executor Adapter Note](../../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md)).
+
+
+## Read-only operational observation
+
+Authenticated `GET /v1/observations/work?provider=github&key=owner%2Frepo%231` applies the same Host/Origin/auth boundary and returns `DecisionService.observeWork`'s single committed-state whitelist. `DecisionBridgeClient.observeWork` aborts after 3 seconds, including response-body reads. This endpoint does not claim, release expired leases, expose tokens/context/receipts or assemble results through multiple queries.

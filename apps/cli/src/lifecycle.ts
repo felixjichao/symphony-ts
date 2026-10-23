@@ -95,6 +95,9 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n" +
         "  plan                 Pre-execution planning gate (start, clarify, replan, retry, status, sync)\n\n" +
         "Options:\n" +
+        "  --status                Start loopback read-only status surface (empty scope by default)\n" +
+        "  --status-work <key>      Explicit github:owner/repo#N scope (repeatable)\n" +
+        "  --status-port <port>     Loopback port; default 0 (OS assigned)\n" +
         "  --enable-planning       Enable Decision Plane planning gate for dispatch\n" +
         "  --no-planning           Explicitly disable Decision Plane planning gate\n" +
         "  --decision-store <dir>  Path to durable decision store directory\n" +
@@ -114,6 +117,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
     host = await (options.createHost ?? createHost)({
       ...options.hostOptions,
       workflowPath,
+      ...(args.status !== undefined ? { status: args.status } : {}),
       ...(args.enablePlanning !== undefined ? { enablePlanning: args.enablePlanning } : {}),
       ...(args.decisionStoreDir !== undefined ? { decisionStoreDir: args.decisionStoreDir } : {}),
       ...(args.decisionBridgeUrl !== undefined ? { decisionBridgeUrl: args.decisionBridgeUrl } : {}),

@@ -531,3 +531,9 @@ Real Chromium smoke is an explicit built-product check, separate from DOM tests;
 | Diagnostic shape validation and compatible unknown fields/codes | `detail.test.ts`: malformed evidence/anomaly inputs; existing transport/polling retain previous success on invalid snapshots |
 
 Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced. #140 and parent #136 remain open.
+
+## Production operational status closeout (#140 / §13 adjacent, §17–18)
+
+The opt-in CLI composes real source readers → operations → read-only HTTP → built Dashboard. Both configured Decision backend modes use the same committed whitelist; no status component owns admission or approvals. Explicit canonical scope, four-state freshness, exact independent review targets, partial failures and no-work scope are preserved. Status startup/cleanup failures are isolated from native host failure, and in-flight reads drain before shared store close.
+
+The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue scenarios and the architecture/read-only assertions to reproducible tests and [Chromium results](evidence/status-surface/browser.json). New production composition acceptance is credential-free; a real built executable packaging smoke runs from another cwd with an isolated tracker. Local/browser evidence does not imply authenticated external-provider acceptance. Existing #159 continuity live gaps remain unchanged. Required delivery validation is root `npm run gate`; no history, analytics, journal, streaming or operator actions are claimed.

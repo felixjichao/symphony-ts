@@ -40,7 +40,8 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 | `packages/operations` | Operational Read Model（Observation Plane） | §13 邻接 | provider-neutral 只读 facts 与投影契约的公共边界；四源只读 reader、确定性 projector、跨源异常检测与进程内查询服务 | domain（Decision / tracker 为测试 devDependencies） |
 | `packages/decision` | —（Decision 扩展） | §4、Decision 扩展 | 任务/会话持久化快照存储、跨进程排他锁、Web Agent Bridge 本地 HTTP 服务、执行器适配层 | domain |
 | `apps/chatgpt-web` | —（Decision 执行器） | Decision 扩展 | ChatGPT Web 执行器适配器与 Tampermonkey 浏览器决策驱动器 | domain, decision |
-| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, decision |
+| `apps/cli` | —（宿主入口） | §17、§18 | CLI / 进程生命周期、组件装配 | domain, config, tracker, workspace, agent, orchestrator, observability, operations, decision |
+| `apps/dashboard` | —（Observation consumer） | §13 邻接 | 只读 Overview / Work list / Work Detail | 浏览器仅 operations 类型；Node-only demo 依赖 operations + observability |
 
 依赖只允许自上表"依赖"列的方向流动；新增跨包依赖前先读 [AGENTS.md](../AGENTS.md) 的扩展点表。表中的"依赖"列指**运行期**（`dependencies`）方向；为了证明跨包接线而引入的 **devDependency / 测试专用**边不视为违反方向流动，但必须在表里显式标注。当前两条例外：`packages/tracker` 与 `packages/workspace` 各以 devDependency 引用 `@symphony/config`（各自仅 `src/config-integration.test.ts` 使用），用来证明扩展点或 typed 契约两侧真的对得上——`@symphony/config` 侧不引用它们，运行期方向仍是 `tracker → domain`、`workspace → domain`。两条硬约束：
 
@@ -55,7 +56,7 @@ WORKFLOW.md → Config → Issue Tracker → Orchestrator → Workspace → Agen
 
 #137 的浏览器读取路径为 `source ports → @symphony/operations → @symphony/observability read-only HTTP transport → browser consumer`。HTTP 只调用注入的 `OperationalQueryService.getOperationalSnapshot()`，不读源、不推导状态、不回写；同步 runtime projector 仍独立保持 domain-only。默认 loopback + 临时端口，显式启动/关闭，异常仅影响 HTTP response。源包不得反向依赖 operations；observability 是允许的下游 consumer。依赖图展示 Core 包关系，新增 operations transport 依赖以上表为准。决策见 [HTTP transport Note](../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。
 
-`operations` 是 **Observation Plane / 只读投影与查询层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader、确定性 projector、跨源异常检测与进程内查询服务（`createOperationalQueryService`）在 `@symphony/operations` 实现，只允许单向读取 `@symphony/domain` 与相应源包。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
+`operations` 是 **Observation Plane / 只读投影与查询层**的公共边界：provider-neutral facts 与投影契约归 `@symphony/domain`，四源 source reader、确定性 projector、跨源异常检测与进程内查询服务（`createOperationalQueryService`）在 `@symphony/operations` 实现，运行期只 import `@symphony/domain`；相应源由宿主通过只读 ports 注入。GitHub（durable Work truth）、Orchestrator（scheduling authority）与 Decision Plane（durable planning / review state）仍是各自权威；`operations` 不参与调度、不写回任何权威源、不引入第二套 workflow 状态机，phase / waiting / attention / health 均为派生展示概念。
 
 ## 历史：M0 协议栈 scaffold 已删除
 
@@ -63,7 +64,7 @@ M0 / M0.5 曾把 Symphony 理解为 `sym/0` 消息协议 + protobuf wire + 可�
 
 ## 只读 snapshot
 
-`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；生产 CLI host 通过相同 ports 装配；OperationalSnapshot HTTP transport 已由 #137 提供；生产 CLI lifecycle 接线留 #140。
+`@symphony/domain` 是 snapshot/view/clock/result 共享类型权威，`@symphony/observability` 从 authority 当前 state 同步投影。无第二份 scheduler/config authority；snapshot 不作为 scheduling 输入。host 注入与 authority 同源的 monotonic clock 及 wall clock，读 snapshot 不入账 tokens/duration。retry URL 仅为可选 metadata，重排更新与显式 null 语义见 [决策 Note](../notes/accepted/architecture/2026-10-03-observability-snapshot.md)。orchestrator → observability 仅 devDependency 测试边，生产依赖方向不变。logger/observers 独立消费提交点事实，不从 snapshot diff 推断事件；生产 CLI host 通过相同 ports 装配；OperationalSnapshot HTTP transport 已由 #137 提供；生产 CLI lifecycle 接线见下方 #140 composition。
 
 ## Executable lifecycle
 
@@ -119,10 +120,32 @@ Acceptance of these boundaries is indexed in the [execution-continuity ledger](e
 
 ## Dashboard observation consumer (#138)
 
-`apps/dashboard` is an app workspace with DOM components and Vite, downstream of operations. Browser imports are type-only from the public operations contract; Node-only `examples/` inject controlled SourceReaders into the real query service and #137 HTTP server. A separate loopback static host proxies only `/api/operations/snapshot` without JSON transformation or CORS. Production CLI is unchanged. Removing the Dashboard cannot affect scheduling.
+`apps/dashboard` is an app workspace with DOM components and Vite, downstream of operations. Browser imports are type-only from the public operations contract; Node-only `examples/` inject controlled SourceReaders into the real query service and #137 HTTP server. A separate loopback static host proxies only `/api/operations/snapshot` without JSON transformation or CORS. The opt-in CLI composition described below owns production sources, scope and lifecycle. Removing the Dashboard cannot affect scheduling.
 
 Only operations derives phase, waiting, attention, health, approval and counts. `degradedWork?` counts exactly degraded attention; `anomalyCount?` comes from final canonical anomaly deduplication. UI displays missing optional counts explicitly. Dependency/import graphs, capability/AST/type guards, closed helper fingerprints, negative fixtures, production bundle inspection and frozen inconsistent-projection tests protect this boundary. See [decision](../notes/accepted/architecture/2026-10-22-dashboard-consumer.md).
 
 ## Work Detail diagnostics (#139)
 
-The [Work Detail decision](../notes/accepted/architecture/2026-10-22-work-detail-diagnostics.md) keeps the existing WorkKey hash and v1 snapshot. `detail.ts`, `evidence.ts` and `anomaly.ts` render supplied data; `identity.ts` selects by full provider/key and groups by source/role without changing entries. Foreign embedded evidence is hidden; work-scoped sources, global sources, associated executors and global anomalies remain distinct. Exact targets and result verdict are independently inspectable. The list raw HEAD foldout remains available. Wire shape validation, registered presentation calls, pinned reviewed helpers/renderers, type/capability/graph guards and negative fixtures preserve operations as the sole semantic owner. There is no workflow command or production assembly.
+The [Work Detail decision](../notes/accepted/architecture/2026-10-22-work-detail-diagnostics.md) keeps the existing WorkKey hash and v1 snapshot. `detail.ts`, `evidence.ts` and `anomaly.ts` render supplied data; `identity.ts` selects by full provider/key and groups by source/role without changing entries. Foreign embedded evidence is hidden; work-scoped sources, global sources, associated executors and global anomalies remain distinct. Exact targets and result verdict are independently inspectable. The list raw HEAD foldout remains available. Wire shape validation, registered presentation calls, pinned reviewed helpers/renderers, type/capability/graph guards and negative fixtures preserve operations as the sole semantic owner. There is no workflow command; production assembly belongs to the CLI composition below.
+
+
+## Production status composition (#140)
+
+The Observation Plane data flow (arrows denote data, not package imports) is:
+
+```mermaid
+flowchart LR
+  Sources[Read-only source ports] --> Operations["@symphony/operations"]
+  Operations --> Transport[Read-only status HTTP]
+  Transport --> Dashboard[Dashboard]
+```
+
+`apps/cli/src/status.ts` composes sources → `@symphony/operations` → read-only observability HTTP → same-origin Dashboard. CLI is the only composition root importing source and query packages together. Browser imports operations types only; no Node, source adapter, store, projector or Vite/HMR runs in the browser bundle. UI never derives phase/waiting/attention/health or review validity. See the [composition decision](../notes/accepted/architecture/2026-10-23-production-status-composition.md).
+
+`--status` is opt-in, loopback-only, with OS-assigned port by default. Repeated `--status-work github:owner/repo#N` defines the whole observation scope; empty scope is valid, not a claim of system idleness. Host snapshots retain their original time and map runtime work only through verified GitHub issue URLs. Completed scoped work remains visible. No tracker/global Decision scan expands scope.
+
+GitHub uses `observeWork` with the existing `GH-N` / `symphony/GH-N` naming convention, verified repository default branch and marker/branch/repository checks. Nonstandard delivery identities are not guessed; association failures are unavailable. Configured tracker credentials are resolved through the existing profile and used by the read-only GitHub subprocess runner. The entire observation has a 3-second subprocess budget with native process-group cleanup. Runtime is the same host's `tryGetSnapshot`. Local Decision reuses the already-open service; Bridge uses authenticated `GET /v1/observations/work?provider=...&key=...`, one committed whitelist read, with a 3-second abort budget. No second store, continuity read, lease cleanup or authority operation is used. Executor inventory is an explicit embedding port; absent inventory is unknown, successful empty inventory is fresh. Default freshness age is 30 seconds; clocks/policies can be injected at the composition boundary. Cross-source reads are not a transaction.
+
+The CLI build first builds Dashboard and copies its static output next to the executable. Asset resolution is relative to the executable, independent of cwd. Production hosting injects a display-only mode marker into HTML; demo keeps its visible demo label. Fixed snapshot GET passes JSON through unchanged; unsupported snapshot methods are 405, other API paths 404. No streaming, journal, persistent operational cache, analytics or operator actions are introduced.
+
+Status startup/asset/bind failures emit sanitized diagnostics and leave host admission running. Status errors never enter `host.failure`. Native host stop synchronously fences new observation requests, stops scheduling, drains owned reads before releasing the shared store, and continues native cleanup if status cleanup fails. Client disconnects do not cancel workers. There is no status supervisor. Loopback is not an authentication system; snapshots can contain identifiers and workspace paths. See the [acceptance evidence](evidence/status-surface/README.md).

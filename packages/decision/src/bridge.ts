@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import {
+  parseWorkKey,
   parseDecisionReviewTarget,
   parseDecisionContextBundle,
   type DecisionContextBundle,
@@ -220,6 +221,13 @@ export class DecisionBridge {
     const pathname = url.pathname;
     const method = req.method?.toUpperCase();
 
+    if (method === "GET" && pathname === "/v1/observations/work") {
+      let key;
+      try { key = parseWorkKey({ provider: url.searchParams.get("provider"), key: url.searchParams.get("key") }); }
+      catch { throw new DecisionValidationError("Invalid observation WorkKey"); }
+      this.sendJson(res, 200, this.service.observeWork(key));
+      return;
+    }
     if (method === "GET" && pathname === "/v1/continuity") {
       this.sendJson(res, 200, { work: this.service.continuityWork() });
       return;
