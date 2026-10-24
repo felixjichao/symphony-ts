@@ -80,3 +80,19 @@ npm run build -w @symphony/domain
 `@symphony/dashboard` lives in `apps/dashboard`. Run `npm run build -w @symphony/dashboard` then `npm run demo -w @symphony/dashboard`; use `npm run dev -w @symphony/dashboard` for Vite middleware mode. Both explicitly start controlled demo readers and the real query/HTTP chain on loopback; Ctrl-C closes both listeners. Build emits ignored `.contracts` declarations before browser tsc so public type barrels do not introduce Node ambient globals. There is one root lockfile. See [Dashboard instructions](../apps/dashboard/README.md).
 
 Work Detail uses `src/detail.ts`, `src/evidence.ts`, `src/anomaly.ts` and the existing hash token. Controlled diagnostic demos use `--scenario=review`, `target-mismatch`, `result-mismatch`, `partial`, `conflict` or `terminal`; they use real query/HTTP and remain visibly demo data. Register and review presentation calls plus diagnostic negative cases before updating fingerprints.
+
+
+## Local production status surface
+
+```sh
+npm ci
+npm run build -w @symphony/cli
+node apps/cli/dist/bin/symphony.js /absolute/path/WORKFLOW.md --status --status-work 'github:owner/repo#123'
+# repeat --status-work for each work; optional --status-port 4173
+```
+
+Open the `http://127.0.0.1:<port>` URL in the `status_surface` log. Default is off; enabled without keys shows an explicitly scoped empty list. Ctrl-C stops the host and both status listeners. Static assets ship beside the executable, so another working directory is supported. Production shows **当前生产只读观测**; demo/dev remain explicitly labeled demo.
+
+Existing local `--decision-store` and authenticated `--decision-bridge-url` modes reuse their configured backend. Unconfigured Decision/inventory is unknown; configured failures are unavailable, retaining other sources. Only canonical GitHub WorkKeys are accepted. Production GitHub observation requires the GitHub tracker profile with the public `https://api.github.com` API base; GHES and other providers safely report unavailable without forwarding their credentials or falling back to another GitHub login. GitHub association supports the verified default `GH-N` / `symphony/GH-N` convention and repository default branch; custom identities are not guessed. The status surface cannot create work, claim tasks, merge PRs or repair sources. A status startup failure logs `status_start_failed` while orchestration continues. Loopback snapshots can contain work identifiers and paths; do not publish the port. History, analytics, streaming and operator actions remain deferred.
+
+Validation and foreground Chromium commands are in the [status acceptance ledger](evidence/status-surface/README.md).

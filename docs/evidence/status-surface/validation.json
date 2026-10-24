@@ -1,0 +1,96 @@
+{
+  "baseCommit": "c7b034f395efdc05e8e9b93275296b051e8da7a3",
+  "sourceCommit": "1735a4e217366d7e5edd2ca8a7ed06c170594f38",
+  "gate": {
+    "command": "VITEST_MAX_THREADS=1 VITEST_MIN_THREADS=1 VITEST_MAX_FORKS=1 VITEST_MIN_FORKS=1 npm run gate",
+    "exitCode": 0,
+    "includes": [
+      "typecheck/build",
+      "all workspace tests",
+      "lint",
+      "docs:check"
+    ],
+    "suites": [
+      {
+        "workspace": "@symphony/agent",
+        "result": "Tests  210 passed (210)"
+      },
+      {
+        "workspace": "@symphony/config",
+        "result": "Tests  155 passed (155)"
+      },
+      {
+        "workspace": "@symphony/decision",
+        "result": "Tests  111 passed (111)"
+      },
+      {
+        "workspace": "@symphony/domain",
+        "result": "Tests  307 passed (307)"
+      },
+      {
+        "workspace": "@symphony/observability",
+        "result": "Tests  29 passed (29)"
+      },
+      {
+        "workspace": "@symphony/operations",
+        "result": "Tests  114 passed (114)"
+      },
+      {
+        "workspace": "@symphony/orchestrator",
+        "result": "Tests  239 passed (239)"
+      },
+      {
+        "workspace": "@symphony/tracker",
+        "result": "Tests  286 passed (286)"
+      },
+      {
+        "workspace": "@symphony/workspace",
+        "result": "Tests  167 passed | 1 skipped (168)"
+      },
+      {
+        "workspace": "@symphony/chatgpt-web",
+        "result": "Tests  216 passed (216)"
+      },
+      {
+        "workspace": "@symphony/cli",
+        "result": "Tests  370 passed | 1 skipped (371)"
+      },
+      {
+        "workspace": "@symphony/dashboard",
+        "result": "Tests  131 passed (131)"
+      }
+    ],
+    "skipPolicy": "Existing opt-in skips retained; no new skip or timeout changes"
+  },
+  "earlierAttempt": {
+    "command": "npm run gate",
+    "result": "failed",
+    "failures": [
+      "ChatGPT Web adapter: slow/recovered/recovered-review cases hit existing 5-second timeout",
+      "CLI host-reload concurrency case: release.flag write before workspace directory existed"
+    ],
+    "resolution": "Full gate rerun with one worker passed; neither failing test file was modified"
+  },
+  "browser": "browser.json",
+  "authenticatedExternalLive": "not run",
+  "ci": "not collected; delivery does not wait for external CI",
+  "credentialOriginReviewFix": {
+    "sourceCommit": "f8621928c554d1f92d86f5d695c6cef626203466",
+    "reviewedHead": "1ee7d340983afb55d2b5c16aaae0cd5e5064da64",
+    "regressions": {
+      "file": "apps/cli/src/status-credentials.test.ts",
+      "passed": 7,
+      "externalBoundary": "Only gh runner intercepted; real host, GitHub profile, reload and production status HTTP"
+    },
+    "gate": {
+      "command": "VITEST_MAX_THREADS=1 VITEST_MIN_THREADS=1 VITEST_MAX_FORKS=1 VITEST_MIN_FORKS=1 npm run gate",
+      "exitCode": 0,
+      "cli": "377 passed, 1 existing opt-in skip",
+      "dashboard": "131 passed",
+      "typecheck": "passed",
+      "lint": "passed",
+      "docsCheck": "passed"
+    },
+    "browserEvidence": "Reused prior Chromium evidence for unchanged frontend; current built static asset SHA-256 matches browser.json. No new authenticated external live run."
+  }
+}

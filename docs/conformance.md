@@ -589,3 +589,11 @@ Final W03 disposition: bounded convergence accepted through merged PR #163; seam
 browser-session resume remains unaccepted/deferred. Native task status may remain
 `running` while `execution.blocked`, host diagnosis and HUD are explicitly Blocked;
 this is an accepted nonterminal operational block, not silent stranded work.
+
+## Production operational status closeout (#140 / §13 adjacent, §17–18)
+
+The opt-in CLI composes real source readers → operations → read-only HTTP → built Dashboard. Both configured Decision backend modes use the same committed whitelist; no status component owns admission or approvals. Explicit canonical scope, four-state freshness, exact independent review targets, partial failures and no-work scope are preserved. Status startup/cleanup failures are isolated from native host failure, and in-flight reads drain before shared store close.
+
+The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue scenarios and the architecture/read-only assertions to reproducible tests and [Chromium results](evidence/status-surface/browser.json). New production composition acceptance is credential-free; a real built executable packaging smoke runs from another cwd with an isolated tracker. Local/browser evidence does not imply authenticated external-provider acceptance. Execution-continuity acceptance is maintained independently in its own ledger. Required delivery validation is root `npm run gate`; no history, analytics, journal, streaming or operator actions are claimed.
+
+Credential-origin review regression (PR #165): `apps/cli/src/status-credentials.test.ts` exercises actual host/profile/reload/status HTTP wiring with only the external gh runner intercepted. Public GitHub succeeds; GHES, alternate API bases and other providers degrade before subprocess execution, without credential forwarding or ambient fallback. A single observation retains its validated token through reload; the next observation revalidates its source. This does not add GHES status support.

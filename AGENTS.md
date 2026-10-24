@@ -56,7 +56,7 @@ orchestrator        → domain + config + tracker + workspace + agent
 observability       → domain + operations（只读 runtime snapshot 与 HTTP transport）
 operations          → domain（只读 operational facts / 投影契约；源包不得反向 import）
 apps/dashboard      → operations（浏览器仅类型）；Node-only demo → operations + observability
-apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability + decision
+apps/cli            → domain + config + tracker + workspace + agent + orchestrator + observability + operations + decision
 ```
 
 两条硬约束（最常见错误）：
