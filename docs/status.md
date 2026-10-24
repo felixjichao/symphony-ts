@@ -12,7 +12,7 @@
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
-- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard shell / Overview / Work list 由 #138 提供；Work Detail / evidence / anomaly / freshness diagnostics 由 #139 提供；只读生产装配与自动化/本地浏览器验收由 #140 提供，待独立审查；history / analytics / operator mutation 继续 deferred。
+- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard shell / Overview / Work list 由 #138 提供；Work Detail / evidence / anomaly / freshness diagnostics 由 #139 提供；只读生产装配与自动化/本地浏览器验收由 #140 完成；PR #165 已通过独立审查并合入 `main`（merge commit `8f7675e`，main CI run #344 通过），父任务 #136 的验收条件已满足；history / analytics / operator mutation 继续 deferred。
 - **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
@@ -96,7 +96,7 @@
 
 ## Operational Snapshot HTTP transport（#137）
 
-`@symphony/observability` 提供显式启动、默认 loopback 的 `GET /api/operations/snapshot`，直接序列化 `@symphony/operations` 查询结果。四类 freshness、partial failure、WorkKey 隔离、exact-HEAD review、anomaly/evidence 均经真实 HTTP 测试验证；无 workflow mutation、缓存或后台轮询。Dashboard 见 #138–#139；生产装配与验收见下方 #140 closeout。父任务 #136 的关闭由 owner 在独立审查后确认。
+`@symphony/observability` 提供显式启动、默认 loopback 的 `GET /api/operations/snapshot`，直接序列化 `@symphony/operations` 查询结果。四类 freshness、partial failure、WorkKey 隔离、exact-HEAD review、anomaly/evidence 均经真实 HTTP 测试验证；无 workflow mutation、缓存或后台轮询。Dashboard 见 #138–#139；生产装配与验收见下方 #140 closeout。父任务 #136 的验收条件已由 #140 closeout 与独立审查满足，关闭由 owner 执行。
 
 ## deferred / optional
 
@@ -226,7 +226,7 @@ close either issue or expand runtime scope.
 
 ## Work Detail — NEST-126 / GitHub #139
 
-Adds WorkKey-addressable structured detail, derived/fact separation, four-state source diagnostics, source/role projection evidence, first-class anomalies and independently visible PR/task/result targets. Work-scoped selections reject foreign nested evidence; global diagnostics remain separate. Shape/type/AST/capability/fingerprint guards and local controlled-reader query/HTTP/proxy/DOM tests cover the diagnostic surface. The explicit Chromium smoke validates the built demo, navigation, keyboard diagnostics and disconnect/recovery. Schema v1/domain/HTTP contracts and production CLI are unchanged. Production scope/lifecycle acceptance is recorded under #140 below; parent #136 closure remains an owner decision. merged #159 is independent.
+Adds WorkKey-addressable structured detail, derived/fact separation, four-state source diagnostics, source/role projection evidence, first-class anomalies and independently visible PR/task/result targets. Work-scoped selections reject foreign nested evidence; global diagnostics remain separate. Shape/type/AST/capability/fingerprint guards and local controlled-reader query/HTTP/proxy/DOM tests cover the diagnostic surface. The explicit Chromium smoke validates the built demo, navigation, keyboard diagnostics and disconnect/recovery. Schema v1/domain/HTTP contracts and production CLI are unchanged. Production scope/lifecycle acceptance is recorded under #140 below; the parent #136 acceptance is complete through merged PR #165, with closure remaining an owner action. merged #159 is independent.
 
 ### #162 bounded-convergence follow-up (2026-10-23)
 
@@ -278,4 +278,4 @@ not a universal wall-clock SLA. See the [closeout assessment](evidence/execution
 
 ## Read-only operational status closeout (#140)
 
-The read-only operational status surface is complete for automated/local acceptance and awaits independent review. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136 is ready for owner acceptance after independent review, not automatically closed. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance is tracked independently by its continuity closeout.
+The read-only operational status surface is complete and accepted: independent review approved PR #165, which merged to `main` as `8f7675ed09f59919f438a3b6e657471eb6b883ba` on 2026-10-24 with main CI run #344 green. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136's exit condition is satisfied; closing it remains the owner's action. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance is tracked independently by its continuity closeout.
