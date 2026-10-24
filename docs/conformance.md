@@ -415,7 +415,7 @@ The host uses the existing marker/HEAD-bound Delivery observer and does not weak
 
 | Contract | Implementation / automated evidence | Real environment |
 |---|---|---|
-| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Real reload/close no-replay and natural host reclaim/block passed; full browser-process restart pending — [evidence](evidence/web-continuity/final-gates-2026-10-22.md) |
+| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Real reload/close no-replay and natural host reclaim/block passed; full browser-process bounded blocking accepted through #162/PR #163 — [current scope](evidence/execution-continuity/closeout-2026-10-23.md). Seamless resume remains deferred |
 | SPEC §7/§8/§14 adjacency: native-source host diagnosis and safe reclaim | `apps/cli/src/work-continuity.test.ts`, `review-regressions.test.ts`: real store/host tick, blocked admission, explicit browser-page wait, exact-HEAD conflicts | Real GitHub tracker + native host poll reclaimed before-Send loss and blocked after-Send loss; actual Review HEAD change fenced — [evidence](evidence/web-continuity/final-gates-2026-10-22.md) |
 | Web navigation/send fencing, receipt-first recovery and persistent intent/Stop | `apps/chatgpt-web/test/driver.test.ts`, `userscript-entry.test.ts`, `review-bootstrap.test.ts`, `review-round11.test.ts` | Real Edge/Tampermonkey reload, Bridge auth/network recovery, no-replay and Stop passed; actual login/deleted-conversation categories remain — [scenarios](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run) |
 
@@ -504,7 +504,18 @@ completed needs-human Review and paused Delivery facts through the production ho
 
 ## Execution-continuity fault acceptance (#151)
 
-SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](evidence/execution-continuity/README.md) maps every required fault group and invariant to native suites and runnable commands. [Current run](evidence/execution-continuity/run-2026-10-22.md) separates automated evidence from live gaps. Current-composition Real Integration acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 follow-up](evidence/execution-continuity/run-2026-10-23.md) adds real local Bridge SIGKILL/restart and accepted-result ACK-loss readbacks (partial W03/W04); operator-confirmed current Driver also passed real ChatGPT generation/reload and accepted-result ACK-loss variants. [Core acceptance](evidence/execution-continuity/core-acceptance-2026-10-23.md) additionally verifies complete blocked-host SIGKILL/restart, native worker retry exhaustion and budget retention after full host restart with real GitHub reads. [Full browser quit/reopen acceptance](evidence/execution-continuity/browser-process-acceptance-2026-10-23.md) was attempted but automatic resume was not established (restored home/empty diagnostics, running task/receipt 404). Browser/tool restore versus Driver checkpoint causes are not isolated. Other provider/UI variants remain pending.
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [29-scenario matrix](evidence/execution-continuity/README.md)
+maps the supported interruptions to native suites and scoped live records. #159 is
+merged; #162 is closed through merged PR #163. **W03 bounded convergence accepted**:
+installed Driver 0.1.6 plus full host shows Waiting → Blocked after complete Edge
+quit/reopen, retaining fenced native ownership and avoiding repeated Send/result.
+Seamless browser-session resume remains unaccepted/deferred. The
+[closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md) maps the
+acceptance criteria and the maintainer-approved non-exhaustive coverage profile.
+Additional live provider/report ACK, auth/human/deleted-conversation UI and Web
+strategy variants remain unexercised/deferred, with production-equivalent failure
+invariants covered; no fixture is relabeled live passed. After gate/review/merge of
+this documentation closeout, #151 is ready for closure and #145 for final acceptance.
 
 ## §13 adjacent: Dashboard shell (#138 / NEST-125)
 
@@ -517,7 +528,7 @@ SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [scenario matrix](eviden
 | Same-origin real composition | `tests/integration.test.ts`: controlled readers → real query → real #137 HTTP → exact proxy; 200/404/405/500/502 and cleanup; dev loopback listeners, real HMR upgrade, failure/stop/restart | Local demo, not production live acceptance |
 | No frontend domain derivation | Dashboard Vitest: AST/type checking, closed helpers, graph/capability/bundle guards, negative cases, semantic pass-through; fetch binding aliases and source-dependent conditional/local-return cases | Root gate runs the workspace tests |
 
-Real Chromium smoke is an explicit built-product check, separate from DOM tests; reproducible invocation and evidence are in [Dashboard README](../apps/dashboard/README.md). Production lifecycle/scope/live acceptance remains #140; #139 detail evidence is recorded below. Existing continuity pending evidence is unchanged.
+Real Chromium smoke is an explicit built-product check, separate from DOM tests; reproducible invocation and evidence are in [Dashboard README](../apps/dashboard/README.md). Production lifecycle/scope/live acceptance remains #140; #139 detail evidence is recorded below. Continuity acceptance follows the #151 closeout profile above; this Dashboard scope does not change it.
 
 ## §13 adjacent: Work Detail (#139 / NEST-126)
 
@@ -532,10 +543,57 @@ Real Chromium smoke is an explicit built-product check, separate from DOM tests;
 
 Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced. #140 and parent #136 remain open.
 
+
+### #162 bounded-convergence follow-up (2026-10-23)
+
+SPEC §4 adjacent / §7 / §8 / §10 / §12 / §14 / §17 / §18: [new evidence](evidence/execution-continuity/bounded-browser-acceptance-2026-10-23.md)
+uses complete production host + authenticated Bridge, real GitHub reads, isolated
+Decision records and the installed Driver. A lost native-created test window's
+`waiting_response` execution blocked 27.296 seconds after lease expiry, preserving
+claim/binding generation 1 with receipt 404 and zero result POSTs. This initial bounded observation is retained with its original scope; the later
+installed Driver 0.1.6 run below accepts W03 conservative convergence. It does not
+establish seamless restoration. #162 is closed through PR #163; #151/#145 await
+the documentation closeout and final maintainer acceptance. The [subsequent agent-tab quit comparison](evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md)
+completed: old PID absence/new PID verified; the same browser tab restored at home
+with a newly created `symphony_tab_id` and empty diagnostics. Host block arrived
+23.019 seconds after lease expiry, with local CLI-visible incident, receipt 404,
+zero result POSTs and 409 for replacement claim/old heartbeat. Both variants now
+show bounded blocking, while seamless resume remains unaccepted; the earlier
+native-window comparison differs in window topology, and old GM checkpoint
+persistence was not directly inspected.
+CLI host-tick regression covers expiry, no replacement claim and durable block/incident
+retention after host/Bridge reconstruction and store reopen. Decision's exported
+`HeartbeatTaskRequest` now includes progress from the domain execution contract,
+matching the already-supported service/HTTP payload; typed Bridge regression verifies
+real progress and unchanged repeated progress. No recovery-policy change was required.
+
+
+### #162 recovery visibility repair — Driver 0.1.6 (2026-10-23)
+
+SPEC §13 adjacent / §10 / §12 / §17 / §18: [repair evidence](evidence/execution-continuity/recovery-hud-fix-2026-10-23.md).
+A restored page without a local checkpoint now reads native continuity facts when
+`/next` has no claimable task, displaying Waiting for an outstanding owner or Blocked
+with native task/reason/instruction. This is read-only observation: no lost identity
+is reconstructed and no lease is adopted, reclaimed or unblocked by the page.
+The HUD displays the build version from the same source as userscript metadata.
+Regression uses a real HTTP Bridge/store seam for waiting/block
+facts, terminal clearing and no mutation, plus late-response-after-Stop fencing.
+Transparent browser-session resume remains outside the proven boundary.
+Operator-confirmed 0.1.6 and its HUD version were verified during actual generation
+and complete Edge quit/reopen (old PID 32189 absent, new PID 16774). The restored
+home page displayed Waiting then Blocked automatically; host block followed expiry
+by 22.913 seconds, with generation 1, receipt 404, zero Driver POSTs after quit,
+and stale heartbeat/replacement claim 409. Gate passed: 2312 tests, one opt-in skip.
+
+Final W03 disposition: bounded convergence accepted through merged PR #163; seamless
+browser-session resume remains unaccepted/deferred. Native task status may remain
+`running` while `execution.blocked`, host diagnosis and HUD are explicitly Blocked;
+this is an accepted nonterminal operational block, not silent stranded work.
+
 ## Production operational status closeout (#140 / §13 adjacent, §17–18)
 
 The opt-in CLI composes real source readers → operations → read-only HTTP → built Dashboard. Both configured Decision backend modes use the same committed whitelist; no status component owns admission or approvals. Explicit canonical scope, four-state freshness, exact independent review targets, partial failures and no-work scope are preserved. Status startup/cleanup failures are isolated from native host failure, and in-flight reads drain before shared store close.
 
-The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue scenarios and the architecture/read-only assertions to reproducible tests and [Chromium results](evidence/status-surface/browser.json). New production composition acceptance is credential-free; a real built executable packaging smoke runs from another cwd with an isolated tracker. Local/browser evidence does not imply authenticated external-provider acceptance. Existing #159 continuity live gaps remain unchanged. Required delivery validation is root `npm run gate`; no history, analytics, journal, streaming or operator actions are claimed.
+The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue scenarios and the architecture/read-only assertions to reproducible tests and [Chromium results](evidence/status-surface/browser.json). New production composition acceptance is credential-free; a real built executable packaging smoke runs from another cwd with an isolated tracker. Local/browser evidence does not imply authenticated external-provider acceptance. Execution-continuity acceptance is maintained independently in its own ledger. Required delivery validation is root `npm run gate`; no history, analytics, journal, streaming or operator actions are claimed.
 
 Credential-origin review regression (PR #165): `apps/cli/src/status-credentials.test.ts` exercises actual host/profile/reload/status HTTP wiring with only the external gh runner intercepted. Public GitHub succeeds; GHES, alternate API bases and other providers degrade before subprocess execution, without credential forwarding or ambient fallback. A single observation retains its validated token through reload; the next observation revalidates its source. This does not add GHES status support.

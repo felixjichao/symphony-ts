@@ -1,0 +1,13 @@
+{
+  "command": "TMPDIR=/private/tmp npm run gate",
+  "exitCode": 0,
+  "passed": 2312,
+  "skipped": 1,
+  "webTests": 219,
+  "driverVersion": "0.1.6",
+  "userscriptSha256": "dcae52d18bfa9f548b742fc6c255c9d4d05ca6d6103a216746f424004234d686",
+  "redRepro": "npm test -w @symphony/chatgpt-web -- test/userscript-entry.test.ts",
+  "redResult": "2 failed: expected Waiting/Blocked, received Running",
+  "fix": "Idle reads native continuity facts for HUD only; no claim/checkpoint/token adoption",
+  "liveInstallation": "operator-confirmed update and HUD 0.1.6 observed before/after process restart"
+}

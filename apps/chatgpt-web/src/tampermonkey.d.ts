@@ -28,3 +28,6 @@ interface GMXmlHttpRequestOptions {
 }
 
 declare function GM_xmlhttpRequest(options: GMXmlHttpRequestOptions): { abort: () => void };
+
+/** Build identity displayed in the HUD for installed-artifact verification. */
+declare const __SYMPHONY_DRIVER_VERSION__: string;

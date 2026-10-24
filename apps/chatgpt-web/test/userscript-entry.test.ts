@@ -153,6 +153,72 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
     expect(activeController.isRunning()).toBe(false);
   });
 
+  // #162 / SPEC §13 adjacent, §17/§18: a fresh page must surface native waiting/block facts.
+  it.each([false, true])("shows authoritative recovery state after identity loss (blocked=%s) without adopting a lease", async blocked => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "userscript-lost-identity-"));
+    const store = new DurableDecisionStore({ storeDir: dir });
+    await store.open();
+    const service = new DecisionService(store);
+    const bridge = new DecisionBridge(service, { port: 0 });
+    try {
+      const { port } = await bridge.start();
+      const session = await service.createSession(githubDecisionRoot("owner", "repo", 162));
+      const task = await service.createPlanTask(session.id);
+      const claim = await service.claimTask(task.id, { owner: "previous-browser-tab" });
+      await service.startTask(task.id, claim.lease);
+      await service.heartbeatTask(task.id, { ...claim.lease, progress: { phase: "waiting_response", responseLength: 10 } });
+      if (blocked) await service.blockExecution(task.id, { ...claim.lease, reason: "human_required" });
+      const before = service.getTask(task.id);
+      const execution = service.getExecution(task.id);
+      const requests: string[] = [];
+      const real = new FetchBridgeTransport({ baseUrl: `http://127.0.0.1:${port}` });
+      const transport: import("../src/transport").BridgeTransport = {
+        request: async (method, route, body, options) => {
+          requests.push(`${method} ${route}`);
+          return real.request(method, route, body, options);
+        },
+      };
+      activeController = initSymphonyUserscript({ autoStart: true, transport, pollIntervalMs: 10 });
+      await vi.waitFor(() => expect(mockDoc.getElementById("symphony-status-pill")?.textContent)
+        .toContain(blocked ? "Blocked" : "Waiting"));
+      expect(mockDoc.getElementById("symphony-driver-status")?.textContent).toContain(task.id);
+      expect(mockDoc.getElementById("symphony-driver-status")?.textContent).toContain(blocked ? "human_required" : "no local checkpoint");
+      expect(mockDoc.getElementById("symphony-toggle-btn")?.textContent).toBe("Stop Driver");
+      expect(activeController.getDriver()?.checkpointStore.get()).toBeNull();
+      expect(requests).toContain("GET /v1/continuity");
+      expect(requests.every(request => request.startsWith("GET "))).toBe(true);
+      expect(service.getTask(task.id)).toEqual(before);
+      expect(service.getExecution(task.id)).toEqual(execution);
+      expect(service.getReceipt(task.id)).toBeNull();
+      await service.cancelTask(task.id);
+      await vi.waitFor(() => expect(mockDoc.getElementById("symphony-status-pill")?.textContent).toContain("Running"));
+      expect(mockDoc.getElementById("symphony-driver-status")?.textContent).toBe("Polling for Decision tasks");
+      activeController.stop();
+      expect(mockDoc.getElementById("symphony-status-pill")?.textContent).toContain("Idle");
+    } finally { activeController?.stop(); await bridge.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("does not overwrite Stop when an idle continuity read completes late", async () => {
+    let complete: ((value: unknown) => void) | undefined;
+    const response = new Promise<unknown>(resolve => { complete = resolve; });
+    let reading = false;
+    const transport: import("../src/transport").BridgeTransport = {
+      request: async <T>(_method: string, route: string): Promise<T> => {
+        if (route === "/v1/tasks/next") return null as T;
+        reading = true;
+        return await response as T;
+      },
+    };
+    activeController = initSymphonyUserscript({ autoStart: true, transport, pollIntervalMs: 10 });
+    await vi.waitFor(() => expect(reading).toBe(true));
+    activeController.stop();
+    complete!({ work: [] });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(mockDoc.getElementById("symphony-status-pill")?.textContent).toContain("Idle");
+    expect(mockDoc.getElementById("symphony-driver-status")?.textContent).toBe("Driver stopped");
+    expect(activeController.isRunning()).toBe(false);
+  });
+
   it("auto-starts across reconstruction, consumes checkpoint, and completes work against controlled bridge", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "userscript-e2e-"));
     const store = new DurableDecisionStore({ storeDir: dir });

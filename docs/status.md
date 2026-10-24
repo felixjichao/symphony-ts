@@ -151,7 +151,7 @@ Uncertain recovery calls/readbacks now suppress repeat delegation across scans u
 
 ## NEST-132 Decision/Web continuity
 
-Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real Edge/Tampermonkey reload, Bridge auth/network faults, no-replay blocking, actual Review HEAD changes and native-host automatic reclaim have scoped 2026-10-22 evidence below; full browser-process restart and ChatGPT login/deleted-conversation categories remain unverified.
+Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real Edge/Tampermonkey reload, Bridge auth/network faults, no-replay blocking, actual Review HEAD changes and native-host automatic reclaim have scoped 2026-10-22 evidence below; full browser-process bounded blocking is now accepted through #162/PR #163 below. Actual login/deleted-conversation UI variants remain unexercised/deferred.
 
 
 PR #156 follow-up fixes active heartbeat auth reporting, authoritative lease recovery,
@@ -160,6 +160,8 @@ result acceptance now revalidate external target admission; accepted receipts re
 readable after target changes. Automated no-replay coverage includes tab identity
 loss after Send. Scoped real-browser and final-gate evidence is recorded below;
 untested historical categories are not marked passed.
+
+Historical 2026-10-22 evidence below retains its original build/scope limits; current acceptance is summarized under NEST-135 and #162 below.
 
 2026-10-22 real-browser follow-up: Edge/Tampermonkey partial fault acceptance passed reload, active heartbeat 401, result 403, pre/post acceptance network loss, bounded no-replay tab-loss handling, two-tab single claim/result, route-drift blocking, supersede continuation and persistent Stop. Ten isolated Plan tasks produced eight result receipts, all claim generation 1. Lost-tab blocking used explicit fenced reclaim, not automatic host coordination. The later same-day final-gate run verifies actual Review HEAD change and native-host reclaim. ChatGPT auth/deleted-conversation recovery and browser-process restart remain pending; #148/#156 overall acceptance is not complete. See [evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
 
@@ -179,7 +181,7 @@ Implementation protects coordinator invocation, CI→Review, Review-result→Del
 paused compensation, landing acknowledgement and retry→worker boundaries. Native
 host startup restores reservations/intent discovery; uncertain launch/repair/child
 outcomes are durable blocks. Local validation covers real child-process SIGKILL and
-restart, native host ticks and both landing paths. Implementation is merged in PR #157; real GitHub/Codex smoke is not claimed. See the
+restart, native host ticks and both landing paths. Independent review and implementation completed in merged PR #157 (`a42f1b55dff42ffc02feb57d31f053bc2b153dcf`). Native crash-window evidence is accepted for the supported contract; exhaustive live provider combinations are not claimed. See the
 [implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
 
 ### NEST-134 / #150 bounded recovery and incidents
@@ -192,8 +194,7 @@ GitHub outbox verifies marker receipts and bounds reporting attempts without rep
 unknown POSTs. Operations/Dashboard remain read-only.
 
 Automated policy, native retry, real filesystem/SIGKILL, cross-process exhaustion,
-concurrent reporter, ACK-loss and stale-target tests are included. Live GitHub/browser
-fault acceptance for this change has not been run. Independent review approved PR #158,
+concurrent reporter, ACK-loss and stale-target tests are included. Scoped host restart and native worker exhaustion now have [real process evidence](evidence/execution-continuity/core-acceptance-2026-10-23.md); external report ACK/UI variants remain unexercised/deferred. Independent review approved PR #158,
 squash-merged as `627daa2164f2a8cdbad67b05d860300ecb822db2`.
 See [operator behavior](bounded-recovery.md) and the
 [decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
@@ -203,21 +204,78 @@ explicit modeled ownership condition; versioned native accounting separates lega
 migration from new capacity/continuation waits; native needs-human/manual reasons
 produce durable deduplicated incidents without blocking Delivery report compensation.
 Focused real-authority/file-store and production-host regressions are included;
-independent re-review approved these fixes in PR #158. External fault acceptance remains pending.
+independent re-review approved these fixes in PR #158. The finite policy and incident invariant are accepted through native fault injection plus scoped process evidence; this does not claim exhaustive external-provider/UI acceptance.
 
 ### NEST-135 / #151 fault acceptance
 
-The [scenario ledger](evidence/execution-continuity/README.md) indexes native crash windows, stale ownership, local cleanup, budgets and reporting. Current-run evidence and explicit live gaps are recorded separately. Current-composition browser/provider acceptance remains incomplete; parent #145 is not ready to close. [2026-10-23 verification](evidence/execution-continuity/run-2026-10-23.md) adds real isolated Bridge process and HTTP evidence; operator-confirmed current Driver also passed real ChatGPT reload and accepted-result ACK loss. [Core acceptance](evidence/execution-continuity/core-acceptance-2026-10-23.md) also passes complete host restart with a native block and actual worker retry exhaustion retained across process restart. [Full browser quit/reopen was attempted](evidence/execution-continuity/browser-process-acceptance-2026-10-23.md), but automatic resume was not accepted: the restored test tab had empty diagnostics and the original task remained running without a receipt. Next work is to separate native tab/session restoration from agent-tab lifecycle and Driver checkpoint lookup. Other provider/UI variants remain pending.
+The [29-scenario ledger](evidence/execution-continuity/README.md) now aligns #159
+(merged evidence), #162 (closed follow-up) and #163 (merged repair). Supported
+bounded-convergence acceptance is satisfied by native production-equivalent fault
+injection plus scoped real process/browser evidence. [Current closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md)
+records the maintainer's approved coverage profile and remaining non-exhaustive live
+variants. W03 is **bounded convergence accepted**: complete host + installed Driver
+0.1.6 reaches visible Waiting → Blocked without duplicate effects; seamless browser
+session/response resume remains unaccepted/deferred. After this documentation
+closeout passes gate/review and merges, #151 is ready to close, followed by final
+maintainer acceptance/closure of parent #145. This documentation change does not
+close either issue or expand runtime scope.
 
 ## Dashboard shell — NEST-125 / GitHub #138
 
-`apps/dashboard` adds a replaceable TypeScript DOM consumer of #137: Overview, attention-first Work list, full WorkKey routes, distinct source freshness, explicit current/stale HEAD approval and observational polling errors. Schema v1 summary adds optional `degradedWork` / `anomalyCount`; new projectors always output them, using final canonical anomalies. The independent Node-only same-origin demo uses real query/HTTP and controlled readers, visibly marked 演示数据. Production CLI/source/lifecycle composition is recorded under #140 below; external live acceptance is not claimed; Work Detail is described below. This delivery does not depend on NEST-135 / Draft #159 or change its continuity acceptance status.
+`apps/dashboard` adds a replaceable TypeScript DOM consumer of #137: Overview, attention-first Work list, full WorkKey routes, distinct source freshness, explicit current/stale HEAD approval and observational polling errors. Schema v1 summary adds optional `degradedWork` / `anomalyCount`; new projectors always output them, using final canonical anomalies. The independent Node-only same-origin demo uses real query/HTTP and controlled readers, visibly marked 演示数据. Production CLI/source/lifecycle composition is recorded under #140 below; external live acceptance is not claimed; Work Detail is described below. This delivery does not depend on NEST-135 / merged #159 or change its continuity acceptance status.
 
 ## Work Detail — NEST-126 / GitHub #139
 
-Adds WorkKey-addressable structured detail, derived/fact separation, four-state source diagnostics, source/role projection evidence, first-class anomalies and independently visible PR/task/result targets. Work-scoped selections reject foreign nested evidence; global diagnostics remain separate. Shape/type/AST/capability/fingerprint guards and local controlled-reader query/HTTP/proxy/DOM tests cover the diagnostic surface. The explicit Chromium smoke validates the built demo, navigation, keyboard diagnostics and disconnect/recovery. Schema v1/domain/HTTP contracts and production CLI are unchanged. Production scope/lifecycle acceptance is recorded under #140 below; parent #136 closure remains an owner decision. Draft #159 is independent.
+Adds WorkKey-addressable structured detail, derived/fact separation, four-state source diagnostics, source/role projection evidence, first-class anomalies and independently visible PR/task/result targets. Work-scoped selections reject foreign nested evidence; global diagnostics remain separate. Shape/type/AST/capability/fingerprint guards and local controlled-reader query/HTTP/proxy/DOM tests cover the diagnostic surface. The explicit Chromium smoke validates the built demo, navigation, keyboard diagnostics and disconnect/recovery. Schema v1/domain/HTTP contracts and production CLI are unchanged. Production scope/lifecycle acceptance is recorded under #140 below; parent #136 closure remains an owner decision. merged #159 is independent.
 
+### #162 bounded-convergence follow-up (2026-10-23)
+
+SPEC §4 adjacent / §7 / §8 / §10 / §12 / §14 / §17 / §18: [new evidence](evidence/execution-continuity/bounded-browser-acceptance-2026-10-23.md)
+uses complete production host + authenticated Bridge, real GitHub reads, isolated
+Decision records and the installed Driver. A lost native-created test window's
+`waiting_response` execution blocked 27.296 seconds after lease expiry, preserving
+claim/binding generation 1 with receipt 404 and zero result POSTs. This initial bounded observation is retained with its original scope; the later
+installed Driver 0.1.6 run below accepts W03 conservative convergence. It does not
+establish seamless restoration. #162 is closed through PR #163; #151/#145 await
+the documentation closeout and final maintainer acceptance. The [subsequent agent-tab quit comparison](evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md)
+completed: old PID absence/new PID verified; the same browser tab restored at home
+with a newly created `symphony_tab_id` and empty diagnostics. Host block arrived
+23.019 seconds after lease expiry, with local CLI-visible incident, receipt 404,
+zero result POSTs and 409 for replacement claim/old heartbeat. Both variants now
+show bounded blocking, while seamless resume remains unaccepted; the earlier
+native-window comparison differs in window topology, and old GM checkpoint
+persistence was not directly inspected.
+CLI host-tick regression covers expiry, no replacement claim and durable block/incident
+retention after host/Bridge reconstruction and store reopen. Decision's exported
+`HeartbeatTaskRequest` now includes progress from the domain execution contract,
+matching the already-supported service/HTTP payload; typed Bridge regression verifies
+real progress and unchanged repeated progress. No recovery-policy change was required.
+
+
+### #162 recovery visibility repair — Driver 0.1.6 (2026-10-23)
+
+SPEC §13 adjacent / §10 / §12 / §17 / §18: [repair evidence](evidence/execution-continuity/recovery-hud-fix-2026-10-23.md).
+A restored page without a local checkpoint now reads native continuity facts when
+`/next` has no claimable task, displaying Waiting for an outstanding owner or Blocked
+with native task/reason/instruction. This is read-only observation: no lost identity
+is reconstructed and no lease is adopted, reclaimed or unblocked by the page.
+The HUD displays the build version from the same source as userscript metadata.
+Regression uses a real HTTP Bridge/store seam for waiting/block
+facts, terminal clearing and no mutation, plus late-response-after-Stop fencing.
+Transparent browser-session resume remains outside the proven boundary.
+Operator-confirmed 0.1.6 and its HUD version were verified during actual generation
+and complete Edge quit/reopen (old PID 32189 absent, new PID 16774). The restored
+home page displayed Waiting then Blocked automatically; host block followed expiry
+by 22.913 seconds, with generation 1, receipt 404, zero Driver POSTs after quit,
+and stale heartbeat/replacement claim 409. Gate passed: 2312 tests, one opt-in skip.
+
+Current #162 disposition: **closed**, with PR #163 merged as
+`7e10c91d5693ef63f438490cbfd1886105b22225`. Bounded, operator-visible convergence
+is accepted; seamless browser-session resume, alternative browser/session policies,
+crash/SIGKILL and remaining live UI/provider combinations are deferred variants,
+not silently passed experiments. The measured 22.913 seconds is one run's result,
+not a universal wall-clock SLA. See the [closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md).
 
 ## Read-only operational status closeout (#140)
 
-The read-only operational status surface is complete for automated/local acceptance and awaits independent review. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136 is ready for owner acceptance after independent review, not automatically closed. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance history and remaining continuity live gaps are unchanged.
+The read-only operational status surface is complete for automated/local acceptance and awaits independent review. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136 is ready for owner acceptance after independent review, not automatically closed. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance is tracked independently by its continuity closeout.
