@@ -1,7 +1,7 @@
 /** Optional real Chromium acceptance against the current dist; no browser download. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { startOperationsHttpServer } from "@symphony/observability";
 import { demoService, type Scenario } from "./sources";
 import { startDemo, close } from "./server";
@@ -18,11 +18,28 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env["SYMPHONY_CHROMIUM"] ? { executablePath: process.env["SYMPHONY_CHROMIUM"] } : {}) });
   const page = await browser.newPage(); const network: string[] = []; const endpoints: string[] = [];
   page.on("request", (request: { url(): string; method(): string }) => { if (request.url().includes("/api/")) { network.push(request.method()); endpoints.push(new URL(request.url()).pathname); } });
-  await page.goto(demo.url); await page.getByText("系统健康:", { exact: false }).waitFor();
+  await page.goto(demo.url); await page.getByText("系统健康:", { exact: false }).first().waitFor();
   await page.getByText("演示数据 · 只读 · 非生产状态面", { exact: true }).waitFor();
+  const evidenceDir = process.env["SYMPHONY_BROWSER_EVIDENCE"] ?? ".symphony/evidence/dashboard-169";
+  await mkdir(evidenceDir, { recursive: true });
+  for (const name of ["Overview", "Work", "Executors", "System"]) {
+    const nav = page.getByRole("navigation");
+    await nav.getByRole("link", { name, exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((expected: string) => document.querySelector("#page-heading")?.textContent === expected, name);
+    assert.equal(await nav.locator('[aria-current="page"]').innerText(), name);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "page-heading");
+    await page.screenshot({ path: `${evidenceDir}/${name.toLowerCase()}.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const name of ["Overview", "Work", "Executors", "System"]) {
+    await page.getByRole("navigation").getByRole("link", { name, exact: true }).click();
+    await page.waitForFunction((expected: string) => document.querySelector("#page-heading")?.textContent === expected, name);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.screenshot({ path: `${evidenceDir}/narrow-${name.toLowerCase()}.png`, fullPage: true });
+  }
+  await page.getByRole("navigation").getByRole("link", { name: "Work", exact: true }).click();
   const link = page.locator("tbody a").first(); await link.click(); await page.getByText("已定位 github:", { exact: false }).waitFor();
-  const details = page.locator("summary").first(); await details.focus(); await page.keyboard.press("Enter");
-  assert.ok(await page.locator("details[open] pre").first().innerText().then((text: string) => text.includes("a".repeat(40))));
   const pane = page.locator("#detail");
   await pane.getByRole("heading", { name: "Why", exact: false }).waitFor();
   for (const letter of ["a", "b", "c"]) assert.ok((await pane.innerText()).includes(letter.repeat(40)));
@@ -42,16 +59,25 @@ try {
   assert.equal(await targetSummary.evaluate((node: HTMLElement) => document.activeElement === node), true);
   const ids = await page.locator("[id]").evaluateAll((nodes: HTMLElement[]) => nodes.map(node => node.id));
   assert.equal(new Set(ids).size, ids.length);
+  await page.getByRole("navigation").getByRole("link", { name: "Work", exact: true }).click();
   await page.locator("tbody a").nth(1).click();
   assert.ok((await pane.innerText()).includes("demo/beta#1") && !(await pane.innerText()).includes("demo/alpha#1"));
-  await page.goBack(); await pane.getByRole("heading", { name: "Work Detail · github:demo/alpha#1", exact: true }).waitFor();
-  await page.goForward(); await pane.getByRole("heading", { name: "Work Detail · github:demo/beta#1", exact: true }).waitFor();
+  await page.goBack(); await page.goBack(); await pane.getByRole("heading", { name: "Work Detail · github:demo/alpha#1", exact: true }).waitFor();
+  await page.goForward(); await page.goForward(); await pane.getByRole("heading", { name: "Work Detail · github:demo/beta#1", exact: true }).waitFor();
   const direct = `#${encodeURIComponent(JSON.stringify(["github", "demo/alpha#1"]))}`;
   for (const [name, expected] of [["review", "waiting_for_review"], ["target-mismatch", "review_target_head_mismatch"], ["partial", "demo_unavailable"], ["conflict", "conflicting_active_review_tasks"], ["terminal", "execution_on_terminal_work"]] as const) {
     scenario = name; await page.goto(`${demo.url}/${direct}`); await page.reload();
     await pane.getByText(expected, { exact: false }).first().waitFor();
     assert.ok(!(await pane.innerText()).includes("demo/beta#1"));
   }
+  await page.screenshot({ path: `${evidenceDir}/narrow-detail.png`, fullPage: true });
+  for (const hash of ["#%bad", `#${encodeURIComponent(JSON.stringify(["github", "outside/repo#1"]))}`]) {
+    await page.goto(`${demo.url}/${hash}`);
+    await page.getByText("工作标识无效或不在当前 scope", { exact: true }).waitFor();
+    assert.equal(await pane.innerText(), "");
+  }
+  await page.goto(`${demo.url}/${direct}`);
+  await pane.getByText("execution_on_terminal_work", { exact: true }).first().waitFor();
   const address = demo.upstream.address(); assert.ok(address && typeof address !== "string");
   await close(demo.upstream);
   await page.getByText("刷新失败，显示上次成功快照", { exact: false }).waitFor({ timeout: 25_000 });
@@ -60,5 +86,5 @@ try {
   assert.ok(network.length >= 3 && network.every(method => method === "GET") && endpoints.every(path => path === "/api/operations/snapshot"));
   const assets = await readdir(new URL("../dist/assets/", import.meta.url));
   const hashes = await Promise.all(assets.map(async file => ({ file, sha256: createHash("sha256").update(await readFile(new URL(`../dist/assets/${file}`, import.meta.url))).digest("hex") })));
-  console.log(JSON.stringify({ mode: "built", browser: await browser.version(), scenarios: ["load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "anomaly evidence focus/open retained across real 15s poll", "unique diagnostic IDs", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
+  console.log(JSON.stringify({ mode: "built", evidenceDir, browser: await browser.version(), scenarios: ["four destinations", "active navigation", "heading focus", "390px shell overflow", "rendered screenshots", "invalid/out-of-scope WorkKeys", "load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "anomaly evidence focus/open retained across real 15s poll", "unique diagnostic IDs", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
 } finally { await browser?.close(); if (recovered) await close(recovered); await demo.stop(); }

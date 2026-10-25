@@ -49,11 +49,11 @@ describe("Work Detail diagnostic surface", () => {
     const node = workDetail(work(), snapshot()); expect(node.textContent).toContain("未提供证据"); expect(node.textContent).toContain("当前快照未报告异常");
   });
   it("supports direct routes, switching, retained error snapshots, refresh focus, removal and invalid routes", () => {
-    const root = document.createElement("div"); document.body.append(root); const view = mount(root); const a = reviewWork(), b = work({ key: { provider: "github", key: "other/b#1" }, review: null, evidence: [crumb({ detail: "B ONLY" })] });
+    const root = document.createElement("div"); document.body.append(root); const view = mount(root); const a = work({ ...reviewWork(), evidence: [crumb()] }), b = work({ key: { provider: "github", key: "other/b#1" }, review: null, evidence: [crumb({ detail: "B ONLY" })] });
     window.history.replaceState(null, "", `#${token(a.key)}`);
     const data = snapshot({ work: [a, b] }); view.update({ snapshot: data }); expect(root.querySelector("#detail")?.textContent).toContain(sha);
-    const summary = root.querySelector("summary")!; summary.focus(); summary.parentElement!.setAttribute("open", "");
-    view.update({ snapshot: snapshot({ work: [a, b] }) }); expect(document.activeElement?.id).toBe(summary.id); expect(root.querySelector("details")?.open).toBe(true);
+    const summary = root.querySelector<HTMLElement>("#detail summary")!; summary.focus(); summary.parentElement!.setAttribute("open", "");
+    view.update({ snapshot: snapshot({ work: [a, b] }) }); expect(document.activeElement?.id).toBe(summary.id); expect(root.querySelector<HTMLDetailsElement>("#detail details")?.open).toBe(true);
     window.history.replaceState(null, "", `#${token(b.key)}`); window.dispatchEvent(new Event("hashchange")); expect(document.activeElement?.id).toBe("detail-heading"); expect(root.querySelector("#detail")?.textContent).toContain("B ONLY"); expect(root.querySelector("#detail")?.textContent).not.toContain(sha);
     view.update({ snapshot: data, error: "network", receivedAt: 1 }); expect(root.textContent).toContain("刷新失败"); expect(root.querySelector("#detail")?.textContent).toContain("B ONLY");
     const raw = root.querySelector<HTMLDetailsElement>("#detail details")!; raw.open = true;
