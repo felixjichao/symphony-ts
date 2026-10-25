@@ -367,6 +367,9 @@ export async function runDeliverySkill(options: RunDeliverySkillOptions): Promis
 async function runDeliverySkillLocked(
   options: RunDeliverySkillOptions,
 ): Promise<DeliverySkillResult> {
+  if (options.validationTimeoutMs !== undefined && (!Number.isSafeInteger(options.validationTimeoutMs) || options.validationTimeoutMs <= 0)) {
+    throw new Error("validationTimeoutMs must be a positive safe integer");
+  }
   const native = options.runner;
   const guard = () => { if (options.canCommit && !options.canCommit()) throw new Error("Delivery stopped before effect"); };
   const runner: DeliveryGitGhRunner = {
@@ -501,7 +504,7 @@ async function runDeliverySkillLocked(
       ...(same ? continuation : {}),
       optInLand: options.optInLand === true, readyLabel, maxRepairAttempts: maxRepairs, maxWaitSeconds,
       requiredChecks: options.requiredChecks, repairCommand: options.repairCommand,
-      validationCommand: options.validationCommand, phase, ...extra };
+      validationCommand: options.validationCommand, validationTimeoutMs: options.validationTimeoutMs, phase, ...extra };
     await persistCurrentState();
   };
   const waiting = (): DeliverySkillResult => ({ status: "waiting", prNumber, prUrl, headSha: currentHeadSha,
@@ -863,7 +866,7 @@ async function runDeliverySkillLocked(
   log("[delivery-skill] Phase 2: Running project validation...");
   if (options.validationCommand) {
     log(`[delivery-skill] Executing validation command: ${options.validationCommand}`);
-    const valRes = await runner.exec(options.validationCommand, options.cwd);
+    const valRes = await runner.exec(options.validationCommand, options.cwd, options.validationTimeoutMs);
     if (valRes.exitCode !== 0) {
       return haltDispatch(
         "manual_intervention_required",
@@ -1262,7 +1265,7 @@ async function runDeliverySkillLocked(
         // 修复完成后重新执行项目验证
         if (options.validationCommand) {
           log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
-          const valRes = await runner.exec(options.validationCommand, options.cwd);
+          const valRes = await runner.exec(options.validationCommand, options.cwd, options.validationTimeoutMs);
           if (valRes.exitCode !== 0) {
             return haltDispatch(
               "ci_failed_max_repairs",
@@ -1716,7 +1719,7 @@ async function runDeliverySkillLocked(
 
           if (options.validationCommand) {
             log(`[delivery-skill] Re-running validation command after review repair: ${options.validationCommand}`);
-            const valRes = await runner.exec(options.validationCommand, options.cwd);
+            const valRes = await runner.exec(options.validationCommand, options.cwd, options.validationTimeoutMs);
             if (valRes.exitCode !== 0) {
               return haltDispatch(
                 "review_changes_requested_max_repairs",

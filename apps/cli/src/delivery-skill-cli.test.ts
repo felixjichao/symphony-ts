@@ -157,6 +157,8 @@ describe("delivery-skill CLI", () => {
       "5",
       "--max-wait",
       "120",
+      "--validation-timeout",
+      "600",
       "--ready-label",
       "custom-ready",
       "--opt-in",
@@ -180,6 +182,7 @@ describe("delivery-skill CLI", () => {
     expect(parsed.repairCommand).toBe("npm run fix");
     expect(parsed.maxRepairs).toBe(5);
     expect(parsed.maxWait).toBe(120);
+    expect(parsed.validationTimeoutMs).toBe(600_000);
     expect(parsed.readyLabel).toBe("custom-ready");
     expect(parsed.optInLand).toBe(true);
     expect(parsed.resume).toBe(true);
@@ -187,6 +190,10 @@ describe("delivery-skill CLI", () => {
     expect(parsed.bridgeUrl).toBe("http://127.0.0.1:4040");
     expect(parsed.bridgeToken).toBe("secret-token");
     expect(parsed.sessionId).toBe("github:owner/repo#80");
+  });
+
+  it.each(["0", "-1", "1.5", "Infinity", "9007199254740991", undefined])("rejects invalid validation timeout %s", (value) => {
+    expect(() => parseDeliverySkillArgs(["run", "--validation-timeout", ...(value === undefined ? [] : [value])])).toThrow("positive integer");
   });
 
   it("rejects non-integer or negative numeric values", () => {

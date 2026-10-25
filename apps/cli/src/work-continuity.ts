@@ -342,6 +342,7 @@ export function createHostWorkContinuity(options: {
               requiredChecks: saved?.requiredChecks, readyLabel: saved?.readyLabel,
               maxRepairAttempts: saved?.maxRepairAttempts, maxWaitSeconds: saved?.maxWaitSeconds,
               repairCommand: saved?.repairCommand, validationCommand: saved?.validationCommand,
+              validationTimeoutMs: saved?.validationTimeoutMs,
               reviewGate: options.reviewGate, canCommit, plan, resumeStageOnly: true, yieldOnWait: true });
             return "applied";
           });

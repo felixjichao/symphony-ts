@@ -111,3 +111,8 @@ Attempt wrappers invoke existing reduction callbacks first and independently iso
 `src/bin.test.ts` 每轮 rebuild 真正 package bin，使用 loopback HTTPS + test CA (`NODE_EXTRA_CA_CERTS`)；请求、session、文件 marker 作 readiness barrier。两根 workspace 的 agent PID、cwd、transcript、prompt 与 after_run marker 均重读核验；stubborn agent 沿用 transport deadline。测试用 key/cert 仅服务本地 fixture，生产 HTTPS 校验不变。`test-fixtures/lifecycle-harness.ts` 仅补充退出码证据，不代替正式 bin 链路。
 
  `npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts` 覆盖 signals、startup/reload race、timer 清零/迟到回调、failure priority 和资源释放；`npm test -w @symphony/config -- src/workflow-reload.test.ts` 验证显式 monitoring 兼容性。每个 M6 Core 项的用例名见 [conformance](../../docs/conformance.md#m65-core-证据索引)。HTTP §13.7、provider-native tools §11.5、durable recovery 与 SSH 未在此实现；真实 GitHub / Codex Real Integration 由 opt-in 的 dogfood harness 验证（见 [github-delivery-dogfood](../../docs/github-delivery-dogfood.md)），不在默认 gate 内。
+
+Delivery validation accepts `--validation-timeout <seconds>` (positive integer).
+It applies independently to initial validation and validation after CI/review repairs;
+omission preserves the runner default of 60 seconds. This does not extend the durable
+CI/review deadline or authorize a new delivery budget (SPEC §17/§18, Delivery extension).

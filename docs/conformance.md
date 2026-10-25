@@ -527,3 +527,11 @@ Real Chromium smoke is an explicit built-product check, separate from DOM tests;
 | Diagnostic shape validation and compatible unknown fields/codes | `detail.test.ts`: malformed evidence/anomaly inputs; existing transport/polling retain previous success on invalid snapshots |
 
 Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced. #140 and parent #136 remain open.
+
+### Delivery validation timeout follow-up (SPEC §17/§18 extension)
+
+The delivery CLI forwards `--validation-timeout <seconds>` as milliseconds to
+initial validation and CI/review repair validation. Positive safe integer validation
+rejects missing/zero/negative/overflow values. Existing runner defaults and durable
+delivery deadlines remain unchanged. Evidence: CLI argument tests and delivery
+runner tests asserting the validation timeout across execution paths.

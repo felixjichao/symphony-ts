@@ -205,6 +205,7 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
 
   async exec(command: string, cwd: string, timeoutMs?: number, env?: Record<string, string>): Promise<DeliverySubprocessResult> {
     this.execCalls.push({ command, cwd, timeoutMs, env });
+    if (command === "npm test") expect(timeoutMs).toBe(600_000);
     const next = this.execResponses.shift();
     if (typeof next === "function") {
       return next(command);
@@ -312,6 +313,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     headBranch: "symphony/GH-80",
     baseBranch: "main",
     validationCommand: "npm test",
+    validationTimeoutMs: 600_000,
     readyLabel: "symphony-ready",
     maxRepairAttempts: 2,
     maxWaitSeconds: 15,

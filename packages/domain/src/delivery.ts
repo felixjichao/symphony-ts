@@ -471,6 +471,8 @@ export interface DeliveryContinuation {
   readonly requiredChecks?: readonly string[] | undefined;
   readonly repairCommand?: string | undefined;
   readonly validationCommand?: string | undefined;
+  /** Per validation invocation timeout in milliseconds; omitted uses runner default. */
+  readonly validationTimeoutMs?: number | undefined;
   readonly phase: "ci" | "review_intent" | "review_wait" | "result_observed" | "repair_pending" | "ready";
   readonly reviewTaskId?: string | undefined;
   readonly reviewRevision?: number | undefined;
@@ -573,6 +575,7 @@ export interface DeliverySkillConfig {
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly validationCommand?: string | undefined;
+  readonly validationTimeoutMs?: number | undefined;
   readonly repairCommand?: string | undefined;
   readonly maxRepairAttempts?: number | undefined;
   readonly maxWaitSeconds?: number | undefined;

@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Delivery validation timeout across recovery](accepted/architecture/2026-10-25-delivery-validation-timeout.md) — #169 self-host recovery; explicit validation timeout without budget extension.
+
 - [Native durable handoffs and startup recovery](proposed/architecture/2026-10-22-durable-recovery-invocations.md) — NEST-133: native stage/landing intents, retry/launch reservations, crash-lock safety and restart evidence.
 
 
