@@ -55,6 +55,18 @@ describe("Prompt formatting and engineering", () => {
     expect(header).toContain("current HEAD: 1111111111111111111111111111111111111111");
   });
 
+  it("keeps connector planning and review verdicts separate from evidence failure", () => {
+    const context: DecisionContextBundle = { strategy: "connector", workItem: { provider: "github", key: "owner/repo#1" },
+      repository: "owner/repo", prNumber: 42, headSha: reviewTask.target.headSha };
+    const plan = formatPlanPrompt(planTask, context);
+    expect(plan).not.toContain("changes_requested");
+    expect(plan).not.toContain("approve verdict");
+    expect(plan).toContain("evidence_unavailable");
+    const review = formatReviewPrompt(reviewTask, context);
+    expect(review).toContain("use the evidence_unavailable executor failure envelope");
+    expect(review).not.toContain('choose "changes_requested" with an actionable evidence-recovery blocker');
+  });
+
   it("formats plan prompt with materialized context", () => {
     const context: DecisionContextBundle = {
       strategy: "materialized",
@@ -76,10 +88,15 @@ describe("Prompt formatting and engineering", () => {
     };
 
     const prompt = formatPlanPrompt(planTask, context);
+    expect(prompt).not.toContain("changes_requested");
     expect(prompt).toContain("Issue: owner/repo #1 - Support ChatGPT Web");
     expect(prompt).toContain("Detailed description of requirements");
     expect(prompt).toContain("Follow TypeScript strict mode");
     expect(prompt).toContain('"kind": "plan"');
+    expect(prompt).not.toContain("changes_requested");
+    expect(prompt).not.toContain("approve verdict");
+    expect(prompt).toContain("Reserve needs_human for unclear product intent");
+    expect(prompt).toContain("For missing product requirements during planning, use needs_clarification");
     expect(prompt).toContain("symphony-result");
   });
 
@@ -114,7 +131,7 @@ describe("Prompt formatting and engineering", () => {
       diff: {
         patch: "+ console.log('hello')",
         files: ["src/index.ts"],
-        truncated: false,
+        truncated: true,
       },
       ci: {
         state: "success",
@@ -139,6 +156,11 @@ describe("Prompt formatting and engineering", () => {
     expect(prompt).toContain("CI State: success");
     expect(prompt).toContain("- [blocker] src/driver.ts:42: Missing error handler");
     expect(prompt).toContain('"kind": "review"');
+    expect(prompt).toContain("no additional human review is required");
+    expect(prompt).toContain("if unavailable, emit the evidence_unavailable executor failure envelope");
+    expect(prompt).not.toContain("Inspect carefully or request clarification");
+    expect(prompt).toContain("Evidence/access failures use the executor failure envelope, never changes_requested");
+    expect(prompt).toContain("Do not merge directly from ChatGPT Web");
   });
 
   it("formats handoff prompt carrying forward review context for rebind/rollover", () => {

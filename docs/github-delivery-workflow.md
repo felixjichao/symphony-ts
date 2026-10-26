@@ -105,13 +105,25 @@ open issue + symphony-ready
        └─ green + mergeable
   → Review Gate (SHA-bound review task)
        ├─ changes_requested → run --repair-cmd with findings → re-validate → push again (bounded)
-       ├─ needs_human → operator handoff
+       ├─ needs_human → product-intent clarification
        └─ approve (exact HEAD SHA verified)
   → squash merge (opt-in only)
   → Fixes #N closes the issue
   → Symphony tracker refresh sees closed
   → terminal reconciliation + workspace cleanup
 ```
+
+ChatGPT Web performs the independent review and returns a verdict bound to the
+exact PR HEAD. `approve` allows the host to proceed to merge once the existing
+opt-in, ownership, CI and merge-safety checks pass, without an additional human
+review. Technical code findings produce actionable `changes_requested` findings for repair/re-review.
+Missing evidence/access failures produce an executor `evidence_unavailable` receipt and
+stop delivery as an operational block, without spending code-repair budget or requiring
+a code mutation. After evidence/access is restored, recovery starts a new review revision
+for the same HEAD; no automatic evidence retry is introduced by this policy. `needs_human` is reserved for
+unclear product intent and must state the product decision needed. Technical
+access failures and exhausted recovery budgets remain operational blocks; they
+do not require a human product review. ChatGPT Web does not execute the merge.
 
 The PR body uses `Fixes #N`, so GitHub closes the issue automatically on merge.
 Symphony then sees the terminal state through its normal tracker refresh and

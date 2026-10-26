@@ -41,7 +41,7 @@ import {
   formatReviewPrompt,
   formatHandoffPrompt,
 } from "./prompts";
-import { extractResultFromAssistantTurn } from "./extractor";
+import { extractResultFromAssistantTurn, extractResponseFromAssistantTurn } from "./extractor";
 import type { DriverStep } from "./checkpoint";
 
 // Tool-use commentary can temporarily be stable with no stop button after reload.
@@ -109,7 +109,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     if (!candidate) return null;
     if (turns.length > baselineCount && !observation.baseline.has(candidate)) return candidate;
     try {
-      const result = canonicalJsonStringify(extractResultFromAssistantTurn(candidate, observation.task));
+      const result = canonicalJsonStringify(extractResponseFromAssistantTurn(candidate, observation.task));
       if (!observation.baselineResults.has(result)) return candidate;
       return null;
     } catch { /* A streaming response need not contain its final result yet. */ }
@@ -773,7 +773,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
 
     const baselineTexts = new Set(initialTurns.map(turn => turn.textContent ?? ""));
     const baselineResults = new Set(initialTurns.flatMap(turn => {
-      try { return [canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))]; } catch { return []; }
+      try { return [canonicalJsonStringify(extractResponseFromAssistantTurn(turn, task))]; } catch { return []; }
     }));
 
     // Report prompt submitting step to listener (e.g. driver checkpoint)
@@ -818,7 +818,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       isCompletionCandidate: isResultTurn,
       isNewResponse: () => this.observeTaskResponse(task.id, baselineCount) !== null,
       matchesExpectedResult: turn => {
-        try { return !baselineResults.has(canonicalJsonStringify(extractResultFromAssistantTurn(turn, task))); } catch { return false; }
+        try { return !baselineResults.has(canonicalJsonStringify(extractResponseFromAssistantTurn(turn, task))); } catch { return false; }
       },
       onState: state => this.onResponseWaitState?.({ ...state, taskId: task.id, kind: task.kind, revision: task.revision }),
     });
@@ -860,7 +860,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
       isCompletionCandidate: isResultTurn,
       isNewResponse: () => this.observeTaskResponse(task.id, options.baselineCount) !== null,
       matchesExpectedResult: turn => {
-        try { extractResultFromAssistantTurn(turn, task); return true; } catch { return false; }
+        try { extractResponseFromAssistantTurn(turn, task); return true; } catch { return false; }
       },
       onState: state => this.onResponseWaitState?.({ ...state, taskId: task.id, kind: task.kind, revision: task.revision }),
     });
@@ -879,7 +879,7 @@ export class ChatGptWebAdapter implements DecisionExecutorAdapter {
     if (getAllAssistantTurns(doc).length > count) return true;
     const candidate = getAllAssistantTurns(doc).at(-1);
     if (task && candidate) {
-      try { extractResultFromAssistantTurn(candidate, task); return true; } catch { /* Exact-task results only. */ }
+      try { extractResponseFromAssistantTurn(candidate, task); return true; } catch { /* Exact-task results only. */ }
     }
     return false;
   }

@@ -27,6 +27,13 @@ import {
 import { githubWorkKey } from "./operations-facts";
 
 describe("Execution Continuity Contracts", () => {
+  it("classifies evidence failures explicitly without treating generic execution errors as safe retries", () => {
+    expect(mapDecisionAdapterFailure({ code: "evidence_unavailable", message: "Missing diff" })).toMatchObject({
+      mapped: true, diagnostic: { category: "recoverable", reason: "evidence_unavailable", suggestedAction: "retry" },
+    });
+    expect(mapDecisionAdapterFailure({ code: "execution_failed", message: "Unknown" }).mapped).toBe(false);
+  });
+
   const dummyWorkKey = githubWorkKey("felixjichao", "symphony-ts", 146);
   const now = 1770000000000;
 

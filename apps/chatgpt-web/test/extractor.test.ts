@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { extractResultFromAssistantTurn } from "../src/extractor";
 import { MockElement } from "./mock-dom";
-import type { DecisionPlanTask } from "@symphony/domain/decision";
+import type { DecisionPlanTask, DecisionReviewTask } from "@symphony/domain/decision";
 import { DecisionAdapterError } from "@symphony/domain/decision";
 
 describe("extractResultFromAssistantTurn strict fail-closed contract", () => {
@@ -47,6 +47,38 @@ describe("extractResultFromAssistantTurn strict fail-closed contract", () => {
     }
     return turn;
   }
+
+  it("routes a task-bound evidence failure to a retryable executor error, never a result", () => {
+    const envelope = { schemaVersion: 1, taskId: planTask.id, sessionId: planTask.sessionId,
+      revision: planTask.revision, kind: "plan", error: "evidence_unavailable", message: "Connector denied access" };
+    const turn = createMockTurnWithBlocks([{ language: "symphony-result", content: JSON.stringify(envelope) }]);
+    expect(() => extractResultFromAssistantTurn(turn as unknown as HTMLElement, planTask)).toThrow(
+      expect.objectContaining({ code: "evidence_unavailable", retryable: true, suggestedAction: "retry" }));
+    for (const change of [{ taskId: "other" }, { sessionId: "other" }, { revision: 2 },
+      { kind: "review" }, { verdict: "approve" }, { message: "" }, { error: "other" }]) {
+      const invalid = createMockTurnWithBlocks([{ language: "symphony-result", content: JSON.stringify({ ...envelope, ...change }) }]);
+      expect(() => extractResultFromAssistantTurn(invalid as unknown as HTMLElement, planTask)).toThrow(
+        expect.objectContaining({ code: "malformed_output" }));
+    }
+    const malformedLast = createMockTurnWithBlocks([
+      { language: "symphony-result", content: JSON.stringify(envelope) },
+      { language: "symphony-result", content: "{ broken" },
+    ]);
+    expect(() => extractResultFromAssistantTurn(malformedLast as unknown as HTMLElement, planTask)).toThrow(
+      expect.objectContaining({ code: "malformed_output" }));
+  });
+
+  it("rejects evidence failures for a different review target HEAD or unknown target fields", () => {
+    const task: DecisionReviewTask = { ...planTask, kind: "review", target: {
+      repository: "owner/repo", prNumber: 42, headSha: "a".repeat(40) } };
+    for (const target of [{ ...task.target, headSha: "b".repeat(40) }, { ...task.target, extra: true }]) {
+      const turn = createMockTurnWithBlocks([{ language: "symphony-result", content: JSON.stringify({
+        schemaVersion: 1, taskId: task.id, sessionId: task.sessionId, revision: task.revision,
+        kind: "review", target, error: "evidence_unavailable", message: "Missing diff" }) }]);
+      expect(() => extractResultFromAssistantTurn(turn as unknown as HTMLElement, task)).toThrow(
+        expect.objectContaining({ code: "malformed_output" }));
+    }
+  });
 
   it("extracts result from valid symphony-result code block", () => {
     const turn = createMockTurnWithBlocks([

@@ -69,7 +69,12 @@ acceptance criteria, risks and clarifications; verdict is `ready`,
 `needs_clarification` or `needs_human`. Review includes the exact target and typed
 blocker/suggestion findings (message and nullable location); verdict is `approve`,
 `changes_requested` or `needs_human`. All verdicts are successful task completion;
-execution failure is the separate `failed` lifecycle state.
+execution failure is the separate `failed` lifecycle state. ChatGPT Web reserves
+`needs_human` for unclear product intent; technical review defects use actionable `changes_requested` findings. Missing evidence
+or inaccessible facts use the Web executor failure envelope (`error: evidence_unavailable`),
+which becomes an `evidence_unavailable` failure receipt rather than a review verdict. An exact-HEAD `approve`
+permits host landing under the existing delivery safety policy without another
+human review.
 
 `parseDecisionResult` validates the envelope itself; `validateDecisionResultForTask`
 additionally checks kind, IDs, revision, exact target and creation ordering.
@@ -512,7 +517,8 @@ Extraction rules:
 - `revision_mismatch`: Result revision does not match task revision.
 - `target_mismatch`: Review result target does not match task review target.
 - `binding_broken`: Executor session expired, disconnected, or unrecoverable.
-- `execution_failed`: Unhandled runtime execution exception.
+- `execution_failed`: Generic or unhandled executor runtime failure.
+- `evidence_unavailable`: Required repository facts, verification evidence, or access could not be recovered.
 - `human_required`: Interactive barrier encountered (CAPTCHA, 2FA, login, rate limit).
 - `unsupported_strategy`: Requested context strategy not supported by adapter.
 - `unsupported_task_kind`: Task kind not supported by adapter.
@@ -538,3 +544,20 @@ Optional task-scoped `executions` metadata in the v1 store carries phase, respon
 After inspecting the conversation, receipt and blocking cause, an authenticated operator can explicitly authorize recovery with `POST /v1/continuity/unblock` and the current `{ taskId, revision, claimGeneration, bindingGeneration, leaseExpiresAtMs, blockedAtMs }`. `blockedAtMs` pins the reviewed block fact so a replay cannot clear a newer one. A leased execution must quote its exact `leaseExpiresAtMs`; a pending execution that owns no lease must quote `null` instead, because recovery budgets can be exhausted by rebind, which releases the claim before it blocks. Both shapes are fenced by task revision, claim generation and binding generation; stale observations are refused. This releases and fences the old attempt and resets its budget/grace; it never authorizes replay under old credentials. Polling does not invoke this operator action. Exact-HEAD result validation, result conflicts and ambiguous-submit receipt matching remain unchanged.
 
 The production Bridge CLI injects a fresh read-only GitHub PR observation before browser navigation/Send and rebind: the PR must still be open at the exact task HEAD. Missing/unreadable facts deny mutation. Native task status, lease and binding are revalidated in the transaction after this I/O. Embedders constructing `DecisionService` directly supply the equivalent `authorizeExecution` port for external target authority; the store does not import tracker or own GitHub policy.
+
+### ChatGPT Web evidence failure envelope
+
+When critical facts cannot be recovered, the Web executor accepts a final
+`symphony-result` code block
+containing only `schemaVersion: 1`, exact `taskId`, `sessionId`, `revision`, `kind`,
+`error: "evidence_unavailable"`, and a nonempty `message`. Review failures also require
+the exact `target` (repository, PR number, HEAD SHA). Unknown fields and mismatched
+identity/target fail closed; the final block alone is authoritative.
+
+This is an adapter-local response, not a new domain verdict or Bridge result schema.
+The adapter raises a retryable `evidence_unavailable`; the driver submits the existing
+lease-fenced failure receipt. Delivery's failed-task path pauses and preserves
+repair budget. Recovery requires restoring evidence and a fresh review revision;
+`retryable` does not promise automatic review retries. Existing handoff reason
+`manual_intervention_required` describes an operational stop, not `needs_human`
+or a request for a human product review.
