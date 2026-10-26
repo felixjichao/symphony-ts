@@ -147,3 +147,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [Operator Console shell](accepted/architecture/2026-10-25-operator-console-shell.md) — #169 / §13 adjacent: four destinations, legacy WorkKey hashes, persistent chrome and accessible focus.
 
 - [Dashboard presentation primitives](accepted/architecture/2026-10-26-dashboard-presentation-primitives.md) — #170 / §13 adjacent: DOM-native presentation API, tokens and closed semantic boundary.
+
+- [Attention-first Overview](accepted/architecture/2026-10-26-attention-first-overview.md) — #171 / §13 adjacent: supplied-state grouping, observational posture and compact anomaly visibility.

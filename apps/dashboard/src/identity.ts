@@ -59,3 +59,15 @@ export function diagnosticIds(identities: readonly string[], namespace: string):
     return `diagnostic-${encodeURIComponent(JSON.stringify([namespace, identity, occurrence]))}`;
   });
 }
+
+/** Selection only: labels are presentation buckets, never new domain conclusions. */
+export function overviewGroups(snapshot: import("@symphony/operations").OperationalSnapshot): readonly (readonly [string, readonly WorkProjection[]])[] {
+  const groups: WorkProjection[][] = [[], [], [], []];
+  for (const work of [...snapshot.work].sort((a, b) => token(a.key).localeCompare(token(b.key)))) {
+    const bucket = work.attention === "needs_human" || work.attention === "failed" ? 0
+      : work.attention === "degraded" || scopedAnomalies(snapshot.anomalies, work.key).length > 0 ? 1
+      : work.attention === "waiting" || work.waiting !== null ? 2 : 3;
+    groups[bucket]!.push(work);
+  }
+  return ["需要人工 / 失败", "降级 / 异常关联", "正在等待", "其他当前工作"].map((label, index) => [label, groups[index]!] as const);
+}

@@ -628,3 +628,15 @@ Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger
 | No domain derivation or extra browser capabilities | Fingerprint registration; primitive lower-level-fact negative cases; existing type, AST and production-bundle tests | Guard restrictions retained; no new source dependencies |
 
 Sandbox executes Dashboard tests/build and root typecheck. The operator host owns full gate, CI, exact-HEAD review and no-land delivery after the coding session. See [primitive evidence ledger](evidence/dashboard-v2-primitives/README.md) for browser limits and reproduction.
+
+## §13 adjacent: Attention-first Overview (#171)
+
+| Capability | Acceptance evidence |
+|---|---|
+| Supplied-state priority and stable WorkKey links | `overview.test.ts`: needs-human/failed, degraded/association, waiting, remaining work; immutable inconsistent snapshot |
+| Waiting/current activity and observation trust | Supplied active aggregate, CI/review/executor waiting reasons, four source statuses, empty source posture, partial useful snapshot and supplied health |
+| Global/work anomaly visibility, executor ownership | Compact supplied severity/message summaries, explicit WorkKey association; no projector |
+| Refresh failure remains observational | Last snapshot DOM retained; generated time and last successful receipt/error displayed independently |
+| Keyboard / narrow viewport | Existing shell focus tests; optional Overview renderer checks outline and overflow at 1280/390px; browser sandbox limitation in evidence ledger |
+
+Sandbox: Dashboard 11 files / 173 tests passed; root typecheck and Dashboard build passed. [Agent Note](../notes/accepted/architecture/2026-10-26-attention-first-overview.md) and [controlled evidence / reproduction](evidence/dashboard-v2-overview/README.md). Host owns full gate, CI, exact-HEAD review and self-hosted Delivery receipts after this coding session.

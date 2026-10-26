@@ -7,6 +7,7 @@ import { el } from "./dom";
 import { attentionBadge, denseTable, surface, workIdentity, shaIdentity, freshnessIndicator, presentationState } from "./primitives";
 import { workDetail } from "./detail";
 import { anomalyCards } from "./anomaly";
+import { overview as renderOverview } from "./overview";
 function reviewDetails(work: WorkProjection): HTMLElement {
   const details = el("details");
   details.id = `review-${token(work.key)}`;
@@ -103,11 +104,7 @@ export function mount(root: HTMLElement, mode: string = "demo"): { update: (stat
       const focused = document.activeElement?.id;
       const open = new Set([...main.querySelectorAll("details[open]")].map(d => d.id));
       current = state.snapshot;
-      const overview = el("section"); overview.id = "overview";
-      overview.append(el("h2", "Overview"), el("p", `系统健康: ${current.health} · 快照生成 ${timestamp(current.generatedAt)}`));
-      const counts = el("dl");
-      for (const [label, value] of [["活动工作", current.summary.active], ["等待", current.summary.waiting], ["需要人工", current.summary.needsHuman], ["重试等待", current.summary.retrying], ["降级工作", current.summary.degradedWork], ["异常条目", current.summary.anomalyCount]] as const) counts.append(el("dt", label), el("dd", value === undefined ? "该版本未提供" : String(value)));
-      overview.append(counts);
+      const overview = renderOverview(current);
       const sources = el("section"); sources.append(el("h2", "来源新鲜度"), el("p", `系统健康: ${current.health} · 快照生成 ${timestamp(current.generatedAt)}`));
       for (const source of current.sources) sources.append(el("p", `${source.source} / ${source.instance} ${source.workKey ? `${source.workKey.provider}:${source.workKey.key}` : ""} · ${freshness(source.freshness)}`));
       const executors = el("section"); executors.append(el("h2", "Executor inventory"));
@@ -123,7 +120,6 @@ export function mount(root: HTMLElement, mode: string = "demo"): { update: (stat
       const cards = anomalyCards(current.anomalies, null);
       overview.dataset["page"] = "Overview"; table.dataset["page"] = "Work";
       sources.dataset["page"] = "System"; executors.dataset["page"] = "Executors"; cards.dataset["page"] = "System";
-      const overviewWork = el("a", "查看 Work"); overviewWork.href = "#work"; overview.append(overviewWork);
       content.replaceChildren(overview, table, sources, executors, cards);
       for (const details of main.querySelectorAll("details")) if (open.has(details.id)) details.open = true;
       if (focused) document.getElementById(focused)?.focus();

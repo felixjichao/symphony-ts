@@ -44,7 +44,7 @@ export function browserErrors(name: string, source: string): string[] {
   while (previousSize !== tainted.size) {
     previousSize = tainted.size;
     const propagate = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.initializer && (isSensitive(node.name) || !(ts.isCallExpression(node.initializer) && ["el", "workDetail", "evidenceList", "anomalyCards"].includes(node.initializer.expression.getText(file))) && isSensitive(node.initializer))) markBinding(node.name);
+      if (ts.isVariableDeclaration(node) && node.initializer && (isSensitive(node.name) || !(ts.isCallExpression(node.initializer) && ["el", "workDetail", "evidenceList", "anomalyCards", "anomalySummary"].includes(node.initializer.expression.getText(file))) && isSensitive(node.initializer))) markBinding(node.name);
       if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(node.left) && isSensitive(node.right)) tainted.add(node.left.text);
       ts.forEachChild(node, propagate);
     };
@@ -58,7 +58,7 @@ export function browserErrors(name: string, source: string): string[] {
       if (specifier && ts.isStringLiteral(specifier)) {
         const value = specifier.text;
         if (!value.startsWith("./") && !(value === "@symphony/operations" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly)) errors.push("browser import boundary");
-        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|primitives|style\.css)$/.test(value)) errors.push("unapproved local module");
+        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|primitives|overview|style\.css)$/.test(value)) errors.push("unapproved local module");
         if (value.includes("examples") || value.includes("tests")) errors.push("Node/test graph in browser");
       }
     }
@@ -79,14 +79,14 @@ export function browserErrors(name: string, source: string): string[] {
     }
     if (!["validate.ts", "identity.ts", "presentation.ts"].includes(name)) {
       // These shape/identity/format helpers are separately fingerprinted, never arbitrary extensions.
-      const registered: Record<string, readonly string[]> = { "primitives.ts": ["attentionBadge", "freshnessIndicator", "presentationState", "workIdentity", "shaIdentity", "surface", "denseTable", "denseList", "searchControl", "filterControl"], "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards"], "dom.ts": ["el"] };
+      const registered: Record<string, readonly string[]> = { "primitives.ts": ["attentionBadge", "freshnessIndicator", "presentationState", "workIdentity", "shaIdentity", "surface", "denseTable", "denseList", "searchControl", "filterControl"], "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards", "anomalySummary"], "overview.ts": ["overview"], "dom.ts": ["el"] };
       if (registered[name] && ts.isFunctionDeclaration(node) && !registered[name]?.includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
       if (name === "view.ts" && ts.isFunctionDeclaration(node) && !["el", "reviewDetails", "workTable", "mount"].includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
       if (name === "view.ts" && ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && node.name.getText(file) !== "locate" && node.name.getText(file) !== "navigate") errors.push("unregistered presentation callback");
       const condition = ts.isConditionalExpression(node) ? node.condition : ts.isIfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ? node.expression : ts.isForStatement(node) ? node.condition : ts.isSwitchStatement(node) ? node.expression : undefined;
       if (condition && isSensitive(condition) && !isNullOrKindTest(condition)) errors.push(`source-dependent control flow: ${condition.getText(file)}`);
       if (ts.isPrefixUnaryExpression(node) && isSensitive(node.operand) && !isNullOrKindTest(node.operand)) errors.push("source truthiness/computation");
-      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "scopedSources", "globalSources", "scopedExecutors", "freshness", "timestamp", "attentionBadge", "shaIdentity", "freshnessIndicator", "Object.entries", "String", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
+      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "anomalySummary", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "overviewGroups", "renderOverview", "context.append", "globalSources", "scopedSources", "scopedExecutors", "freshness", "timestamp", "attentionBadge", "shaIdentity", "freshnessIndicator", "Object.entries", "String", "page.append", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
       if (ts.isReturnStatement(node) && node.expression && isSensitive(node.expression)) errors.push(`returning source-derived value: ${node.expression.getText(file)}`);
       if (ts.isPropertyAssignment(node) && semantics.has(node.name.getText(file))) errors.push("constructing derived field");
       if (ts.isBinaryExpression(node)) {
@@ -101,7 +101,7 @@ export function browserErrors(name: string, source: string): string[] {
       if ((ts.isPropertyAccessExpression(node) && ["anomalies", "evidence"].includes(node.name.text)) || (ts.isElementAccessExpression(node) && ["anomalies", "evidence"].includes(referenceName(node.argumentExpression) ?? ""))) {
         // Only direct reads at reviewed renderer selection calls are allowed.
         const parent = node.parent;
-        const permitted = ts.isCallExpression(parent) && ["evidenceList", "anomalyCards"].includes(parent.expression.getText(file));
+        const permitted = ts.isCallExpression(parent) && ["evidenceList", "anomalyCards", "anomalySummary"].includes(parent.expression.getText(file));
         const optionalEvidence = ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && ts.isArrayLiteralExpression(parent.right) && parent.right.elements.length === 0 && ts.isCallExpression(parent.parent) && parent.parent.expression.getText(file) === "evidenceList";
         if (!permitted && !optionalEvidence) errors.push("anomaly/evidence consumption");
       }

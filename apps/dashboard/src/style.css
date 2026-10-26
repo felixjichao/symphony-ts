@@ -64,3 +64,11 @@ input, select { color: var(--console-text); background: var(--console-bg); borde
 a:hover, summary:hover { text-decoration: underline; }
 :focus-visible { outline: 2px solid var(--console-focus); outline-offset: 4px; }
 [aria-selected="true"] { border-inline-start: 3px solid var(--console-focus); background: #243a40; }
+
+/* #171: intervention lists lead; counts remain supporting context. */
+#overview .dense-list { list-style: none; padding: 0; margin: 0; }
+#overview .dense-list > li { border-top: 1px solid var(--console-border); padding: var(--space-3) 0; }
+#overview article > a { font-weight: 700; display: inline-block; padding: 4px 0; }
+#overview article section { margin-top: var(--space-2); }
+#overview .overview-counts dd { font-size: var(--text-body); margin-right: var(--space-3); }
+#overview .badge { max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
