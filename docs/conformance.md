@@ -611,3 +611,8 @@ Independent review approved PR #165, which merged to `main` as `8f7675ed09f59919
 Sandbox validation uses Dashboard tests and root typecheck. Full gate, CI, independent exact-HEAD review and retained self-hosting delivery evidence are supplied by the operator host after the coding session; they are not claimed by this implementation entry.
 
 Sandbox result (2026-10-25): Dashboard 9 test files / 138 tests passed; root typecheck (including built Dashboard), scoped ESLint and docs:check passed. Chromium smoke was attempted with an already-installed browser/module, but Chromium exited SIGABRT during launch in the coding sandbox; no rendered evidence or successful browser acceptance is claimed. Host must run the documented smoke and retain screenshots/JSON alongside CI/review evidence.
+
+Host browser follow-up (2026-10-26, #169 / #178): all 23 built-product smoke
+scenarios passed with installed Edge 156.0.4314.42. Two asynchronous harness reads
+now wait for their existing focus/detail assertions. Product semantics are unchanged.
+Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger](evidence/dashboard-v2-shell/README.md).

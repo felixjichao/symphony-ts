@@ -1,0 +1,51 @@
+{
+  "mode": "built",
+  "evidenceDir": "docs/evidence/dashboard-v2-shell",
+  "browser": "156.0.4314.42",
+  "scenarios": [
+    "four destinations",
+    "active navigation",
+    "heading focus",
+    "390px shell overflow",
+    "rendered screenshots",
+    "invalid/out-of-scope WorkKeys",
+    "load",
+    "WorkKey direct route",
+    "back/forward",
+    "three full SHAs",
+    "keyboard raw evidence",
+    "anomaly evidence focus/open retained across real 15s poll",
+    "unique diagnostic IDs",
+    "cross-work isolation",
+    "review",
+    "target-mismatch",
+    "result-mismatch",
+    "partial",
+    "conflict",
+    "terminal",
+    "transport disconnect",
+    "transport recover",
+    "GET only"
+  ],
+  "network": [
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET"
+  ],
+  "assets": [
+    {
+      "file": "index-D5kJGQbu.css",
+      "sha256": "4e32dff194b5be4b721cc0b231e6e974e6e36a194a28bd4320624d9bba3d1809"
+    },
+    {
+      "file": "index-beKLas5w.js",
+      "sha256": "c3ed16785973dff4dfa9abf913e72131d4ebabe8d409e372895a672e5dcfa468"
+    }
+  ]
+}

@@ -28,6 +28,7 @@ try {
     await page.keyboard.press("Enter");
     await page.waitForFunction((expected: string) => document.querySelector("#page-heading")?.textContent === expected, name);
     assert.equal(await nav.locator('[aria-current="page"]').innerText(), name);
+    await page.waitForFunction(() => document.activeElement?.id === "page-heading");
     assert.equal(await page.evaluate(() => document.activeElement?.id), "page-heading");
     await page.screenshot({ path: `${evidenceDir}/${name.toLowerCase()}.png`, fullPage: true });
   }
@@ -61,6 +62,7 @@ try {
   assert.equal(new Set(ids).size, ids.length);
   await page.getByRole("navigation").getByRole("link", { name: "Work", exact: true }).click();
   await page.locator("tbody a").nth(1).click();
+  await pane.getByRole("heading", { name: "Work Detail · github:demo/beta#1", exact: true }).waitFor();
   assert.ok((await pane.innerText()).includes("demo/beta#1") && !(await pane.innerText()).includes("demo/alpha#1"));
   await page.goBack(); await page.goBack(); await pane.getByRole("heading", { name: "Work Detail · github:demo/alpha#1", exact: true }).waitFor();
   await page.goForward(); await page.goForward(); await pane.getByRole("heading", { name: "Work Detail · github:demo/beta#1", exact: true }).waitFor();
