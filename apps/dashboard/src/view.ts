@@ -21,7 +21,7 @@ function reviewDetails(work: WorkProjection): HTMLElement {
     task: review?.task == null ? null : { taskId: review.task.taskId, revision: review.task.revision, target: review.task.kind === "review" ? review.task.target : null },
     result: review?.result == null ? null : { taskId: review.result.taskId, revision: review.result.revision, target: review.result.outcome.kind === "review" ? review.result.outcome.target : null },
   };
-  details.append(shaIdentity("Review task target HEAD", review?.task?.kind === "review" ? review.task.target.headSha : null), shaIdentity("Review result / approval target HEAD", review?.result?.outcome.kind === "review" ? review.result.outcome.target.headSha : null), shaIdentity("PR HEAD", work.pullRequest?.headSha ?? null), shaIdentity("Review current HEAD", review?.currentHeadSha ?? null), el("pre", JSON.stringify(identifiers, null, 2)));
+  details.append(shaIdentity("Review task target HEAD", review?.taskTarget?.headSha ?? null), shaIdentity("Review result / approval target HEAD", review?.result?.outcome.kind === "review" ? review.result.outcome.target.headSha : null), shaIdentity("PR HEAD", work.pullRequest?.headSha ?? null), shaIdentity("Review current HEAD", review?.currentHeadSha ?? null), el("pre", JSON.stringify(identifiers, null, 2)));
   return details;
 }
 function workTable(snapshot: OperationalSnapshot): HTMLElement {

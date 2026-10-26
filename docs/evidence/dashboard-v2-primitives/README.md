@@ -8,8 +8,23 @@ Regenerate from the repository root:
 npx tsx apps/dashboard/examples/primitives.ts
 ```
 
-Sandbox result (2026-10-26): Dashboard 10 test files / 158 tests passed, including primitive rendering, focus, SHA accessibility, negative derivation and production-bundle/capability checks. Root typecheck builds the production bundle. Scoped ESLint and docs:check are also run before handoff.
+Repair validation (2026-10-26, SPEC §13 adjacent): Dashboard 10 test files / 161 tests passed, including supplied taskTarget with a missing task, a different nested target and a missing taskTarget. Root typecheck (including production build), scoped ESLint and docs:check passed. No guard or acceptance assertion was relaxed.
 
-Real Chromium smoke was attempted using an existing Playwright module and Chromium binary. Launch failed before page rendering: `bootstrap_check_in ... Permission denied (1100)` in `mach_port_rendezvous_mac.cc`. No successful browser acceptance or screenshots are claimed. The standalone HTML is inspectable evidence of generated DOM only.
+The initial sandbox Chromium launch failed before rendering with macOS `bootstrap_check_in ... Permission denied (1100)`. The unchanged documented smoke subsequently **passed** using the installed Playwright module and Chromium headless shell outside the execution sandbox. No browser was installed and the pinned host was not modified.
 
-The operator host should regenerate the showcase, build Dashboard, then run the documented `apps/dashboard/examples/smoke.ts` with its installed browser/module and `SYMPHONY_BROWSER_EVIDENCE` set to a retained evidence directory. The extended smoke checks native Tab focus plus computed focus outline, badge matrix count and full SHA accessible name; it captures `primitives-desktop.png` and `primitives-narrow.png` alongside existing shell/detail screenshots and prints a JSON scenario/asset-hash ledger. Retain those artifacts with CI and independent exact-HEAD review in the host delivery trail. These are host validation steps, not completed sandbox evidence.
+Retained browser acceptance:
+
+- [JSON scenario, asset, source and screenshot SHA-256 ledger](browser/acceptance.json), including browser version and GET-only requests.
+- [Primitive desktop screenshot](browser/primitives-desktop.png) at 1280px and [primitive narrow screenshot](browser/primitives-narrow.png) at 390px; both visually inspected.
+- Shell desktop/narrow and detail screenshots are retained in the same `browser/` directory. The smoke also passed native Tab focus/computed outline, full SHA accessible name, routing/history, diagnostic focus across polling, isolation and transport disconnect/recovery checks.
+
+Reproduce after regenerating the showcase and building Dashboard:
+
+```sh
+SYMPHONY_BROWSER_MODULE=/absolute/path/to/playwright/index.mjs \
+SYMPHONY_CHROMIUM=/absolute/path/to/chrome-headless-shell \
+SYMPHONY_BROWSER_EVIDENCE=docs/evidence/dashboard-v2-primitives/browser \
+npx tsx apps/dashboard/examples/smoke.ts
+```
+
+This run validates the repaired working tree, identified by source and production-asset hashes in the JSON ledger. No commit was created. The delivery runner owns final commit identity, full gate, CI and independent exact-HEAD review; bind those receipts to this retained evidence before landing. This is local built-browser acceptance, not production live verification.

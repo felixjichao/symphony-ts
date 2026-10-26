@@ -45,6 +45,22 @@ describe("read-only dashboard component", () => {
     expect(detail.textContent).toContain(sha); expect(detail.textContent).toContain("task-one"); expect(detail.textContent).toContain("task-two"); expect(root.textContent).toContain("不表示当前 HEAD 获批");
     view.update({ snapshot: snapshot() }); expect(root.querySelector("details")?.open).toBe(true); expect(document.activeElement?.tagName).toBe("SUMMARY");
   });
+  it.each(["missing task", "different task target", "missing taskTarget"])("renders supplied taskTarget independently: %s", scenario => {
+    const { root, view } = setup();
+    const target = { repository: "owner/a", prNumber: 2, headSha: "b".repeat(40) };
+    const nestedTarget = { ...target, headSha: "c".repeat(40) };
+    view.update({ snapshot: freeze(snapshot({ work: [work({ review: {
+      currentHeadSha: "a".repeat(40), approval: "unknown",
+      taskTarget: scenario === "missing taskTarget" ? null : target,
+      task: scenario === "missing task" ? null : { kind: "review", taskId: "task-one", revision: 3, target: nestedTarget, status: "running", createdAtMs: 1, updatedAtMs: 2 },
+      result: null,
+    } })] })) });
+    const identity = root.querySelector('code[aria-label^="Review task target HEAD:"]')!;
+    const supplied = scenario === "missing taskTarget" ? "未知 / 未提供" : target.headSha;
+    expect(identity.getAttribute("aria-label")).toBe(`Review task target HEAD: ${supplied}`);
+    expect(identity.getAttribute("title")).toBe(`Review task target HEAD: ${supplied}`);
+    expect(identity.textContent).toBe(`Review task target HEAD: ${scenario === "missing taskTarget" ? supplied : target.headSha.slice(0, 12)}`);
+  });
   it("uses complete WorkKey for routes, lookup and stable attention order across repositories", () => {
     const a = work({ attention: "waiting" }); const b = work({ key: { provider: "github", key: "other/b#1" }, attention: "needs_human" });
     expect(findWork([a, b], token(b.key))).toBe(b); expect(findWork([a], token(b.key))).toBeUndefined(); expect(findWork([a], "%bad")).toBeUndefined();

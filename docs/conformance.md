@@ -623,7 +623,7 @@ Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger
 | Capability | Acceptance evidence | Boundary |
 |---|---|---|
 | All attention values; fresh/stale/unknown/unavailable; explicit empty/unknown/unavailable/degraded | `apps/dashboard/tests/primitives.test.ts`, Work-table `ui.test.ts` | Supplied semantics only; text/shape cues alongside color |
-| WorkKey and independent PR/task/result SHA identities | Primitive tests; existing detail and exact-target tests | Full identity in accessible name/title; no target comparison |
+| WorkKey and independent PR/task/result SHA identities | Primitive tests; `ui.test.ts` independently supplied/null/mismatched taskTarget regressions; existing detail and exact-target tests | Full identity in accessible name/title; no target comparison |
 | Surfaces, dense table/list, native labeled controls, focus/hover/selected tokens | Primitive DOM tests; controlled showcase; extended optional Chromium smoke | No page filter behavior or new routes |
 | No domain derivation or extra browser capabilities | Fingerprint registration; primitive lower-level-fact negative cases; existing type, AST and production-bundle tests | Guard restrictions retained; no new source dependencies |
 
