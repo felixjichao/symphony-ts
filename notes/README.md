@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Decision evidence failures](accepted/architecture/2026-10-26-decision-evidence-failure.md) — 区分代码审查 verdict 与证据不可用 executor failure，保留修复预算。
+
 - [Delivery validation timeout](accepted/architecture/2026-10-16-delivery-validation-timeout.md) — 本地验证的独立有界超时，覆盖首次及 CI/Review 修复后验证。
 
 - [Production status composition](accepted/architecture/2026-10-23-production-status-composition.md) — #140 opt-in scope, Bridge whitelist, static assets and observational lifecycle.

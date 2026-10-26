@@ -116,8 +116,11 @@ open issue + symphony-ready
 ChatGPT Web performs the independent review and returns a verdict bound to the
 exact PR HEAD. `approve` allows the host to proceed to merge once the existing
 opt-in, ownership, CI and merge-safety checks pass, without an additional human
-review. Technical findings and missing review evidence produce actionable
-`changes_requested` findings for repair/re-review. `needs_human` is reserved for
+review. Technical code findings produce actionable `changes_requested` findings for repair/re-review.
+Missing evidence/access failures produce an executor `evidence_unavailable` receipt and
+stop delivery as an operational block, without spending code-repair budget or requiring
+a code mutation. After evidence/access is restored, recovery starts a new review revision
+for the same HEAD; no automatic evidence retry is introduced by this policy. `needs_human` is reserved for
 unclear product intent and must state the product decision needed. Technical
 access failures and exhausted recovery budgets remain operational blocks; they
 do not require a human product review. ChatGPT Web does not execute the merge.

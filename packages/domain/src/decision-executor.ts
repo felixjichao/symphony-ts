@@ -12,6 +12,7 @@ export type DecisionAdapterErrorCode =
   | "target_mismatch"
   | "binding_broken"
   | "execution_failed"
+  | "evidence_unavailable"
   | "human_required"
   | "unsupported_strategy"
   | "unsupported_task_kind"
@@ -59,6 +60,7 @@ export class DecisionAdapterError extends Error {
       this.suggestedAction = options.suggestedAction;
     } else {
       switch (options.code) {
+        case "evidence_unavailable":
         case "execution_failed":
           this.suggestedAction = "retry";
           break;

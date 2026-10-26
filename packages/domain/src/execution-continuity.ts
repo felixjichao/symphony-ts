@@ -650,6 +650,7 @@ export const FAILURE_CATEGORIES = [
 ] as const satisfies readonly FailureCategory[];
 
 export type FailureReason =
+  | "evidence_unavailable"
   | "network_timeout"
   | "bridge_unavailable"
   | "stale_binding"
@@ -668,6 +669,7 @@ export type FailureReason =
   | "unmapped";
 
 export const FAILURE_REASONS = [
+  "evidence_unavailable",
   "network_timeout",
   "bridge_unavailable",
   "stale_binding",
@@ -919,6 +921,10 @@ export function mapDecisionAdapterFailure(input: {
           details,
         },
       };
+
+    case "evidence_unavailable":
+      return { mapped: true, diagnostic: { category: "recoverable", reason: "evidence_unavailable",
+        source: "decision", sourceCode: code, message, suggestedAction: "retry", details } };
 
     case "execution_failed":
       return {

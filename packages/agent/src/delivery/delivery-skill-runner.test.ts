@@ -2023,7 +2023,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       reviewGate.statusResults.push({
         taskId: `task-review-test-${shaA}`,
         status: "failed",
-        error: "Decision executor network timeout",
+        error: "evidence_unavailable",
       });
 
       // Halt calls
@@ -2031,15 +2031,21 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
       runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
 
+      let repairs = 0;
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
+        repairFn: async () => { repairs++; return true; },
         reviewGate,
         runner,
       });
 
       expect(result.status).toBe("blocked");
       expect(result.reason).toBe("manual_intervention_required");
-      expect(result.handoffMarkdown).toContain("Decision executor network timeout");
+      expect(result.handoffMarkdown).toContain("evidence_unavailable");
+      expect(repairs).toBe(0);
+      expect(result.spentRepairs).toBe(0);
+      expect(runner.gitCalls.some(c => c.args[0] === "commit")).toBe(false);
+      expect(runner.ghCalls.some(c => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
     });
 
     it("验收 7: optInLand 开启时若未配置 reviewGate -> fail-closed 严禁静默 fallback 到纯 CI auto-merge", async () => {

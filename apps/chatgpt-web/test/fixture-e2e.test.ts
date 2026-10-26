@@ -6,6 +6,7 @@ import {
   DurableDecisionStore,
   DecisionService,
   DecisionBridge,
+  DecisionReviewGate,
 } from "@symphony/decision";
 import {
   githubDecisionRoot,
@@ -38,6 +39,53 @@ describe("Decision Multi-Turn Fixture and Rollover (E2E)", () => {
     await bridge.stop();
     await store.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("records evidence failure through adapter/driver/Bridge and recovers with a fresh exact-HEAD review", async () => {
+    const root = githubDecisionRoot("owner", "repo", 170);
+    const session = await service.createSession(root);
+    const target = { repository: "owner/repo", prNumber: 42, headSha: "a".repeat(40) };
+    const context: DecisionContextBundle = {
+      strategy: "connector", workItem: root, repository: "owner/repo", prNumber: 42, headSha: target.headSha,
+    };
+    const gate = new DecisionReviewGate(service);
+    const task = await gate.ensureReviewTask(session.id, target, context);
+    const uri = "https://chatgpt.com/c/6adf2447-9d2c-83ea-90a4-a835805d5aaf";
+    await service.putBinding(session.id, { adapter: "chatgpt-web", externalSessionRef: uri.split("/").at(-1)!, resumeUri: uri });
+    const doc = new MockDocument();
+    const win = new MockWindow();
+    win.location.href = uri;
+    const composer = new MockElement("textarea", { id: "prompt-textarea" });
+    const send = new MockElement("button", { "data-testid": "send-button" });
+    doc.body.appendChild(composer);
+    doc.body.appendChild(send);
+    let response: unknown = { schemaVersion: 1, taskId: task.id, sessionId: task.sessionId,
+      revision: task.revision, kind: "review", target, error: "evidence_unavailable", message: "Repository connector denied access" };
+    send.addEventListener("click", () => {
+      const turn = new MockElement("div", { "data-message-author-role": "assistant" });
+      turn.textContent = "```symphony-result\n" + JSON.stringify(response) + "\n```";
+      doc.body.appendChild(turn);
+    });
+    const adapter = new ChatGptWebAdapter({ doc: doc as unknown as Document, win: win as unknown as Window,
+      checkIntervalMs: 10, stabilizationMs: 20, responseTimeoutMs: 2000 });
+    const driver = new DecisionTabDriver({ transport: new FetchBridgeTransport({ baseUrl }),
+      checkpointStore: new MemoryCheckpointStore(), ownerId: "evidence-fixture", adapter });
+    const outcome = await driver.runOnce();
+    expect(outcome).toMatchObject({ status: "failed" });
+    expect(service.getFailure(task.id)).toMatchObject({ error: "evidence_unavailable", retryable: true });
+    expect(service.getResult(task.id)).toBeNull();
+    // Reload/checkpoint waiting recognizes the same failure response without another Send.
+    await expect(adapter.waitForExistingResponse(task, { baselineCount: 0 })).rejects.toMatchObject({
+      code: "evidence_unavailable", retryable: true,
+    });
+    expect(await gate.getReviewStatus(task.id)).toMatchObject({ status: "failed", error: "evidence_unavailable" });
+    expect((await gate.verifyReviewApproval({ ...target, sessionId: session.id })).approved).toBe(false);
+    // After access is restored, explicitly create a fresh revision on the SAME HEAD.
+    const retry = await gate.ensureReviewTask(session.id, target, context, { forceNewRevision: true });
+    response = { schemaVersion: 1, taskId: retry.id, sessionId: retry.sessionId, revision: retry.revision,
+      createdAtMs: Date.now(), kind: "review", target, verdict: "approve", findings: [] };
+    expect((await driver.runOnce())?.status).toBe("completed");
+    expect((await gate.verifyReviewApproval({ ...target, sessionId: session.id })).approved).toBe(true);
   });
 
   it("verifies Plan -> Review SHA-A -> Review SHA-B on single binding, followed by broken-binding rollover N -> N+1", async () => {
