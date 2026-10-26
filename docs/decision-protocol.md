@@ -517,7 +517,8 @@ Extraction rules:
 - `revision_mismatch`: Result revision does not match task revision.
 - `target_mismatch`: Review result target does not match task review target.
 - `binding_broken`: Executor session expired, disconnected, or unrecoverable.
-- `evidence_unavailable`: Unhandled runtime execution exception.
+- `execution_failed`: Generic or unhandled executor runtime failure.
+- `evidence_unavailable`: Required repository facts, verification evidence, or access could not be recovered.
 - `human_required`: Interactive barrier encountered (CAPTCHA, 2FA, login, rate limit).
 - `unsupported_strategy`: Requested context strategy not supported by adapter.
 - `unsupported_task_kind`: Task kind not supported by adapter.
