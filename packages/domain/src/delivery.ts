@@ -471,6 +471,8 @@ export interface DeliveryContinuation {
   readonly requiredChecks?: readonly string[] | undefined;
   readonly repairCommand?: string | undefined;
   readonly validationCommand?: string | undefined;
+  /** Persisted validation limit; legacy continuations use the default. */
+  readonly validationTimeoutMs?: number | undefined;
   readonly phase: "ci" | "review_intent" | "review_wait" | "result_observed" | "repair_pending" | "ready";
   readonly reviewTaskId?: string | undefined;
   readonly reviewRevision?: number | undefined;
@@ -573,6 +575,8 @@ export interface DeliverySkillConfig {
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly validationCommand?: string | undefined;
+  /** Project validation timeout in milliseconds (default 600_000), independent of CI wait. */
+  readonly validationTimeoutMs?: number | undefined;
   readonly repairCommand?: string | undefined;
   readonly maxRepairAttempts?: number | undefined;
   readonly maxWaitSeconds?: number | undefined;

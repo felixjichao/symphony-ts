@@ -90,6 +90,7 @@ Work autonomously to completion. A human does not merge for you.
      --head "$delivery_branch" \
      --base "$base_branch" \
      --validate "${SYMPHONY_DELIVERY_VALIDATE:-npm run gate}" \
+     --validation-timeout 600 \
      --repair-cmd "${SYMPHONY_DELIVERY_REPAIR_CMD:-npm run ci:fix}" \
      $resume_flag \
      --opt-in

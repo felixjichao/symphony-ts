@@ -359,6 +359,10 @@ export function parsePrCheckRollup(
  *    - 持久化 paused 状态，阻止未显式 --resume 的重入。
  */
 export async function runDeliverySkill(options: RunDeliverySkillOptions): Promise<DeliverySkillResult> {
+  const validationTimeoutMs = options.validationTimeoutMs ?? 600_000;
+  if (!Number.isSafeInteger(validationTimeoutMs) || validationTimeoutMs <= 0 || validationTimeoutMs > 2_147_483_647) {
+    throw new Error("validationTimeoutMs must be a positive integer no greater than 2147483647");
+  }
   const storage = options.stateStorage;
   if (storage?.withExclusive) return storage.withExclusive(locked => runDeliverySkillLocked({ ...options, stateStorage: locked }));
   return runDeliverySkillLocked(options);
@@ -367,6 +371,7 @@ export async function runDeliverySkill(options: RunDeliverySkillOptions): Promis
 async function runDeliverySkillLocked(
   options: RunDeliverySkillOptions,
 ): Promise<DeliverySkillResult> {
+  const validationTimeoutMs = options.validationTimeoutMs ?? 600_000;
   const native = options.runner;
   const guard = () => { if (options.canCommit && !options.canCommit()) throw new Error("Delivery stopped before effect"); };
   const runner: DeliveryGitGhRunner = {
@@ -501,7 +506,7 @@ async function runDeliverySkillLocked(
       ...(same ? continuation : {}),
       optInLand: options.optInLand === true, readyLabel, maxRepairAttempts: maxRepairs, maxWaitSeconds,
       requiredChecks: options.requiredChecks, repairCommand: options.repairCommand,
-      validationCommand: options.validationCommand, phase, ...extra };
+      validationCommand: options.validationCommand, validationTimeoutMs, phase, ...extra };
     await persistCurrentState();
   };
   const waiting = (): DeliverySkillResult => ({ status: "waiting", prNumber, prUrl, headSha: currentHeadSha,
@@ -863,7 +868,7 @@ async function runDeliverySkillLocked(
   log("[delivery-skill] Phase 2: Running project validation...");
   if (options.validationCommand) {
     log(`[delivery-skill] Executing validation command: ${options.validationCommand}`);
-    const valRes = await runner.exec(options.validationCommand, options.cwd);
+    const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
     if (valRes.exitCode !== 0) {
       return haltDispatch(
         "manual_intervention_required",
@@ -1262,7 +1267,7 @@ async function runDeliverySkillLocked(
         // 修复完成后重新执行项目验证
         if (options.validationCommand) {
           log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
-          const valRes = await runner.exec(options.validationCommand, options.cwd);
+          const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
           if (valRes.exitCode !== 0) {
             return haltDispatch(
               "ci_failed_max_repairs",
@@ -1716,7 +1721,7 @@ async function runDeliverySkillLocked(
 
           if (options.validationCommand) {
             log(`[delivery-skill] Re-running validation command after review repair: ${options.validationCommand}`);
-            const valRes = await runner.exec(options.validationCommand, options.cwd);
+            const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
             if (valRes.exitCode !== 0) {
               return haltDispatch(
                 "review_changes_requested_max_repairs",

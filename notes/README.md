@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Delivery validation timeout](accepted/architecture/2026-10-16-delivery-validation-timeout.md) — 本地验证的独立有界超时，覆盖首次及 CI/Review 修复后验证。
+
 - [Production status composition](accepted/architecture/2026-10-23-production-status-composition.md) — #140 opt-in scope, Bridge whitelist, static assets and observational lifecycle.
 
 - [Native durable handoffs and startup recovery](proposed/architecture/2026-10-22-durable-recovery-invocations.md) — NEST-133: native stage/landing intents, retry/launch reservations, crash-lock safety and restart evidence.

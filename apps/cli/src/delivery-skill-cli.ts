@@ -107,6 +107,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   headBranch?: string | undefined;
   baseBranch?: string | undefined;
   validationCommand?: string | undefined;
+  validationTimeoutMs?: number | undefined;
   repairCommand?: string | undefined;
   maxRepairs?: number | undefined;
   maxWait?: number | undefined;
@@ -128,6 +129,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   let headBranch: string | undefined;
   let baseBranch: string | undefined;
   let validationCommand: string | undefined;
+  let validationTimeoutMs: number | undefined;
   let repairCommand: string | undefined;
   let maxRepairs: number | undefined;
   let maxWait: number | undefined;
@@ -162,6 +164,12 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
       baseBranch = argv[++i];
     } else if (arg === "--validate" && i + 1 < argv.length) {
       validationCommand = argv[++i];
+    } else if (arg === "--validation-timeout") {
+      const seconds = Number(argv[++i]);
+      if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 2_147_483) {
+        throw new Error("Invalid value for --validation-timeout: expected integer seconds between 1 and 2147483");
+      }
+      validationTimeoutMs = seconds * 1000;
     } else if (arg === "--repair-cmd" && i + 1 < argv.length) {
       repairCommand = argv[++i];
     } else if (arg === "--max-repairs" && i + 1 < argv.length) {
@@ -202,6 +210,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
     headBranch,
     baseBranch,
     validationCommand,
+    validationTimeoutMs,
     repairCommand,
     maxRepairs,
     maxWait,
@@ -538,6 +547,7 @@ async function runDeliverySkillCliLocked(
     headBranch,
     baseBranch,
     validationCommand: parsed.validationCommand,
+    validationTimeoutMs: parsed.validationTimeoutMs,
     repairCommand: parsed.repairCommand,
     maxRepairAttempts: parsed.maxRepairs,
     maxWaitSeconds: parsed.maxWait,

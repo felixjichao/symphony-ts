@@ -247,7 +247,7 @@ it("derives current-HEAD CI waits, review execution, accepted results, repair an
   } finally { await host.stop(); await store.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-it("real host startup and ticks ensure Review and consume a durable result without relaunching coding", async () => {
+it.each([900_000, 240_000, undefined])("host restart preserves validation timeout %s while consuming durable Review without relaunching coding", async validationTimeoutMs => {
   const { createFixtureRunner, saveRemote, remote, context } = await import("../test-fixtures/durable-delivery-harness");
   const { DecisionReviewGate } = await import("@symphony/decision");
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "host-native-delivery-"));
@@ -286,12 +286,19 @@ it("real host startup and ticks ensure Review and consume a durable result witho
     const review = service.getTasksForSession(session.id).find(t => t.kind === "review");
     expect(review?.status, JSON.stringify(host.workContinuity.observations)).toBe("pending");
     expect(host.state.running.size).toBe(0);
+    const storage = new FileDeliveryStateStorage(path.join(dir, "workspaces", "GH-1", ".symphony", "delivery-state.json"));
+    const saved = storage.readState()!;
+    expect(saved.continuation?.validationTimeoutMs).toBe(600_000);
+    storage.writeState({ ...saved, continuation: { ...saved.continuation!, validationTimeoutMs } });
+    await host.stop();
+    host = await create();
+    await host.start();
     const claim = await service.claimTask(review!.id, { owner: "reviewer" });
     await service.startTask(review!.id, claim.lease);
     await service.submitResult(review!.id, { ...claim.lease, result: { schemaVersion: 1, taskId: review!.id, sessionId: session.id,
       kind: "review", revision: review!.revision, createdAtMs: Date.now(), target: { repository: context.repo, prNumber: 2, headSha: remote(dir).head }, verdict: "approve", findings: [] } });
     tick!(); await host.loop.settled();
-    const storage = new FileDeliveryStateStorage(path.join(dir, "workspaces", "GH-1", ".symphony", "delivery-state.json"));
+    expect(storage.readState()?.continuation?.validationTimeoutMs).toBe(validationTimeoutMs ?? 600_000);
     expect(storage.readState()?.continuation?.phase).toBe("ready");
     expect(host.workContinuity.observations[0]?.diagnosis?.status).toBe("external_wait");
     await host.stop();

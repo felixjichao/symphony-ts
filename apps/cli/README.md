@@ -43,6 +43,7 @@ symphony delivery-skill [run|halt] --repo <owner/repo> --issue <number> [options
   - `--head <branch>`：Issue 功能分支名（默认 `symphony/GH-<issue>`）；
   - `--base <branch>`：目标合并分支（默认 `main`）；
   - `--validate <command>`：本地验证命令（如 `"npm test"`）；
+  - `--validation-timeout <seconds>`：每次本地验证的独立超时（默认 600 秒；正整数，最大 2147483），首次验证、CI/Review 修复后的验证均适用；
   - `--max-repairs <N>`：CI 失败最大修复尝试次数（默认 3）；
   - `--max-wait <seconds>`：CI 等待超时秒数（默认 300）；
   - `--ready-label <label>`：就绪调度标签（默认 `symphony-ready`）；

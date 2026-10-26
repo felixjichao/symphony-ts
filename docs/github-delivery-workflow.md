@@ -159,6 +159,16 @@ handoff instead of looping forever. The reference profile supplies the repair
 entry through `$SYMPHONY_DELIVERY_REPAIR_CMD` (default `npm run ci:fix`), so a
 repository that wants unattended repair must provide that command.
 
+### Project validation timeout
+
+`delivery-skill run --validation-timeout 600` gives each `--validate` invocation
+its own bounded timeout in seconds (default 600; positive integer, maximum
+2147483). The same timeout applies to initial validation and validation after CI
+or review repair. Timeout/failure still halts delivery before commit/push/land.
+This does not change `--max-wait`, persisted deadlines, repair budgets, or the
+60-second defaults for ordinary git/gh subprocesses. A larger validation timeout
+does not extend an already-persisted CI deadline.
+
 ### Recovering from a handoff
 
 A handoff is explicit, not a dead end:
