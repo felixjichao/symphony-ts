@@ -69,7 +69,11 @@ acceptance criteria, risks and clarifications; verdict is `ready`,
 `needs_clarification` or `needs_human`. Review includes the exact target and typed
 blocker/suggestion findings (message and nullable location); verdict is `approve`,
 `changes_requested` or `needs_human`. All verdicts are successful task completion;
-execution failure is the separate `failed` lifecycle state.
+execution failure is the separate `failed` lifecycle state. ChatGPT Web reserves
+`needs_human` for unclear product intent; technical review defects or missing
+evidence use actionable `changes_requested` findings. An exact-HEAD `approve`
+permits host landing under the existing delivery safety policy without another
+human review.
 
 `parseDecisionResult` validates the envelope itself; `validateDecisionResultForTask`
 additionally checks kind, IDs, revision, exact target and creation ordering.

@@ -80,6 +80,8 @@ describe("Prompt formatting and engineering", () => {
     expect(prompt).toContain("Detailed description of requirements");
     expect(prompt).toContain("Follow TypeScript strict mode");
     expect(prompt).toContain('"kind": "plan"');
+    expect(prompt).toContain("Reserve needs_human for unclear product intent");
+    expect(prompt).toContain("For missing product requirements during planning, use needs_clarification");
     expect(prompt).toContain("symphony-result");
   });
 
@@ -139,6 +141,9 @@ describe("Prompt formatting and engineering", () => {
     expect(prompt).toContain("CI State: success");
     expect(prompt).toContain("- [blocker] src/driver.ts:42: Missing error handler");
     expect(prompt).toContain('"kind": "review"');
+    expect(prompt).toContain("no additional human review is required");
+    expect(prompt).toContain("return changes_requested with an actionable blocker");
+    expect(prompt).toContain("Do not merge directly from ChatGPT Web");
   });
 
   it("formats handoff prompt carrying forward review context for rebind/rollover", () => {

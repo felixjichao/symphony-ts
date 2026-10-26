@@ -9,6 +9,16 @@ import type {
   DecisionConnectorContext,
 } from "@symphony/domain/decision";
 
+/** Decision extension (§4, §17/§18): autonomous review-to-landing policy. */
+const AUTONOMOUS_DECISION_POLICY = `Autonomous delivery policy:
+- Complete technical planning and PR review autonomously. An approve verdict authorizes the host delivery pipeline to merge the exact reviewed HEAD after its existing ownership, opt-in, CI and merge-safety checks pass; no additional human review is required.
+- Reserve needs_human for unclear product intent requiring a human product decision. Identify the unresolved product question explicitly. For missing product requirements during planning, use needs_clarification.
+- Technical defects, test failures, and implementation gaps require changes_requested with actionable blocker findings so the coding agent can repair and return for review.
+- Missing verification evidence, inaccessible repository facts, or a truncated critical diff must never produce approve. During review, return changes_requested with an actionable blocker describing the evidence to recover. Execution/access failures remain technical recovery or operational blocks, not requests for human product review.
+- Do not merge directly from ChatGPT Web. Return the structured verdict; the host owns the fenced merge operation.
+
+`;
+
 export const BOOTSTRAP_PROMPT = `You are acting as an Independent Decision Reviewer and Planner for the Symphony orchestration platform.
 
 Your role:
@@ -51,7 +61,7 @@ export function formatPlanPrompt(
   task: DecisionTask,
   context: DecisionContextBundle
 ): string {
-  let body = "";
+  let body = AUTONOMOUS_DECISION_POLICY;
   if (context.strategy === "materialized") {
     const mat = context as DecisionMaterializedContext;
     body += `Issue: ${mat.issue.repository} #${mat.issue.number} - ${mat.issue.title}\n\n`;
@@ -64,11 +74,11 @@ export function formatPlanPrompt(
     body += `WorkItem: ${conn.workItem.provider}:${conn.workItem.key}\n`;
     body += `Repository: ${conn.repository}\n\n`;
     body += `Important connector instructions:\n`;
-    body += `You have received connector references instead of full inlined context. You MUST fetch and inspect the actual repository instructions, issue description, and requirements. If facts cannot be verified or context is insufficient, choose verdict "needs_human" or "needs_clarification".\n\n`;
+    body += `You have received connector references instead of full inlined context. You MUST fetch and inspect the actual repository instructions, issue description, and requirements. If facts cannot be verified or context is insufficient, do not mark the plan ready. Use "needs_clarification" for missing product requirements; report technical access or evidence failures as execution failures for recovery, not as a product decision.\n\n`;
   }
 
   body += `Please formulate an implementation plan. Address scope, implementation slices, acceptance criteria, and risks.\n\n`;
-  body += `Verdict choices: "ready" (plan is complete and ready to execute), "needs_clarification" (missing requirements), or "needs_human" (requires manual decision).\n`;
+  body += `Verdict choices: "ready" (plan is complete and ready to execute), "needs_clarification" (missing requirements), or "needs_human" (unclear product intent requires a human product decision).\n`;
   body += `Conclude your response strictly with the following JSON envelope (note: all plan fields MUST be nested inside "content", and no extra fields are allowed):\n\n`;
   body += `\`\`\`symphony-result\n`;
   body += `{\n`;
@@ -100,7 +110,7 @@ export function formatReviewPrompt(
   context: DecisionContextBundle,
   options: ReviewPromptOptions = {}
 ): string {
-  let body = "";
+  let body = AUTONOMOUS_DECISION_POLICY;
   const target = task.target;
   body += `Please review the Pull Request for repository ${target.repository}, PR #${target.prNumber}.\n`;
   body += `Expected target HEAD SHA: ${target.headSha}\n`;
@@ -157,10 +167,10 @@ export function formatReviewPrompt(
     body += `Repository: ${conn.repository}\n`;
     if (conn.prNumber) body += `PR: #${conn.prNumber}\n`;
     body += `\nImportant connector instructions:\n`;
-    body += `You have received connector references instead of full inlined context. You MUST re-inspect and verify actual repository instructions, current issue description, PR diff, and CI facts. If facts cannot be verified or context is insufficient, you MUST NOT approve (choose "needs_human" or "changes_requested").\n\n`;
+    body += `You have received connector references instead of full inlined context. You MUST re-inspect and verify actual repository instructions, current issue description, PR diff, and CI facts. If facts cannot be verified or context is insufficient, you MUST NOT approve (choose "changes_requested" with an actionable evidence-recovery blocker).\n\n`;
   }
 
-  body += `Evaluate the changes. Choose verdict: "approve" (ready to land), "changes_requested" (issues must be fixed), or "needs_human" (requires manual attention).\n\n`;
+  body += `Evaluate the changes. Choose verdict: "approve" (ready to land), "changes_requested" (issues must be fixed), or "needs_human" (unclear product intent requires a human product decision).\n\n`;
   body += `Conclude your response strictly with the following JSON envelope:\n`;
   body += `- Do NOT include a "comments" field at the root.\n`;
   body += `- Each finding in "findings" MUST only contain: "severity" ("blocker" or "suggestion"), "message" (string), and "location" (string like "path/to/file.ts:42" or null). Do NOT include "id", "file", or "line".\n`;
