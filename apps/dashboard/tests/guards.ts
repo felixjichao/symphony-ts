@@ -51,12 +51,14 @@ export function browserErrors(name: string, source: string): string[] {
     propagate(file);
   }
   const visit = (node: ts.Node) => {
+    if (name === "primitives.ts" && ts.isIdentifier(node) && !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) && /^(ci|review|pullRequest|task|result|outcome|target|headSha|anomalies|evidence|execution|planning|phase|waiting|health|approval|severity|observedAt|lastAttemptAt)$/.test(node.text)) errors.push("lower-level fact/conclusion in primitive");
+
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const specifier = node.moduleSpecifier;
       if (specifier && ts.isStringLiteral(specifier)) {
         const value = specifier.text;
         if (!value.startsWith("./") && !(value === "@symphony/operations" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly)) errors.push("browser import boundary");
-        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|style\.css)$/.test(value)) errors.push("unapproved local module");
+        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|primitives|style\.css)$/.test(value)) errors.push("unapproved local module");
         if (value.includes("examples") || value.includes("tests")) errors.push("Node/test graph in browser");
       }
     }
@@ -77,14 +79,14 @@ export function browserErrors(name: string, source: string): string[] {
     }
     if (!["validate.ts", "identity.ts", "presentation.ts"].includes(name)) {
       // These shape/identity/format helpers are separately fingerprinted, never arbitrary extensions.
-      const registered: Record<string, readonly string[]> = { "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards"], "dom.ts": ["el"] };
+      const registered: Record<string, readonly string[]> = { "primitives.ts": ["attentionBadge", "freshnessIndicator", "presentationState", "workIdentity", "shaIdentity", "surface", "denseTable", "denseList", "searchControl", "filterControl"], "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards"], "dom.ts": ["el"] };
       if (registered[name] && ts.isFunctionDeclaration(node) && !registered[name]?.includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
       if (name === "view.ts" && ts.isFunctionDeclaration(node) && !["el", "reviewDetails", "workTable", "mount"].includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
       if (name === "view.ts" && ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && node.name.getText(file) !== "locate" && node.name.getText(file) !== "navigate") errors.push("unregistered presentation callback");
       const condition = ts.isConditionalExpression(node) ? node.condition : ts.isIfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ? node.expression : ts.isForStatement(node) ? node.condition : ts.isSwitchStatement(node) ? node.expression : undefined;
       if (condition && isSensitive(condition) && !isNullOrKindTest(condition)) errors.push(`source-dependent control flow: ${condition.getText(file)}`);
       if (ts.isPrefixUnaryExpression(node) && isSensitive(node.operand) && !isNullOrKindTest(node.operand)) errors.push("source truthiness/computation");
-      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "scopedSources", "globalSources", "scopedExecutors", "freshness", "timestamp", "Object.entries", "String", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
+      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "scopedSources", "globalSources", "scopedExecutors", "freshness", "timestamp", "attentionBadge", "shaIdentity", "freshnessIndicator", "Object.entries", "String", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
       if (ts.isReturnStatement(node) && node.expression && isSensitive(node.expression)) errors.push(`returning source-derived value: ${node.expression.getText(file)}`);
       if (ts.isPropertyAssignment(node) && semantics.has(node.name.getText(file))) errors.push("constructing derived field");
       if (ts.isBinaryExpression(node)) {

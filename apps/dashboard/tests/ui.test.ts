@@ -19,7 +19,7 @@ describe("read-only dashboard component", () => {
     expect(root.querySelector("td:nth-child(2)")?.textContent).toBe("coding"); expect(root.textContent).toContain("批准状态未知");
   });
   it.each(["needs_human", "failed", "degraded", "waiting", "normal"] as const)("shows supplied %s attention", attention => {
-    const { root, view } = setup(); view.update({ snapshot: snapshot({ work: [work({ attention })] }) }); expect(root.querySelector("td:nth-child(6)")?.textContent).toBe(attention);
+    const { root, view } = setup(); view.update({ snapshot: snapshot({ work: [work({ attention })] }) }); expect(root.querySelector("td:nth-child(6)")?.textContent).toContain(attention);
   });
   it.each(["waiting_for_ci", "waiting_for_review"] as const)("shows %s without inventing a wait start", reason => {
     const { root, view } = setup(); view.update({ snapshot: snapshot({ work: [work({ waiting: { reason, since: null } })] }) }); expect(root.textContent).toContain(`${reason} · 自 未报告`);

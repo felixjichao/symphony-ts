@@ -143,3 +143,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [Bounded-continuity acceptance closeout](accepted/testing/2026-10-23-bounded-continuity-closeout.md) — maintainer-approved coverage profile, W03 bounded block and deferred seamless/live variants.
 
 - [Operator Console shell](accepted/architecture/2026-10-25-operator-console-shell.md) — #169 / §13 adjacent: four destinations, legacy WorkKey hashes, persistent chrome and accessible focus.
+
+- [Dashboard presentation primitives](accepted/architecture/2026-10-26-dashboard-presentation-primitives.md) — #170 / §13 adjacent: DOM-native presentation API, tokens and closed semantic boundary.

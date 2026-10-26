@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboard presentation primitives · #170</title><style>:root { font-family: ui-sans-serif, system-ui, sans-serif; color: #dce5e7; background: #10191d; font-size: 14px; }
+body { margin: 0 auto; padding: 28px; max-width: 1600px; }
+header { border-bottom: 1px solid #49616a; padding-bottom: 20px; }
+header p { color: #93b5bd; letter-spacing: .12em; font-size: 12px; }
+h1 { font-size: 32px; margin: 12px 0; } h2 { font-size: 18px; }
+strong { color: #ffce85; } nav { margin-top: 18px; } a { color: #9bded0; overflow-wrap: anywhere; }
+section { margin-top: 28px; } table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 12px 10px; border-bottom: 1px solid #33464e; text-align: left; vertical-align: top; }
+th { color: #a9bdc3; } td p { margin: 5px 0; } tr:target { background: #243a40; }
+caption { text-align: left; margin-bottom: 12px; color: #a9bdc3; }
+dl { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; } dt { color: #a9bdc3; } dd { margin: 0 24px 0 0; font-size: 24px; font-variant-numeric: tabular-nums; }
+summary { cursor: pointer; margin-top: 10px; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 36em; }
+:focus-visible { outline: 2px solid #ffce85; outline-offset: 4px; }
+[role=status] { padding: 8px 0; color: #ffce85; } main { overflow-x: auto; }
+
+#detail dl { display: grid; grid-template-columns: minmax(10em, 1fr) minmax(0, 3fr); gap: 8px 20px; }
+#detail dd { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+#detail article { border-left: 3px solid #49616a; padding: 8px 18px; margin: 14px 0; background: #162329; }
+#detail h3 { margin-top: 30px; border-bottom: 1px solid #49616a; padding-bottom: 8px; }
+#detail h4, #detail h5 { margin: 12px 0; }
+@media (max-width: 640px) { body { padding: 14px; } #detail dl { grid-template-columns: 1fr; } }
+
+/* Stable console chrome; navigation never depends on snapshot availability. */
+nav { display: flex; flex-wrap: wrap; gap: 8px; }
+nav a { padding: 10px 16px; border: 2px solid transparent; text-decoration: none; }
+nav a[aria-current="page"] { border-color: currentColor; font-weight: 700; text-decoration: underline; text-underline-offset: 5px; }
+.skip-link { position: absolute; top: -100px; }
+.skip-link:focus { top: 8px; background: #10191d; padding: 12px; z-index: 1; }
+[hidden] { display: none !important; }
+main { min-width: 0; overflow: visible; }
+#work { overflow-x: auto; }
+#work table { min-width: 760px; }
+main p, main article { overflow-wrap: anywhere; }
+#page-heading { margin-top: 28px; }
+@media (max-width: 640px) {
+  nav a { flex: 1 1 30%; text-align: center; }
+  h1 { font-size: 26px; }
+  #detail article { padding: 8px; }
+}
+
+/* #170 operator-console tokens and reusable presentation language. */
+:root {
+  --console-bg: #10191d; --console-surface: #162329; --console-border: #49616a;
+  --console-text: #dce5e7; --console-muted: #a9bdc3; --console-focus: #ffce85;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 20px; --space-5: 28px;
+  --text-small: 12px; --text-body: 14px; --text-heading: 18px;
+  color: var(--console-text); background: var(--console-bg); font-size: var(--text-body);
+}
+.surface { border: 1px solid var(--console-border); padding: var(--space-3); background: var(--console-surface); }
+.surface > h2, .surface > h3 { margin-top: 0; font-size: var(--text-heading); }
+.badge { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 2px 6px; font-size: var(--text-small); }
+.attention-needs_human, .attention-failed, .state-unavailable { color: #ffb3a9; font-weight: 700; }
+.attention-degraded, .freshness-stale, .state-degraded { color: #ffce85; }
+.attention-normal, .freshness-fresh { color: #9bded0; }
+.attention-waiting, .freshness-unknown, .state-unknown { color: #c1cbd0; border-style: dashed; }
+.freshness-unavailable { color: #ffb3a9; border-style: double; }
+.presentation-state { border-left: 3px solid currentColor; padding: var(--space-2) var(--space-3); }
+.identity { display: block; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.dense-table td, .dense-table th { padding: var(--space-2); }
+.dense-table tbody tr:hover, .dense-list li:hover { background: #243a40; }
+.dense-list { padding-left: var(--space-4); } .dense-list li { padding: var(--space-1); }
+.control { display: inline-flex; flex-direction: column; gap: var(--space-1); margin: var(--space-2); }
+input, select { color: var(--console-text); background: var(--console-bg); border: 1px solid var(--console-border); padding: var(--space-2); font: inherit; }
+a:hover, summary:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--console-focus); outline-offset: 4px; }
+[aria-selected="true"] { border-inline-start: 3px solid var(--console-focus); background: #243a40; }
+</style></head><body><h1>Operator Console · Presentation primitives</h1><p>Controlled supplied values · no live facts or derived validity</p><section class="surface"><h2>Derived conclusions · supplied attention</h2><span class="badge attention-normal">○ normal · 正常</span> <span class="badge attention-waiting">◷ waiting · 等待</span> <span class="badge attention-degraded">△ degraded · 降级</span> <span class="badge attention-needs_human">! needs_human · 需要人工</span> <span class="badge attention-failed">× failed · 失败</span> </section><section class="surface"><h2>Supplied facts · source freshness and independent identities</h2><ul class="dense-list"><li><span class="badge freshness-fresh">fresh · 新鲜 · 观测 1970-01-01T00:00:00.001Z · 尝试 1970-01-01T00:00:00.002Z</span></li><li><span class="badge freshness-stale">stale · 陈旧 · 观测 1970-01-01T00:00:00.001Z · 尝试 1970-01-01T00:00:00.002Z</span></li><li><span class="badge freshness-unknown">unknown · 未知 / 未观测 · 观测 未报告 · 尝试 未报告 · not observed</span></li><li><span class="badge freshness-unavailable">unavailable · 读取不可用 · 观测 1970-01-01T00:00:00.001Z · 尝试 1970-01-01T00:00:00.002Z · offline</span></li><li><a title="GH-170 · github:felixjichao/symphony-ts#170" href="#%5B%22github%22%2C%22felixjichao%2Fsymphony-ts%23170%22%5D">GH-170 · github:felixjichao/symphony-ts#170</a></li><li><code class="identity" title="PR HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" aria-label="PR HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">PR HEAD: aaaaaaaaaaaa</code></li><li><code class="identity" title="Review task target HEAD: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" aria-label="Review task target HEAD: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">Review task target HEAD: bbbbbbbbbbbb</code></li><li><code class="identity" title="Result / approval target HEAD: cccccccccccccccccccccccccccccccccccccccc" aria-label="Result / approval target HEAD: cccccccccccccccccccccccccccccccccccccccc">Result / approval target HEAD: cccccccccccc</code></li><li><code class="identity" title="Unknown HEAD: 未知 / 未提供" aria-label="Unknown HEAD: 未知 / 未提供">Unknown HEAD: 未知 / 未提供</code></li></ul></section><section class="surface"><h2>Diagnostics · explicit presentation states</h2><p class="presentation-state state-empty">∅ 空 · Caller-supplied explanation</p><p class="presentation-state state-unknown">? 未知 · Caller-supplied explanation</p><p class="presentation-state state-unavailable">⊘ 不可用 · Caller-supplied explanation</p><p class="presentation-state state-degraded">△ 降级 · Caller-supplied explanation</p></section><section class="surface"><h2>Structures and keyboard controls</h2><label class="control">Search work<input type="search"></label><label class="control">Attention<select><option value="All supplied states">All supplied states</option><option value="waiting">waiting</option></select></label><table class="dense-table"><caption>Dense observations</caption><thead><tr><th scope="col">Identity</th><th scope="col">Supplied value</th></tr></thead><tbody><tr aria-selected="true"><td>GH-170</td><td>unknown</td></tr></tbody></table><article class="surface"><h3>Card · supplied diagnostic context</h3></article></section></body></html>

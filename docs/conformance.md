@@ -617,3 +617,14 @@ Host browser follow-up (2026-10-26, #169 / #178): all 23 built-product smoke
 scenarios passed with installed Edge 156.0.4314.42. Two asynchronous harness reads
 now wait for their existing focus/detail assertions. Product semantics are unchanged.
 Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger](evidence/dashboard-v2-shell/README.md).
+
+## §13 adjacent: Dashboard presentation primitives (#170)
+
+| Capability | Acceptance evidence | Boundary |
+|---|---|---|
+| All attention values; fresh/stale/unknown/unavailable; explicit empty/unknown/unavailable/degraded | `apps/dashboard/tests/primitives.test.ts`, Work-table `ui.test.ts` | Supplied semantics only; text/shape cues alongside color |
+| WorkKey and independent PR/task/result SHA identities | Primitive tests; existing detail and exact-target tests | Full identity in accessible name/title; no target comparison |
+| Surfaces, dense table/list, native labeled controls, focus/hover/selected tokens | Primitive DOM tests; controlled showcase; extended optional Chromium smoke | No page filter behavior or new routes |
+| No domain derivation or extra browser capabilities | Fingerprint registration; primitive lower-level-fact negative cases; existing type, AST and production-bundle tests | Guard restrictions retained; no new source dependencies |
+
+Sandbox executes Dashboard tests/build and root typecheck. The operator host owns full gate, CI, exact-HEAD review and no-land delivery after the coding session. See [primitive evidence ledger](evidence/dashboard-v2-primitives/README.md) for browser limits and reproduction.
