@@ -2,12 +2,18 @@
 import type { DriverStep } from "./checkpoint";
 import { SELECTORS, type ResponseWaitState } from "./probes";
 
-export type DriverDiagnosticStage = DriverStep | "response_wait" | "result_submitting" | "result_accepted" | "result_submit_error" | "task_failed";
+export type DriverDiagnosticStage = DriverStep | "response_wait" | "result_submitting" | "result_accepted" | "result_submit_error" | "task_failed" | "interrupted";
 export interface DriverDiagnostic {
   readonly stage: DriverDiagnosticStage;
   readonly taskId: string;
   readonly kind: "plan" | "review";
   readonly revision: number;
+  readonly interruption?: {
+    readonly reason: "heartbeat_denied" | "lease_expired" | "manual_stop";
+    readonly status?: number | undefined;
+    readonly claimGeneration: number;
+    readonly bindingGeneration: number;
+  } | undefined;
   readonly wait?: ResponseWaitState | undefined;
 }
 export interface DiagnosticRecord extends DriverDiagnostic { readonly atMs: number }
@@ -42,10 +48,16 @@ function cleanRecord(value: unknown): DiagnosticRecord | null {
       !oneOf(value.kind, ["plan", "review"] as const) || !nonnegativeInteger(value.revision) ||
       !oneOf(value.stage, ["claimed", "navigating", "started", "prompt_submitting", "waiting_response",
         "result_extracted", "completed", "rebind_submitting", "bootstrap_submitting", "bootstrap_waiting",
-        "response_wait", "result_submitting", "result_accepted", "result_submit_error", "task_failed"] as const)) return null;
+        "response_wait", "result_submitting", "result_accepted", "result_submit_error", "task_failed", "interrupted"] as const)) return null;
   const wait = cleanWait(value.wait);
+  const raw = value.interruption;
+  const interruption = metadata(raw) && oneOf(raw.reason, ["heartbeat_denied", "lease_expired", "manual_stop"] as const) &&
+    nonnegativeInteger(raw.claimGeneration) && nonnegativeInteger(raw.bindingGeneration) &&
+    (raw.status === undefined || nonnegativeInteger(raw.status) && raw.status >= 100 && raw.status <= 599)
+    ? { reason: raw.reason, claimGeneration: raw.claimGeneration, bindingGeneration: raw.bindingGeneration,
+      ...(raw.status === undefined ? {} : { status: raw.status }) } : undefined;
   return { atMs: value.atMs, stage: value.stage, taskId: value.taskId, kind: value.kind, revision: value.revision,
-    ...(wait ? { wait } : {}) };
+    ...(wait ? { wait } : {}), ...(interruption ? { interruption } : {}) };
 }
 
 export class DriverDiagnostics {

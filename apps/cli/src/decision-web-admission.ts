@@ -1,3 +1,4 @@
+import { DecisionStoreError } from "@symphony/decision";
 import type { DecisionTask } from "@symphony/domain";
 import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
 
@@ -10,8 +11,13 @@ export async function authorizeDecisionWebExecution(
   if (task.kind !== "review") return true;
   try {
     const response = await runner.gh(["api", `repos/${task.target.repository}/pulls/${task.target.prNumber}`], process.cwd(), 10_000);
-    if (response.exitCode !== 0) return false;
+    if (response.exitCode !== 0) throw new Error("GitHub observation unavailable");
     const pr = JSON.parse(response.stdout) as { number?: unknown; state?: unknown; head?: { sha?: unknown } };
+    if (typeof pr.number !== "number" || (pr.state !== "open" && pr.state !== "closed") || typeof pr.head?.sha !== "string") {
+      throw new Error("Invalid GitHub observation");
+    }
     return pr.number === task.target.prNumber && pr.state === "open" && pr.head?.sha === task.target.headSha;
-  } catch { return false; }
+  } catch {
+    throw new DecisionStoreError("GitHub execution target observation unavailable", "execution_observation_unavailable", 503);
+  }
 }

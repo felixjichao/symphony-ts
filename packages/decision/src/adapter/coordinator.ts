@@ -341,6 +341,7 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
 
   // Helper to record structured failure if adapter lifecycle or execution fails (Blocker 1 & 3)
   const recordFailure = async (err: unknown): Promise<TaskExecutionFailureOutcome> => {
+    if (signal?.aborted) throw signal.reason ?? err;
     let errorCode: DecisionAdapterErrorCode = "execution_failed";
     let retryable = false;
     let suggestedAction: DecisionAdapterSuggestedAction = "fail_closed";
@@ -576,6 +577,8 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
       }
     );
   } catch (err) {
+    // Cancellation belongs to the caller; never turn a technical interruption into a verdict.
+    if (signal?.aborted) throw signal.reason ?? err;
     const isPreSubmitRebind =
       err instanceof DecisionAdapterError &&
       err.suggestedAction === "rebind" &&
@@ -590,6 +593,8 @@ function buildSafeRawDetails(rawObj: unknown, task: DecisionTask): Record<string
     }
     return await recordFailure(err);
   }
+
+  signal?.throwIfAborted();
 
   // 4. Submit result (controller authority call)
   const submission = await controller.submitResult(task.id, {

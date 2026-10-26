@@ -14,6 +14,15 @@ it("authorizes only a fresh exact open PR HEAD and fails closed when GitHub is u
     } };
     expect(await authorizeDecisionWebExecution(task, runner)).toBe(allowed);
   }
-  expect(await authorizeDecisionWebExecution(task, { gh: async () => { throw new Error("offline"); } })).toBe(false);
-  expect(await authorizeDecisionWebExecution(task, { gh: async () => ({ exitCode: 0, stdout: "invalid", stderr: "" }) })).toBe(false);
+  await expect(authorizeDecisionWebExecution(task, { gh: async () => { throw new Error("offline"); } })).rejects.toMatchObject({ code: "execution_observation_unavailable", status: 503 });
+  for (const response of [
+    { exitCode: 1, stdout: "", stderr: "private diagnostic" },
+    { exitCode: 0, stdout: "invalid", stderr: "" },
+    { exitCode: 0, stdout: "null", stderr: "" },
+    { exitCode: 0, stdout: "{}", stderr: "" },
+  ]) {
+    await expect(authorizeDecisionWebExecution(task, { gh: async () => response }))
+      .rejects.toMatchObject({ code: "execution_observation_unavailable", status: 503,
+        message: "GitHub execution target observation unavailable" });
+  }
 });
