@@ -55,7 +55,7 @@ describe("mechanical observation boundaries", () => {
     for (const [name, digest] of Object.entries(approved)) expect(createHash("sha256").update(readFileSync(path.join(root, "apps/dashboard/src", name))).digest("hex"), name).toBe(digest);
   });
   it("checks every browser module, including local helpers", () => {
-    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts"];
+    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts", "routing.ts"];
     for (const file of files(path.join(root, "apps/dashboard/src")).filter(f => f.endsWith(".ts"))) {
       expect(allowed).toContain(path.basename(file));
       expect(browserErrors(path.basename(file), readFileSync(file, "utf8")), file).toEqual([]);

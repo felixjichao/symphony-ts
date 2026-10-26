@@ -58,3 +58,10 @@ npx tsx apps/dashboard/examples/smoke.ts
 ```
 
 The foreground smoke serves current `dist`, opens Chromium, checks loaded demo status, direct WorkKey routes, back/forward, three independent full SHAs, keyboard raw evidence, work isolation, review/mismatch/partial/conflict/terminal scenarios, fixed GET network requests, actual upstream disconnect and recovery, then closes browser/listeners. It prints browser version and asset hashes. This is local consumer acceptance, not production live verification. Default gate runs DOM/HTTP tests, not Chromium.
+
+## Operator Console navigation
+Top-level destinations are `#overview` (default), `#work`, `#executors` and `#system`. Work Detail keeps the existing `#${encodeURIComponent(JSON.stringify([provider, key]))}` format and highlights Work. Invalid and out-of-scope identities show an explicit message. Overview links to Work; inventory WorkKeys also open detail. Native hash history supports back/forward and refresh without server route configuration.
+
+The shell always retains the production/demo label and refresh status. Keyboard navigation focuses the page or detail heading; the first skip link reaches current content. Polling preserves surviving focus and diagnostic expansion. Navigation wraps on narrow screens; wide Work tables scroll within their own panel.
+
+The Chromium smoke additionally checks all destinations, active navigation, heading focus, invalid identities and 390px overflow, and writes desktop/narrow screenshots to `.symphony/evidence/dashboard-169` (override with `SYMPHONY_BROWSER_EVIDENCE`). Retain its JSON output alongside screenshots in the host issue/PR trail. Production labels are also checked by the shell repository tests.

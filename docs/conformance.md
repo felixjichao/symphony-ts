@@ -599,3 +599,20 @@ The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue sce
 Credential-origin review regression (PR #165): `apps/cli/src/status-credentials.test.ts` exercises actual host/profile/reload/status HTTP wiring with only the external gh runner intercepted. Public GitHub succeeds; GHES, alternate API bases and other providers degrade before subprocess execution, without credential forwarding or ambient fallback. A single observation retains its validated token through reload; the next observation revalidates its source. This does not add GHES status support.
 
 Independent review approved PR #165, which merged to `main` as `8f7675ed09f59919f438a3b6e657471eb6b883ba` on 2026-10-24 with main CI run #344 green. Parent #136's exit condition is satisfied by the #137–#139 sections above plus this closeout; closing it remains the owner's action.
+
+## §13 adjacent: Operator Console shell (#169)
+| Capability | Evidence | Boundary |
+|---|---|---|
+| Four destinations, active state, legacy/direct WorkKey detail and explicit invalid/scope misses | `apps/dashboard/tests/shell.test.ts`, `detail.test.ts`, `ui.test.ts` | Presentation route ownership only |
+| Keyboard heading/skip navigation, polling focus and expanded diagnostics | `shell.test.ts`, `detail-integration.test.ts` | No mutation controls |
+| Native back/forward, wrapped narrow navigation and overflow-contained table | `apps/dashboard/examples/smoke.ts` captures desktop and 390px screenshots | Built-product browser check separate from repository tests |
+| Production/demo labels and read-only source boundary | Shell/UI tests and existing recursive AST/type/import/bundle guards, extended to routing module | Fixed snapshot GET; no store access or frontend derivation |
+
+Sandbox validation uses Dashboard tests and root typecheck. Full gate, CI, independent exact-HEAD review and retained self-hosting delivery evidence are supplied by the operator host after the coding session; they are not claimed by this implementation entry.
+
+Sandbox result (2026-10-25): Dashboard 9 test files / 138 tests passed; root typecheck (including built Dashboard), scoped ESLint and docs:check passed. Chromium smoke was attempted with an already-installed browser/module, but Chromium exited SIGABRT during launch in the coding sandbox; no rendered evidence or successful browser acceptance is claimed. Host must run the documented smoke and retain screenshots/JSON alongside CI/review evidence.
+
+Host browser follow-up (2026-10-26, #169 / #178): all 23 built-product smoke
+scenarios passed with installed Edge 156.0.4314.42. Two asynchronous harness reads
+now wait for their existing focus/detail assertions. Product semantics are unchanged.
+Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger](evidence/dashboard-v2-shell/README.md).

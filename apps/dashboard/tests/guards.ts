@@ -56,7 +56,7 @@ export function browserErrors(name: string, source: string): string[] {
       if (specifier && ts.isStringLiteral(specifier)) {
         const value = specifier.text;
         if (!value.startsWith("./") && !(value === "@symphony/operations" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly)) errors.push("browser import boundary");
-        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|style\.css)$/.test(value)) errors.push("unapproved local module");
+        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|style\.css)$/.test(value)) errors.push("unapproved local module");
         if (value.includes("examples") || value.includes("tests")) errors.push("Node/test graph in browser");
       }
     }

@@ -139,3 +139,5 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 - [Work Detail diagnostics](accepted/architecture/2026-10-22-work-detail-diagnostics.md) — NEST-126 / #139: structured evidence, WorkKey isolation, exact targets and closed presentation guards.
 
 - [Bounded-continuity acceptance closeout](accepted/testing/2026-10-23-bounded-continuity-closeout.md) — maintainer-approved coverage profile, W03 bounded block and deferred seamless/live variants.
+
+- [Operator Console shell](accepted/architecture/2026-10-25-operator-console-shell.md) — #169 / §13 adjacent: four destinations, legacy WorkKey hashes, persistent chrome and accessible focus.
