@@ -37,3 +37,30 @@ main p, main article { overflow-wrap: anywhere; }
   h1 { font-size: 26px; }
   #detail article { padding: 8px; }
 }
+
+/* #170 operator-console tokens and reusable presentation language. */
+:root {
+  --console-bg: #10191d; --console-surface: #162329; --console-border: #49616a;
+  --console-text: #dce5e7; --console-muted: #a9bdc3; --console-focus: #ffce85;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 20px; --space-5: 28px;
+  --text-small: 12px; --text-body: 14px; --text-heading: 18px;
+  color: var(--console-text); background: var(--console-bg); font-size: var(--text-body);
+}
+.surface { border: 1px solid var(--console-border); padding: var(--space-3); background: var(--console-surface); }
+.surface > h2, .surface > h3 { margin-top: 0; font-size: var(--text-heading); }
+.badge { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 2px 6px; font-size: var(--text-small); }
+.attention-needs_human, .attention-failed, .state-unavailable { color: #ffb3a9; font-weight: 700; }
+.attention-degraded, .freshness-stale, .state-degraded { color: #ffce85; }
+.attention-normal, .freshness-fresh { color: #9bded0; }
+.attention-waiting, .freshness-unknown, .state-unknown { color: #c1cbd0; border-style: dashed; }
+.freshness-unavailable { color: #ffb3a9; border-style: double; }
+.presentation-state { border-left: 3px solid currentColor; padding: var(--space-2) var(--space-3); }
+.identity { display: block; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.dense-table td, .dense-table th { padding: var(--space-2); }
+.dense-table tbody tr:hover, .dense-list li:hover { background: #243a40; }
+.dense-list { padding-left: var(--space-4); } .dense-list li { padding: var(--space-1); }
+.control { display: inline-flex; flex-direction: column; gap: var(--space-1); margin: var(--space-2); }
+input, select { color: var(--console-text); background: var(--console-bg); border: 1px solid var(--console-border); padding: var(--space-2); font: inherit; }
+a:hover, summary:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--console-focus); outline-offset: 4px; }
+[aria-selected="true"] { border-inline-start: 3px solid var(--console-focus); background: #243a40; }

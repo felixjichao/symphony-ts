@@ -1,0 +1,177 @@
+{
+  "mode": "built",
+  "evidenceDir": "docs/evidence/dashboard-v2-primitives/browser",
+  "browser": "153.0.8010.12",
+  "scenarios": [
+    "primitive matrix",
+    "native keyboard focus outline",
+    "full SHA accessible name",
+    "four destinations",
+    "active navigation",
+    "heading focus",
+    "390px shell overflow",
+    "rendered screenshots",
+    "invalid/out-of-scope WorkKeys",
+    "load",
+    "WorkKey direct route",
+    "back/forward",
+    "three full SHAs",
+    "keyboard raw evidence",
+    "anomaly evidence focus/open retained across real 15s poll",
+    "unique diagnostic IDs",
+    "cross-work isolation",
+    "review",
+    "target-mismatch",
+    "result-mismatch",
+    "partial",
+    "conflict",
+    "terminal",
+    "transport disconnect",
+    "transport recover",
+    "GET only"
+  ],
+  "network": [
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+    "GET"
+  ],
+  "assets": [
+    {
+      "file": "index-BlDZ9Eut.css",
+      "sha256": "13b22f5e7f62f292278a753257b997e09910ceceecaf2b921bab17440f3d5714"
+    },
+    {
+      "file": "index-CLc0rZbK.js",
+      "sha256": "5963d80be779dbf87a19971a60123ae6ef28c5b4007731b9ff12a4aa30d361d1"
+    }
+  ],
+  "validationDate": "2026-10-26",
+  "sourceBaseCommit": "d77d946632fd763e868a37aaa12af257d663c073",
+  "sourceState": "Uncommitted repair on sourceBaseCommit; delivery runner must bind final commit to these source/asset hashes and retain exact-HEAD review.",
+  "sourceFiles": [
+    {
+      "file": "apps/dashboard/src/anomaly.ts",
+      "sha256": "07ab0a49d780a1b13161e641c7043d69d8adaac081d4d3010aede8c5e13487a2"
+    },
+    {
+      "file": "apps/dashboard/src/detail.ts",
+      "sha256": "b32a3768063921b63efa52069d8516a9c95b45fa3db6f826baa9ac414a999013"
+    },
+    {
+      "file": "apps/dashboard/src/dom.ts",
+      "sha256": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1"
+    },
+    {
+      "file": "apps/dashboard/src/evidence.ts",
+      "sha256": "f8e3990874bbdeed5ab4b69cb6e6f344cf688b9bc76659ac9ae005f6308e472c"
+    },
+    {
+      "file": "apps/dashboard/src/identity.ts",
+      "sha256": "2af61b5fe8f2c864f2e0e164a86ad2b4e26740e3fb1d85f5e2d864414ad9d6bc"
+    },
+    {
+      "file": "apps/dashboard/src/main.ts",
+      "sha256": "10085f625e22e35351c33bae659a837226e80fdd208e0177fbffadc698f220fb"
+    },
+    {
+      "file": "apps/dashboard/src/polling.ts",
+      "sha256": "9d03d8a3dd597e93be1789c4b7106b4f0833244fe1e0ddbfe3092a095e28663c"
+    },
+    {
+      "file": "apps/dashboard/src/presentation.ts",
+      "sha256": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61"
+    },
+    {
+      "file": "apps/dashboard/src/primitives.ts",
+      "sha256": "632a9c21ae837509d69a13aa228af220c58decc0bb827b5264d102ecb65ea298"
+    },
+    {
+      "file": "apps/dashboard/src/routing.ts",
+      "sha256": "565bb1b04f3f500f758d4d61e56527a50f95bc387c306822012314bf037028f8"
+    },
+    {
+      "file": "apps/dashboard/src/style.css",
+      "sha256": "52489321dbffa594144503b7971c44615dcde9b6599ce76f10cf57212ccb58ea"
+    },
+    {
+      "file": "apps/dashboard/src/transport.ts",
+      "sha256": "ec257e97fe442072dc8bb1db01ed5e1eab7f62dc65b83d0b23656a01dd716979"
+    },
+    {
+      "file": "apps/dashboard/src/validate.ts",
+      "sha256": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250"
+    },
+    {
+      "file": "apps/dashboard/src/view.ts",
+      "sha256": "4e69ede2be0360a5b730eef65c757fd76d6333c74364cfff48fb4857481fc4f9"
+    },
+    {
+      "file": "apps/dashboard/examples/smoke.ts",
+      "sha256": "7f0d58744433451eb75aee9b4fe288c60155ed1de105c1886bb2f174b7a6cb95"
+    },
+    {
+      "file": "apps/dashboard/examples/primitives.ts",
+      "sha256": "cce3dae4d9b54f4b2206b74dc43bc1e3b435da497ce2fd75131ffe7e9ac67dab"
+    },
+    {
+      "file": "apps/dashboard/tests/ui.test.ts",
+      "sha256": "c6c083f5474aae1c0544a446820f194fff862a0051a4b5b2a838abf04b6fbf48"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/showcase.html",
+      "sha256": "681ec5965e31d8e0f485ba7a92c5b11a347ab031249d79b3fcce8d967761a236"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/executors.png",
+      "sha256": "6cd98f9bfba00db3f1fd460cce563d7ffef95c74137b59074fbf3b88c7d541de"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/narrow-detail.png",
+      "sha256": "eaf3c69352d888f9845ac73cdaf54b22eea6f0d1656b79ebb2873617098072d7"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/narrow-executors.png",
+      "sha256": "4496186b20f8d9dfa0e4137455b395ea4cdb1eebfeec9b4cb90ae6fca8822ee2"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/narrow-overview.png",
+      "sha256": "e22f6937a29090112d70b43fa9f91264d2c8ef3fb42d39d49f1862b901676538"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/narrow-system.png",
+      "sha256": "841f3a65e6fe27292639b488c1e97838e9e7dc2b036c8eb8e0fd81ae07691238"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/narrow-work.png",
+      "sha256": "52227e5ab58530b68b94787345d2492a9132630e21722863d0942dc0f91154e3"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/overview.png",
+      "sha256": "8bdb3b666433992210fe78f480545c6a99ff59f962cb2f8e57f2ea44119a6aaf"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/primitives-desktop.png",
+      "sha256": "87a08f732b00542cd78e7c4deb02f2d5d9836105a399a6021b9e9f16e01735af"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/primitives-narrow.png",
+      "sha256": "e38ef82be4a882f96e20c55ceac1aa42fdafdbe8bc25477c37aef899a9e89a6e"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/system.png",
+      "sha256": "5f6e29b3f5b4f700a5fbed309c7eafaa6612fbc1589d7d81488a9eddc826107c"
+    },
+    {
+      "file": "docs/evidence/dashboard-v2-primitives/browser/work.png",
+      "sha256": "21cb104af28cd89d80c4b44cd86036c75e0242de2e67a11d9335cb3de854c418"
+    }
+  ]
+}

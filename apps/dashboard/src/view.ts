@@ -4,6 +4,7 @@ import { destination, destinations } from "./routing";
 import { findWork, token } from "./identity";
 import { approvalLabels, freshness, ordered, timestamp } from "./presentation";
 import { el } from "./dom";
+import { attentionBadge, denseTable, surface, workIdentity, shaIdentity, freshnessIndicator, presentationState } from "./primitives";
 import { workDetail } from "./detail";
 import { anomalyCards } from "./anomaly";
 function reviewDetails(work: WorkProjection): HTMLElement {
@@ -20,29 +21,25 @@ function reviewDetails(work: WorkProjection): HTMLElement {
     task: review?.task == null ? null : { taskId: review.task.taskId, revision: review.task.revision, target: review.task.kind === "review" ? review.task.target : null },
     result: review?.result == null ? null : { taskId: review.result.taskId, revision: review.result.revision, target: review.result.outcome.kind === "review" ? review.result.outcome.target : null },
   };
-  details.append(el("pre", JSON.stringify(identifiers, null, 2)));
+  details.append(shaIdentity("Review task target HEAD", review?.taskTarget?.headSha ?? null), shaIdentity("Review result / approval target HEAD", review?.result?.outcome.kind === "review" ? review.result.outcome.target.headSha : null), shaIdentity("PR HEAD", work.pullRequest?.headSha ?? null), shaIdentity("Review current HEAD", review?.currentHeadSha ?? null), el("pre", JSON.stringify(identifiers, null, 2)));
   return details;
 }
 function workTable(snapshot: OperationalSnapshot): HTMLElement {
-  const section = el("section"); section.id = "work";
-  section.append(el("h2", "Work list · attention-first"));
-  if (snapshot.work.length === 0) section.append(el("p", "当前快照没有已知工作；请同时检查来源状态。"));
-  const table = el("table");
-  table.append(el("caption", "当前工作投影（非历史记录）"));
-  const head = el("thead"); const headings = el("tr");
-  for (const name of ["工作 / Issue", "Phase", "等待原因", "CI", "Review", "Attention", "来源新鲜度"]) { const th = el("th", name); th.scope = "col"; headings.append(th); }
-  head.append(headings); table.append(head);
+  const section = surface("Work list · attention-first"); section.id = "work";
+  if (snapshot.work.length === 0) section.append(presentationState("empty", "当前快照没有已知工作；请同时检查来源状态。"));
+  const table = denseTable("当前工作投影（非历史记录）", ["工作 / Issue", "Phase", "等待原因", "CI", "Review", "Attention", "来源新鲜度"]);
   const body = el("tbody");
   for (const work of ordered(snapshot.work)) {
     const row = el("tr"); row.id = `work-${token(work.key)}`;
-    const identity = el("td"); const link = el("a", `${work.workItem.identifier} · ${work.key.provider}:${work.key.key}`);
+    const identity = el("td"); const link = workIdentity(work.key, work.workItem.identifier);
     link.href = `#${token(work.key)}`; link.id = `link-${token(work.key)}`;
     identity.append(link, el("p", work.workItem.title ?? "未报告标题"));
     const reviewCell = el("td", work.review === null ? "未提供审查信号" : approvalLabels[work.review.approval]);
     reviewCell.append(reviewDetails(work));
-    row.append(identity, el("td", work.phase), el("td", work.waiting === null ? "未报告等待" : `${work.waiting.reason} · 自 ${timestamp(work.waiting.since)}`), el("td", work.ci?.status ?? "未提供 CI 信号"), reviewCell, el("td", work.attention));
+    row.append(identity, el("td", work.phase), el("td", work.waiting === null ? "未报告等待" : `${work.waiting.reason} · 自 ${timestamp(work.waiting.since)}`), el("td", work.ci?.status ?? "未提供 CI 信号"), reviewCell);
+    const attentionCell = el("td"); attentionCell.append(attentionBadge(work.attention)); row.append(attentionCell);
     const sources = el("td");
-    sources.append(el("p", `GitHub: ${freshness(work.freshness.github)}`), el("p", `Runtime: ${freshness(work.freshness.runtime)}`), el("p", `Decision: ${freshness(work.freshness.decision)}`));
+    sources.append(el("p", "GitHub: "), freshnessIndicator(work.freshness.github), el("p", "Runtime: "), freshnessIndicator(work.freshness.runtime), el("p", "Decision: "), freshnessIndicator(work.freshness.decision));
     row.append(sources); body.append(row);
   }
   table.append(body); section.append(table); return section;

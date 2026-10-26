@@ -88,5 +88,17 @@ try {
   assert.ok(network.length >= 3 && network.every(method => method === "GET") && endpoints.every(path => path === "/api/operations/snapshot"));
   const assets = await readdir(new URL("../dist/assets/", import.meta.url));
   const hashes = await Promise.all(assets.map(async file => ({ file, sha256: createHash("sha256").update(await readFile(new URL(`../dist/assets/${file}`, import.meta.url))).digest("hex") })));
-  console.log(JSON.stringify({ mode: "built", evidenceDir, browser: await browser.version(), scenarios: ["four destinations", "active navigation", "heading focus", "390px shell overflow", "rendered screenshots", "invalid/out-of-scope WorkKeys", "load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "anomaly evidence focus/open retained across real 15s poll", "unique diagnostic IDs", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
+  // Static controlled matrix uses the actual primitive DOM, separate from live snapshots.
+  await page.setContent(await readFile(new URL("../../../docs/evidence/dashboard-v2-primitives/showcase.html", import.meta.url), "utf8"));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("searchbox").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.locator("select").evaluate((node: HTMLElement) => node === document.activeElement), true);
+  assert.notEqual(await page.locator("select").evaluate((node: HTMLElement) => getComputedStyle(node).outlineStyle), "none");
+  assert.equal(await page.locator(".badge").count(), 9);
+  assert.equal(await page.locator("code").first().getAttribute("aria-label"), `PR HEAD: ${"a".repeat(40)}`);
+  await page.screenshot({ path: `${evidenceDir}/primitives-desktop.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: `${evidenceDir}/primitives-narrow.png`, fullPage: true });
+  console.log(JSON.stringify({ mode: "built", evidenceDir, browser: await browser.version(), scenarios: ["primitive matrix", "native keyboard focus outline", "full SHA accessible name", "four destinations", "active navigation", "heading focus", "390px shell overflow", "rendered screenshots", "invalid/out-of-scope WorkKeys", "load", "WorkKey direct route", "back/forward", "three full SHAs", "keyboard raw evidence", "anomaly evidence focus/open retained across real 15s poll", "unique diagnostic IDs", "cross-work isolation", "review", "target-mismatch", "result-mismatch", "partial", "conflict", "terminal", "transport disconnect", "transport recover", "GET only"], network, assets: hashes }, null, 2));
 } finally { await browser?.close(); if (recovered) await close(recovered); await demo.stop(); }

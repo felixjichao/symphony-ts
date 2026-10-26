@@ -65,3 +65,9 @@ Top-level destinations are `#overview` (default), `#work`, `#executors` and `#sy
 The shell always retains the production/demo label and refresh status. Keyboard navigation focuses the page or detail heading; the first skip link reaches current content. Polling preserves surviving focus and diagnostic expansion. Navigation wraps on narrow screens; wide Work tables scroll within their own panel.
 
 The Chromium smoke additionally checks all destinations, active navigation, heading focus, invalid identities and 390px overflow, and writes desktop/narrow screenshots to `.symphony/evidence/dashboard-169` (override with `SYMPHONY_BROWSER_EVIDENCE`). Retain its JSON output alongside screenshots in the host issue/PR trail. Production labels are also checked by the shell repository tests.
+
+## Presentation primitives (#170)
+
+`src/primitives.ts` provides DOM-native attention/freshness badges, explicit display states, WorkKey and independent SHA identities, surfaces, dense tables/lists and native labeled search/filter controls. Append returned elements using the existing DOM model. Controls expose native events; callers supply behavior. Pass already-derived enums, never infer attention, phase, freshness, health or approval applicability here. Full SHA values remain in accessible names and titles; PR, task and result targets stay separate.
+
+Regenerate the controlled matrix with `npx tsx apps/dashboard/examples/primitives.ts` from the repository root. Open [the standalone showcase](../../docs/evidence/dashboard-v2-primitives/showcase.html) locally. The existing optional Chromium smoke also captures this matrix at desktop/390px and checks Tab focus outline and full SHA accessibility. Regenerate before running smoke; no runtime route or API is added.
