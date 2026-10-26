@@ -1,0 +1,25 @@
+{
+  "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+  "status": "running",
+  "claimGeneration": 1,
+  "target": {
+    "repository": "felixjichao/symphony-delivery-dogfood",
+    "prNumber": 25,
+    "headSha": "d590d4bc0b54284c5abf1662a49c0086822e9fa7"
+  },
+  "execution": {
+    "revision": 1,
+    "startedAtMs": 1792650909004,
+    "lastProgressAtMs": 1792650931948,
+    "deadlineAtMs": 1792651531948,
+    "phase": "waiting_response",
+    "responseLength": 0,
+    "recoveryAttempts": 0,
+    "blocked": {
+      "reason": "human_required",
+      "unblock": "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock",
+      "atMs": 1792650951198
+    }
+  },
+  "receiptPresent": false
+}

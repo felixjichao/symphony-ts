@@ -69,9 +69,16 @@ await bridge.stop();
 | `POST` | `/v1/tasks/:id/cancel` | Explicitly cancels unfinished task |
 | `POST` | `/v1/tasks/:id/supersede` | Explicitly supersedes task |
 
+Expired-claim recovery policy belongs to the work-aware host coordinator. Bridge startup, timers, task polling and claim requests do not reclaim leases independently. Polling is read-only; claims accept only pending tasks and cannot replace an unsettled session lease merely because its deadline elapsed; callers delegate through the authenticated fenced reclaim primitive after checking current work-level admission and stage facts.
+
 ## Known limitations
 
 - Restricted strictly to loopback (`127.0.0.1`). Not exposed to the local network (LAN) or public interfaces.
 - Single writer per store directory: concurrent instances on the same directory fail startup with `DecisionStoreLockError`.
 - Whole JSON snapshot format: designed for local single-node workflows without external database dependencies. High-throughput multi-writer scenarios require migrating to a relational database (see [Agent Note](../../notes/accepted/architecture/2026-10-09-decision-store-bridge.md)).
 - Does not implement DOM automation, browser scripts, or orchestrator state machine wiring (see [Executor Adapter Note](../../notes/accepted/architecture/2026-10-09-decision-executor-adapter.md)).
+
+
+## Read-only operational observation
+
+Authenticated `GET /v1/observations/work?provider=github&key=owner%2Frepo%231` applies the same Host/Origin/auth boundary and returns `DecisionService.observeWork`'s single committed-state whitelist. `DecisionBridgeClient.observeWork` aborts after 3 seconds, including response-body reads. This endpoint does not claim, release expired leases, expose tokens/context/receipts or assemble results through multiple queries.

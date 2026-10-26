@@ -1,0 +1,199 @@
+Symphony Decision Driver
+● Running
+Connecting & polling...
+Token: Configured
+Change Token
+Response timeout (minutes, 1–60)
+Stop Driver
+Driver diagnostics (last 50 events)
+[
+  {
+    "atMs": 1792719428064,
+    "stage": "navigating",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719428704,
+    "stage": "bootstrap_submitting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719428933,
+    "stage": "bootstrap_waiting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719432374,
+    "stage": "bootstrap_waiting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719443446,
+    "stage": "rebind_submitting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719444237,
+    "stage": "prompt_submitting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719444411,
+    "stage": "waiting_response",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719444413,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 1,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": false,
+      "elapsedMs": 0
+    }
+  },
+  {
+    "atMs": 1792719444916,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 2,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 503
+    }
+  },
+  {
+    "atMs": 1792719466085,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": null,
+      "baselineCount": 1,
+      "currentCount": 0,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": false,
+      "elapsedMs": 0
+    }
+  },
+  {
+    "atMs": 1792719467102,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 1,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 1017
+    }
+  },
+  {
+    "atMs": 1792719468200,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 2,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 2113
+    }
+  },
+  {
+    "atMs": 1792719493484,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "stabilizing",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 2,
+      "candidateFound": true,
+      "matchingTaskResult": true,
+      "stopPresent": false,
+      "elapsedMs": 27395
+    }
+  },
+  {
+    "atMs": 1792719494495,
+    "stage": "response_wait",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1,
+    "wait": {
+      "phase": "completed",
+      "reason": "ready",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 1,
+      "currentCount": 2,
+      "candidateFound": true,
+      "matchingTaskResult": true,
+      "stopPresent": false,
+      "elapsedMs": 28408
+    }
+  },
+  {
+    "atMs": 1792719494500,
+    "stage": "result_submitting",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  },
+  {
+    "atMs": 1792719506776,
+    "stage": "result_submit_error",
+    "taskId": "github%3Asymphony-acceptance%2Fpr159%23151:plan:1",
+    "kind": "plan",
+    "revision": 1
+  }
+]

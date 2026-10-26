@@ -7,6 +7,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { DeliveryError, type DeliveryErrorCode } from "@symphony/domain";
 
 export interface GhExecOptions {
+  /** Host authority lifecycle evidence; invoked only when the child is confirmed closed. */
+  readonly onProcessClose?: (() => void) | undefined;
   readonly timeoutMs?: number | undefined;
   readonly cwd?: string | undefined;
   readonly env?: Record<string, string | undefined> | undefined;
@@ -211,6 +213,7 @@ export class DefaultGhRunner implements GhRunner {
 
       child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null) => {
         cleanup();
+        try { options.onProcessClose?.(); } catch (error) { reject(error); return; }
         const code = exitCode ?? (signal ? 128 : 1);
         const cleanStderr = sanitizeCredentials(stderr);
 

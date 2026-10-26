@@ -1,8 +1,10 @@
 import path from "node:path";
+import { parseStatusWork, type StatusOptions } from "./status";
 
 export interface ParsedCliArgs {
-  readonly subcommand?: "repo-bootstrap" | "delivery" | "delivery-skill" | "dogfood" | "decision-bridge" | "plan" | undefined;
+  readonly subcommand?: "recovery" | "repo-bootstrap" | "delivery" | "delivery-skill" | "dogfood" | "decision-bridge" | "plan" | undefined;
   readonly subcommandArgs?: readonly string[] | undefined;
+  readonly status?: StatusOptions | undefined;
   readonly workflowPath?: string | undefined;
   readonly enablePlanning?: boolean | undefined;
   readonly decisionStoreDir?: string | undefined;
@@ -15,6 +17,7 @@ export interface ParsedCliArgs {
 export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   if (argv.length > 0) {
     const first = argv[0];
+    if (first === "recovery") return { subcommand: "recovery", subcommandArgs: argv.slice(1) };
     if (first === "plan" || first === "planning") {
       return {
         subcommand: "plan",
@@ -77,12 +80,27 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let decisionStoreDir: string | undefined;
   let decisionBridgeUrl: string | undefined;
   let decisionBridgeToken: string | undefined;
+  let statusEnabled = false;
+  let statusPort: number | undefined;
+  const statusWork: ReturnType<typeof parseStatusWork>[] = [];
   let help = false;
   let version = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg === "--help" || arg === "-h") {
+    if (arg === "--status") {
+      statusEnabled = true;
+    } else if (arg === "--status-port" || arg === "--status-work") {
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new TypeError(`Missing ${arg} value`);
+      if (arg === "--status-work") statusWork.push(parseStatusWork(value));
+      else {
+        if (!/^(0|[1-9][0-9]*)$/.test(value) || Number(value) > 65535) throw new TypeError("Invalid status port");
+        statusPort = Number(value);
+      }
+    } else if (arg.startsWith("--status")) {
+      throw new TypeError("Unknown status option");
+    } else if (arg === "--help" || arg === "-h") {
       help = true;
     } else if (arg === "--version" || arg === "-v") {
       version = true;
@@ -103,7 +121,9 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     }
   }
 
+  if (!statusEnabled && (statusPort !== undefined || statusWork.length)) throw new TypeError("Status options require --status");
   return {
+    ...(statusEnabled ? { status: { workKeys: statusWork, ...(statusPort === undefined ? {} : { port: statusPort }) } } : {}),
     ...(workflowPath !== undefined ? { workflowPath } : {}),
     ...(enablePlanning !== undefined ? { enablePlanning } : {}),
     ...(decisionStoreDir !== undefined ? { decisionStoreDir } : {}),

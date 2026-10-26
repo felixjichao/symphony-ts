@@ -15,6 +15,9 @@ The CLI accepts --validation-timeout in integer seconds and converts once to
 milliseconds. The agent uses the configured timeout (default 600000 ms) for all
 three project validation paths: initial, CI repair, and review repair. Values must
 be positive integers within Node timer range; invalid API values fail before I/O.
+The effective timeout is checkpointed in DeliveryContinuation and restored by host
+recovery; legacy continuations without the field retain the default. Validation
+runs before acquiring the storage lock.
 CLI seconds are capped at 2147483. The full validation command is unchanged.
 Git/gh defaults, repair timeouts, persisted CI deadlines and budgets are unchanged.
 

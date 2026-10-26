@@ -118,6 +118,7 @@ describe("resolveServiceConfig — defaults (SPEC §6.4)", () => {
         maxConcurrentAgents: 10,
         maxTurns: 20,
         maxRetryBackoffMs: 300_000,
+        recovery: { maxAttempts: 6, maxStrategyAttempts: 2 },
         maxConcurrentAgentsByState: {},
       },
       codex: {
@@ -735,5 +736,15 @@ describe("loadEffectiveWorkflow — composition & error surface (SPEC §5.5 / §
       "tracker.kind",
     );
     expect(error.message).not.toContain("max_turns");
+  });
+});
+
+describe("finite recovery configuration", () => {
+  it("resolves explicit recovery limits through a real workflow", () => {
+    const result = loadWithFrontMatter("agent:\n  recovery:\n    max_attempts: 4\n    max_strategy_attempts: 1");
+    expect(result.serviceConfig.agent.recovery).toEqual({ maxAttempts: 4, maxStrategyAttempts: 1 });
+  });
+  it.each(["0", "-1", "1.5", ".inf", "9007199254740992", '"unlimited"'])("rejects non-finite or invalid recovery limit %s", value => {
+    expectInvalidConfig(`agent:\n  recovery:\n    max_attempts: ${value}`, "agent.recovery.max_attempts");
   });
 });

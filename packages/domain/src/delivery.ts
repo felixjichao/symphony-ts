@@ -386,7 +386,7 @@ export interface DeliveryReviewGate {
     sessionId: string,
     target: DecisionReviewTarget,
     context?: DecisionContextBundle,
-    options?: { operationKey?: string },
+    options?: { operationKey?: string; reuseCompleted?: boolean },
   ): Promise<DecisionTask>;
 
   /**
@@ -452,9 +452,52 @@ export interface DeliveryHandoff {
   readonly readyLabelRemoved?: boolean | undefined;
   readonly commentPosted?: boolean | undefined;
   readonly handoffId?: string | undefined;
+  /** Receipt destination is independent of the PR business target. Legacy
+   * handoffs with a PR and unique marker re-observe both comment collections. */
+  readonly reportDestination?: "issue" | "pr" | undefined;
+}
+
+/** Small native Delivery step markers (§4 adjacent); current stage remains derived. */
+export interface DeliveryContinuation {
+  readonly intentId: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly headSha: string;
+  readonly prNumber: number;
+  readonly optInLand: boolean;
+  readonly readyLabel: string;
+  readonly maxRepairAttempts: number;
+  readonly maxWaitSeconds: number;
+  readonly requiredChecks?: readonly string[] | undefined;
+  readonly repairCommand?: string | undefined;
+  readonly validationCommand?: string | undefined;
+  /** Persisted validation limit; legacy continuations use the default. */
+  readonly validationTimeoutMs?: number | undefined;
+  readonly phase: "ci" | "review_intent" | "review_wait" | "result_observed" | "repair_pending" | "ready";
+  readonly reviewTaskId?: string | undefined;
+  readonly reviewRevision?: number | undefined;
+  readonly reviewOperationKey?: string | undefined;
+  readonly verdict?: "approve" | "changes_requested" | "needs_human" | undefined;
+}
+export interface LandingIntent {
+  readonly intentId: string;
+  readonly context: DeliveryContext;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly optIn: true;
+  readonly phase: "intent" | "observed";
+  readonly mergeCommitSha?: string | undefined;
+  readonly mergedAt?: string | undefined;
+}
+export interface LandingIntentStorage {
+  withExclusive?<T>(action: (storage: LandingIntentStorage) => Promise<T>): Promise<T>;
+  read(): Promise<LandingIntent | null> | LandingIntent | null;
+  write(intent: LandingIntent): Promise<void> | void;
 }
 
 export interface PersistedDeliveryState {
+  readonly continuation?: DeliveryContinuation | undefined;
+  readonly landing?: LandingIntent | undefined;
   readonly repo: string;
   readonly issueNumber: number;
   readonly workspaceKey: string;
@@ -551,7 +594,7 @@ export interface DeliverySkillConfig {
   readonly plan?: DecisionMaterializedPlan | null | undefined;
 }
 
-export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land";
+export type DeliverySkillStatus = "completed" | "blocked" | "ready_to_land" | "waiting";
 
 export interface DeliverySkillResult {
   readonly status: DeliverySkillStatus;

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import {
+  parseWorkKey,
   parseDecisionReviewTarget,
   parseDecisionContextBundle,
   type DecisionContextBundle,
@@ -35,6 +36,10 @@ export class DecisionBridge {
   private readonly allowedOrigins: Set<string>;
   private server: http.Server | null = null;
   private actualPort: number | null = null;
+  private closing = false;
+  private fullyStopped = false;
+  private startup: Promise<{ host: string; port: number }> | null = null;
+  private shutdown: Promise<void> | null = null;
   private activeSockets = new Set<import("node:net").Socket>();
 
   constructor(serviceOrConfig: DecisionService | DecisionBridgeConfig, config?: Partial<DecisionBridgeConfig>) {
@@ -49,11 +54,13 @@ export class DecisionBridge {
       const storeConfig: DecisionStoreConfig = {
         storeDir: serviceOrConfig.storeDir,
         clock: serviceOrConfig.clock,
+        authorizeExecution: serviceOrConfig.authorizeExecution,
         defaultClaimTtlMs: serviceOrConfig.defaultClaimTtlMs,
       };
       const store = new DurableDecisionStore(storeConfig);
       this.service = new DecisionService(store, {
         clock: serviceOrConfig.clock,
+        authorizeExecution: serviceOrConfig.authorizeExecution,
         defaultClaimTtlMs: serviceOrConfig.defaultClaimTtlMs,
       });
       this.host = serviceOrConfig.host ?? "127.0.0.1";
@@ -81,12 +88,25 @@ export class DecisionBridge {
     return this.host;
   }
 
-  async start(): Promise<{ host: string; port: number }> {
+  start(): Promise<{ host: string; port: number }> {
+    if (this.fullyStopped) {
+      this.fullyStopped = false;
+      this.closing = false;
+      this.startup = null;
+      this.shutdown = null;
+    }
+    if (this.closing) return Promise.reject(new Error("Decision bridge is stopping"));
+    if (!this.startup) this.startup = this.startInternal();
+    return this.startup;
+  }
+
+  private async startInternal(): Promise<{ host: string; port: number }> {
     if (this.server) {
       return { host: this.host, port: this.actualPort! };
     }
 
     await this.service.getStore().open();
+    if (this.closing) throw new Error("Decision bridge stopped during startup");
 
     return new Promise<{ host: string; port: number }>((resolve, reject) => {
       const server = http.createServer((req, res) => {
@@ -119,9 +139,17 @@ export class DecisionBridge {
     });
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.closing = true;
+    if (!this.shutdown) this.shutdown = this.stopInternal();
+    return this.shutdown;
+  }
+
+  private async stopInternal(): Promise<void> {
+    try { await this.startup; } catch { /* startup failure still owns its store cleanup */ }
     if (!this.server) {
       await this.service.getStore().close();
+      this.fullyStopped = true;
       return;
     }
 
@@ -143,6 +171,7 @@ export class DecisionBridge {
     });
 
     await this.service.getStore().close();
+    this.fullyStopped = true;
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -191,6 +220,46 @@ export class DecisionBridge {
     const url = new URL(req.url ?? "/", `http://${this.host}`);
     const pathname = url.pathname;
     const method = req.method?.toUpperCase();
+
+    if (method === "GET" && pathname === "/v1/observations/work") {
+      let key;
+      try { key = parseWorkKey({ provider: url.searchParams.get("provider"), key: url.searchParams.get("key") }); }
+      catch { throw new DecisionValidationError("Invalid observation WorkKey"); }
+      this.sendJson(res, 200, this.service.observeWork(key));
+      return;
+    }
+    if (method === "GET" && pathname === "/v1/continuity") {
+      this.sendJson(res, 200, { work: this.service.continuityWork() });
+      return;
+    }
+    if (method === "POST" && pathname === "/v1/continuity/reclaim") {
+      const body = await this.readJsonBody(req) as Record<string, unknown> | null;
+      if (!body || typeof body["taskId"] !== "string" ||
+        !["revision", "claimGeneration", "bindingGeneration", "leaseExpiresAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0)) {
+        throw new DecisionValidationError("Invalid expired claim fence");
+      }
+      const reclaimed = await this.service.reclaimExpiredClaim({ taskId: body["taskId"],
+        revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
+        bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: body["leaseExpiresAtMs"] as number });
+      this.sendJson(res, 200, { reclaimed });
+      return;
+    }
+    if (method === "POST" && pathname === "/v1/continuity/unblock") {
+      const body = await this.readJsonBody(req) as Record<string, unknown> | null;
+      // `leaseExpiresAtMs: null` is the explicit fence for a pending task that owns no lease.
+      const leaseExpiresAtMs = body?.["leaseExpiresAtMs"];
+      if (!body || typeof body["taskId"] !== "string" ||
+        !["revision", "claimGeneration", "bindingGeneration", "blockedAtMs"].every(key => Number.isSafeInteger(body[key]) && (body[key] as number) >= 0) ||
+        (leaseExpiresAtMs !== null && !(Number.isSafeInteger(leaseExpiresAtMs) && (leaseExpiresAtMs as number) >= 0))) {
+        throw new DecisionValidationError("Invalid unblock fence");
+      }
+      const unblocked = await this.service.unblockExecution({ taskId: body["taskId"],
+        revision: body["revision"] as number, claimGeneration: body["claimGeneration"] as number,
+        bindingGeneration: body["bindingGeneration"] as number, leaseExpiresAtMs: leaseExpiresAtMs as number | null,
+        blockedAtMs: body["blockedAtMs"] as number });
+      this.sendJson(res, 200, { unblocked });
+      return;
+    }
 
     // Route matching
     // GET /v1/tasks/next
@@ -244,6 +313,27 @@ export class DecisionBridge {
       return;
     }
 
+    const blockMatch = /^\/v1\/tasks\/([^/]+)\/block$/.exec(pathname);
+    if (method === "POST" && blockMatch) {
+      const b = await this.readJsonBody(req) as Record<string, unknown>;
+      if (!b || typeof b["owner"] !== "string" || typeof b["token"] !== "string"
+        || typeof b["generation"] !== "number" || typeof b["reason"] !== "string") throw new DecisionValidationError("Invalid block request");
+      await this.service.blockExecution(decodeURIComponent(blockMatch[1]!), {
+        owner: b["owner"], token: b["token"], generation: b["generation"], reason: b["reason"],
+        ...(b["recoveryCount"] !== undefined ? { recoveryCount: b["recoveryCount"] as number } : {}),
+      });
+      this.sendJson(res, 200, { blocked: true });
+      return;
+    }
+
+    const executionMatch = /^\/v1\/tasks\/([^/]+)\/execution$/.exec(pathname);
+    if (method === "GET" && executionMatch) {
+      const id = decodeURIComponent(executionMatch[1]!);
+      if (!this.service.getTask(id)) throw new DecisionNotFoundError("Task not found");
+      this.sendJson(res, 200, { execution: this.service.getExecution(id) });
+      return;
+    }
+
     // POST /v1/tasks/:id/heartbeat
     const hbMatch = /^\/v1\/tasks\/([^/]+)\/heartbeat$/.exec(pathname);
     if (method === "POST" && hbMatch) {
@@ -259,6 +349,7 @@ export class DecisionBridge {
         token: b["token"],
         generation: b["generation"],
         ttlMs: typeof ttlMs === "number" ? ttlMs : undefined,
+        ...(b["progress"] !== undefined ? { progress: parseExecutionProgress(b["progress"]) } : {}),
       });
       this.sendJson(res, 200, result);
       return;
@@ -374,7 +465,7 @@ export class DecisionBridge {
       const id = decodeURIComponent(taskGetMatch[1]!);
       const task = this.service.getTask(id);
       if (!task) throw new DecisionNotFoundError(`Task "${id}" not found`);
-      this.sendJson(res, 200, { task });
+      this.sendJson(res, 200, { task, execution: this.service.getExecution(id) });
       return;
     }
 
@@ -526,6 +617,7 @@ export class DecisionBridge {
           ...(operationKey !== undefined ? { operationKey } : {}),
           supersedeSessionReviews,
           ...(forceNewRevision ? { forceNewRevision: true } : {}),
+          ...(b["reuseCompleted"] === true ? { reuseCompleted: true } : {}),
         });
         this.sendJson(res, 201, { task });
         return;
@@ -744,4 +836,12 @@ export class DecisionBridge {
       res.end(JSON.stringify({ error: { code, message } }));
     }
   }
+}
+
+function parseExecutionProgress(value: unknown): { phase: string; responseLength: number } {
+  if (!value || typeof value !== "object" || !("phase" in value) || !("responseLength" in value)
+    || typeof value.phase !== "string" || typeof value.responseLength !== "number") {
+    throw new DecisionValidationError("Invalid execution progress");
+  }
+  return { phase: value.phase, responseLength: value.responseLength };
 }

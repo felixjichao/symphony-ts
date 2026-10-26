@@ -1,0 +1,17 @@
+{
+  "sourceCommit": "285ff58399ea1d8206a6f4758d9d378abaf65c19",
+  "node": "v24.15.0",
+  "npm": "12.2.0",
+  "command": "TMPDIR=/private/tmp npm run gate",
+  "exitCode": 0,
+  "testsPassed": 2307,
+  "testsSkipped": 1,
+  "execution": "outside restricted process-signal sandbox",
+  "artifactsSha256": {
+    "apps/chatgpt-web/dist/symphony-decision-driver.user.js": "1ced74f4e363a24cb48f651cc9b04f33fb896d0be594e6f9cfe3f198345d9ff5",
+    "apps/cli/dist/bin/symphony.js": "5e4dd5edf472f323cd866c9cced01a2b9f1ea47d42dc53d86523d926d3d06ddb",
+    "/private/tmp/symphony-pr159-live-20261023/server.mjs": "a972f9848358c76d44a3d05ccc27da8820563015611a6bb93036d94100aab0b6",
+    "/private/tmp/pr159-gate-unsandboxed.log": "31a0d0e829942ea423cffbbe222dae3107e3897fcccb9174bdb92ea935349d8f"
+  },
+  "scope": "subsequent changes only record documentation/evidence"
+}

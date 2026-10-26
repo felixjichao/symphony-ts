@@ -1,3 +1,5 @@
+import { withDeliveryFileAuthority } from "./file-authority";
+import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -15,6 +17,8 @@ import {
 } from "@symphony/decision";
 import {
   decisionSessionId,
+  isDeliveryContinuation,
+  isLandingIntent,
   formatDeliveryHandoffMarkdown,
   type DecisionMaterializedPlan,
   type DeliveryHandoff,
@@ -30,7 +34,13 @@ export interface DeliveryCliIo {
 }
 
 export class FileDeliveryStateStorage implements DeliveryStateStorage {
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly filePath: string, private readonly lockHeld = false) {}
+
+  async withExclusive<T>(action: (storage: DeliveryStateStorage) => Promise<T>): Promise<T> {
+    if (this.lockHeld) return action(this);
+    return withDeliveryAuthority(path.dirname(path.dirname(this.filePath)),
+      () => action(new FileDeliveryStateStorage(this.filePath, true)));
+  }
 
   readState(): PersistedDeliveryState | null {
     if (!fs.existsSync(this.filePath)) {
@@ -61,20 +71,23 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     ) {
       throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);
     }
+    if (rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
+        rec["landing"] !== undefined && (!isLandingIntent(rec["landing"])
+          || rec["landing"].context.repo.toLowerCase() !== String(rec["repo"]).toLowerCase()
+          || rec["landing"].context.issueNumber !== rec["issueNumber"]
+          || rec["landing"].context.workspaceKey !== rec["workspaceKey"])) {
+      throw new Error("Corrupted delivery recovery step schema");
+    }
+    const handoff = rec["handoff"] as DeliveryHandoff | undefined;
+    if (handoff?.reportDestination !== undefined && (handoff.reportDestination !== "issue" && handoff.reportDestination !== "pr"
+      || handoff.reportDestination === "pr" && handoff.prNumber === null)) {
+      throw new Error("Corrupted delivery report destination");
+    }
     return rec as unknown as PersistedDeliveryState;
   }
 
   writeState(state: PersistedDeliveryState): void {
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const tmpFile = path.join(
-      dir,
-      `.delivery-state.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
-    );
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmpFile, this.filePath);
+    writeDurableJson(this.filePath, state);
   }
 }
 
@@ -214,7 +227,27 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   };
 }
 
+/** One filesystem authority lock shared by run, halt, and automatic/manual compensation.
+ * Never steal a lock by age: an old process may still be executing a GitHub mutation.
+ */
+export async function withDeliveryAuthority<T>(cwd: string, action: () => Promise<T>): Promise<T> {
+  return withDeliveryFileAuthority(path.join(cwd, ".symphony", "delivery-authority.lock"), action);
+}
+
 export async function runDeliverySkillCli(
+  argv: readonly string[], io: DeliveryCliIo, customRunner?: DeliveryGitGhRunner,
+  customReviewGate?: DeliveryReviewGate,
+): Promise<number> {
+  try {
+    const parsed = parseDeliverySkillArgs(argv);
+    return await withDeliveryAuthority(parsed.cwd ?? process.cwd(), () => runDeliverySkillCliLocked(argv, io, customRunner, customReviewGate));
+  } catch (error) {
+    io.stderr.write(`symphony delivery-skill: ${String(error)}\n`);
+    return 1;
+  }
+}
+
+async function runDeliverySkillCliLocked(
   argv: readonly string[],
   io: DeliveryCliIo,
   customRunner?: DeliveryGitGhRunner,
@@ -238,7 +271,7 @@ export async function runDeliverySkillCli(
   }
 
   if (parsed.action === "recover-handoff") {
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
     const result = await recoverDeliveryHandoff({
       cwd,
       repo: parsed.repo,
@@ -272,12 +305,20 @@ export async function runDeliverySkillCli(
     const reason = (parsed.reason ?? "budget_exhausted") as DeliveryHandoff["reason"];
     const details = parsed.details ?? "Delivery budget exhausted or manual blocker triggered.";
 
-    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
-    let existingState: PersistedDeliveryState | null = null;
-    try {
-      existingState = stateStorage.readState();
-    } catch {
-      // ignore
+    const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
+    // A damaged or foreign record is evidence, never permission to replace it.
+    const existingState = stateStorage.readState();
+    if (existingState && (existingState.repo.toLowerCase() !== parsed.repo.toLowerCase()
+      || existingState.issueNumber !== parsed.issueNumber
+      || (parsed.workspaceKey !== undefined && existingState.workspaceKey !== parsed.workspaceKey))) {
+      throw new Error("Delivery halt work identity does not match persisted state");
+    }
+
+    if (existingState?.isPaused) {
+      if (!existingState.pendingCompensation) return 0;
+      const recovered = await recoverDeliveryHandoff({ cwd, repo: parsed.repo, issueNumber: parsed.issueNumber,
+        workspaceKey: parsed.workspaceKey, stateStorage, runner });
+      return recovered.success ? 0 : 1;
     }
 
     const spentRepairs = existingState?.spentRepairs ?? (parsed.maxRepairs ?? 3);
@@ -289,10 +330,10 @@ export async function runDeliverySkillCli(
       details,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
-      headBranch: parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
-      prNumber: null,
-      prUrl: null,
-      headSha: null,
+      headBranch: existingState?.continuation?.headBranch ?? existingState?.landing?.context.headBranch ?? parsed.headBranch ?? `symphony/GH-${parsed.issueNumber}`,
+      prNumber: existingState?.continuation?.prNumber ?? existingState?.landing?.prNumber ?? null,
+      prUrl: existingState?.handoff?.prUrl ?? null,
+      headSha: existingState?.continuation?.headSha ?? existingState?.landing?.headSha ?? null,
       spentRepairs,
       maxRepairs: parsed.maxRepairs ?? spentRepairs,
       spentWaitSeconds,
@@ -301,10 +342,12 @@ export async function runDeliverySkillCli(
       readyLabelRemoved: false,
       commentPosted: false,
       handoffId,
+      reportDestination: "issue",
     };
 
     // 先持久化 paused 状态和待补偿事实
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -362,6 +405,7 @@ export async function runDeliverySkillCli(
 
     const handoffAfterLabel = { ...handoff, readyLabelRemoved };
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -406,6 +450,7 @@ export async function runDeliverySkillCli(
 
     const pendingCompensation = !(readyLabelRemoved && commentPosted);
     stateStorage.writeState({
+      ...existingState,
       repo: parsed.repo,
       issueNumber: parsed.issueNumber,
       workspaceKey: parsed.workspaceKey ?? (existingState?.workspaceKey ?? `GH-${parsed.issueNumber}`),
@@ -443,7 +488,7 @@ export async function runDeliverySkillCli(
   const baseBranch = parsed.baseBranch ?? "main";
   const workspaceKey = parsed.workspaceKey ?? `GH-${parsed.issueNumber}`;
 
-  const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
+  const stateStorage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"), true);
 
   let reviewGate = customReviewGate;
   let plan: DecisionMaterializedPlan | null | undefined = undefined;

@@ -1,0 +1,44 @@
+[
+  {
+    "taskId": "github%3Asymphony-acceptance%2Fpr156%23151:plan:1",
+    "revision": 1,
+    "finalStatus": "superseded",
+    "claimGeneration": 1,
+    "bindingGeneration": 1,
+    "execution": {
+      "phase": "waiting_response",
+      "responseLength": 11876,
+      "lastProgressAtMs": 1792662842074,
+      "deadlineAtMs": 1792663442074,
+      "recoveryAttempts": 0,
+      "blocked": null
+    },
+    "receipt": {
+      "type": "result",
+      "claimGeneration": 1,
+      "acceptedAtMs": 1792662950424,
+      "verdict": "ready"
+    }
+  },
+  {
+    "taskId": "github%3Asymphony-acceptance%2Fpr156%23151:plan:2",
+    "revision": 2,
+    "finalStatus": "completed",
+    "claimGeneration": 1,
+    "bindingGeneration": 1,
+    "execution": {
+      "phase": "prompt_submitting",
+      "responseLength": 0,
+      "lastProgressAtMs": 1792663091496,
+      "deadlineAtMs": 1792663691496,
+      "recoveryAttempts": 0,
+      "blocked": null
+    },
+    "receipt": {
+      "type": "result",
+      "claimGeneration": 1,
+      "acceptedAtMs": 1792663101753,
+      "verdict": "ready"
+    }
+  }
+]

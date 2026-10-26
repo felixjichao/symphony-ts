@@ -8,18 +8,20 @@
 
 ## 当前 posture
 
-- GitHub delivery：本地验证新增 `--validation-timeout`（默认 600 秒），覆盖首次及 CI/Review 修复后验证；独立于 CI 等待预算。
+- GitHub delivery：本地验证新增 `--validation-timeout`（默认 600 秒），覆盖首次及 CI/Review 修复后验证；独立于 CI 等待预算；超时配置随 continuation 持久化，host 重启恢复保持原值，旧记录使用默认值。
 
 - 开发主线：`main`。当前最新里程碑提交为 `29840f9`（PR #133，Operational Read Model / Observation Plane query service 与集成验收收口）；GitHub Delivery MVP 的 dogfood 里程碑提交为 `e6f8e25`（PR #88）。
 - **M0–M6 Core 已完成**：orchestrator authority 独占调度状态，默认 CI 覆盖 Core Conformance。
 - **GitHub Delivery MVP 已完成并经真实验收**：从 issue 到自动合入并关闭 issue 的闭环可用。
 - **Decision Plane extension（GitHub #93）已完成并经真实验收**：planning、SHA-bound review、repair/re-review、durable state、ChatGPT Web 执行与异常恢复均已通过真实环境验收；该扩展不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义。
-- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；Dashboard / HTTP / history / operator mutation 仍是独立后续能力。
+- **Operational Read Model extension（GitHub #108）已完成**：provider-neutral facts、只读 source readers、确定性 projectors、跨源 anomaly / explanation 与统一 in-process query service 已合入；只读 HTTP transport 由 #137 提供；Dashboard shell / Overview / Work list 由 #138 提供；Work Detail / evidence / anomaly / freshness diagnostics 由 #139 提供；只读生产装配与自动化/本地浏览器验收由 #140 完成；PR #165 已通过独立审查并合入 `main`（merge commit `8f7675e`，main CI run #344 通过），父任务 #136 的验收条件已满足；history / analytics / operator mutation 继续 deferred。
+- **Execution Continuity extension（GitHub #145 / NEST-129）启动**：NEST-130 / GitHub #146 已完成 provider-neutral 契约、所有权防御（fencing）与故障分类共享语言（`packages/domain/src/execution-continuity.ts`）；NEST-138 增加工作级 stage/owner/progress 派生、host tick 扫描、Decision 过期租约原子回收及受互斥保护的 Delivery handoff 补偿；NEST-132 已补齐 Decision/Web continuity；NEST-133 增加跨重启 native handoff、retry 预约与不确定 executor 的持久化阻塞，等待独立审查；NEST-134 增加有限恢复策略、持久化 incident 和 CLI/GitHub 报告，等待独立审查。
 - **M7 §15 hardening 未开始**。
 - 尚无正式 npm 发布；安装形态为源码 checkout + `npm run build`。
 - 不宣称整个 SPEC 或所有 provider 场景完成——见 [deferred / optional](#deferred--optional)。
 
 ## Decision Plane extension
+
 
 本扩展是 §4（domain contracts）旁的 provider-neutral extension（GitHub #93 / NEST-98），不是上游 Symphony SPEC Core requirement，不改变 SPEC Core conformance，也不改变既有 GitHub Delivery 语义；逐项能力与证据矩阵见 [conformance.md](conformance.md#decision-plane-extension-evidence-nest-99--94-nest-100--95-nest-101--96-nest-102--97-nest-103--98--nest-104--99)。
 
@@ -57,6 +59,10 @@
 - NEST-116 / GitHub #112: cross-source anomaly detection and projection explanations in `@symphony/operations` — 8 canonical domain anomalies across GitHub, runtime, Decision Plane, and executor facts, structured `ProjectionEvidence` breadcrumbs with roles, deterministic multi-work aggregation and tie-breaking, attention state degradation, and snapshot/system health degradation with stale/unavailable safety guards. [Anomaly note](../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md); evidence in [conformance](conformance.md#cross-source-anomaly-detection-and-projection-explanations-nest-116--112).
 - NEST-117 / GitHub #113: in-process Operational Query Service and integration acceptance in `@symphony/operations` — public query surface (`getOperationalSnapshot`, `listWork`, `getWork`, `listExecutors`), single-round bounded assembly, partial failure tolerance, WorkKey scope boundaries, deterministic ordering, and multi-work isolation without background polling or persistent caching. Closes parent epic GitHub #108. [Query service note](../notes/accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md); evidence in [conformance](conformance.md#operational-query-service-and-integration-acceptance-nest-117--113).
 
+## Execution Continuity and Recovery extension
+
+- NEST-130 / GitHub #146: provider-neutral execution continuity, ownership fencing, and failure contracts in `@symphony/domain` (`src/execution-continuity.ts`) — continuity scopes (`work` / `task` / `attempt` / `binding`), continuity states with first-class non-terminal `blocked`, recovery actions (`none` / `dispatch` / `resume` / `retry` / `rebind` / `reclaim` / `compensate` / `await_external` / `require_human`), expected next actions with typed internal/external/human authority, multi-dimensional ownership fencing with capability credential sanitization, liveness and forward progress tracking, failure taxonomy (`transient` / `recoverable` / `blocked_external` / `superseded` / `invariant_violation`), pure subsystem error mapping for Decision, Delivery, Web Driver, and Orchestrator with explicit unmapped diagnostic gap handling, and canonical stage descriptors. [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md); evidence in [conformance](conformance.md#execution-continuity-and-recovery-contracts-nest-130--146).
+
 ## 已完成能力
 
 ### M0–M6 Core
@@ -90,13 +96,17 @@
 
 默认 `npm run gate` 始终 credential-free：dogfood 入口需要显式 opt-in，缺凭据显式 skip，不计为 passed。
 
+## Operational Snapshot HTTP transport（#137）
+
+`@symphony/observability` 提供显式启动、默认 loopback 的 `GET /api/operations/snapshot`，直接序列化 `@symphony/operations` 查询结果。四类 freshness、partial failure、WorkKey 隔离、exact-HEAD review、anomaly/evidence 均经真实 HTTP 测试验证；无 workflow mutation、缓存或后台轮询。Dashboard 见 #138–#139；生产装配与验收见下方 #140 closeout。父任务 #136 的验收条件已由 #140 closeout 与独立审查满足，关闭由 owner 执行。
+
 ## deferred / optional
 
 以下能力**未实现或明确保持 optional**，不计入当前已完成范围：
 
-- HTTP / dashboard status surface（SPEC §13.7）；
+- 状态面的 history/analytics/journaling/streaming/operator actions 继续 deferred；
 - provider-native agent tools（SPEC §11.5）；
-- durable scheduler state / durable recovery；
+- 通用 durable scheduler DB / workflow engine；原生 handoff 和 retry 预约恢复已由下文 #149 覆盖；
 - SSH worker（Appendix A）；
 - 最终 provider-native credential / tool boundary：当前 GitHub Delivery 使用 host 的 `git` + `gh`，是显式、临时的 MVP trust boundary。
 
@@ -134,3 +144,143 @@
 - 开发环境与工程命令： [development.md](development.md)；
 - 测试策略与可复跑入口： [testing.md](testing.md)；
 - Agent / 贡献者规则： [AGENTS.md](../AGENTS.md)。
+
+## NEST-138 work-level liveness
+
+Active supported GitHub work is scanned even with zero running workers. Native-source observations distinguish blocked, legitimate external wait, scheduled retry, unknown lease progress, stranded and contradictory ownership. Pre-action re-observation and native authority fencing prevent stale/concurrent reclaim. Codex stall uses meaningful lifecycle/usage progress, not arbitrary event traffic. File-backed Delivery entry points share an exclusive mutation lock; crash locks are not automatically stolen. Diagnostics are available via `host.workContinuity.observations`. The Decision bridge only exposes fenced reclaim; it no longer makes context-free startup/timer recovery decisions. Certified pre-entry lock failures allow later compensation, while post-entry uncertainty remains suppressed. Merged runtime/plan conflicts are diagnosed without mutation. Launch admission now reads native sources for each poll/retry attempt and rechecks keyed tracker facts after remote I/O; inventory failures suppress dispatch, observation failures retain retry reservations through backoff, and remote PR/CI reads work without a local workspace.
+
+Uncertain recovery calls/readbacks now suppress repeat delegation across scans until native completion/invalidation evidence; unresolved work requires manual verification and cannot admit coding. Exact-target review selection retains cross-PR active conflicts, and merged PRs explicitly wait for tracker synchronization. Unsupported native browser/repair/merge recovery is reported without command replay. The #149 native durable handoff/retry implementation and #148 Decision/Web implementation are described below; NEST-134 / #150 adds the bounded policy and incidents described below, merged in PR #158. See [design and limitations](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+
+## NEST-132 Decision/Web continuity
+
+Implementation adds durable execution progress/deadline, shared reclaim/rebind budget, explicit nonterminal blocked facts and fenced operator unblock to Decision; the host consumes these facts and distinguishes stalled valid leases, blocked work and browser-page waits. Browser enabled/Stop survives reopen; navigation/Send is authorized before mutation, and receipt-first recovery remains fenced. See [decision](../notes/proposed/architecture/2026-10-21-decision-web-continuity.md). Automated fixtures cover authority, driver, startup and host paths. Real Edge/Tampermonkey reload, Bridge auth/network faults, no-replay blocking, actual Review HEAD changes and native-host automatic reclaim have scoped 2026-10-22 evidence below; full browser-process bounded blocking is now accepted through #162/PR #163 below. Actual login/deleted-conversation UI variants remain unexercised/deferred.
+
+
+PR #156 follow-up fixes active heartbeat auth reporting, authoritative lease recovery,
+and bound-conversation checks around recovered extraction. Heartbeat and first
+result acceptance now revalidate external target admission; accepted receipts remain
+readable after target changes. Automated no-replay coverage includes tab identity
+loss after Send. Scoped real-browser and final-gate evidence is recorded below;
+untested historical categories are not marked passed.
+
+Historical 2026-10-22 evidence below retains its original build/scope limits; current acceptance is summarized under NEST-135 and #162 below.
+
+2026-10-22 real-browser follow-up: Edge/Tampermonkey partial fault acceptance passed reload, active heartbeat 401, result 403, pre/post acceptance network loss, bounded no-replay tab-loss handling, two-tab single claim/result, route-drift blocking, supersede continuation and persistent Stop. Ten isolated Plan tasks produced eight result receipts, all claim generation 1. Lost-tab blocking used explicit fenced reclaim, not automatic host coordination. The later same-day final-gate run verifies actual Review HEAD change and native-host reclaim. ChatGPT auth/deleted-conversation recovery and browser-process restart remain pending; #148/#156 overall acceptance is not complete. See [evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
+
+2026-10-22 final gates: both requested blockers passed. Native host polling with real GitHub sources automatically reclaimed a pre-Send lost claim; a new page completed generation 2 and stale generation 1 was rejected. The same host automatically blocked uncertain post-Send loss without replay. Actual dogfood PR #25 HEAD A → B during Review caused production GitHub admission to reject A and block the old task; an explicitly superseding Review completed with an exact-B approve receipt without manual Start. The test branch was restored to original A, all workers/listeners were stopped. See [final-gate evidence and remaining scope](evidence/web-continuity/final-gates-2026-10-22.md).
+
+2026-10-22 closeout: inaccessible-conversation recovery additionally passed with automatic binding/claim generation 1 → 2 and a matching receipt. Standards review found one diagnostics-restoration metadata boundary defect, now fixed and re-reviewed; Spec review found no confirmed defect. PR #156 implementation closeout is complete within this bounded review scope. #148 remains open; remaining auth UI, permanent deletion/rebind exhaustion, full browser restart and heartbeat-403 live coverage stays tracked with existing #151. See [closeout evidence and build provenance](evidence/web-continuity/closeout-2026-10-22.md).
+
+PR #156 review follow-up: the DOM-windowing liveness mismatch is fixed by sharing a task-scoped response observer between the adapter waiter and Driver heartbeat. Prompt-submission recovery recognizes strict exact-task results as Send evidence. Fake-clock Driver→Decision authority regressions cover growth beyond ten minutes and reject stale/non-response changes; real HTTP recovery proves no repeated Send. Userscript build advances to 0.1.5. Fresh live-browser coverage of this change remains unperformed; #148/#151 stay open.
+
+Review-fix validation: full gate passed (2,042 tests, one existing opt-in skip; Web 216). See [review-fix evidence](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
+
+Later 2026-10-22, after the operator updated Userscript 0.1.5, scoped real-browser acceptance passed native response-growth reporting, active reload without repeated Send, and accepted-result acknowledgement loss resolved by receipt readback. Two Plan receipts retained claim/binding generation 1. Build metadata duplication is fixed: Vitest shutdown no longer prepends to the built file. Full gate remains green (2,042 passed, one opt-in skip). [Evidence and limits](evidence/web-continuity/live015-acceptance-2026-10-22.md) distinguish this run from the untriggered ten-minute DOM-windowing and Send/checkpoint crash-gap cases; #148/#151 stay open.
+
+### NEST-133 / #149 durable handoffs
+
+Implementation protects coordinator invocation, CI→Review, Review-result→Delivery,
+paused compensation, landing acknowledgement and retry→worker boundaries. Native
+host startup restores reservations/intent discovery; uncertain launch/repair/child
+outcomes are durable blocks. Local validation covers real child-process SIGKILL and
+restart, native host ticks and both landing paths. Independent review and implementation completed in merged PR #157 (`a42f1b55dff42ffc02feb57d31f053bc2b153dcf`). Native crash-window evidence is accepted for the supported contract; exhaustive live provider combinations are not claimed. See the
+[implementation note](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+
+### NEST-134 / #150 bounded recovery and incidents
+
+Implementation adds independent finite failure budgets, normalized SHA-256 fingerprints,
+capability-aware strategy selection, stable recovery epochs and durable host policy
+blocks. Native Decision/Web limits and fresh-admission/fencing remain authoritative.
+The CLI exposes incident list/detail and exact-ID policy authorization; its dedicated
+GitHub outbox verifies marker receipts and bounds reporting attempts without replaying
+unknown POSTs. Operations/Dashboard remain read-only.
+
+Automated policy, native retry, real filesystem/SIGKILL, cross-process exhaustion,
+concurrent reporter, ACK-loss and stale-target tests are included. Scoped host restart and native worker exhaustion now have [real process evidence](evidence/execution-continuity/core-acceptance-2026-10-23.md); external report ACK/UI variants remain unexercised/deferred. Independent review approved PR #158,
+squash-merged as `627daa2164f2a8cdbad67b05d860300ecb822db2`.
+See [operator behavior](bounded-recovery.md) and the
+[decision note](../notes/proposed/architecture/2026-10-22-bounded-recovery-incidents.md).
+
+NEST-134 review follow-up fixes three blockers: automatic unblock now requires an
+explicit modeled ownership condition; versioned native accounting separates legacy
+migration from new capacity/continuation waits; native needs-human/manual reasons
+produce durable deduplicated incidents without blocking Delivery report compensation.
+Focused real-authority/file-store and production-host regressions are included;
+independent re-review approved these fixes in PR #158. The finite policy and incident invariant are accepted through native fault injection plus scoped process evidence; this does not claim exhaustive external-provider/UI acceptance.
+
+### NEST-135 / #151 fault acceptance
+
+The [29-scenario ledger](evidence/execution-continuity/README.md) now aligns #159
+(merged evidence), #162 (closed follow-up) and #163 (merged repair). Supported
+bounded-convergence acceptance is satisfied by native production-equivalent fault
+injection plus scoped real process/browser evidence. [Current closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md)
+records the maintainer's approved coverage profile and remaining non-exhaustive live
+variants. W03 is **bounded convergence accepted**: complete host + installed Driver
+0.1.6 reaches visible Waiting → Blocked without duplicate effects; seamless browser
+session/response resume remains unaccepted/deferred. After this documentation
+closeout passes gate/review and merges, #151 is ready to close, followed by final
+maintainer acceptance/closure of parent #145. This documentation change does not
+close either issue or expand runtime scope.
+
+## Dashboard shell — NEST-125 / GitHub #138
+
+`apps/dashboard` adds a replaceable TypeScript DOM consumer of #137: Overview, attention-first Work list, full WorkKey routes, distinct source freshness, explicit current/stale HEAD approval and observational polling errors. Schema v1 summary adds optional `degradedWork` / `anomalyCount`; new projectors always output them, using final canonical anomalies. The independent Node-only same-origin demo uses real query/HTTP and controlled readers, visibly marked 演示数据. Production CLI/source/lifecycle composition is recorded under #140 below; external live acceptance is not claimed; Work Detail is described below. This delivery does not depend on NEST-135 / merged #159 or change its continuity acceptance status.
+
+## Work Detail — NEST-126 / GitHub #139
+
+Adds WorkKey-addressable structured detail, derived/fact separation, four-state source diagnostics, source/role projection evidence, first-class anomalies and independently visible PR/task/result targets. Work-scoped selections reject foreign nested evidence; global diagnostics remain separate. Shape/type/AST/capability/fingerprint guards and local controlled-reader query/HTTP/proxy/DOM tests cover the diagnostic surface. The explicit Chromium smoke validates the built demo, navigation, keyboard diagnostics and disconnect/recovery. Schema v1/domain/HTTP contracts and production CLI are unchanged. Production scope/lifecycle acceptance is recorded under #140 below; the parent #136 acceptance is complete through merged PR #165, with closure remaining an owner action. merged #159 is independent.
+
+### #162 bounded-convergence follow-up (2026-10-23)
+
+SPEC §4 adjacent / §7 / §8 / §10 / §12 / §14 / §17 / §18: [new evidence](evidence/execution-continuity/bounded-browser-acceptance-2026-10-23.md)
+uses complete production host + authenticated Bridge, real GitHub reads, isolated
+Decision records and the installed Driver. A lost native-created test window's
+`waiting_response` execution blocked 27.296 seconds after lease expiry, preserving
+claim/binding generation 1 with receipt 404 and zero result POSTs. This initial bounded observation is retained with its original scope; the later
+installed Driver 0.1.6 run below accepts W03 conservative convergence. It does not
+establish seamless restoration. #162 is closed through PR #163; #151/#145 await
+the documentation closeout and final maintainer acceptance. The [subsequent agent-tab quit comparison](evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md)
+completed: old PID absence/new PID verified; the same browser tab restored at home
+with a newly created `symphony_tab_id` and empty diagnostics. Host block arrived
+23.019 seconds after lease expiry, with local CLI-visible incident, receipt 404,
+zero result POSTs and 409 for replacement claim/old heartbeat. Both variants now
+show bounded blocking, while seamless resume remains unaccepted; the earlier
+native-window comparison differs in window topology, and old GM checkpoint
+persistence was not directly inspected.
+CLI host-tick regression covers expiry, no replacement claim and durable block/incident
+retention after host/Bridge reconstruction and store reopen. Decision's exported
+`HeartbeatTaskRequest` now includes progress from the domain execution contract,
+matching the already-supported service/HTTP payload; typed Bridge regression verifies
+real progress and unchanged repeated progress. No recovery-policy change was required.
+
+
+### #162 recovery visibility repair — Driver 0.1.6 (2026-10-23)
+
+SPEC §13 adjacent / §10 / §12 / §17 / §18: [repair evidence](evidence/execution-continuity/recovery-hud-fix-2026-10-23.md).
+A restored page without a local checkpoint now reads native continuity facts when
+`/next` has no claimable task, displaying Waiting for an outstanding owner or Blocked
+with native task/reason/instruction. This is read-only observation: no lost identity
+is reconstructed and no lease is adopted, reclaimed or unblocked by the page.
+The HUD displays the build version from the same source as userscript metadata.
+Regression uses a real HTTP Bridge/store seam for waiting/block
+facts, terminal clearing and no mutation, plus late-response-after-Stop fencing.
+Transparent browser-session resume remains outside the proven boundary.
+Operator-confirmed 0.1.6 and its HUD version were verified during actual generation
+and complete Edge quit/reopen (old PID 32189 absent, new PID 16774). The restored
+home page displayed Waiting then Blocked automatically; host block followed expiry
+by 22.913 seconds, with generation 1, receipt 404, zero Driver POSTs after quit,
+and stale heartbeat/replacement claim 409. Gate passed: 2312 tests, one opt-in skip.
+
+Current #162 disposition: **closed**, with PR #163 merged as
+`7e10c91d5693ef63f438490cbfd1886105b22225`. Bounded, operator-visible convergence
+is accepted; seamless browser-session resume, alternative browser/session policies,
+crash/SIGKILL and remaining live UI/provider combinations are deferred variants,
+not silently passed experiments. The measured 22.913 seconds is one run's result,
+not a universal wall-clock SLA. See the [closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md).
+
+## Read-only operational status closeout (#140)
+
+The read-only operational status surface is complete and accepted: independent review approved PR #165, which merged to `main` as `8f7675ed09f59919f438a3b6e657471eb6b883ba` on 2026-10-24 with main CI run #344 green. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136's exit condition is satisfied; closing it remains the owner's action. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance is tracked independently by its continuity closeout.
+
+## Dashboard V2 Operator Console — GitHub #169
+Implementation adds the framework-free four-destination shell (Overview / Work / Executors / System), with Work Detail owned by Work and legacy WorkKey hash links retained. V1 content and supplied semantics remain unchanged; executor inventory and global diagnostics have dedicated destinations. Keyboard heading focus, refresh restoration and narrow navigation/table layout are covered by Dashboard tests and the extended Chromium smoke harness. Initial host gate and CI passed; independent Review requested browser evidence. Host browser acceptance on 2026-10-26 passed all 23 scenarios after two smoke-only asynchronous waits were corrected. [Retained evidence](evidence/dashboard-v2-shell/README.md) includes desktop/390px screenshots, JSON and asset hashes. The evidence follow-up still requires its current-HEAD CI and independent re-review before landing; no downstream V2 child is marked ready.

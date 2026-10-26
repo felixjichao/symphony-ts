@@ -4,8 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { DecisionService, DurableDecisionStore } from "@symphony/decision";
 import { GitHubDeliveryService, type GhRunner } from "@symphony/tracker";
-import { projectObservabilitySnapshot } from "@symphony/observability";
-import { DeliveryError, formatPrBody, type OrchestratorRuntimeState, type GitHubObservation } from "@symphony/domain";
+import { DeliveryError, formatPrBody, type ObservabilitySnapshot, type GitHubObservation } from "@symphony/domain";
 import {
   collectOperationFacts, createGitHubReader, createRuntimeReader, createDecisionReader,
   createExecutorReader, githubWorkKey, type ReaderOptions,
@@ -14,18 +13,15 @@ import {
 const key = githubWorkKey("acme", "repo", 1);
 const options: ReaderOptions = { instance: "test", clock: () => 2000, maxAgeMs: 1000 };
 const github: GitHubObservation = { workKey: key, issue: { state: "open", url: "https://github.com/acme/repo/issues/1" }, pullRequest: null, ci: null };
-function runtime(): OrchestratorRuntimeState {
-  return { pollIntervalMs: 30000, maxConcurrentAgents: 2, running: new Map(), retryAttempts: new Map(),
-    claimed: new Set(), completed: new Set(), codexRateLimits: null,
-    codexTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 } };
+function snapshot(generatedAt = 2000): ObservabilitySnapshot {
+  return { generatedAt, pollIntervalMs: 30000, maxConcurrentAgents: 2, running: [], retrying: [],
+    rateLimits: null, codexTotals: { inputTokens: 0, outputTokens: 0, totalTokens: 0, secondsRunning: 0 } };
 }
 
 it("collects all sources; successful absence differs from unavailable and unconfigured", async () => {
   const readers = {
     github: createGitHubReader(options, async () => github),
-    runtime: createRuntimeReader(options, () => ({ status: "available", snapshot: projectObservabilitySnapshot(runtime(), {
-      wallNow: () => 2000, monotonicNow: () => 10,
-    }) })),
+    runtime: createRuntimeReader(options, () => ({ status: "available", snapshot: snapshot() })),
     decision: createDecisionReader(options, () => ({ workKey: key, session: null, tasks: [], results: [] })),
     executor: createExecutorReader(options, () => ({ observedAt: 2000, facts: [] })),
   };
@@ -48,18 +44,17 @@ it("collects all sources; successful absence differs from unavailable and unconf
 });
 
 it("preserves snapshot time, retry delay, UTC start, sessions and unlinked/cross-repository rows", async () => {
-  const state = runtime();
-  for (const [id, url] of [["a", "https://github.com/acme/repo/issues/1"], ["b", "https://github.com/other/repo/issues/1"], ["c", null]] as const) {
-    state.running.set(id, {
-      issue: { id, identifier: id, url, state: "Todo", nativeRef: null, title: "private", description: "private",
-        priority: null, branchName: null, assigneeId: null, labels: [], blockedBy: [], dispatchable: true, createdAt: null, updatedAt: null },
-      attempt: { issueId: id, issueIdentifier: id, attempt: null, status: "preparing_workspace", startedAt: 900, workspacePath: "/w" },
-      workspacePath: "/w", startedAtMs: 10, session: null, workerHandle: { secret: "handle" },
-    });
-  }
-  state.retryAttempts.set("r", { issueId: "r", identifier: null, attempt: 2, dueAtMs: 100, timerHandle: {}, error: null });
-  const snapshot = projectObservabilitySnapshot(state, { wallNow: () => 999, monotonicNow: () => 40 });
-  const read = createRuntimeReader(options, () => ({ status: "available", snapshot }));
+  // Domain snapshot fixture: snapshot projection itself is covered by observability.
+  const observed: ObservabilitySnapshot = { ...snapshot(999),
+    running: ([["a", "https://github.com/acme/repo/issues/1"], ["b", "https://github.com/other/repo/issues/1"], ["c", null]] as const).map(([id, url]) => ({
+      issueId: id, issueIdentifier: id, issueUrl: url ?? null, issueState: "Todo", attempt: null,
+      status: "preparing_workspace", workspacePath: "/w", startedAt: 900, elapsedMs: 30,
+      sessionId: null, threadId: null, turnId: null, codexAppServerPid: null, turnCount: null,
+      lastCodexEvent: null, lastCodexMessage: null, lastCodexTimestamp: null, tokens: null,
+    })),
+    retrying: [{ issueId: "r", issueIdentifier: null, issueUrl: null, attempt: 2, retryInMs: 60, error: null }],
+  };
+  const read = createRuntimeReader(options, () => ({ status: "available", snapshot: observed }));
   const result = await read.read();
   expect(result.freshness).toEqual({ status: "stale", observedAt: 999, lastAttemptAt: 2000 });
   expect(result.facts?.map((row) => row.workKey)).toEqual([key, githubWorkKey("other", "repo", 1), null, null]);
@@ -68,8 +63,8 @@ it("preserves snapshot time, retry delay, UTC start, sessions and unlinked/cross
   expect(result.facts?.[0]?.provenance.observedAt).toBe(999);
   expect(JSON.stringify(result)).not.toMatch(/workerHandle|timerHandle|private|elapsedMs/);
   Object.assign(result.facts![0]!.attempt!, { workspacePath: "changed" });
-  expect(snapshot.running[0]?.workspacePath).toBe("/w");
-  expect((await createRuntimeReader(options, () => ({ status: "available", snapshot: { ...snapshot, generatedAt: 1000 } })).read()).freshness.status).toBe("fresh");
+  expect(observed.running[0]?.workspacePath).toBe("/w");
+  expect((await createRuntimeReader(options, () => ({ status: "available", snapshot: { ...observed, generatedAt: 1000 } })).read()).freshness.status).toBe("fresh");
 });
 
 it("uses reported executor heartbeat/binding only, strips extras and makes defensive copies", async () => {

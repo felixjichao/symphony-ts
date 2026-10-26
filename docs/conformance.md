@@ -50,7 +50,7 @@
 | §14 / §16 | retry / backoff（参考算法对齐） | `packages/orchestrator` | implemented | Core Conformance — `npm test -w @symphony/orchestrator`（`src/backoff.test.ts`：§8.4 continuation 固定 1000 ms、failure `min(10000 * 2^(attempt - 1), max_retry_backoff_ms)` 的基数 / 指数 / cap / 单调性；**M5.3** `src/retry-queue.test.ts`：normal exit → attempt 1 / 1s / error null / claim 保留、failure 10 / 20 / 40s 指数增长、cap 用当前 effective `max_retry_backoff_ms`（含低于基数与运行时换值）、`RetryEntry` 六字段完整且 `dueAtMs` 用单调时钟、同 issue 新 retry 取消 / 替换旧 timer、stale / canceled timer 与替换后迟到回调不产生 duplicate dispatch、refresh missing / inactive / unroutable 释放 claim（不 cleanup）、refresh terminal 安全 cleanup + 释放、global / per-state slot 不足精确记录 `no available orchestrator slots`、fetch 失败不丢 claim 并以 `retry refresh failed` 重排、await 期间被替换则丢弃迟到 refresh、suppressRetry（reconciliation）不入队；`src/retry-workspace.test.ts` 用**真实** `WorkspaceManager` + 真实临时文件系统验证 terminal refresh 删除真实目录，以及 workspace 换成逃逸 symlink 时 `refused`、出根目标无损且只记诊断；同文件另覆盖审查 blocker 1——替换 retry 不得在旧 terminal cleanup 删除期间启动新 worker（cleanup 与后续 launch 串行）；`src/retry-scheduler.test.ts` 覆盖审查 blocker 2——默认 scheduler 对超过 `2^31 - 1` ms 的合法 backoff 分段保时、分段期间 cancel 不触发；`src/retry-agent-integration.test.ts` 用真实 `runAgentAttempt` + app-server fixture 子进程跑 `outcome → fake timer → refresh → 新 worker`，并以 `--record-startup` / `--record-world` 记录两次 attempt 的不同 PID、`cwd === workspace.path`，用进程存活检查确认 attempt 结束后子进程已退出，同时以 workspace marker 内容保留验证复用不清空） |
 | §13.1 / §13.2 | 结构化日志、required context、安全预算与失败隔离 | `packages/observability` + CLI helpers | implemented（helpers + production host） | `npm test -w @symphony/observability`；`npm test -w @symphony/cli -- src/logging.test.ts`；`npm test -w @symphony/orchestrator -- src/event-boundaries.test.ts` |
 | §13.6 | richer AgentEvent humanization（conditional） | `packages/observability` | deferred | MVP 固定 event/outcome/reason 与生命周期模板，不复制自由 summary |
-| §13.7 | HTTP / dashboard status surface（optional extension） | `packages/observability` | deferred extension | 不属于 M6 Core 完成条件 |
+| §13.7 | OperationalSnapshot HTTP / dashboard status surface（optional extension） | `packages/observability` + `apps/cli` + `apps/dashboard` | HTTP transport implemented（#137）；Dashboard shell/detail implemented（#138–#139）；production wiring + acceptance implemented（#140） | `packages/observability/src/operations-http.test.ts` + `operations-http-boundaries.test.ts`；`apps/cli/src/status.test.ts` + `status-boundaries.test.ts` + `status-credentials.test.ts`（production composition、boundary、credential origin）；[acceptance ledger](evidence/status-surface/README.md)；root `npm run gate`；不属于 M6 Core 完成条件 |
 | §17.7 / §18.1 | CLI lifecycle、组件装配与动态热重载（initial effective runtime host + bin executable 契约 + M6.4 EffectiveRuntime authority / live reload / secret boundary） | `apps/cli` | implemented | Core Conformance — `npm test -w @symphony/cli`（`src/args.test.ts` 纯逻辑解析 argv 与 fallback；`src/host.test.ts` in-process `createHost` 构造/装配/start/stop/preflight 校验；`src/bin.test.ts` 真实子进程 `package.json` bin contract、显式/CWD 默认 WORKFLOW.md、缺失/错误配置洁净退出 1 与 SIGINT/SIGTERM 优雅停机；`src/effective-runtime.test.ts` 单一权威原子 `accept` 与 fail-fast 回滚；`src/host-reload.test.ts` 动态热重载全语义、单 timer 链与调度器更新、运行中 worker 保持、workspace root 迁移与精准清理；`src/secret-boundary.test.ts` 子进程敏感环境变量安全过滤与宿主 tracker 凭据隔离；`src/lifecycle.test.ts` 与正式 bin/harness 覆盖 M6.5 exit-code matrix） |
 | §15 | 安全与运维安全加固 | 跨包（orchestrator / workspace 主导） | planned M7 | — |
 | App. A | SSH worker 扩展（可选） | 待定 | planned M7（可选） | — |
@@ -158,9 +158,9 @@ conditional snapshot running/retry/token/rate-limit 输出：**M6.1 implemented*
 | before_remove cleanup diagnostics | implemented helpers | CLI logging suite — real temp fs failure/timeout emits issue-bound hook warning, deletion continues, payload/secret omitted; throwing hook observer preserves removed result；event-boundaries — explicit cleanup identity port and legacy compatibility |
 | watcher reload and lifecycle log adapters | implemented helpers | CLI logging suite — temp filesystem invalid reload preserves watcher current, success means watcher acceptance, shutdown completion after loop stop; production runtime commit/signals additionally covered by host-reload/bin/lifecycle suites |
 | package dependency direction, observability never scheduler input | implemented | `npm test -w @symphony/orchestrator -- src/boundaries.test.ts`；`logger-boundaries.test.ts` + `snapshot-boundaries.test.ts` |
-| host/status surface 最终闭环 | host implemented（M6.3–M6.5），HTTP deferred extension | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP status surface 为 optional extension |
+| host/status surface 最终闭环 | host implemented（M6.3–M6.5），OperationalSnapshot HTTP implemented（#137）；production status wiring + acceptance implemented（#140） | CLI host lifecycle、bin executable 契约与真实子进程测试已在 M6.3 闭环；HTTP transport 见 #137 证据；production composition、fault isolation 与 acceptance ledger 见 #140 证据 |
 
-上述为 snapshot/logging Core 证据；HTTP 与 richer humanization 为未实现的 optional/conditional 项，同步 projector 没有获取层 timeout。M6 Core 已完成并通过验收（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 保持为范围外 extension。
+上述为 snapshot/logging Core 证据；OperationalSnapshot HTTP 已实现（#137），production status wiring 与自动化/本地浏览器验收已由 #140 完成；richer AgentEvent humanization（§13.6）仍为 deferred 项，同步 projector 没有获取层 timeout。M6 Core 已完成并通过验收（M6.1–M6.5 已合入；merge commit [`dc08f1e3bc1b087131579f35c154104da6bb134e`](https://github.com/felixjichao/symphony-ts/commit/dc08f1e3bc1b087131579f35c154104da6bb134e)，main CI [run 37161569329](https://github.com/felixjichao/symphony-ts/actions/runs/37161569329) 全绿）；HTTP §13.7、provider-native tools §11.5、durable recovery、SSH 保持为范围外 extension。
 
 ## §17.7 / §18.1 分项证据（M6.3 CLI host 与可执行契约）
 
@@ -251,7 +251,7 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | 6-path end-to-end planning workflow: ready dispatch, clarification loop, needs_human block, ChatGPT binding reuse, rollover reconstruction, requirement change review invalidation | `packages/decision/src/planning-workflow.test.ts`: Decision Planning Workflow — 6 Required Dogfood Paths |
 | Decision environment isolation (vitest test setup isolation, fail-fast on `--store`/`--bridge-url` conflict, explicit store precedence over inherited bridge env) | `apps/cli/src/planning-cli.test.ts`, `apps/cli/src/host.test.ts` |
 | Delivery handoff persistence before remote mutations, reconciliation resilience, and `recover-handoff` deduplication | `packages/agent/src/delivery/delivery-skill-runner.test.ts`: NEST-128 test, `apps/cli/src/delivery-skill-cli.test.ts`: recover-handoff action |
-| Project validation has an independent bounded timeout (GitHub delivery extension; SPEC §17/§18 adjacent) | `packages/agent/src/delivery/delivery-skill-runner.test.ts`: initial, CI repair and review repair; `apps/cli/src/delivery-skill-cli.test.ts`: CLI conversion and invalid values |
+| Project validation has an independent bounded timeout (GitHub delivery extension; SPEC §17/§18 adjacent) | `packages/agent/src/delivery/delivery-skill-runner.test.ts`: initial, CI repair and review repair; `apps/cli/src/delivery-skill-cli.test.ts`: CLI conversion and invalid values; `apps/cli/src/work-continuity.test.ts`: durable host restart preserves longer/shorter timeouts and defaults legacy records |
 | Directional cleanup tool for `#99` plan tasks in store/bridge with session isolation leaving `#137` untouched | `packages/decision/src/cleanup-polluted-tasks.test.ts`, `scripts/cleanup-polluted-tasks.mjs` |
 
 Real browser smoke: [NEST-105 process and sanitized receipts](evidence/nest105/README.md). This is adapter evidence, not the delivery review gate end-to-end acceptance.
@@ -310,7 +310,7 @@ Pure, deterministic projection layer adjacent to §13. Converts normalized facts
 | Purity, immutability (deep freeze), and deterministic array shuffle invariance | same suite: Purity, immutability & deterministic array order |
 | Zero I/O, domain-only dependencies, and absence of mutation APIs (`setWorkPhase`, `setWaitingReason`, etc.) | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) has moved to the next section; query transport remains unverified / unimplemented.
+Validation: `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. Cross-source anomaly detection (NEST-116) has moved to the next section; HTTP transport 证据见下方 #137；该历史 slice 不含 transport。
 
 ## Cross-source anomaly detection and projection explanations (NEST-116 / #112)
 
@@ -329,7 +329,7 @@ Pure, deterministic cross-source anomaly detection and structured projection evi
 | Attention degradation to `degraded` and system health degradation when anomalies exist | same suite: integration with deriveAttention and deriveSystemHealth |
 | Zero I/O, domain-only imports, and absence of mutation APIs | `packages/operations/src/boundaries.test.ts` |
 
-Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) has moved to the next section; query transport remains unverified / unimplemented.
+Validation: `npm test -w @symphony/domain`, `npm test -w @symphony/operations`, `npm run typecheck`, `npm run gate`. In-process query service (NEST-117) has moved to the next section; HTTP transport 证据见下方 #137；该历史 slice 不含 transport。
 
 ## Operational query service and integration acceptance (NEST-117 / #113)
 
@@ -351,4 +351,269 @@ Stable in-process Operational Query Service and full multi-source integration ac
 
 Validation: `npm test -w @symphony/operations`, `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Transports (HTTP/SSE/WebSocket) and Web Dashboard remain out of scope for #108 acceptance.
 
+## OperationalSnapshot HTTP transport（#137 / §13.7）
 
+Thin Observation Plane transport，完整快照直接委托 `@symphony/operations`；不改变 #108 查询语义，不完成父任务 #136。见 [HTTP transport Note](../notes/accepted/architecture/2026-10-16-operational-snapshot-http.md)。
+
+| Acceptance | Evidence |
+|---|---|
+| Full serialization, deterministic mapping, schema/time/health/summary/executors | `packages/observability/src/operations-http.test.ts`: fixed snapshot repeated GET deep equivalence |
+| Actual query service, partial failure, four freshness variants, multiple isolated WorkKeys | `operations-http.test.ts`: real query boundary with read-only SourceReaders |
+| Current PR HEAD, task/result targets, taskId/revision, all three review mismatch anomalies and evidence survive | `operations-http.test.ts`: real query boundary exact-HEAD assertions |
+| Sanitized query/serialization rejection, disconnected clients, active-request shutdown, recovery, no workflow control; no write routes | `operations-http.test.ts`: failure and unsupported methods/unknown routes |
+| Bind failure rejects startup; repeated post-listen server errors remain non-fatal | `operations-http.test.ts`: bind conflict and runtime error isolation with subsequent successful GET |
+| Only operations + Node HTTP capabilities; independent synchronous domain-only projector | `operations-http-boundaries.test.ts`, `snapshot-boundaries.test.ts`; `packages/operations/src/boundaries.test.ts` prohibits source reverse imports |
+
+Validation commands: `npm test -w @symphony/operations`, `npm test -w @symphony/observability`, `npm run typecheck`, `npm run docs:check`, and `npm run gate`. Production lifecycle (#140), Dashboard (#138–#139), history, streaming and commands remain outside this transport slice.
+## Execution continuity and recovery contracts (NEST-130 / #146)
+
+Provider-neutral execution continuity, ownership fencing, and failure taxonomy contracts adjacent to §4. Establishes the shared language used by Orchestrator, Decision, Web Driver, Delivery, and future reconciliation code before adding automated recovery behaviors (#147–#151). [Continuity note](../notes/accepted/architecture/2026-10-17-execution-continuity-contracts.md).
+
+| Capability | Evidence |
+|---|---|
+| Provider-neutral continuity states (`running`, `retry_queued`, `recovering`, `blocked`, `completed`, `released`) with first-class non-terminal `blocked` | `packages/domain/src/execution-continuity.test.ts`: Enumerations and State Predicates |
+| Expected-next-action and authority semantics distinguishing internal, external, and human authorities | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Liveness and forward progress metadata distinguishing observation from genuine progress (explicit "unknown") | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Multi-dimensional ownership fencing across lifecycle generations, epochs, lease generations, binding generations, and HEAD SHAs | same suite: Multi-dimensional Ownership Fencing |
+| Capability credential protection (`sanitizeOwnershipFence` stripping `leaseToken` before public display) | same suite: sanitizes ownership fence for safe public observation |
+| Common failure taxonomy (`transient`, `recoverable`, `blocked_external`, `superseded`, `invariant_violation`) with structured diagnostics | same suite: Subsystem Failure Taxonomy Mappings |
+| Subsystem failure mappers for Decision, Delivery, Web Driver, and Orchestrator with explicit unmapped gap handling | same suite: Subsystem Failure Taxonomy Mappings |
+| Invariant validation pure helper (`validateContinuityDescriptor`) enforcing active action, authority, blocked details, retry re-evaluation, and liveness rules | same suite: Execution Continuity Descriptors & Invariant Validation |
+| Canonical stage descriptors covering planning, coding, CI waiting, review claim, repair, delivery resume, and merge confirmation | same suite: validates all canonical stage descriptors |
+| Domain purity, zero Node I/O, zero timer, and zero UI framework dependencies | same suite: Architectural and Boundary Invariants |
+
+Validation: `npm test -w @symphony/domain`, `npm run typecheck`, `npm run gate`. Cross-stage expected action derivation (#147), startup reconciliation (#148), and automated recovery loops remain in subsequent issues.
+
+
+
+## Work-level liveness and reconciliation (NEST-138 / #147)
+
+§4 adjacent contracts, §7/§8 ownership and reconciliation, §14 retry safety.
+
+| Behavior | Evidence |
+|---|---|
+| Missing/valid/stale owner, meaningful progress boundaries, blocked/external wait/scheduled separation | `packages/orchestrator/src/work-continuity.test.ts` |
+| Re-observe before/after bounded delegation, changing admission/HEAD version cancellation, idempotence, unavailable source/readback, stop fencing | `packages/orchestrator/src/work-continuity.test.ts` |
+| Cross-scan response-loss/readback suppression, unrelated version/heartbeat changes, native resolution and delayed-proof stop fencing | `packages/orchestrator/src/work-continuity.test.ts`; `apps/cli/src/review-regressions.test.ts` (real Decision store and Delivery file readback) |
+| Merged PR with a single exact-target pending/expired/valid review waits for tracker sync without reclaim; explicit block and other-target conflicts win; poll/retry deny coding and native task/lease remains unchanged | `apps/cli/src/review-regressions.test.ts` (B5, real host and Decision store) |
+| Exact target/revision 9–10, same SHA on different PR, active cross-PR conflicts, terminal history, bound pending adapter, merged tracker wait and terminal/outage transitions | `apps/cli/src/review-regressions.test.ts` |
+| Authenticated ordinary Bridge poll, unrelated-WorkKey claim and direct expired-review claim preserve merged task/lease snapshots; explicit fenced recovery still renews generation and rejects stale credentials | `apps/cli/src/review-regressions.test.ts` (B6); `packages/decision/src/service.test.ts` |
+| Bridge startup and former timer period preserve merged review leases; fenced reclaim remains explicit and authenticated | `apps/cli/src/review-regressions.test.ts`; `packages/decision/src/continuity.test.ts` |
+| Certified pre-entry lock contention permits later compensation; post-entry response loss stays uncertain; native files and remote label/comment fixture confirm one completion | `apps/cli/src/review-regressions.test.ts` |
+| Final keyed tracker read rejects state/routing/required-label changes during remote I/O; remote CLOSED versus stale active tracker denies poll/retry | `apps/cli/src/review-regressions.test.ts` |
+| Merged with active plan or live Codex is contradictory; native plan leases and real worker PID remain intact | `apps/cli/src/review-regressions.test.ts` |
+| Atomic expired claim reclaim, concurrent attempts, renewed lease, revision/binding fences, authenticated bridge and safe observation | `packages/decision/src/continuity.test.ts` |
+| Real host tick scans without running workers, native store readback after reclaim, temporary tracker outage preserves owner | `apps/cli/src/work-continuity.test.ts` |
+| File-backed run/halt/manual/library compensation share mutation authority lock | `apps/cli/src/work-continuity.test.ts`; existing Delivery recovery regressions |
+| Continuity uses the canonical trim/lowercase active-state semantics; raw config values remain intact and whitespace/case variants launch real workers through both poll and retry | `apps/cli/src/review-regressions.test.ts` (B4, real app-server fixture subprocess and filesystem/PID readback) |
+| Inventory failure after successful candidates or earlier admission cannot dispatch; retry sees new Delivery pause, Decision owner, CI stage and temporary outage; remote CI is observed without local workspace | `apps/cli/src/review-regressions.test.ts` (B1–B3 regressions) |
+| Retry admission readback preserves reservation on outage, rejects pauses during observation and fences stop/replacement; refreshed Issue is used and concurrent admissions commit one owner | `apps/cli/src/review-regressions.test.ts`; `packages/orchestrator/src/retry-queue.test.ts` |
+| Stable Codex progress replaces raw event activity while retaining timeout disable/boundary semantics | `packages/orchestrator/src/reconciliation.test.ts`; agent event/regression suites |
+
+The host uses the existing marker/HEAD-bound Delivery observer and does not weaken merge checks. Browser automation, durable retry reconstruction and incident policy are deferred (#148–#150). Fixture checks are not real GitHub/Codex verification. [Design note](../notes/accepted/architecture/2026-10-20-work-level-continuity.md).
+
+## Decision/Web continuity (NEST-132 / #148)
+
+| Contract | Implementation / automated evidence | Real environment |
+|---|---|---|
+| SPEC §4 Decision extension: durable progress, bounded recovery and nonterminal blocked | `packages/decision/src/continuity.test.ts`: heartbeat versus response growth, expired reclaim, restart-persistent budget/block, duplicate rebind and stale generations | Real reload/close no-replay and natural host reclaim/block passed; full browser-process bounded blocking accepted through #162/PR #163 — [current scope](evidence/execution-continuity/closeout-2026-10-23.md). Seamless resume remains deferred |
+| SPEC §7/§8/§14 adjacency: native-source host diagnosis and safe reclaim | `apps/cli/src/work-continuity.test.ts`, `review-regressions.test.ts`: real store/host tick, blocked admission, explicit browser-page wait, exact-HEAD conflicts | Real GitHub tracker + native host poll reclaimed before-Send loss and blocked after-Send loss; actual Review HEAD change fenced — [evidence](evidence/web-continuity/final-gates-2026-10-22.md) |
+| Web navigation/send fencing, receipt-first recovery and persistent intent/Stop | `apps/chatgpt-web/test/driver.test.ts`, `userscript-entry.test.ts`, `review-bootstrap.test.ts`, `review-round11.test.ts` | Real Edge/Tampermonkey reload, Bridge auth/network recovery, no-replay and Stop passed; actual login/deleted-conversation categories remain — [scenarios](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run) |
+
+PR #156 active-response fixes (SPEC §4 / §13 adjacent):
+`apps/chatgpt-web/test/review-followup-regressions.test.ts` covers active heartbeat
+401/403 reporting, interruption without a failure receipt, authoritative renewed
+expiry, and conversation drift before/during recovery extraction.
+`packages/decision/src/continuity.test.ts` covers review admission denial during
+waiting/result acceptance, idempotent accepted receipts after admission changes,
+and no claim-generation rollover after tab identity loss following Send.
+These fixtures alone do not close the failed real-browser acceptance recorded in
+[PR #156](https://github.com/felixjichao/symphony-ts/pull/156#issuecomment-6315625918).
+See the [recovery fencing note](../notes/accepted/architecture/2026-10-21-active-web-response-fencing.md).
+
+### Decision Web response deadline (Decision extension, §4 / §13 adjacent)
+
+Browser response waits default to 15 minutes and have a persisted HUD setting (1–60 minutes). Navigation/composer timeouts and host delivery budgets are unchanged. `apps/chatgpt-web/test/adapter.test.ts` exercises real execution and checkpoint-response extraction after four simulated minutes, an explicit shorter deadline, and invalid adapter values; `userscript-entry.test.ts` covers saved settings and invalid UI input.
+
+### Decision Web result recognition under DOM windowing
+
+`apps/chatgpt-web/test/response-wait-regression.test.ts` reproduces completed exact-task results timing out when counts shrink or the restored baseline exceeds current DOM count, and mixed-selector masking. It validates count-independent exact-task recognition, in-place node replacement, timeout metadata, and rejection of stale revision, wrong task/SHA, unknown fields, pre-send replies and active streaming. Existing extraction/receipt/lease regression suites retain their strict fencing. `diagnostics.test.ts` validates the 50-event bound, reload retention, metadata-only storage and best-effort failures. Real #137 revision 3 captured baseline 5/current 4 at completion and a Bridge-accepted changes_requested result; the host automatically entered repair 1/3. See [live recovery evidence](evidence/self-hosting/driver-result-recovery-2026-10-17.md). Historical revisions lack the corresponding DOM trace. See the [decision note](../notes/accepted/architecture/2026-10-17-task-bound-web-response-completion.md).
+
+PR #156 follow-up automated verification (2026-10-22): full host gate passed with 2,019 tests and one existing opt-in skip; real-browser acceptance remains pending. See [validation evidence](evidence/web-continuity/automated-validation-2026-10-22.md).
+
+PR #156 real-browser follow-up (2026-10-22): actual Edge/Tampermonkey reload, heartbeat-401 recovery, result-403 recovery, result request/ack loss, no-replay blocking after tab loss, two enabled tabs, route-drift blocking, supersede continuation and durable Stop were exercised. Ten isolated Plan tasks produced eight matching result receipts, all at claim generation 1. That initial run left actual Review HEAD changes and host-owned reclaim pending; the [final-gate run](evidence/web-continuity/final-gates-2026-10-22.md) now verifies both. Browser-process/auth UI failures remain outside the completed scope; see [scenario evidence and limits](evidence/web-continuity/live-acceptance-2026-10-22.md#current-build-real-browser-fault-run).
+
+PR #156 final gates (2026-10-22): real GitHub-backed host polling automatically reclaimed pre-Send Web loss (generation 1 → 2 → matching receipt) and blocked post-Send uncertainty without replay. During an actual dogfood PR #25 HEAD A → B change, production GitHub admission rejected A, and a superseding B Review completed with an exact-B receipt. The test branch was restored to A with expected-head protection. See [final-gate evidence](evidence/web-continuity/final-gates-2026-10-22.md).
+
+PR #156 closeout (2026-10-22): an inaccessible bound conversation automatically rolled over binding and claim generation 1 → 2 and completed with a matching receipt. Final diagnostics restoration uses validated metadata only; 14 focused regressions passed and the P2 review finding was resolved. Remaining live categories and installed-versus-final-build provenance are explicit in the [closeout record](evidence/web-continuity/closeout-2026-10-22.md); #148 remains open.
+
+PR #156 review 5611917646 follow-up (SPEC §4 Decision extension, §17/§18): `apps/chatgpt-web/test/windowed-progress.test.ts` drives real Driver heartbeat → DecisionService/store with 20 pre-send turns reduced to eight. Live and restored response growth remains renewable beyond ten minutes; stalled/static/old-turn/route-drift cases expire. Response regressions reject wrong task/revision/HEAD/schema Send proofs, and the real HTTP Bridge recovery regression accepts an exact-task result from `prompt_submitting` without another Send. This automated follow-up does not extend the recorded live-browser acceptance scope.
+
+The review follow-up passed the full gate with 2,042 tests (Web 216); see [reproduction, safeguards and build provenance](evidence/web-continuity/review-5611917646-fix-2026-10-22.md).
+
+Userscript 0.1.5 live follow-up (2026-10-22): real Edge/Tampermonkey response growth advanced native progress; active reload resumed generation 1 without repeated Send and accepted a matching receipt. Lost success acknowledgement recovered through receipt readback with one result POST. The metadata duplication caused by Vitest calling `closeBundle` is fixed and reproduced/verified through real builds. See [live evidence and explicit limits](evidence/web-continuity/live015-acceptance-2026-10-22.md); the >10-minute growing-windowed-response and Send/checkpoint crash-gap combinations remain automated-only.
+
+### #149 durable handoff recovery evidence
+
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: native intents persist before effect,
+authoritative readback precedes acknowledgement, startup discovers incomplete work,
+and native fences/locks refuse stale ownership. `durable-delivery.test.ts` covers
+SIGKILL before/after Review and merge effects, repair ambiguity, paused compensation,
+remote receipt deduplication, target changes and lock races. `durable-retry.test.ts`
+covers reservation/launch SIGKILL, wall-clock restoration, attempt/token preservation,
+admission drift, source outage and failed persistence. `landing-recovery.test.ts`
+covers the tracker path with real durable state. `work-continuity.test.ts` exercises
+native host startup/ticks and result consumption without coding replay. Existing
+Decision generation/lease regressions remain authoritative. See the
+[boundary/evidence mapping](../notes/proposed/architecture/2026-10-22-durable-recovery-invocations.md).
+Real GitHub/Codex integration remains unverified by these local fixtures.
+
+`apps/cli/src/delivery-cleanup.test.ts` adds native host terminal-sweep coverage
+for Delivery ownership during merge auto-close, unknown children, legacy/corrupt
+evidence, unfinished intents and cleanup/recreation exclusion. Its formal halt
+CLI cases verify all checkpoints preserve recovery targets and budgets, and reject
+corrupt/foreign state before remote calls (§8/§9/§17 extensions).
+
+The cleanup regression additionally runs the real Delivery skill and durable
+Decision store through auto-merge, then passes its unmodified `result_observed`
+plus `landing.observed` output into the real host terminal sweep. Negative cases
+retain mismatched/unverified merges. Formal halt/recover tests maintain distinct
+Issue and PR comment collections and lose the first Issue response: the persisted
+report destination yields one receipt without discarding the business PR target.
+
+## Bounded recovery and incidents (NEST-134 / #150)
+
+| Contract / SPEC | Automated evidence | Limits |
+| --- | --- | --- |
+| §4 adjacent / §14 finite policy, fingerprints and capability-aware escalation | `packages/orchestrator/src/recovery-policy.test.ts`: repeated/alternating fingerprints, supported strategies, total budget, same invocation, changed target, non-retryable blocks and legacy counts | No new browser supervisor or arbitrary replay |
+| §7/§8/§14 bounded retry retains exponential delays and legitimate waits | `packages/orchestrator/src/retry-queue.test.ts`: 10s/20s then exhausted hook; continuation/slot waits uncharged | CLI composes durable policy port |
+| §17/§18 durable policy blocks and exact authorization | `apps/cli/src/host-recovery.test.ts`: native evidence, stale HEAD/task/handoff, infrastructure scope, pending invocation suppression, modeled-conflict unblock, explicit epoch; Decision continuity tests assert native epoch | Native unknown effects require their own authorization |
+| §17/§18 persistence and one durable incident | `apps/cli/src/recovery-ledger.test.ts`: SIGKILL and independent-process exhaustion, history, corruption, concurrent reporters, POST/ACK loss, marker verification, stale publication and report bounds | External GitHub/browser faults not exercised live; exactly-once not promised |
+| §5/§6 finite configuration | Config workflow tests: defaults/overrides and invalid/unsafe limits | No unlimited setting |
+
+[Operator documentation](bounded-recovery.md) describes retained outbox uncertainty
+and native unblock prerequisites. Dashboard/Operations remain read-only.
+
+NEST-134 review regressions: `apps/cli/src/recovery-review-regressions.test.ts`
+uses the real scheduling authority and file stores to cover six capacity waits
+after successful continuation, with/without restart, followed by one charged failure
+and eventual bounded exhaustion; explicit legacy migration survives reconstruction.
+It also verifies persistent path/other invariant blocks, conservative legacy unblock,
+invalid accounting schema rejection, exact human-reason incident/list/report dedup
+and preserved Delivery compensation. `review-regressions.test.ts` exercises actual
+completed needs-human Review and paused Delivery facts through the production host.
+
+## Execution-continuity fault acceptance (#151)
+
+SPEC §4 adjacent / §7 / §8 / §14 / §17 / §18: the [29-scenario matrix](evidence/execution-continuity/README.md)
+maps the supported interruptions to native suites and scoped live records. #159 is
+merged; #162 is closed through merged PR #163. **W03 bounded convergence accepted**:
+installed Driver 0.1.6 plus full host shows Waiting → Blocked after complete Edge
+quit/reopen, retaining fenced native ownership and avoiding repeated Send/result.
+Seamless browser-session resume remains unaccepted/deferred. The
+[closeout assessment](evidence/execution-continuity/closeout-2026-10-23.md) maps the
+acceptance criteria and the maintainer-approved non-exhaustive coverage profile.
+Additional live provider/report ACK, auth/human/deleted-conversation UI and Web
+strategy variants remain unexercised/deferred, with production-equivalent failure
+invariants covered; no fixture is relabeled live passed. After gate/review/merge of
+this documentation closeout, #151 is ready for closure and #145 for final acceptance.
+
+## §13 adjacent: Dashboard shell (#138 / NEST-125)
+
+| Capability | Implementation / validation | Scope |
+|---|---|---|
+| Optional v1 summary counts | domain operations contracts; `dashboard-summary.test.ts` checks exact degraded attention, final deduped anomalies, input permutation and zeros | Existing health/attention rules unchanged |
+| Overview / Work list | `apps/dashboard/src/view.ts`; DOM eight-state matrix and frozen inconsistent projections | Display only; no Work Detail/evidence explanations |
+| Four-state freshness / exact HEAD | per-source text; separate approval labels; keyboard details retain full HEAD, targets, task IDs/revisions | Observation, never merge authorization |
+| WorkKey / refresh / fault isolation | tuple routes, cross-repository same-number tests, bounded single-request poller, last-success preservation | No workflow action or persistent cache |
+| Same-origin real composition | `tests/integration.test.ts`: controlled readers → real query → real #137 HTTP → exact proxy; 200/404/405/500/502 and cleanup; dev loopback listeners, real HMR upgrade, failure/stop/restart | Local demo, not production live acceptance |
+| No frontend domain derivation | Dashboard Vitest: AST/type checking, closed helpers, graph/capability/bundle guards, negative cases, semantic pass-through; fetch binding aliases and source-dependent conditional/local-return cases | Root gate runs the workspace tests |
+
+Real Chromium smoke is an explicit built-product check, separate from DOM tests; reproducible invocation and evidence are in [Dashboard README](../apps/dashboard/README.md). Production lifecycle/scope acceptance is recorded under #140 below; authenticated external live checks remain unrun. #139 detail evidence is recorded below. Continuity acceptance follows the #151 closeout profile above; this Dashboard scope does not change it.
+
+## §13 adjacent: Work Detail (#139 / NEST-126)
+
+| Acceptance | Evidence |
+|---|---|
+| Stable WorkKey detail, navigation, stale/error retention, focus | Dashboard `detail.test.ts`, existing `ui.test.ts` / `polling.test.ts`; explicit Chromium smoke |
+| Derived state distinct from supplied facts/evidence/freshness | `detail.test.ts`: matching review and contradictory supplied conclusions, four freshness states, empty/legacy roles |
+| Severity/context and exact independent PR/task/result targets | `detail.test.ts`: all eight codes plus unknown code, three full SHAs, fallback labeling, malicious strings |
+| Partial failure and cross-work isolation | `detail.test.ts`: foreign embedded evidence/source/executor/anomaly; `detail-integration.test.ts`: real query/HTTP/proxy/DOM diagnostic matrix |
+| No frontend projector, freshness inference or workflow mutation | `guards.test.ts`: capability/import/bundle/type guards, diagnostic negative cases and pinned renderers/helpers |
+| Diagnostic shape validation and compatible unknown fields/codes | `detail.test.ts`: malformed evidence/anomaly inputs; existing transport/polling retain previous success on invalid snapshots |
+
+Validation: `npm test -w @symphony/dashboard`, root `npm run gate`; explicit Chromium smoke after the current build. Contracts and transport remain unchanged. No history, journal, charts, host monitoring, mutation controls, production wiring or live acceptance is introduced by this detail slice. Production wiring and acceptance are recorded under #140; the parent #136 acceptance is complete through merged PR #165.
+
+
+### #162 bounded-convergence follow-up (2026-10-23)
+
+SPEC §4 adjacent / §7 / §8 / §10 / §12 / §14 / §17 / §18: [new evidence](evidence/execution-continuity/bounded-browser-acceptance-2026-10-23.md)
+uses complete production host + authenticated Bridge, real GitHub reads, isolated
+Decision records and the installed Driver. A lost native-created test window's
+`waiting_response` execution blocked 27.296 seconds after lease expiry, preserving
+claim/binding generation 1 with receipt 404 and zero result POSTs. This initial bounded observation is retained with its original scope; the later
+installed Driver 0.1.6 run below accepts W03 conservative convergence. It does not
+establish seamless restoration. #162 is closed through PR #163; #151/#145 await
+the documentation closeout and final maintainer acceptance. The [subsequent agent-tab quit comparison](evidence/execution-continuity/agent-browser-acceptance-2026-10-23.md)
+completed: old PID absence/new PID verified; the same browser tab restored at home
+with a newly created `symphony_tab_id` and empty diagnostics. Host block arrived
+23.019 seconds after lease expiry, with local CLI-visible incident, receipt 404,
+zero result POSTs and 409 for replacement claim/old heartbeat. Both variants now
+show bounded blocking, while seamless resume remains unaccepted; the earlier
+native-window comparison differs in window topology, and old GM checkpoint
+persistence was not directly inspected.
+CLI host-tick regression covers expiry, no replacement claim and durable block/incident
+retention after host/Bridge reconstruction and store reopen. Decision's exported
+`HeartbeatTaskRequest` now includes progress from the domain execution contract,
+matching the already-supported service/HTTP payload; typed Bridge regression verifies
+real progress and unchanged repeated progress. No recovery-policy change was required.
+
+
+### #162 recovery visibility repair — Driver 0.1.6 (2026-10-23)
+
+SPEC §13 adjacent / §10 / §12 / §17 / §18: [repair evidence](evidence/execution-continuity/recovery-hud-fix-2026-10-23.md).
+A restored page without a local checkpoint now reads native continuity facts when
+`/next` has no claimable task, displaying Waiting for an outstanding owner or Blocked
+with native task/reason/instruction. This is read-only observation: no lost identity
+is reconstructed and no lease is adopted, reclaimed or unblocked by the page.
+The HUD displays the build version from the same source as userscript metadata.
+Regression uses a real HTTP Bridge/store seam for waiting/block
+facts, terminal clearing and no mutation, plus late-response-after-Stop fencing.
+Transparent browser-session resume remains outside the proven boundary.
+Operator-confirmed 0.1.6 and its HUD version were verified during actual generation
+and complete Edge quit/reopen (old PID 32189 absent, new PID 16774). The restored
+home page displayed Waiting then Blocked automatically; host block followed expiry
+by 22.913 seconds, with generation 1, receipt 404, zero Driver POSTs after quit,
+and stale heartbeat/replacement claim 409. Gate passed: 2312 tests, one opt-in skip.
+
+Final W03 disposition: bounded convergence accepted through merged PR #163; seamless
+browser-session resume remains unaccepted/deferred. Native task status may remain
+`running` while `execution.blocked`, host diagnosis and HUD are explicitly Blocked;
+this is an accepted nonterminal operational block, not silent stranded work.
+
+## Production operational status closeout (#140 / §13 adjacent, §17–18)
+
+The opt-in CLI composes real source readers → operations → read-only HTTP → built Dashboard. Both configured Decision backend modes use the same committed whitelist; no status component owns admission or approvals. Explicit canonical scope, four-state freshness, exact independent review targets, partial failures and no-work scope are preserved. Status startup/cleanup failures are isolated from native host failure, and in-flight reads drain before shared store close.
+
+The [acceptance ledger](evidence/status-surface/README.md) maps all 13 issue scenarios and the architecture/read-only assertions to reproducible tests and [Chromium results](evidence/status-surface/browser.json). New production composition acceptance is credential-free; a real built executable packaging smoke runs from another cwd with an isolated tracker. Local/browser evidence does not imply authenticated external-provider acceptance. Execution-continuity acceptance is maintained independently in its own ledger. Required delivery validation is root `npm run gate`; no history, analytics, journal, streaming or operator actions are claimed.
+
+Credential-origin review regression (PR #165): `apps/cli/src/status-credentials.test.ts` exercises actual host/profile/reload/status HTTP wiring with only the external gh runner intercepted. Public GitHub succeeds; GHES, alternate API bases and other providers degrade before subprocess execution, without credential forwarding or ambient fallback. A single observation retains its validated token through reload; the next observation revalidates its source. This does not add GHES status support.
+
+Independent review approved PR #165, which merged to `main` as `8f7675ed09f59919f438a3b6e657471eb6b883ba` on 2026-10-24 with main CI run #344 green. Parent #136's exit condition is satisfied by the #137–#139 sections above plus this closeout; closing it remains the owner's action.
+
+## §13 adjacent: Operator Console shell (#169)
+| Capability | Evidence | Boundary |
+|---|---|---|
+| Four destinations, active state, legacy/direct WorkKey detail and explicit invalid/scope misses | `apps/dashboard/tests/shell.test.ts`, `detail.test.ts`, `ui.test.ts` | Presentation route ownership only |
+| Keyboard heading/skip navigation, polling focus and expanded diagnostics | `shell.test.ts`, `detail-integration.test.ts` | No mutation controls |
+| Native back/forward, wrapped narrow navigation and overflow-contained table | `apps/dashboard/examples/smoke.ts` captures desktop and 390px screenshots | Built-product browser check separate from repository tests |
+| Production/demo labels and read-only source boundary | Shell/UI tests and existing recursive AST/type/import/bundle guards, extended to routing module | Fixed snapshot GET; no store access or frontend derivation |
+
+Sandbox validation uses Dashboard tests and root typecheck. Full gate, CI, independent exact-HEAD review and retained self-hosting delivery evidence are supplied by the operator host after the coding session; they are not claimed by this implementation entry.
+
+Sandbox result (2026-10-25): Dashboard 9 test files / 138 tests passed; root typecheck (including built Dashboard), scoped ESLint and docs:check passed. Chromium smoke was attempted with an already-installed browser/module, but Chromium exited SIGABRT during launch in the coding sandbox; no rendered evidence or successful browser acceptance is claimed. Host must run the documented smoke and retain screenshots/JSON alongside CI/review evidence.
+
+Host browser follow-up (2026-10-26, #169 / #178): all 23 built-product smoke
+scenarios passed with installed Edge 156.0.4314.42. Two asynchronous harness reads
+now wait for their existing focus/detail assertions. Product semantics are unchanged.
+Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger](evidence/dashboard-v2-shell/README.md).

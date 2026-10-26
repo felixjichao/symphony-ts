@@ -1,0 +1,19 @@
+vite v5.4.21 building for production...
+transforming...
+✓ 21 modules transformed.
+rendering chunks...
+computing gzip size...
+../../../private/tmp/symphony-pr156-live015-20261022/old-output/symphony-decision-driver.user.js  113.16 kB │ gzip: 28.24 kB
+✓ built in 149ms
+HEADER_HOOK_BEFORE 0
+
+ RUN  v2.1.9 /Volumes/Data/symphony-ts/apps/chatgpt-web
+
+ ✓ test/diagnostics.test.ts (14 tests) 5ms
+
+ Test Files  1 passed (1)
+      Tests  14 passed (14)
+   Start at  17:56:44
+   Duration  234ms (transform 64ms, setup 0ms, collect 61ms, tests 5ms, environment 0ms, prepare 40ms)
+
+HEADER_HOOK_BEFORE 1

@@ -1,0 +1,12 @@
+{
+  "observedAtUtc": "2026-10-23T01:33:31.815790+00:00",
+  "sourceCommit": "285ff58",
+  "taskId": "github%3Asymphony-acceptance%2Fpr159-native%23151:plan:1",
+  "processKilled": 98528,
+  "signal": "SIGKILL",
+  "authoritativeStateExactlyPreserved": true,
+  "blockedReason": "auth_required",
+  "recoveryCount": 1,
+  "duplicateStartup": "store_locked",
+  "boundary": "real local Bridge process + HTTP + durable store; injected native auth_required, no real authentication UI or coding host"
+}

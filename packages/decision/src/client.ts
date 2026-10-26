@@ -1,5 +1,8 @@
+import type { DecisionContinuityWork, ReclaimDecisionClaim, UnblockDecisionExecution } from "./continuity";
 import { execFileSync } from "node:child_process";
 import type {
+  DecisionObservation,
+  WorkKey,
   DecisionSession,
   DecisionTask,
   DecisionReviewTarget,
@@ -66,6 +69,23 @@ export class DecisionBridgeClient {
     this.syncTransport = options.syncTransport;
   }
 
+  /** Single committed-state whitelist read, with a real abort budget (no continuity side effects). */
+  async observeWork(key: WorkKey): Promise<DecisionObservation> {
+    const query = new URLSearchParams({ provider: key.provider, key: key.key });
+    return this.request<DecisionObservation>("GET", `/v1/observations/work?${query}`, undefined,
+      { signal: AbortSignal.timeout(3000) });
+  }
+
+  async continuityWork(): Promise<readonly DecisionContinuityWork[]> {
+    return (await this.request<{ work: DecisionContinuityWork[] }>("GET", "/v1/continuity")).work;
+  }
+  async reclaimExpiredClaim(expected: ReclaimDecisionClaim): Promise<boolean> {
+    return (await this.request<{ reclaimed: boolean }>("POST", "/v1/continuity/reclaim", expected)).reclaimed;
+  }
+  async unblockExecution(expected: UnblockDecisionExecution): Promise<boolean> {
+    return (await this.request<{ unblocked: boolean }>("POST", "/v1/continuity/unblock", expected)).unblocked;
+  }
+
   private syncRequest(method: "GET" | "POST", path: string, body: unknown): unknown {
     if (this.syncTransport) {
       return this.syncTransport(method, path, body);
@@ -89,7 +109,7 @@ export class DecisionBridgeClient {
     method: string,
     path: string,
     body?: unknown,
-    options: { allow204?: boolean } = {}
+    options: { allow204?: boolean; signal?: AbortSignal } = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -109,6 +129,7 @@ export class DecisionBridgeClient {
     const init: RequestInit = {
       method,
       headers,
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(serializedBody !== undefined ? { body: serializedBody } : {}),
     };
 

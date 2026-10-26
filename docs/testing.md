@@ -108,3 +108,68 @@ readiness 用真实 request/session/transcript/prompt/after_run marker，无固�
 `npm test -w @symphony/domain` covers v1 parsing, task/session transitions, lease fencing, binding generation, exact HEAD authorization in `src/decision.test.ts`, and context bundle validation in `src/decision-context.test.ts`. `npm test -w @symphony/decision` covers store persistence, process locking, lease coordination, HTTP bridge, result extraction, and executor adapters in `src/adapter.test.ts`. Protocol and caller/store boundaries: [decision-protocol.md](decision-protocol.md); extension evidence: [conformance.md](conformance.md). Final validation remains `npm run gate`.
 
 Delivery review recovery: `npm test -w @symphony/cli -- src/delivery-review-recovery.test.ts` exercises fixed base/head diff recovery (SHA fetch, fixed compare API, fail-closed) and closes/reopens the durable Decision store and HTTP bridge before the delivery runner consumes `needs_human` or passes `changes_requested` findings into repair. The repair fixture deliberately fails; assertions verify handoff, repair budget consumption and no merge. These local fixtures do not replace the isolated real GitHub/ChatGPT Web dogfood acceptance.
+
+### Work continuity admission regressions
+
+`npm test -w @symphony/cli -- src/review-regressions.test.ts src/work-continuity.test.ts` exercises real host poll/retry entry points with a real temporary Delivery file and Decision store, and injected tracker/GitHub/timer boundaries. It covers Bridge startup/timer non-reclaim on merged work, pre-entry contention versus post-entry uncertainty, tracker state/routing/label drift during remote reads, merged runtime/plan conflicts, inventory failure, invalidation of earlier coding facts, new pause/Decision/CI facts, observation outage/backoff and late reads after stop/retry replacement. `npm test -w @symphony/orchestrator -- src/retry-queue.test.ts` verifies that refreshed Issue facts reach the native commit and overlapping admissions cannot create multiple owners. The real executable tests inject a read-only GitHub CLI fixture through the child process environment; they retain the actual binary, worker subprocess, signal handling and filesystem readback, and reject unexpected GitHub commands.
+
+### Decision/Web continuity faults
+
+`npm test -w @symphony/decision -- src/continuity.test.ts` uses a real temporary store, controlled clock and HTTP bridge to test progress deadlines, vanished owners, old leases/bindings, idempotent rebind, persisted budgets and nonterminal blocks. `npm test -w @symphony/chatgpt-web` exercises checkpoint/receipt recovery, conservative bootstrap blocking and persisted enable/Stop with tab identity loss. `apps/chatgpt-web/test/review-followup-regressions.test.ts` drives the real driver → adapter → temporary HTTP Bridge chain: a persisted Stop written by another tab during the prompt or navigation authorization, and an extracted candidate that must survive repeated blocked polls and a rebuilt driver until the operator unblocks it. Host fixtures above verify blocked work cannot launch coding and absent pages are explicit waits. The full local gate remains `npm run gate`.
+
+Real acceptance additionally requires an enabled Tampermonkey page plus authenticated ChatGPT/Bridge: reload mid-response, close/reopen with tab identity loss, recover bridge authorization, interrupt before/after result acceptance, invalidate a conversation, change review HEAD and exercise competing tabs. Record interventions, native receipt/claim/binding readbacks and Stop persistence. Fixture results cannot substitute for those browser/environment checks.
+
+`apps/cli/src/decision-web-admission.test.ts` checks exact current PR HEAD/open-state admission and fail-closed GitHub errors. Decision continuity tests verify that external admission refusal cannot mutate a lease/binding and native supersede is revalidated after admission.
+
+The #149 native recovery entries are `apps/cli/src/durable-delivery.test.ts`,
+`durable-retry.test.ts`, `landing-recovery.test.ts`, `recovery-storage.test.ts` and
+`work-continuity.test.ts`. They use real temporary files, native authorities and a
+bundled separate Node process for SIGKILL, replacing only external GitHub/Codex or
+time/scheduler boundaries. Recovery is verified at intent/effect/acknowledgement,
+with drift, unavailable sources, duplicate calls and stale ownership. Full validation
+uses `npm run gate`; local fixtures do not substitute for real GitHub/Codex smoke.
+
+Delivery cleanup/halt regression: `npx vitest run apps/cli/src/delivery-cleanup.test.ts`
+uses real host startup sweeps and the formal halt CLI with native file storage.
+It covers merge auto-close before acknowledgement, deletion/recreation exclusion,
+unknown child and legacy/corrupt evidence, and preservation of repair/landing
+steps through every halt checkpoint.
+
+## Bounded recovery extension
+
+Run `npm test -w @symphony/orchestrator -- src/recovery-policy.test.ts src/retry-queue.test.ts`
+for selection, budget accounting and native backoff; run
+`npm test -w @symphony/cli -- src/host-recovery.test.ts src/recovery-ledger.test.ts`
+for persisted host composition, real filesystem/SIGKILL, independent-process exhaustion,
+reporter concurrency, ACK-loss verification, stale publication and exact authorization.
+Decision continuity and Web regression suites retain native 3/6 limits and no-replay
+checks. New local tests use isolated fixtures and injected GitHub runners. They do
+not publish live comments or establish real browser/provider acceptance.
+
+NEST-134 review regressions additionally run with
+`npm test -w @symphony/cli -- src/recovery-review-regressions.test.ts src/review-regressions.test.ts`:
+real authority → six slot waits → worker failure, accounting provenance across restart,
+non-ownership invariant retention, modeled-condition migration, and actual native
+Review/Delivery human-block reporting. External provider/browser acceptance is unchanged.
+
+## Execution-continuity acceptance profile
+
+See the [scenario matrix and commands](evidence/execution-continuity/README.md), [per-run template](evidence/execution-continuity/template.json), and independent [live procedure](evidence/execution-continuity/live-procedure.md). Host restart tests query the durable authentication incident through the real recovery CLI and preserve it across tracker outage/recovery. R01–R03 explicitly retain the NEST-134 review regressions. Default gate success does not imply live browser/provider acceptance.
+
+## Dashboard validation
+
+`npm test -w @symphony/dashboard` runs unit, jsdom mount, real loopback composition, AST/type/graph/capability guards, negative fixtures, frozen semantic pass-through and production module-graph inspection. It is included by root `npm run gate`. Domain/operations tests cover additive optional v1 counts; observability retains its complete JSON transport regressions. Run the [built Chromium smoke](../apps/dashboard/README.md#real-browser-smoke) separately with an already installed browser. It checks load, WorkKey routing, keyboard full SHA, GET-only requests, transport disconnect/recovery and prints artifact hashes. DOM tests alone are not browser or production live evidence.
+
+## Work Detail (#139)
+
+Dashboard `tests/detail.test.ts` covers independent exact targets, intentionally inconsistent projection pass-through, all anomaly codes plus unknown codes, four-state source freshness, empty/legacy diagnostics, malformed wire data, malicious strings, full WorkKey selection (including foreign nested evidence), route changes, retained failed-refresh data and focus restoration. `detail-integration.test.ts` uses controlled SourceReaders through real query → HTTP → same-origin proxy → validation → DOM rendering for review, two mismatch cases, partial failure, conflicting tasks and terminal execution. Node remains the test realm for this composition; an isolated JSDOM document supplies only rendering, preserving esbuild/typed-array invariants.
+
+Guards cover evidence/rule/value/severity/time flows through locals/destructuring, typed freshness/anomaly construction and writes, new-renderer capabilities and reviewed helper fingerprints. Existing domain/operations tests retain projector ownership. The explicit built-product Chromium smoke separately checks direct routes, history navigation, three complete SHAs, keyboard raw diagnostics, work isolation, six diagnostic scenarios, real network failure/recovery and fixed GET requests; it reports browser version and asset hashes. None of these tests constitutes production live acceptance (#140).
+
+Diagnostic DOM identity is scoped by projection versus canonical anomaly identity (full WorkKey/code/message), then by a fixed tuple of evidence content/provenance. Observation/entity timestamps do not identify a breadcrumb across queries. Insertion/reordering cannot reuse a different fact's ID. Indistinguishable duplicate identities receive render-local unique IDs and deliberately lose cross-snapshot focus/open restoration; removal falls back to the detail heading. DOM regressions cover multiple work/global anomalies, repeated breadcrumbs and insertion/removal/reordering; Chromium smoke focuses an anomaly target breadcrumb across an actual 15-second poll and verifies exactly one open diagnostic and globally unique IDs.
+
+## Production status closeout (#140)
+
+The [status acceptance ledger](evidence/status-surface/README.md) maps representative source states to the actual CLI composition, operations readers/query, transport and built Dashboard. CLI status tests cover shared-store Bridge equivalence/read-only bytes, expired leases, independent HEAD approval refusal, real HTTP abort/drain, method rejection and startup rollback. Host fault comparisons retain actual worker failure and retry reservation. Existing Dashboard semantic guards remain active. The foreground Chromium script covers controlled production states plus actual executable packaging from another cwd; its version, asset hashes and explicit external-live limitation are retained. Run `npm run gate` before delivery.
+
+Dashboard V2 shell acceptance (#169): `npm test -w @symphony/dashboard` covers route ownership, labels, active state, keyboard focus and refresh restoration. The optional built Chromium harness in [Dashboard README](../apps/dashboard/README.md#real-browser-smoke) exercises native history and 390px layout and emits screenshots plus asset hashes. Host-owned full validation/review remains separate from sandbox feature checks.

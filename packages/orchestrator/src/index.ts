@@ -154,3 +154,8 @@ export type {
 } from "./loop";
 
 export type { OrchestratorEvent, RetryEventReason } from "./events";
+export { deriveWorkContinuity, WorkContinuityCoordinator } from "./work-continuity";
+export type { WorkRecoveryStorage, WorkContinuityPorts, WorkContinuityReconciliation } from "./work-continuity";
+export { reserveRecovery } from "./recovery-policy";
+export { refundRecovery } from "./recovery-policy";
+export { beginRecoveryEpoch } from "./recovery-policy";

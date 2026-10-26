@@ -1,3 +1,4 @@
+import type { WorkKey } from "./operations-facts";
 import type { MonotonicTimestampMs } from "./time";
 
 /**
@@ -33,4 +34,25 @@ export interface RetryEntry {
   timerHandle: TimerHandle;
   /** SPEC `error`：触发本次 retry 的失败原因；无则 `null`。 */
   error: string | null;
+}
+
+/** Native retry/launch recovery record (§4/§8/§14), never a serialized timer. */
+export interface DurableRetryReservation {
+  readonly workKey?: WorkKey | undefined;
+  /** Distinguishes pre-policy snapshots from current scheduling/wait counters. */
+  readonly recoveryAccounting?: { readonly schemaVersion: 1; readonly legacyAttempts: number };
+  readonly issueId: string;
+  readonly identifier: string | null;
+  readonly issueUrl: string | null;
+  readonly attempt: number;
+  readonly error: string | null;
+  readonly kind: "continuation" | "failure";
+  readonly dueAtUtcMs: number;
+  readonly token: string;
+  readonly phase: "scheduled" | "launch_pending" | "blocked";
+}
+export interface RetryReservationStorage {
+  load(): readonly DurableRetryReservation[];
+  put(record: DurableRetryReservation, expectedToken: string | null): void;
+  remove(issueId: string, token: string): void;
 }

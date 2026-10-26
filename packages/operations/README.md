@@ -35,7 +35,7 @@ import {
 
 ## Extension points
 
-source reader 与 deterministic projector 均已在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、observability、tracker 是真实入口测试的 devDependencies。
+source reader 与 deterministic projector 均已在本包实现，允许**单向**读取 `@symphony/domain` 以及相应源包；源包（`orchestrator` / `decision` / `tracker` / `agent`）**不得**反向 import `@symphony/operations`。生产依赖保持 `operations → domain`；Decision、tracker 是真实入口测试的 devDependencies；observability 是允许依赖 operations 的下游只读 HTTP consumer（#137），operations 不反向依赖 observability。
 
 ## Readers
 
@@ -142,3 +142,6 @@ const executors = await queryService.listExecutors();
 没有持久缓存、后台轮询、source timeout wrapper 或网络 transport（HTTP/SSE/WebSocket）。底层 port 负责预算、取消与收尾；默认 gh runner 有有界 subprocess timeout。四源不是原子快照。当前没有统一 executor inventory，宿主未接入时应使用 null port。Web Dashboard、TUI、历史事件分析与变异命令（cancel/retry/force-merge）属于未来独立演进，不在本观察面范围内。架构决定见 [source readers note](../../notes/accepted/architecture/2026-10-13-operational-source-readers.md)、[deterministic projectors note](../../notes/accepted/architecture/2026-10-14-deterministic-work-and-system-projectors.md)、[anomaly detection note](../../notes/accepted/architecture/2026-10-15-cross-source-anomaly-detection-and-projection-explanations.md) 与 [operational query service note](../../notes/accepted/architecture/2026-10-15-operational-query-service-and-integration-acceptance.md)。
 
 运行 `npm test -w @symphony/operations`（真实 Decision / snapshot 采集、推导器、异常检测、边界与查询服务集成），`npm test -w @symphony/tracker -- src/github/operations-observation.test.ts`（只读 GitHub 归一化）；共享契约测试见 `npm test -w @symphony/domain`。
+
+
+Decision readers accept either a synchronous local `DecisionObservation` or an asynchronous Bridge observation. Both paths use the same whitelist mapping and failure/freshness policy. Cancellation belongs to the source port; the reader always awaits settlement. Production composition is owned by the CLI, not this package.

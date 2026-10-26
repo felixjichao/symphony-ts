@@ -1,0 +1,146 @@
+{
+  "userscriptSha256": "c08b9ad494f101a2c4197c0666a33e21c76af8e74a309c5c49e5ffd251114154",
+  "installationEvidence": "operator-confirmed current build in earlier acceptance; artifact unchanged",
+  "tasks": [
+    {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:plan:1",
+      "kind": "plan",
+      "revision": 1,
+      "status": "superseded",
+      "claimGeneration": 2,
+      "bindingGeneration": 1,
+      "target": null,
+      "execution": {
+        "revision": 1,
+        "startedAtMs": 1792650330191,
+        "lastProgressAtMs": 1792650529594,
+        "deadlineAtMs": 1792651129594,
+        "phase": "waiting_response",
+        "responseLength": 6337,
+        "recoveryAttempts": 1,
+        "blocked": null
+      },
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 2,
+        "acceptedAtMs": 1792650531202,
+        "target": null,
+        "verdict": "ready"
+      }
+    },
+    {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:plan:2",
+      "kind": "plan",
+      "revision": 2,
+      "status": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "target": null,
+      "execution": {
+        "revision": 2,
+        "startedAtMs": 1792650567192,
+        "lastProgressAtMs": 1792650568715,
+        "deadlineAtMs": 1792651168715,
+        "phase": "prompt_submitting",
+        "responseLength": 0,
+        "recoveryAttempts": 0,
+        "blocked": null
+      },
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792650586985,
+        "target": null,
+        "verdict": "ready"
+      }
+    },
+    {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:plan:3",
+      "kind": "plan",
+      "revision": 3,
+      "status": "cancelled",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "target": null,
+      "execution": {
+        "revision": 3,
+        "startedAtMs": 1792650669662,
+        "lastProgressAtMs": 1792650672017,
+        "deadlineAtMs": 1792651272017,
+        "phase": "prompt_submitting",
+        "responseLength": 0,
+        "recoveryAttempts": 0,
+        "blocked": {
+          "reason": "human_required",
+          "unblock": "Verify conversation/result receipt before authorizing another prompt",
+          "atMs": 1792650807091
+        }
+      },
+      "receipt": null
+    },
+    {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+      "kind": "review",
+      "revision": 1,
+      "status": "superseded",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 25,
+        "headSha": "d590d4bc0b54284c5abf1662a49c0086822e9fa7"
+      },
+      "execution": {
+        "revision": 1,
+        "startedAtMs": 1792650909004,
+        "lastProgressAtMs": 1792650931948,
+        "deadlineAtMs": 1792651531948,
+        "phase": "waiting_response",
+        "responseLength": 0,
+        "recoveryAttempts": 0,
+        "blocked": {
+          "reason": "human_required",
+          "unblock": "Resolve the cause, inspect conversation/receipt, then explicitly authorize recovery via continuity/unblock",
+          "atMs": 1792650951198
+        }
+      },
+      "receipt": null
+    },
+    {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+      "kind": "review",
+      "revision": 2,
+      "status": "completed",
+      "claimGeneration": 1,
+      "bindingGeneration": 1,
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 25,
+        "headSha": "ca8ace51ca38307d1a4333de0fb6071bde8cc0b5"
+      },
+      "execution": {
+        "revision": 2,
+        "startedAtMs": 1792650992404,
+        "lastProgressAtMs": 1792651034308,
+        "deadlineAtMs": 1792651634308,
+        "phase": "waiting_response",
+        "responseLength": 1215,
+        "recoveryAttempts": 0,
+        "blocked": null
+      },
+      "receipt": {
+        "type": "result",
+        "claimGeneration": 1,
+        "acceptedAtMs": 1792651038309,
+        "target": {
+          "repository": "felixjichao/symphony-delivery-dogfood",
+          "prNumber": 25,
+          "headSha": "ca8ace51ca38307d1a4333de0fb6071bde8cc0b5"
+        },
+        "verdict": "approve"
+      }
+    }
+  ],
+  "codingWorkersObserved": 0,
+  "nativeHostAppliedObservations": 2
+}

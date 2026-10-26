@@ -113,9 +113,9 @@ export function createRuntimeReader(options: ReaderOptions, read: (() => Snapsho
 
 /** Port is DecisionService.observeWork; it never opens a second store. */
 export function createDecisionReader(options: ReaderOptions,
-  read: (() => DecisionObservation) | null): SourceReader<DecisionWorkFacts> {
-  return reader("decision", options, read === null ? null : () => {
-    const value = read();
+  read: (() => DecisionObservation | Promise<DecisionObservation>) | null): SourceReader<DecisionWorkFacts> {
+  return reader("decision", options, read === null ? null : async () => {
+    const value = await read();
     const observedAt = options.clock();
     return { observedAt, facts: { workKey: keyCopy(value.workKey),
       session: value.session ? {

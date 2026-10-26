@@ -1,0 +1,332 @@
+[
+  {
+    "atMs": 1792650911376,
+    "stage": "prompt_submitting",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1
+  },
+  {
+    "atMs": 1792650914666,
+    "stage": "waiting_response",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1
+  },
+  {
+    "atMs": 1792650914667,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 4,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": false,
+      "elapsedMs": 0
+    }
+  },
+  {
+    "atMs": 1792650915168,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 4,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 501
+    }
+  },
+  {
+    "atMs": 1792650919701,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 5,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 5034
+    }
+  },
+  {
+    "atMs": 1792650922237,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 6,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 7570
+    }
+  },
+  {
+    "atMs": 1792650930817,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 7,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 16150
+    }
+  },
+  {
+    "atMs": 1792650932842,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 8,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 18176
+    }
+  },
+  {
+    "atMs": 1792650951084,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:1:felixjichao%2Fsymphony-delivery-dogfood:25:d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+    "kind": "review",
+    "revision": 1,
+    "wait": {
+      "phase": "aborted",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 8,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 36418
+    }
+  },
+  {
+    "atMs": 1792650993803,
+    "stage": "prompt_submitting",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2
+  },
+  {
+    "atMs": 1792650995295,
+    "stage": "waiting_response",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2
+  },
+  {
+    "atMs": 1792650995297,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "no_new_turn",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 4,
+      "candidateFound": false,
+      "matchingTaskResult": false,
+      "stopPresent": false,
+      "elapsedMs": 0
+    }
+  },
+  {
+    "atMs": 1792650995801,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 5,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 505
+    }
+  },
+  {
+    "atMs": 1792650997810,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 6,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 2514
+    }
+  },
+  {
+    "atMs": 1792651000334,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 7,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 5038
+    }
+  },
+  {
+    "atMs": 1792651015939,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 8,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 20642
+    }
+  },
+  {
+    "atMs": 1792651017449,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 9,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 22150
+    }
+  },
+  {
+    "atMs": 1792651028034,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "generating",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 5,
+      "candidateFound": true,
+      "matchingTaskResult": false,
+      "stopPresent": true,
+      "elapsedMs": 32738
+    }
+  },
+  {
+    "atMs": 1792651035094,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "waiting",
+      "reason": "stabilizing",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 5,
+      "candidateFound": true,
+      "matchingTaskResult": true,
+      "stopPresent": false,
+      "elapsedMs": 39798
+    }
+  },
+  {
+    "atMs": 1792651036106,
+    "stage": "response_wait",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2,
+    "wait": {
+      "phase": "completed",
+      "reason": "ready",
+      "selector": "[data-markdown-text-style='assistant-message']",
+      "baselineCount": 4,
+      "currentCount": 5,
+      "candidateFound": true,
+      "matchingTaskResult": true,
+      "stopPresent": false,
+      "elapsedMs": 40810
+    }
+  },
+  {
+    "atMs": 1792651036108,
+    "stage": "result_submitting",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2
+  },
+  {
+    "atMs": 1792651038326,
+    "stage": "result_accepted",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2324:review:2:felixjichao%2Fsymphony-delivery-dogfood:25:ca8ace51ca38307d1a4333de0fb6071bde8cc0b5",
+    "kind": "review",
+    "revision": 2
+  }
+]

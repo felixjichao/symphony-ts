@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatDeliveryHandoffMarkdown,
+  formatPrBody,
   type DecisionContextBundle,
   type DecisionReviewTarget,
   type DecisionTask,
@@ -19,6 +20,7 @@ import { recoverDeliveryHandoff } from "./recover-handoff";
 import type { DeliveryGitGhRunner, DeliverySubprocessResult } from "./git-gh-runner";
 
 class MockDeliveryRunner implements DeliveryGitGhRunner {
+  private remoteLabelRemoved: boolean | undefined;
   readonly gitCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly ghCalls: Array<{ args: readonly string[]; cwd: string }> = [];
   readonly execCalls: Array<{ command: string; cwd: string; timeoutMs: number | undefined; env: Record<string, string> | undefined }> = [];
@@ -71,6 +73,18 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
 
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
+    if (args.includes("labels,state") || args.includes("body,headRefOid,headRefName,baseRefName")) {
+      let state: PersistedDeliveryState | undefined;
+      try { state = JSON.parse(fs.readFileSync(path.join(cwd, ".symphony", "delivery-state.json"), "utf8")); } catch { /* no disk fixture */ }
+      if (args.includes("labels,state")) return { stdout: JSON.stringify({ state: "OPEN", labels: (this.remoteLabelRemoved ?? state?.readyLabelRemoved ?? false) ? [] : [{ name: "symphony-ready" }] }), stderr: "", exitCode: 0 };
+      const handoff = state?.handoff;
+      const repo = state?.repo ?? "owner/repo";
+      const context = { repo, issueNumber: state?.issueNumber ?? 80, workspaceKey: state?.workspaceKey ?? "GH-80",
+        headBranch: handoff?.headBranch ?? "symphony/GH-80", baseBranch: "main" };
+      return { stdout: JSON.stringify({ body: formatPrBody({ context }), headRefOid: handoff?.headSha,
+        headRefName: context.headBranch, baseRefName: "main" }), stderr: "", exitCode: 0 };
+    }
+
     if (args[0] === "api" && args[1]?.includes("rules/branches")) {
       return { stdout: "[]", stderr: "", exitCode: 0 };
     }
@@ -184,10 +198,9 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
       return { stdout: JSON.stringify({ headRefOid: this.currentPrHead ?? this.lastRevParseSha ?? "1234567890abcdef1234567890abcdef12345678" }), stderr: "", exitCode: 0 };
     }
     const next = this.ghResponses.shift();
-    if (typeof next === "function") {
-      return next(args);
-    }
-    return next ?? { stdout: "", stderr: "", exitCode: 0 };
+    const response = typeof next === "function" ? await next(args) : next ?? { stdout: "", stderr: "", exitCode: 0 };
+    if (args[0] === "issue" && args[1] === "edit" && response.exitCode === 0) this.remoteLabelRemoved = true;
+    return response;
   }
 
   async exec(command: string, cwd: string, timeoutMs?: number, env?: Record<string, string>): Promise<DeliverySubprocessResult> {
@@ -206,6 +219,7 @@ class MockReviewGate implements DeliveryReviewGate {
   getReviewStatusCallCount = 0;
   supersedeReviewTaskCallCount = 0;
 
+  private readonly targets = new Map<string, DecisionReviewTarget>();
   reviewTaskToReturn: DecisionTask | null = null;
   statusResults: DeliveryReviewStatusResult[] = [];
   approvalResults: DeliveryReviewApprovalResult[] = [];
@@ -216,6 +230,7 @@ class MockReviewGate implements DeliveryReviewGate {
     target: DecisionReviewTarget,
     _context?: DecisionContextBundle,
   ): Promise<DecisionTask> {
+    this.targets.set(`task-review-test-${target.headSha}`, target);
     this.ensureReviewTaskCallCount++;
     if (this.reviewTaskToReturn) return this.reviewTaskToReturn;
     return {
@@ -253,7 +268,7 @@ class MockReviewGate implements DeliveryReviewGate {
         verdict: "approve",
         target: {
           repository: "felixjichao/symphony-ts",
-          prNumber: 85,
+          prNumber: this.targets.get(taskId)?.prNumber ?? 85,
           headSha: headSha!,
         },
         findings: [],
@@ -309,9 +324,12 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     },
   });
 
-  it.each([0, -1, 1.5, NaN, Infinity, 2_147_483_648])("rejects invalid validation timeout %s before invoking subprocesses", async validationTimeoutMs => {
+  it.each([0, -1, 1.5, NaN, Infinity, 2_147_483_648])("rejects invalid validation timeout %s before storage or subprocess I/O", async validationTimeoutMs => {
     const runner = new MockDeliveryRunner();
-    await expect(runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, validationTimeoutMs })).rejects.toThrow("validationTimeoutMs");
+    await expect(runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, validationTimeoutMs,
+      stateStorage: { withExclusive: async () => { throw new Error("storage must not be accessed"); },
+        readState: () => { throw new Error("storage must not be read"); }, writeState: () => { throw new Error("storage must not be written"); } },
+    })).rejects.toThrow("validationTimeoutMs");
     expect(runner.execCalls).toHaveLength(0);
     expect(runner.gitCalls).toHaveLength(0);
     expect(runner.ghCalls).toHaveLength(0);
@@ -728,9 +746,11 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     });
     runner.ghResponses.push({ stdout: JSON.stringify({ state: "CLOSED" }), stderr: "", exitCode: 0 });
 
+    const checkpoints: PersistedDeliveryState[] = [];
     const result = await runDeliverySkill({
       ...getBaseOptions(cwd),
       runner,
+      stateStorage: { readState: () => null, writeState: state => { checkpoints.push(state); } },
       repairCommand: "npm run ci:fix",
       validationTimeoutMs: 240_000,
       maxWaitSeconds: 300,
@@ -739,6 +759,9 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(result.status).toBe("completed");
     expect(result.spentRepairs).toBe(1);
     expect(result.mergeSha).toBe("mergedsha-repair-cmd");
+    const continuations = checkpoints.flatMap(state => state.continuation ? [state.continuation] : []);
+    expect(continuations.length).toBeGreaterThan(0);
+    expect(continuations.every(saved => saved.validationTimeoutMs === 240_000)).toBe(true);
     const validations = runner.execCalls.filter(c => c.command === "npm test");
     expect(validations).toHaveLength(2);
     expect(validations.every(c => c.timeoutMs === 240_000)).toBe(true);
@@ -1539,19 +1562,14 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     };
     realDiskStorage.writeState(interruptedState);
 
-    // On GitHub: the comment was ACTUALLY posted before worker died!
+    // Legacy destination is absent: re-observe PR and Issue separately, then
+    // verify the selected PR receipt again before acknowledging it.
     const runner = new MockDeliveryRunner();
-    runner.ghResponses.push({
-      stdout: JSON.stringify({
-        comments: [
-          {
-            body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }),
-          },
-        ],
-      }),
-      stderr: "",
-      exitCode: 0,
-    });
+    const receipt = { stdout: JSON.stringify({ comments: [
+      { body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }) },
+    ] }), stderr: "", exitCode: 0 };
+    runner.ghResponses.push(receipt,
+      { stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 }, receipt);
 
     const result = await recoverDeliveryHandoff({
       cwd,

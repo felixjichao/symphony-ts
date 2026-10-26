@@ -51,6 +51,9 @@ export interface ThreadUsageBaseline {
  * 跨事件积累"身份未齐时的暂存遥测"与"每个 thread 的已入账 token 高水位"。
  */
 export interface AgentTelemetryState {
+  /** Meaningful lifecycle/usage progress, separate from last observed event time. */
+  lastProgressAt: UtcTimestampMs | null;
+  progressLifecycle: Set<string>;
   /** 已确认的当前 thread 身份（只能由可靠生命周期事件确认）；尚未确认时 `null`。 */
   threadId: string | null;
   /** 已确认的当前 turn 身份；尚未确认时 `null`。 */
@@ -72,6 +75,8 @@ const UNKNOWN_THREAD_KEY = "\u0000unknown-thread";
 /** 新建一个空的 per-attempt 遥测状态。 */
 export function createAgentTelemetryState(): AgentTelemetryState {
   return {
+    lastProgressAt: null,
+    progressLifecycle: new Set(),
     threadId: null,
     turnId: null,
     turnCount: 0,
@@ -149,6 +154,16 @@ export function applyAgentEvent(
   if (telemetry.threadId === null && reliableLifecycle && eventThreadId !== null) {
     telemetry.threadId = eventThreadId;
   }
+
+  const usageBaseline = telemetry.baselines.get(eventThreadId ?? UNKNOWN_THREAD_KEY);
+  const advancedUsage = event.usage !== undefined && (
+    event.usage.inputTokens > (usageBaseline?.reportedInputTokens ?? 0)
+    || event.usage.outputTokens > (usageBaseline?.reportedOutputTokens ?? 0)
+    || event.usage.totalTokens > (usageBaseline?.reportedTotalTokens ?? 0));
+  const lifecycleKey = `${event.threadId ?? ""}:${event.turnId ?? ""}:${event.event}`;
+  const advancedLifecycle = reliableLifecycle && !telemetry.progressLifecycle.has(lifecycleKey);
+  if (advancedLifecycle) telemetry.progressLifecycle.add(lifecycleKey);
+  if (advancedUsage || advancedLifecycle) telemetry.lastProgressAt = Math.max(telemetry.lastProgressAt ?? 0, event.timestamp);
 
   recordLastEvent(entry, telemetry, event);
 

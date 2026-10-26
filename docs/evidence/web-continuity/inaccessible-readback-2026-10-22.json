@@ -1,0 +1,19 @@
+{
+  "fixture": {
+    "taskId": "github%3Asymphony-acceptance%2Fpr156%23150:plan:1",
+    "sessionId": "github:symphony-acceptance/pr156#150",
+    "initialBindingGeneration": 1,
+    "invalidRef": "00000000-0000-4000-8000-000000000000"
+  },
+  "status": "completed",
+  "claimGeneration": 2,
+  "bindingGeneration": 2,
+  "phase": "prompt_submitting",
+  "recoveryAttempts": 1,
+  "receipt": {
+    "type": "result",
+    "claimGeneration": 2,
+    "acceptedAtMs": 1792652328685
+  },
+  "verdict": "ready"
+}

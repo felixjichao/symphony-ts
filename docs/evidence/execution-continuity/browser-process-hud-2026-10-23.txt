@@ -1,0 +1,9 @@
+Symphony Decision Driver
+● Running
+Connecting & polling...
+Token: Configured
+Change Token
+Response timeout (minutes, 1–60)
+Stop Driver
+Driver diagnostics (last 50 events)
+[]

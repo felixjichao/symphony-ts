@@ -112,3 +112,19 @@ Attempt wrappers invoke existing reduction callbacks first and independently iso
 `src/bin.test.ts` 每轮 rebuild 真正 package bin，使用 loopback HTTPS + test CA (`NODE_EXTRA_CA_CERTS`)；请求、session、文件 marker 作 readiness barrier。两根 workspace 的 agent PID、cwd、transcript、prompt 与 after_run marker 均重读核验；stubborn agent 沿用 transport deadline。测试用 key/cert 仅服务本地 fixture，生产 HTTPS 校验不变。`test-fixtures/lifecycle-harness.ts` 仅补充退出码证据，不代替正式 bin 链路。
 
  `npm test -w @symphony/cli -- src/bin.test.ts src/lifecycle.test.ts` 覆盖 signals、startup/reload race、timer 清零/迟到回调、failure priority 和资源释放；`npm test -w @symphony/config -- src/workflow-reload.test.ts` 验证显式 monitoring 兼容性。每个 M6 Core 项的用例名见 [conformance](../../docs/conformance.md#m65-core-证据索引)。HTTP §13.7、provider-native tools §11.5、durable recovery 与 SSH 未在此实现；真实 GitHub / Codex Real Integration 由 opt-in 的 dogfood harness 验证（见 [github-delivery-dogfood](../../docs/github-delivery-dogfood.md)），不在默认 gate 内。
+
+
+## Local production status surface
+
+```sh
+npm ci
+npm run build -w @symphony/cli
+node apps/cli/dist/bin/symphony.js /absolute/path/WORKFLOW.md --status --status-work 'github:owner/repo#123'
+# repeat --status-work for each work; optional --status-port 4173
+```
+
+Open the `http://127.0.0.1:<port>` URL in the `status_surface` log. Default is off; enabled without keys shows an explicitly scoped empty list. Ctrl-C stops the host and both status listeners. Static assets ship beside the executable, so another working directory is supported. Production shows **当前生产只读观测**; demo/dev remain explicitly labeled demo.
+
+Existing local `--decision-store` and authenticated `--decision-bridge-url` modes reuse their configured backend. Unconfigured Decision/inventory is unknown; configured failures are unavailable, retaining other sources. Only canonical GitHub WorkKeys are accepted. Production GitHub observation requires the GitHub tracker profile with the public `https://api.github.com` API base; GHES and other providers safely report unavailable without forwarding their credentials or falling back to another GitHub login. GitHub association supports the verified default `GH-N` / `symphony/GH-N` convention and repository default branch; custom identities are not guessed. The status surface cannot create work, claim tasks, merge PRs or repair sources. A status startup failure logs `status_start_failed` while orchestration continues. Loopback snapshots can contain work identifiers and paths; do not publish the port. History, analytics, streaming and operator actions remain deferred.
+
+Validation and foreground Chromium commands are in the [status acceptance ledger](../../docs/evidence/status-surface/README.md).

@@ -1,3 +1,4 @@
+import { runRecoveryCli } from "./recovery-cli";
 /** Executable lifecycle (SPEC §17.7 / §18.1). Host owns resources; shell owns signals/status. */
 import pkg from "../package.json";
 import { runRepositoryBootstrapCli } from "@symphony/workspace";
@@ -35,6 +36,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
   let host: Pick<SymphonyHost, "start" | "stop" | "failure">;
   try {
     const args = parseCliArgs(argv);
+    if (args.subcommand === "recovery") return runRecoveryCli(args.subcommandArgs ?? [], shell);
     if (args.subcommand === "decision-bridge") {
       return await runDecisionBridgeCli(args.subcommandArgs ?? [], {
         stdout: shell.stdout,
@@ -76,6 +78,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
     if (args.help) {
       shell.stdout.write(
         "Usage: symphony [workflow-path]\n" +
+        "       symphony recovery list|show|authorize <ledger-file> [incident-id]\n" +
         "       symphony repo-bootstrap --repo <url> [options]\n" +
         "       symphony workspace bootstrap --repo <url> [options]\n" +
         "       symphony delivery-skill [run|halt] [options]\n" +
@@ -92,6 +95,9 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "  decision bridge      Localhost Web Agent Bridge for Decision Plane tasks/sessions\n" +
         "  plan                 Pre-execution planning gate (start, clarify, replan, retry, status, sync)\n\n" +
         "Options:\n" +
+        "  --status                Start loopback read-only status surface (empty scope by default)\n" +
+        "  --status-work <key>      Explicit github:owner/repo#N scope (repeatable)\n" +
+        "  --status-port <port>     Loopback port; default 0 (OS assigned)\n" +
         "  --enable-planning       Enable Decision Plane planning gate for dispatch\n" +
         "  --no-planning           Explicitly disable Decision Plane planning gate\n" +
         "  --decision-store <dir>  Path to durable decision store directory\n" +
@@ -111,6 +117,7 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
     host = await (options.createHost ?? createHost)({
       ...options.hostOptions,
       workflowPath,
+      ...(args.status !== undefined ? { status: args.status } : {}),
       ...(args.enablePlanning !== undefined ? { enablePlanning: args.enablePlanning } : {}),
       ...(args.decisionStoreDir !== undefined ? { decisionStoreDir: args.decisionStoreDir } : {}),
       ...(args.decisionBridgeUrl !== undefined ? { decisionBridgeUrl: args.decisionBridgeUrl } : {}),

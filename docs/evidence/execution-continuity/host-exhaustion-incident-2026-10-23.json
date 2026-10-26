@@ -1,0 +1,30 @@
+[
+  {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-delivery-dogfood#24"
+    },
+    "expectedAction": "coding:retry",
+    "target": "runtime",
+    "owner": "24::2",
+    "fence": {
+      "lifecycleGeneration": 2,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": "unknown",
+    "failure": {
+      "classification": "recoverable",
+      "reason": "port_exit"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "33be5640bcbf124f1e66e8a468d405202ab888eab7a2f0ee6481af0fd36a34dc",
+    "fingerprint": "85b8d579b69f753773de9745156cee0980564d7715fbfad643cdf0552517617c",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [
+      "retry"
+    ],
+    "blockedReason": "recovery_exhausted",
+    "createdAt": 1792720554591
+  }
+]

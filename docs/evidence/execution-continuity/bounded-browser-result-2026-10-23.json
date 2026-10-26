@@ -1,0 +1,69 @@
+{
+  "source": "937e9d6d9e74c90f736137d897efdca856444594",
+  "variant": "native-created separate window, native menu clean quit, tool-assisted reopen",
+  "browserPidBefore": 44752,
+  "browserPidAfter": 8768,
+  "oldPidAbsenceObserved": false,
+  "atMs": 1792742963641,
+  "taskId": "github%3Afelixjichao%2Fsymphony-ts%23162:plan:2",
+  "status": "running",
+  "owner": "chatgpt-web-driver-54shyi",
+  "claimGeneration": 1,
+  "bindingGeneration": 1,
+  "leaseExpiresAtMs": 1792741872447,
+  "execution": {
+    "revision": 2,
+    "startedAtMs": 1792741672165,
+    "lastProgressAtMs": 1792741752447,
+    "deadlineAtMs": 1792742352447,
+    "phase": "waiting_response",
+    "responseLength": 23985,
+    "recoveryAttempts": 0,
+    "blocked": {
+      "reason": "human_required",
+      "unblock": "Verify conversation/result receipt before authorizing another prompt",
+      "atMs": 1792741899743
+    }
+  },
+  "receiptHttpStatus": 404,
+  "resultPostCount": 0,
+  "startPostCount": 1,
+  "blockAfterLeaseMs": 27296,
+  "incident": {
+    "workKey": {
+      "provider": "github",
+      "key": "felixjichao/symphony-ts#162"
+    },
+    "expectedAction": "plan:recover",
+    "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23162:plan:2\",\"revision\":2},null,null,0]",
+    "owner": "chatgpt-web-driver-54shyi",
+    "fence": {
+      "leaseGeneration": 1,
+      "bindingGeneration": 1,
+      "hasLeaseToken": false
+    },
+    "lastProgressAt": 1792741752447,
+    "failure": {
+      "classification": "human_required",
+      "reason": "human_required"
+    },
+    "unblock": "Inspect native task/conversation/subprocess receipts; resolve the cause; authorize this exact incident with symphony recovery authorize",
+    "id": "b0076d5448173d0d9473868431fd0192d59eb95f50e0dff45e889692d7f0883b",
+    "fingerprint": "7bb8c156d67d35e743dedff9b7e75e1066ef803f6ec24723758817edea3950e5",
+    "epoch": 1,
+    "attempts": 1,
+    "actions": [
+      "reclaim"
+    ],
+    "blockedReason": "human_required",
+    "createdAt": 1792741907725
+  },
+  "firstBlockedObservation": null,
+  "limitations": [
+    "Installed bytes not independently extracted",
+    "No persisted checkpoint imported or inspected",
+    "Native separate test window was not restored",
+    "No direct old-PID-absent sample; changed PID establishes replacement",
+    "Remote incident reporting disabled; local incident only"
+  ]
+}

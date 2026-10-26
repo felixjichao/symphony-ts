@@ -86,6 +86,10 @@ class FakeDeliveryGhRunner implements DeliveryGitGhRunner {
   async gh(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.ghCalls.push({ args, cwd });
 
+    if (args.includes("labels,state")) return { stdout: JSON.stringify({ state: "OPEN", labels: [] }), stderr: "", exitCode: 0 };
+    if (args.includes("body,headRefOid,headRefName,baseRefName")) return { stdout: JSON.stringify({
+      body: 'Fixes #80\n\n<!-- symphony-delivery-marker: {"schemaVersion":1,"workspaceKey":"GH-80","issueNumber":80,"repo":"owner/repo","headBranch":"symphony/GH-80","baseBranch":"main"} -->',
+      headRefOid: "sha-head-initial", headRefName: "symphony/GH-80", baseRefName: "main" }), stderr: "", exitCode: 0 };
     // 1. Issue view for pre-mutation inspection
     if (args[0] === "issue" && args[1] === "view" && args.some((a) => a.includes("title,body") || a.includes("title"))) {
       return {

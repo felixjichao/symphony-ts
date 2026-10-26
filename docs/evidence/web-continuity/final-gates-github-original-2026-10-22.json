@@ -1,0 +1,8 @@
+{
+  "repository": "felixjichao/symphony-delivery-dogfood",
+  "prNumber": 25,
+  "branch": "codex/nest-120-invoice-summary",
+  "originalHead": "d590d4bc0b54284c5abf1662a49c0086822e9fa7",
+  "base": "main",
+  "baseSha": "2525eb4412f24601226a1efbd539f8a697b14980"
+}

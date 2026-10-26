@@ -1,14 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { ChatGptWebAdapter } from "../src/adapter";
 import {
   type DecisionSession,
   type DecisionPlanTask,
+  type DecisionTask,
   type DecisionExecutionRequest,
   DecisionAdapterError,
 } from "@symphony/domain/decision";
 import { MockDocument, MockElement, MockWindow } from "./mock-dom";
 
 describe("ChatGptWebAdapter", () => {
+  afterEach(() => vi.useRealTimers());
   const baseSession: DecisionSession = {
     schemaVersion: 1,
     id: "github:owner/repo#1",
@@ -19,6 +21,23 @@ describe("ChatGptWebAdapter", () => {
     createdAtMs: 1000,
     updatedAtMs: 1000,
   };
+
+  it("honors a configured response deadline during checkpoint recovery", async () => {
+    vi.useFakeTimers();
+    const adapter = new ChatGptWebAdapter({
+      doc: new MockDocument() as unknown as Document,
+      responseTimeoutMs: 60_000,
+    });
+    const pending = adapter.waitForExistingResponse({} as DecisionPlanTask, { baselineCount: 0 });
+    await Promise.all([
+      expect(pending).rejects.toThrow("Timeout waiting for ChatGPT response after 60000ms"),
+      vi.advanceTimersByTimeAsync(61_000),
+    ]);
+  });
+
+  it.each([0, -1, NaN, Infinity, 1.5, 2_147_483_648])("rejects invalid response timeout %s", (responseTimeoutMs) => {
+    expect(() => new ChatGptWebAdapter({ responseTimeoutMs })).toThrow("responseTimeoutMs");
+  });
 
   it("inspects bindings and reports none, unusable, or usable", async () => {
     const adapter = new ChatGptWebAdapter();
@@ -263,7 +282,8 @@ describe("ChatGptWebAdapter", () => {
     }
   });
 
-  it("executes plan task and extracts structured JSON result", async () => {
+  it.each(["immediate", "slow", "recovered", "slow-review", "recovered-review"])("accepts a %s structured response", async (mode) => {
+    vi.useFakeTimers();
     const doc = new MockDocument();
     const win = new MockWindow();
     win.location.href = "https://chatgpt.com/c/target-conv-id";
@@ -292,7 +312,17 @@ describe("ChatGptWebAdapter", () => {
       updatedAtMs: 1000,
     };
 
-    const resultJson = {
+    const review = mode.endsWith("review");
+    const target = { repository: "owner/repo", prNumber: 2, headSha: "a".repeat(40) };
+    const task: DecisionTask = review ? {
+      ...planTask, kind: "review", target,
+      id: `github%3Aowner%2Frepo%231:review:1:owner%2Frepo:2:${target.headSha}`,
+    } : planTask;
+    const resultJson = review ? {
+      schemaVersion: 1, taskId: task.id, sessionId: task.sessionId,
+      revision: 1, kind: "review", target, verdict: "changes_requested", createdAtMs: 2000,
+      findings: [{ severity: "blocker", message: "Update gate evidence", location: "docs/conformance.md:366" }],
+    } : {
       schemaVersion: 1,
       taskId: planTask.id,
       sessionId: planTask.sessionId,
@@ -308,13 +338,14 @@ describe("ChatGptWebAdapter", () => {
       createdAtMs: 2000,
     };
 
-    sendBtn.addEventListener("click", () => {
+    const addResponse = () => {
       const turn = new MockElement("article", { "data-testid": "conversation-turn-2" });
       const msg = new MockElement("div", { "data-message-author-role": "assistant" });
       msg.textContent = `Here is the plan:\n\`\`\`symphony-result\n${JSON.stringify(resultJson, null, 2)}\n\`\`\``;
       turn.appendChild(msg);
       doc.body.appendChild(turn);
-    });
+    };
+    sendBtn.addEventListener("click", () => { setTimeout(addResponse, mode === "immediate" ? 0 : 240_000); });
 
     const adapter = new ChatGptWebAdapter({
       doc: doc as unknown as Document,
@@ -324,7 +355,7 @@ describe("ChatGptWebAdapter", () => {
     });
 
     const request: DecisionExecutionRequest = {
-      task: planTask,
+      task,
       session: {
         ...baseSession,
         binding: {
@@ -351,9 +382,16 @@ describe("ChatGptWebAdapter", () => {
       },
     };
 
-    const outcome = await adapter.executeTask(request);
-    expect(outcome.result.kind).toBe("plan");
-    expect(outcome.result.verdict).toBe("ready");
+    const recovered = mode.startsWith("recovered");
+    if (recovered) setTimeout(addResponse, 240_000);
+    const pending = recovered
+      ? adapter.waitForExistingResponse(task, { baselineCount: 0 })
+      : adapter.executeTask(request);
+    const assertion = expect(pending).resolves.toMatchObject({ result: { verdict: review ? "changes_requested" : "ready" } });
+    await Promise.all([vi.advanceTimersByTimeAsync(242_000), assertion]);
+    const outcome = await pending;
+    expect(outcome.result.kind).toBe(review ? "review" : "plan");
+    expect(outcome.result.verdict).toBe(review ? "changes_requested" : "ready");
     if (outcome.result.kind === "plan") {
       expect(outcome.result.content.plan).toContain("Step 1: Implement feature");
     }

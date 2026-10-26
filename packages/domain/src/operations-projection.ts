@@ -330,6 +330,10 @@ export interface OperationalSnapshotSummary {
   readonly waiting: number;
   readonly retrying: number;
   readonly needsHuman: number;
+  /** Work whose derived attention is exactly degraded (schema v1 additive). */
+  readonly degradedWork?: number;
+  /** Number of snapshot anomalies after canonical deduplication. */
+  readonly anomalyCount?: number;
 }
 
 export const OPERATIONAL_SNAPSHOT_SCHEMA_VERSION = 1 as const;
