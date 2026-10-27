@@ -1,5 +1,6 @@
 # 实现状态
 
+
 本文件是本项目**开发进度与能力的唯一总览**：当前 posture、已完成能力、deferred / optional、下一阶段与历史里程碑。
 
 - 面向使用者的安装 / 配置 / 运行指引见根 [README.md](../README.md)；
@@ -7,6 +8,8 @@
 - 稳定架构、组件职责与依赖方向见 [architecture.md](architecture.md)。
 
 ## 当前 posture
+
+- #186：实现 confirmed CONFLICTING 的有界 pinned-base merge 修复，复用 repair/deadline 预算；新增 durable operation/commit/push 回执、工作区与远端身份检查、新 HEAD CI/exact-HEAD review 闭环，以及 continuity repair 展示。未确认 executor/push 结果保留工作并交接，不重放；Core SPEC 不变（§8/§14、§9、§17/§18 邻接扩展）。临时真实 Git 回归与本地定向验证见 [conformance](conformance.md#github-delivery-merge-conflict-repair-186)；完整 host gate 与真实交付待 after_run 验证。
 
 - GitHub delivery：本地验证新增 `--validation-timeout`（默认 600 秒），覆盖首次及 CI/Review 修复后验证；独立于 CI 等待预算；超时配置随 continuation 持久化，host 重启恢复保持原值，旧记录使用默认值。
 

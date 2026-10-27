@@ -75,6 +75,7 @@ export type {
   ChecksSummaryStatus,
   DeliveryContext,
   DeliveryContinuation,
+  DeliveryMergeConflictRepair,
   LandingIntent,
   LandingIntentStorage,
   DeliveryErrorCode,
@@ -118,5 +119,5 @@ export * from "./execution-continuity";
 export * from "./work-continuity";
 export * from "./decision-continuity";
 
-export { isDeliveryContinuation, isLandingIntent } from "./delivery-recovery";
+export { isDeliveryContinuation, isLandingIntent, isDeliveryMergeConflictRepair } from "./delivery-recovery";
 export * from "./recovery-policy";

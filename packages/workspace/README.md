@@ -18,6 +18,10 @@ Workspace Manager 接收已解析的运行时配置，不自行读取或解析 `
 
 包的唯一公共入口为 `src/index.ts`：
 
+### Git 进行态只读检查
+
+`inspectGitOperationState(gitDirectory)`（#186，§9 邻接）接收 `git rev-parse --absolute-git-dir` 得到的 per-worktree 绝对目录，返回已存在的 merge/rebase/cherry-pick/revert/sequencer 标记名；不修改文件，非目录、不可读或未知错误直接失败。它不授予 mutation 权限，调用方仍须持有原 workspace/delivery authority。
+
 ### 核心管理接口
 
 - `WorkspaceManager` / `createWorkspaceManager(options: WorkspaceManagerOptions)`：

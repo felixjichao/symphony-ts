@@ -1,5 +1,5 @@
 /** Validate durable native step records before they can authorize recovery (§4). */
-import type { DeliveryContinuation, LandingIntent } from "./delivery";
+import type { DeliveryContinuation, LandingIntent, DeliveryMergeConflictRepair } from "./delivery";
 const object = (v: unknown): Record<string, unknown> | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const integer = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
@@ -23,4 +23,16 @@ export function isLandingIntent(value: unknown): value is LandingIntent {
     && ["intent", "observed"].includes(String(r["phase"]))
     && (r["phase"] !== "observed" || text(r["mergeCommitSha"]))
     && (r["mergedAt"] === undefined || text(r["mergedAt"]));
+}
+
+export function isDeliveryMergeConflictRepair(value: unknown): value is DeliveryMergeConflictRepair {
+  const r = object(value);
+  const sha = (v: unknown) => typeof v === "string" && /^[a-f0-9]{40}$/.test(v);
+  return !!r && r["cause"] === "merge_conflict" && text(r["operationId"])
+    && integer(r["attempt"]) && r["attempt"] > 0 && integer(r["prNumber"]) && r["prNumber"] > 0
+    && sha(r["expectedHeadSha"]) && sha(r["baseSha"])
+    && ["reserved", "merging", "executing", "validating", "committing", "committed", "pushing", "pushed", "failed"].includes(String(r["phase"]))
+    && (r["commitSha"] === undefined || sha(r["commitSha"]))
+    && (!["committed", "pushing", "pushed"].includes(String(r["phase"])) || sha(r["commitSha"]))
+    && (r["outcome"] === undefined || text(r["outcome"]));
 }

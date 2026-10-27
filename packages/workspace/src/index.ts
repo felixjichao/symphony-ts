@@ -98,3 +98,5 @@ export type {
   RepositoryBootstrapOptions,
   RepositoryBootstrapResult,
 } from "./repository-bootstrap";
+
+export { inspectGitOperationState } from "./git-operation-state";

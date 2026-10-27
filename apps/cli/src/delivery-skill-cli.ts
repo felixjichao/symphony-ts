@@ -18,6 +18,7 @@ import {
 import {
   decisionSessionId,
   isDeliveryContinuation,
+  isDeliveryMergeConflictRepair,
   isLandingIntent,
   formatDeliveryHandoffMarkdown,
   type DecisionMaterializedPlan,
@@ -71,7 +72,9 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     ) {
       throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);
     }
-    if (rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
+    if (rec["mergeConflictRepair"] !== undefined && (!isDeliveryMergeConflictRepair(rec["mergeConflictRepair"])
+          || rec["mergeConflictRepair"].attempt > Number(rec["spentRepairs"])) ||
+        rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
         rec["landing"] !== undefined && (!isLandingIntent(rec["landing"])
           || rec["landing"].context.repo.toLowerCase() !== String(rec["repo"]).toLowerCase()
           || rec["landing"].context.issueNumber !== rec["issueNumber"]

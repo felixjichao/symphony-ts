@@ -495,7 +495,20 @@ export interface LandingIntentStorage {
   write(intent: LandingIntent): Promise<void> | void;
 }
 
+/** GitHub Delivery extension, SPEC §8/§9/§14 adjacent. Receipts never authorize executor replay. */
+export interface DeliveryMergeConflictRepair {
+  readonly cause: "merge_conflict";
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly prNumber: number;
+  readonly expectedHeadSha: string;
+  readonly baseSha: string;
+  readonly phase: "reserved" | "merging" | "executing" | "validating" | "committing" | "committed" | "pushing" | "pushed" | "failed";
+  readonly commitSha?: string | undefined;
+  readonly outcome?: string | undefined;
+}
 export interface PersistedDeliveryState {
+  readonly mergeConflictRepair?: DeliveryMergeConflictRepair | undefined;
   readonly continuation?: DeliveryContinuation | undefined;
   readonly landing?: LandingIntent | undefined;
   readonly repo: string;
