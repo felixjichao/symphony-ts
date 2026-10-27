@@ -68,3 +68,17 @@ describe("bounded local Driver diagnostics", () => {
     expect(() => new DriverDiagnostics("tab-test", () => { throw new Error("HUD unavailable"); }).record(event)).not.toThrow();
   });
 });
+
+it("persists sanitized interruption authority metadata across reload", () => {
+  let saved = "[]";
+  vi.stubGlobal("GM_getValue", () => saved);
+  vi.stubGlobal("GM_setValue", (_key: string, value: string) => { saved = value; });
+  new DriverDiagnostics("interruptions", () => {}).record({ ...event, stage: "interrupted", wait: undefined,
+    interruption: { reason: "heartbeat_denied", status: 409, claimGeneration: 2, bindingGeneration: 3,
+      token: "TOKEN_SECRET", message: "REPLY_SECRET" } } as DriverDiagnostic);
+  const render = vi.fn();
+  new DriverDiagnostics("interruptions", render);
+  expect(JSON.parse(render.mock.calls[0]?.[0] as string)[0]).toMatchObject({ stage: "interrupted",
+    interruption: { reason: "heartbeat_denied", status: 409, claimGeneration: 2, bindingGeneration: 3 } });
+  expect(saved).not.toContain("SECRET");
+});

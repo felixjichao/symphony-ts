@@ -1021,13 +1021,11 @@ describe("DecisionTabDriver", () => {
       ownerId: "driver-1",
     });
 
-    // Checkpoint must NOT be deleted due to transient heartbeat error!
-    const outcome = await driver.resumeCheckpointIfAvailable();
-    expect(outcome?.status).toBe("completed");
-    expect(outcome && "result" in outcome ? outcome.result : undefined).toEqual(expectedResult);
-    expect(heartbeatAttempts).toBeGreaterThanOrEqual(1);
-    expect(mockAdapter.waitForExistingResponse).toHaveBeenCalled();
-    expect(cpStore.get()).toBeNull(); // Cleared only upon successful submission!
+    // No page action is authorized until a renewal succeeds; retain sent evidence for retry.
+    await expect(driver.resumeCheckpointIfAvailable()).rejects.toThrow("Bridge network error");
+    expect(heartbeatAttempts).toBe(1);
+    expect(mockAdapter.waitForExistingResponse).not.toHaveBeenCalled();
+    expect(cpStore.get()?.step).toBe("waiting_response");
   });
 
   it("preserves checkpoint and rethrows when GET /v1/tasks encounters transient network error (T2)", async () => {

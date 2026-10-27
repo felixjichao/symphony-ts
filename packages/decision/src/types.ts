@@ -98,6 +98,7 @@ export interface DecisionStoreConfig {
   readonly storeDir: string;
   readonly clock?: (() => UtcTimestampMs) | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  /** False means an observed stale target; throw a sanitized service error when observation is unavailable. */
   readonly authorizeExecution?: ((task: DecisionTask) => Promise<boolean>) | undefined;
 }
 
@@ -109,6 +110,7 @@ export interface DecisionBridgeConfig {
   readonly allowedOrigins?: readonly string[] | undefined;
   readonly clock?: (() => UtcTimestampMs) | undefined;
   readonly defaultClaimTtlMs?: number | undefined;
+  /** False means an observed stale target; throw a sanitized service error when observation is unavailable. */
   readonly authorizeExecution?: ((task: DecisionTask) => Promise<boolean>) | undefined;
 }
 
