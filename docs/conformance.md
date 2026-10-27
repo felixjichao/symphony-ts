@@ -653,6 +653,7 @@ Recovery below budget resumes without Send; exhausted recovery records a native
 | 能力 | 实现与验收证据 |
 |---|---|
 | 仅 confirmed owned OPEN 非 draft exact-HEAD CONFLICTING 可修复 | agent `delivery-skill-runner.ts` + `merge-conflict-repair.ts`；`merge-conflict-repair.test.ts` 的 UNKNOWN、读取/解析、ownership、HEAD drift、review evidence 与未知 merge outcome 负例 |
+| 同 workspace coding-agent 生产默认接线 | CLI / continuity host 共用 runner 的内置 `codex exec --sandbox workspace-write -`，不依赖 CI repair command；真实 shell + 替身 Codex 可执行文件回归验证 cwd、argv、stdin、修复与新 HEAD review，沿用预算/authority/deadline |
 | 精确 base 正常 merge，保留两边实现，正常 push | 同一测试使用临时真实 Git/共享 bare origin，断言两父 commit、base/feature 文件、无 force；覆盖并行 owned PR 和修复中 base 再次前移 |
 | 新 HEAD 重新 CI → 独立 exact-HEAD review → fenced merge | 完整 green + approve → base 前移 → repair → 新 CI/review → `--match-head-commit` merge 回归；tracker landPr 拒绝冲突及 host fence 保持原契约 |
 | 既有预算、deadline、durable operation 与不重放 | domain `delivery-recovery.test.ts`；agent committed/pushing/pushed 收敛、未完成 executor 各 phase 拒绝重放、后续 CI/review 新提交不误恢复旧回执；CLI storage admission、continuity authority 测试 |

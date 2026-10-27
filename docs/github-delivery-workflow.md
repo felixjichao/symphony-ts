@@ -346,7 +346,7 @@ halt report. Recovery queries that same comment collection before posting.
 
 修复前必须确认工作区分支/origin 身份，且无已有 dirty/index 改动、merge/rebase/cherry-pick 等进行态；不清理或丢弃现有工作。旧 landing intent 只有在同一 owned PR 的权威 OPEN、`mergeCommit=null` 事实下才能解除。新 landing intent 延迟至真正发起 merge 前写入。
 
-`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先扣除 `spentRepairs` 并 checkpoint，再 fetch/正常 merge 精确 base SHA。既有 `--repair-cmd` 或注入的 repair executor 在原工作区解决冲突，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。命令接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）；兼容诊断入口同时通过 `SYMPHONY_CI_FAILURE_DIAGNOSTICS` / `SYMPHONY_REVIEW_FINDINGS` 提供同一上下文。执行器缺失或未配置本地验证时明确交接。
+`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先扣除 `spentRepairs` 并 checkpoint，再 fetch/正常 merge 精确 base SHA。内置 `codex exec --sandbox workspace-write -`（或注入的 `repairFn`）在原工作区解决冲突；CLI 与 continuity host 共用此默认路径，不依赖 profile 的 CI/review `--repair-cmd`，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。Codex prompt 由 stdin 传入；执行器接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）。执行器缺失或未配置本地验证时明确交接。
 
 本地验证与冲突检查通过后，Delivery 创建精确两父 merge commit；再次验证本地身份及远端所有权/HEAD，再普通 push，绝不 force push。base 在修复中前移不会改变已固定的 merge parents；重读最新 GitHub facts 后，新 HEAD 必须重新通过 CI、独立 exact-HEAD review 和原有 merge fence。若再次确认冲突，使用剩余预算再修复。
 

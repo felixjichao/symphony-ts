@@ -96,6 +96,7 @@ Work autonomously to completion. A human does not merge for you.
      --opt-in
    ```
 
+   Merge conflicts use the built-in same-workspace `codex exec` repair, independently of `--repair-cmd`.
    `--repair-cmd` is the repair entry: on a CI failure the skill runs it with the
    failure logs in `SYMPHONY_CI_FAILURE_DIAGNOSTICS`, re-runs `--validate`,
    commits, pushes, and re-checks CI — up to `--max-repairs` attempts. `--base`,

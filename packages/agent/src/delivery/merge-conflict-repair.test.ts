@@ -14,7 +14,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: 
 const ok = (value: unknown): DeliverySubprocessResult => ({ stdout: JSON.stringify(value), stderr: "", exitCode: 0 });
 const text = (stdout: string): DeliverySubprocessResult => ({ stdout, stderr: "", exitCode: 0 });
 
-function fixture(issueNumber = 186, sharedOrigin?: string) {
+function fixture(issueNumber = 186, sharedOrigin?: string, launchCodex = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-repair-")); dirs.push(dir);
   const cwd = path.join(dir, "work"); const origin = sharedOrigin ?? path.join(dir, "origin.git");
   fs.mkdirSync(cwd);
@@ -92,14 +92,35 @@ function fixture(issueNumber = 186, sharedOrigin?: string) {
     async exec(command, _at, _timeout, env) {
       calls.push(["exec", command]);
       if (command === "validate") return failValidation ? { stdout: "", stderr: "validation failure", exitCode: 1 } : text("");
-      expect(command).toBe("coding-agent-repair");
+      expect(command).toContain("codex exec --sandbox workspace-write -");
+      expect(_at).toBe(cwd);
+      expect(_timeout).toBeGreaterThan(0);
+      expect(env?.SYMPHONY_REPAIR_PROMPT).toContain(env?.SYMPHONY_REPAIR_CONTEXT);
       expect(env?.SYMPHONY_REPAIR_CAUSE).toBe("merge_conflict");
-      expect(env?.SYMPHONY_CI_FAILURE_DIAGNOSTICS).toBe(env?.SYMPHONY_REPAIR_CONTEXT);
-      expect(env?.SYMPHONY_REVIEW_FINDINGS).toBe(env?.SYMPHONY_REPAIR_CONTEXT);
       const structured = JSON.parse(env!.SYMPHONY_REPAIR_CONTEXT!);
       expect(structured.expectedHeadSha).toBe(head());
       expect(structured.conflicts).toContain("source.txt");
       repairCount++; onRepair();
+      if (launchCodex) {
+        const bin = path.join(dir, "bin"); fs.mkdirSync(bin);
+        const executable = path.join(bin, "codex");
+        fs.writeFileSync(executable, `#!/usr/bin/env node
+const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const prompt = fs.readFileSync(0, "utf8");
+fs.writeFileSync(${JSON.stringify(path.join(dir, "launch.json"))}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), prompt }));
+const context = JSON.parse(process.env.SYMPHONY_REPAIR_CONTEXT);
+fs.writeFileSync("source.txt", "PR implementation\\n" + execFileSync("git", ["show", context.observedBaseSha + ":source.txt"], { encoding: "utf8" }).trim() + "\\n");
+execFileSync("git", ["add", "source.txt"]);
+`, { mode: 0o755 });
+        const result = spawnSync("/bin/sh", ["-c", command], { cwd: _at, timeout: _timeout,
+          env: { ...process.env, ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
+        const launched = JSON.parse(fs.readFileSync(path.join(dir, "launch.json"), "utf8"));
+        expect(launched.args).toEqual(["exec", "--sandbox", "workspace-write", "-"]);
+        expect(launched.cwd).toBe(cwd);
+        expect(launched.prompt).toContain(env!.SYMPHONY_REPAIR_CONTEXT);
+        return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.status ?? 1 };
+      }
       fs.writeFileSync(path.join(cwd, "source.txt"), `PR implementation\n${git(["show", `${structured.observedBaseSha}:source.txt`])}\n`);
       git(["add", "source.txt"]);
       return text("");
@@ -129,7 +150,7 @@ function fixture(issueNumber = 186, sharedOrigin?: string) {
   };
   let clock = Date.now();
   const options: RunDeliverySkillOptions = { ...context, cwd, runner, stateStorage: storage, resumeStageOnly: true,
-    validationCommand: "validate", repairCommand: "coding-agent-repair", requiredChecks: ["gate"], reviewGate, optInLand: true,
+    validationCommand: "validate", requiredChecks: ["gate"], reviewGate, optInLand: true,
     maxRepairAttempts: 3, maxWaitSeconds: 100, nowFn: () => clock, sleepFn: async () => { clock += 1000; } };
   return { cwd, origin, context, native, git, originalHead, advanceBase, head, base, storage, states, calls, reviews, superseded, options,
     repairCount: () => repairCount, paused: () => paused,
@@ -138,6 +159,17 @@ function fixture(issueNumber = 186, sharedOrigin?: string) {
 }
 
 describe("#186 bounded pinned-base conflict repair", () => {
+  it("CLI/host default dispatches Codex in the same workspace without a repository repair command", async () => {
+    const f = fixture(186, undefined, true); f.advanceBase();
+    // These are the shared production defaults used by delivery-skill CLI and
+    // continuity host; a repository's CI repair command cannot resolve this merge.
+    const result = await runDeliverySkill({ ...f.options, repairCommand: "must-not-run-ci-fix" });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(result.spentRepairs).toBe(1);
+    expect(f.repairCount()).toBe(1);
+    expect(f.reviews).toContain(f.head());
+  });
+
   it("green + approve -> base advances -> repair -> new CI/review -> fenced merge", async () => {
     const f = fixture(); let advanced = false;
     f.setOnApprove(() => { if (!advanced) { advanced = true; f.advanceBase(); } });

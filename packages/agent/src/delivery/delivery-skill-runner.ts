@@ -878,7 +878,6 @@ async function runDeliverySkillLocked(
     },
     validationCommand: options.validationCommand!, validationTimeoutMs,
     repairFn: options.repairFn ? (failure: string) => { guard(); return options.repairFn!(failure); } : undefined,
-    repairCommand: options.repairCommand,
   });
   if (mergeConflictRepair && (mergeConflictRepair.phase !== "pushed"
     || !continuation || continuation.headSha === mergeConflictRepair.expectedHeadSha)) {
@@ -1994,7 +1993,7 @@ async function runDeliverySkillLocked(
 
   if (preMergePr.mergeable === "CONFLICTING") {
     try {
-      if (!stateStorage || !options.validationCommand || (!options.repairFn && !options.repairCommand)) {
+      if (!stateStorage || !options.validationCommand) {
         throw new Error("merge_conflict_executor_or_durable_validation_unavailable");
       }
       if (spentRepairs >= maxRepairs) throw new Error(`merge_conflict_budget_exhausted (${spentRepairs}/${maxRepairs})`);
