@@ -51,11 +51,11 @@ describe("mechanical observation boundaries", () => {
   });
   it("locks approved shape/format/rank helpers to a closed implementation", () => {
     // Updating these fingerprints requires reviewing the helper and its negative cases.
-    const approved: Record<string, string> = {"primitives.ts": "632a9c21ae837509d69a13aa228af220c58decc0bb827b5264d102ecb65ea298", "identity.ts": "2af61b5fe8f2c864f2e0e164a86ad2b4e26740e3fb1d85f5e2d864414ad9d6bc", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "b32a3768063921b63efa52069d8516a9c95b45fa3db6f826baa9ac414a999013", "evidence.ts": "f8e3990874bbdeed5ab4b69cb6e6f344cf688b9bc76659ac9ae005f6308e472c", "anomaly.ts": "07ab0a49d780a1b13161e641c7043d69d8adaac081d4d3010aede8c5e13487a2"};
+    const approved: Record<string, string> = {"overview.ts": "06c84b516e621492c1b602a4daf4abb75cad1b9f235d38df59388ab220ea98f9", "primitives.ts": "632a9c21ae837509d69a13aa228af220c58decc0bb827b5264d102ecb65ea298", "identity.ts": "24248436240094cd957bb9df3514b108f230b520082852adbe6c38a7d79933f1", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "b32a3768063921b63efa52069d8516a9c95b45fa3db6f826baa9ac414a999013", "evidence.ts": "f8e3990874bbdeed5ab4b69cb6e6f344cf688b9bc76659ac9ae005f6308e472c", "anomaly.ts": "2488f905e8949e2811c290b9e9eab3105837e082a00c19d95d1219f8e42df653"};
     for (const [name, digest] of Object.entries(approved)) expect(createHash("sha256").update(readFileSync(path.join(root, "apps/dashboard/src", name))).digest("hex"), name).toBe(digest);
   });
   it("checks every browser module, including local helpers", () => {
-    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts", "routing.ts", "primitives.ts"];
+    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts", "routing.ts", "primitives.ts", "overview.ts"];
     for (const file of files(path.join(root, "apps/dashboard/src")).filter(f => f.endsWith(".ts"))) {
       expect(allowed).toContain(path.basename(file));
       expect(browserErrors(path.basename(file), readFileSync(file, "utf8")), file).toEqual([]);
@@ -82,9 +82,9 @@ describe("mechanical observation boundaries", () => {
     'return {code: "review_target_head_mismatch", severity: "warning"};',
     'return {freshnessStatus: "stale"};',
   ])("rejects diagnostics-derived semantics in every new renderer: %s", body => {
-    for (const name of ["detail.ts", "evidence.ts", "anomaly.ts"]) expect(browserErrors(name, `function inferred(w) { ${body} }`).length).toBeGreaterThan(0);
+    for (const name of ["detail.ts", "evidence.ts", "anomaly.ts", "overview.ts"]) expect(browserErrors(name, `function inferred(w) { ${body} }`).length).toBeGreaterThan(0);
   });
-  it.each(["detail.ts", "evidence.ts", "anomaly.ts"])("rejects fetch aliases in %s", name => {
+  it.each(["detail.ts", "evidence.ts", "anomaly.ts", "overview.ts"])("rejects fetch aliases in %s", name => {
     expect(browserErrors(name, 'const {fetch: send} = window; send("/mutate");')).toContain("fetch capability reference outside fixed invocation");
   });
   it.each([

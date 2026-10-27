@@ -293,3 +293,7 @@ Implementation adds the framework-free four-destination shell (Overview / Work /
 ### #170 — Dashboard V2 presentation primitives
 
 Implemented horizontal DOM-native primitives, console tokens, Work-table reuse, explicit four-state freshness and display states, independently accessible full SHA identities, native controls and a generated static showcase. No page redesign or new read-model fields. Sandbox validation covers Dashboard tests/build and root typecheck; full gate, CI, exact-HEAD independent review and delivery evidence remain operator-host steps after this coding session. Rendered browser acceptance is tracked in [the primitive evidence ledger](evidence/dashboard-v2-primitives/README.md).
+
+### Dashboard V2 Overview — #171
+
+Attention-first presentation implemented on #169/#170: supplied needs-human/failed → degraded/anomaly association → waiting → remaining current work; compact supplied counts, system health, source posture, executor ownership and global/work anomaly visibility. Stable WorkKey navigation and last-successful snapshot retention remain intact. No Read Model extension or frontend projector added. Sandbox validation and controlled artifacts are recorded in [Overview evidence](evidence/dashboard-v2-overview/README.md). Full host gate, CI, exact-HEAD review and Delivery remain pending operator after_run; no production acceptance is claimed here.

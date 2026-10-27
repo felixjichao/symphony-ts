@@ -679,3 +679,15 @@ GitHub Delivery / Execution Continuity 扩展，对应固定 baseline `be10a1b79
 | 重启与安全约束 | 原 reserved/executing/validating/committing 无授权不重放、committed/pushing/pushed 远端回执、budget/deadline 与 secret isolation 测试沿用；CLI storage/continuity 回归不改变 required-check/review/ownership/opt-in fence |
 
 测试为隔离资源，GitHub API、CI、review 与 coding executor 仍是 fixture；不声称已对生产 #171 执行恢复。[Agent Note](../notes/accepted/architecture/2026-10-27-authoritative-delivery-base.md) 记录跨包事实契约与替代方案，[恢复文档](github-delivery-workflow.md#真实-base-tipno-op-与历史-merging-恢复188) 给出原生精确授权路径。沙箱运行受影响包测试和根 typecheck；完整 `npm run gate` 与 GitHub 交付由 operator-owned host after_run 执行。
+
+## §13 adjacent: Attention-first Overview (#171)
+
+| Capability | Acceptance evidence |
+|---|---|
+| Supplied-state priority and stable WorkKey links | `overview.test.ts`: needs-human/failed, degraded/association, waiting, remaining work; immutable inconsistent snapshot |
+| Waiting/current activity and observation trust | Supplied active aggregate, CI/review/executor waiting reasons, four source statuses, empty source posture, partial useful snapshot and supplied health |
+| Global/work anomaly visibility, executor ownership | Compact supplied severity/message summaries, explicit WorkKey association; no projector |
+| Refresh failure remains observational | Last snapshot DOM retained; generated time and last successful receipt/error displayed independently |
+| Keyboard / narrow viewport | Existing shell focus tests; optional Overview renderer checks outline and overflow at 1280/390px; browser sandbox limitation in evidence ledger |
+
+Sandbox: Dashboard 11 files / 173 tests passed; root typecheck and Dashboard build passed. [Agent Note](../notes/accepted/architecture/2026-10-26-attention-first-overview.md) and [controlled evidence / reproduction](evidence/dashboard-v2-overview/README.md). Host owns full gate, CI, exact-HEAD review and self-hosted Delivery receipts after this coding session.

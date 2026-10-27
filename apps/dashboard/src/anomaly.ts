@@ -16,3 +16,13 @@ export function anomalyCards(items: readonly OperationalAnomaly[], key: WorkKey 
   }
   return section;
 }
+
+/** Compact Overview visibility; full evidence remains in System / Work Detail. */
+export function anomalySummary(items: readonly OperationalAnomaly[], key: WorkKey | null): HTMLElement {
+  const section = el("section");
+  const selected = scopedAnomalies(items, key);
+  if (selected.length === 0) return section;
+  section.append(el("h3", key === null ? "全局异常（未关联 WorkKey）" : "Work 异常"));
+  for (const entry of selected) section.append(el("p", `${entry.code} · severity: ${entry.severity} · ${entry.message} · 检测 ${timestamp(entry.detectedAt)}`));
+  return section;
+}
