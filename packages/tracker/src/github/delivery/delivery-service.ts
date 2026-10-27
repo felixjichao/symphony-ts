@@ -22,6 +22,7 @@ import {
   type CheckState,
   type ChecksEvaluationResult,
   type DeliveryContext,
+  type DeliveryRemoteBranchFact,
   type DeliveryReviewGate,
   type PrCheck,
   type PrMergeability,
@@ -220,6 +221,25 @@ export class GitHubDeliveryService {
 
   constructor(runner?: GhRunner) {
     this.runner = runner ?? new DefaultGhRunner();
+  }
+
+  /** Atomic remote ref read (§11 adjacent). No scheduling or repair policy. */
+  async readRemoteBranch(repository: string, branch: string): Promise<DeliveryRemoteBranchFact> {
+    if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository)
+      || !branch || branch.startsWith("-") || /[\s~^:?*[\\]/.test(branch)
+      || branch.includes("..") || branch.includes("@{") || branch.endsWith("/") || branch.endsWith(".lock")) {
+      throw new Error("remote_branch_identity_invalid");
+    }
+    const result = await this.runner.exec(["api", `repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`]);
+    if (result.exitCode !== 0) throw new Error("remote_branch_unavailable");
+    const raw: unknown = JSON.parse(result.stdout);
+    if (!raw || typeof raw !== "object" || !("ref" in raw) || raw.ref !== `refs/heads/${branch}`
+      || !("object" in raw) || !raw.object || typeof raw.object !== "object"
+      || !("type" in raw.object) || raw.object.type !== "commit"
+      || !("sha" in raw.object) || typeof raw.object.sha !== "string" || !/^[a-f0-9]{40}$/.test(raw.object.sha)) {
+      throw new Error("remote_branch_malformed");
+    }
+    return { repository: repository.toLowerCase(), branch, sha: raw.object.sha };
   }
 
   /**

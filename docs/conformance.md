@@ -663,3 +663,19 @@ Recovery below budget resumes without Send; exhausted recovery records a native
 设计：[Agent Note](../notes/accepted/architecture/2026-10-27-delivery-merge-conflict-repair.md)。测试中的 Git/工作区与 recovery entry 为真实临时资源；GitHub facts、coding executor、review verdict 为受控 fixture，不代表真实 GitHub/browser 验收。完整 gate 与真实交付由 operator-owned host after_run 执行。
 
 沙箱验证限制：workspace 全包测试中的既有 repository-bootstrap / git-supervisor 进程组检查因 macOS 沙箱禁止 `ps`，返回 `git_command_failed`（无法确认已退出进程组）；未修改该安全检查。新增 Git 状态检查及可运行的 workspace 定向测试在沙箱验证，完整进程监督测试留给 host gate。
+
+## GitHub Delivery authoritative base and no-op recovery (#188)
+
+GitHub Delivery / Execution Continuity 扩展，对应固定 baseline `be10a1b79df723d6d7612b5651c8522704dafb2e` 的 §8/§14、§9、§17/§18 邻接能力；不是新增 Core SPEC 强制项。
+
+| 能力 | 实现与隔离验收证据 |
+|---|---|
+| 真实远端分支引用，拒绝错误/不可读事实 | domain `DeliveryRemoteBranchFact/Reader`；tracker `readRemoteBranch` 与 `remote-branch.test.ts` 验证 ref/type/SHA、失败响应、slash branch；CLI `delivery-remote-branch.test.ts` 验证同 runner/cwd 注入 |
+| #171 生产形状复现与修复 | agent `merge-conflict-repair.test.ts` 的 `#171 shape` 使用真实临时 Git + bare origin：PR baseRefOid 和本地 origin/main 均为 HEAD 的直接父节点，远端 main 已前移且 PR CONFLICTING；断言选择真实 tip、双亲提交及新 HEAD review |
+| no-op 有界分类、不消耗预算、不制造成功 | 同文件：两次远端观察后 already-contained 交接，重复 resume 仍零预算；真实 no-op merge 无 MERGE_HEAD，不读取它、不提交/推送；clean merge 无需 coding executor 仍验证/Review；非冲突 git failure 单独分类 |
+| 目标漂移与 workspace 保护 | base/head branch、远端 reader repository/branch/SHA、local/remote HEAD drift 负例；预留与 merge 间 base 漂移不开始 merge；既有 dirty/staged、merge/rebase 保留 |
+| pinned receipt 与新目标分离 | 既有 base 二次前移回归继续断言旧/新双亲、不同 operation 与每个 HEAD 的 CI/review；push 前后读取真实远端 base，不以旧 approve 放行新 HEAD |
+| 历史 merging 原生精确恢复 | 真实 Git 回归覆盖无 MERGE_HEAD 的历史记录：默认不重放；精确 operationId/attempt/HEAD + stopped executor 授权仅退役干净无效果旧记录；旧 spentRepairs=1 保留，新修复=2；stale fence、dirty、进行中 merge、远端 HEAD 改变均拒绝 |
+| 重启与安全约束 | 原 reserved/executing/validating/committing 无授权不重放、committed/pushing/pushed 远端回执、budget/deadline 与 secret isolation 测试沿用；CLI storage/continuity 回归不改变 required-check/review/ownership/opt-in fence |
+
+测试为隔离资源，GitHub API、CI、review 与 coding executor 仍是 fixture；不声称已对生产 #171 执行恢复。[Agent Note](../notes/accepted/architecture/2026-10-27-authoritative-delivery-base.md) 记录跨包事实契约与替代方案，[恢复文档](github-delivery-workflow.md#真实-base-tipno-op-与历史-merging-恢复188) 给出原生精确授权路径。沙箱运行受影响包测试和根 typecheck；完整 `npm run gate` 与 GitHub 交付由 operator-owned host after_run 执行。

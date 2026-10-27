@@ -31,8 +31,9 @@ export function isDeliveryMergeConflictRepair(value: unknown): value is Delivery
   return !!r && r["cause"] === "merge_conflict" && text(r["operationId"])
     && integer(r["attempt"]) && r["attempt"] > 0 && integer(r["prNumber"]) && r["prNumber"] > 0
     && sha(r["expectedHeadSha"]) && sha(r["baseSha"])
-    && ["reserved", "merging", "executing", "validating", "committing", "committed", "pushing", "pushed", "failed"].includes(String(r["phase"]))
+    && ["reserved", "merging", "executing", "validating", "committing", "committed", "pushing", "pushed", "failed", "reconciled"].includes(String(r["phase"]))
     && (r["commitSha"] === undefined || sha(r["commitSha"]))
     && (!["committed", "pushing", "pushed"].includes(String(r["phase"])) || sha(r["commitSha"]))
+    && (r["phase"] !== "reconciled" || r["commitSha"] === undefined && text(r["outcome"]))
     && (r["outcome"] === undefined || text(r["outcome"]));
 }

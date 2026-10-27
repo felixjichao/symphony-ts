@@ -151,6 +151,7 @@ execFileSync("git", ["add", "source.txt"]);
   };
   let clock = Date.now();
   const options: RunDeliverySkillOptions = { ...context, cwd, runner, stateStorage: storage, resumeStageOnly: true,
+    readRemoteBranch: async (repository, branch) => ({ repository, branch, sha: base() }),
     validationCommand: "validate", requiredChecks: ["gate"], reviewGate, optInLand: true,
     maxRepairAttempts: 3, maxWaitSeconds: 100, nowFn: () => clock, sleepFn: async () => { clock += 1000; } };
   return { cwd, origin, context, native, git, originalHead, advanceBase, head, base, storage, states, calls, reviews, superseded, options,
@@ -158,6 +159,181 @@ execFileSync("git", ["add", "source.txt"]);
     setOnApprove: (fn: typeof onApprove) => { onApprove = fn; }, setOnRepair: (fn: typeof onRepair) => { onRepair = fn; },
     setPr: (fn: typeof overridePr) => { overridePr = fn; }, failValidation: () => { failValidation = true; } };
 }
+
+describe("#188 authoritative branch and no-op regression (isolated real Git)", () => {
+  it("#171 shape: stale PR base and origin/main are HEAD's direct parent; uses remote tip and correct parents", async () => {
+    const f = fixture(171);
+    const oldBase = f.git(["rev-parse", "HEAD^"]);
+    expect(f.git(["rev-parse", "origin/main"])).toBe(oldBase);
+    f.advanceBase();
+    f.setPr((_args, pr) => { pr.baseRefOid = oldBase; });
+    const result = await runDeliverySkill(f.options);
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(result.spentRepairs).toBe(1);
+    expect(f.git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(`${f.head()} ${f.originalHead} ${f.base()}`);
+    expect(f.storage.readState()?.mergeConflictRepair?.baseSha).toBe(f.base());
+    expect(f.calls.some(a => a[0] === "fetch" && a.at(-1) === oldBase)).toBe(false);
+  });
+
+  it("already-contained + conflicting is bounded, preserves HEAD, and consumes no budget even on resume", async () => {
+    const f = fixture();
+    f.setPr((_args, pr) => { pr.mergeable = "CONFLICTING"; });
+    let reads = 0;
+    const options = { ...f.options, readRemoteBranch: async (repository: string, branch: string) => {
+      reads++; return { repository, branch, sha: f.base() };
+    } };
+    for (let run = 0; run < 2; run++) {
+      const result = await runDeliverySkill({ ...options, resume: run > 0 });
+      expect(result.status).toBe("blocked");
+      expect(result.handoffMarkdown).toContain("already_contained");
+      expect(result.spentRepairs).toBe(0);
+    }
+    expect(reads).toBe(4);
+    expect(f.git(["rev-parse", "HEAD"])).toBe(f.originalHead);
+    expect(f.calls.some(a => ["merge", "commit", "push", "exec"].includes(a[0]!))).toBe(false);
+    expect(f.storage.readState()?.mergeConflictRepair).toBeUndefined();
+  });
+
+  it.each(["unavailable", "sha", "repo", "branch", "missing_reader", "base_identity", "head_identity", "head_drift"])("rejects %s before reservation", async kind => {
+    const f = fixture(); f.advanceBase();
+    f.setPr((args, pr) => {
+      if (!args.some(a => a.includes("baseRefOid"))) return;
+      if (kind === "base_identity") pr.baseRefName = "other";
+      if (kind === "head_identity") pr.headRefName = "other";
+      if (kind === "head_drift") pr.headRefOid = "e".repeat(40);
+    });
+    const result = await runDeliverySkill({ ...f.options,
+      readRemoteBranch: kind === "missing_reader" ? undefined : async (repository, branch) => {
+        if (kind === "unavailable") throw new Error("remote unavailable");
+        return { repository: kind === "repo" ? "other/repo" : repository,
+          branch: kind === "branch" ? "other" : branch, sha: kind === "sha" ? "bad" : f.base() };
+      } });
+    expect(result.status).toBe("blocked"); expect(result.spentRepairs).toBe(0);
+    expect(f.calls.some(a => ["merge", "push", "commit"].includes(a[0]!))).toBe(false);
+  });
+
+  it("real clean merge needs no coding executor, still validates and reviews the new HEAD", async () => {
+    const f = fixture();
+    f.git(["switch", "main"]);
+    fs.writeFileSync(path.join(f.cwd, "independent.txt"), "base addition\n");
+    f.git(["add", "."]); f.git(["commit", "-m", "independent base"]); f.git(["push", "origin", "main"]);
+    f.git(["switch", f.context.headBranch]);
+    const result = await runDeliverySkill(f.options);
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(f.repairCount()).toBe(0); expect(result.spentRepairs).toBe(1);
+    expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
+    expect(f.reviews).toContain(f.head());
+    expect(f.calls.some(a => a[0] === "exec" && a[1] === "validate")).toBe(true);
+  });
+
+  it("non-conflict git failure is classified before requiring MERGE_HEAD", async () => {
+    const f = fixture(); f.advanceBase();
+    const runner = { ...f.options.runner, git: async (args: readonly string[], cwd: string, timeout?: number) => {
+      if (args[0] === "merge") return { stdout: "", stderr: "fatal: failure", exitCode: 128 };
+      return f.options.runner.git(args, cwd, timeout);
+    } };
+    const result = await runDeliverySkill({ ...f.options, runner });
+    expect(result.handoffMarkdown).toContain("merge_conflict_merge_failed");
+    expect(f.calls.some(a => a[0] === "rev-parse" && a.includes("MERGE_HEAD"))).toBe(false);
+    expect(f.repairCount()).toBe(0);
+  });
+
+  it("actual no-op merge has no MERGE_HEAD and is never mistaken for a successful repair", async () => {
+    const f = fixture();
+    const operation: DeliveryMergeConflictRepair = { cause: "merge_conflict", operationId: "noop", attempt: 1,
+      prNumber: 187, expectedHeadSha: f.originalHead, baseSha: f.base(), phase: "reserved" };
+    await expect(executeMergeConflictRepair({ context: f.context, cwd: f.cwd, runner: f.options.runner,
+      readRemoteBranch: f.options.readRemoteBranch, operation, save: async () => {}, timeout: () => 10_000,
+      validationCommand: "validate", validationTimeoutMs: 10_000, assertIdentity: async () => {},
+    })).rejects.toThrow("noop_after_reservation");
+    expect(f.calls.some(a => a.includes("MERGE_HEAD"))).toBe(false);
+    expect(f.calls.some(a => ["commit", "push", "exec"].includes(a[0]!))).toBe(false);
+    expect(f.git(["rev-parse", "HEAD"])).toBe(f.originalHead);
+  });
+
+  it("local HEAD drift after fetch prevents reservation", async () => {
+    const f = fixture(); f.advanceBase(); let fetched = false;
+    const runner = { ...f.options.runner, git: async (args: readonly string[], cwd: string, timeout?: number) => {
+      if (args[0] === "fetch") fetched = true;
+      if (fetched && args[0] === "rev-parse" && args[1] === "HEAD") return text("e".repeat(40));
+      return f.options.runner.git(args, cwd, timeout);
+    } };
+    const result = await runDeliverySkill({ ...f.options, runner });
+    expect(result.status).toBe("blocked"); expect(result.spentRepairs).toBe(0);
+    expect(result.handoffMarkdown).toContain("local_head_mismatch");
+    expect(f.calls.some(a => a[0] === "merge")).toBe(false);
+  });
+
+  it("base drift between reservation and merge refuses the wrong target", async () => {
+    const f = fixture(); f.advanceBase(); let reads = 0;
+    const result = await runDeliverySkill({ ...f.options, readRemoteBranch: async (repository, branch) => ({
+      repository, branch, sha: ++reads === 1 ? f.base() : "e".repeat(40),
+    }) });
+    expect(result.status).toBe("blocked"); expect(result.handoffMarkdown).toContain("target_drift_before_merge");
+    expect(f.calls.some(a => a[0] === "merge")).toBe(false);
+    expect(f.git(["rev-parse", "HEAD"])).toBe(f.originalHead);
+  });
+
+  it.each([false, true])("historical merging no-op recovery requires exact native authorization (authorized=%s)", async authorized => {
+    const f = fixture(171); const oldBase = f.base(); f.advanceBase();
+    const operation: DeliveryMergeConflictRepair = { cause: "merge_conflict", operationId: "historical-171", attempt: 1,
+      prNumber: 172, expectedHeadSha: f.head(), baseSha: oldBase, phase: "merging" };
+    f.storage.writeState({ ...f.context, mergeConflictRepair: operation, spentRepairs: 1, spentWaitSeconds: 7,
+      deadlineTimestampMs: Date.now() + 100_000, isPaused: false, lastUpdated: "now" });
+    const result = await runDeliverySkill({ ...f.options, conflictRecoveryAuthorization: authorized ? {
+      operationId: operation.operationId, attempt: 1, expectedHeadSha: f.head(), executorStopped: true,
+    } : undefined });
+    expect(result.status, result.handoffMarkdown).toBe(authorized ? "completed" : "blocked");
+    expect(result.spentRepairs).toBe(authorized ? 2 : 1);
+    expect(f.repairCount()).toBe(authorized ? 1 : 0);
+    if (authorized) expect(f.states.some(s => s.mergeConflictRepair?.phase === "reconciled")).toBe(true);
+    else expect(result.handoffMarkdown).toContain("exact native authorization");
+  });
+
+  it("stale native authorization with no pending operation cannot start ordinary delivery", async () => {
+    const f = fixture(); f.advanceBase();
+    const result = await runDeliverySkill({ ...f.options, conflictRecoveryAuthorization: {
+      operationId: "missing", attempt: 1, expectedHeadSha: f.head(), executorStopped: true,
+    } });
+    expect(result.status).toBe("blocked"); expect(result.handoffMarkdown).toContain("stale_native_authorization");
+    expect(f.calls).toHaveLength(0); expect(f.storage.readState()).toBeNull();
+  });
+
+  it("restart after authorized retirement before checkpoint does not replay or refund the historical attempt", async () => {
+    const f = fixture(); const expectedHeadSha = f.head();
+    f.storage.writeState({ ...f.context, spentRepairs: 1, spentWaitSeconds: 0,
+      isPaused: false, deadlineTimestampMs: Date.now() + 100_000, lastUpdated: "now",
+      mergeConflictRepair: { cause: "merge_conflict", operationId: "retired", attempt: 1, prNumber: 187,
+        expectedHeadSha, baseSha: f.base(), phase: "reconciled", outcome: "authorized_no_local_or_remote_effect" },
+      continuation: { intentId: "prior", headBranch: f.context.headBranch, baseBranch: "main", headSha: expectedHeadSha,
+        prNumber: 187, optInLand: true, readyLabel: "symphony-ready", maxRepairAttempts: 3, maxWaitSeconds: 100,
+        validationCommand: "validate", phase: "repair_pending" } });
+    f.calls.splice(0);
+    const result = await runDeliverySkill(f.options);
+    expect(result.status, result.handoffMarkdown).toBe("completed"); expect(result.spentRepairs).toBe(1);
+    expect(f.calls.some(a => ["merge", "push", "commit", "exec"].includes(a[0]!))).toBe(false);
+    expect(f.storage.readState()?.mergeConflictRepair?.phase).toBe("reconciled");
+    expect(f.states.some(s => s.continuation?.phase === "ci")).toBe(true);
+  });
+
+  it.each(["operation", "attempt", "head", "dirty", "merge", "remote"])("recovery refuses stale authorization or uncertain %s facts", async kind => {
+    const f = fixture(); const oldBase = f.base(); f.advanceBase();
+    if (kind === "dirty") fs.writeFileSync(path.join(f.cwd, "source.txt"), "operator changes\n");
+    if (kind === "merge") { f.git(["fetch", "origin", "main"]); f.native(["merge", "--no-commit", f.base()]); }
+    if (kind === "remote") f.setPr((_args, pr) => { pr.headRefOid = "e".repeat(40); });
+    f.storage.writeState({ ...f.context, spentRepairs: 1, spentWaitSeconds: 0, isPaused: false, lastUpdated: "now",
+      mergeConflictRepair: { cause: "merge_conflict", operationId: "old", attempt: 1, prNumber: 187,
+        expectedHeadSha: f.originalHead, baseSha: oldBase, phase: "merging" } });
+    const before = f.git(["status", "--porcelain"]);
+    const result = await runDeliverySkill({ ...f.options, conflictRecoveryAuthorization: {
+      operationId: kind === "operation" ? "other" : "old", attempt: kind === "attempt" ? 2 : 1,
+      expectedHeadSha: kind === "head" ? "f".repeat(40) : f.originalHead, executorStopped: true,
+    } });
+    expect(result.status).toBe("blocked"); expect(result.spentRepairs).toBe(1);
+    expect(f.git(["status", "--porcelain"])).toBe(before);
+    expect(f.calls.some(a => ["merge", "push", "commit", "exec"].includes(a[0]!))).toBe(false);
+  });
+});
 
 describe("#186 bounded pinned-base conflict repair", () => {
   it("CLI/host default dispatches Codex in the same workspace without a repository repair command", async () => {
@@ -291,6 +467,7 @@ describe("#186 bounded pinned-base conflict repair", () => {
     // Model remote readback after push completion was lost.
     let record: DeliveryMergeConflictRepair = { ...operation, phase: "pushing" };
     const helper = { context: f.context, cwd: f.cwd, runner: f.options.runner, operation: record,
+      readRemoteBranch: f.options.readRemoteBranch,
       save: async (r: DeliveryMergeConflictRepair) => { record = r; }, timeout: () => 10_000,
       validationCommand: "validate", validationTimeoutMs: 10_000, assertIdentity: async () => {} };
     f.calls.splice(0);

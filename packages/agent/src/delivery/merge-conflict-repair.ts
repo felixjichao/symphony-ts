@@ -1,13 +1,16 @@
 /** GitHub Delivery extension: pinned-base repair under the caller's filesystem
  * authority. SPEC §8/§9/§14 adjacent; no scheduler and no executor replay. */
 import { inspectGitOperationState } from "@symphony/workspace";
-import { validatePrOwnership, type DeliveryContext, type DeliveryMergeConflictRepair } from "@symphony/domain";
+import { validatePrOwnership, type DeliveryContext, type DeliveryMergeConflictRepair,
+  type DeliveryRemoteBranchReader, type DeliveryConflictRecoveryAuthorization } from "@symphony/domain";
 import type { DeliveryGitGhRunner } from "./git-gh-runner";
 
 const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/**"] as const;
 export const isCommitSha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{40}$/.test(v);
 
 interface RepairOptions {
+  readonly readRemoteBranch?: DeliveryRemoteBranchReader | undefined;
+  readonly recoveryAuthorization?: DeliveryConflictRecoveryAuthorization | undefined;
   readonly context: DeliveryContext;
   readonly cwd: string;
   readonly runner: DeliveryGitGhRunner;
@@ -35,7 +38,7 @@ export async function assertRepairWorkspace(runner: DeliveryGitGhRunner, cwd: st
 }
 
 /** Fresh identity, ownership, OPEN/no-merge facts, and exact expected HEAD. */
-export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext, prNumber: number) {
+export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext, prNumber: number, readRemoteBranch?: DeliveryRemoteBranchReader) {
   const result = await runner.gh(["pr", "view", String(prNumber), "--repo", context.repo, "--json",
     "state,isDraft,body,headRefOid,baseRefOid,headRefName,baseRefName,mergeable,mergeCommit"], cwd);
   if (result.exitCode !== 0) throw new Error("merge_conflict_remote_facts_unavailable");
@@ -44,8 +47,37 @@ export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string,
   if (pr.state !== "OPEN" || pr.isDraft !== false || pr.mergeCommit !== null
     || pr.headRefName !== context.headBranch || pr.baseRefName !== context.baseBranch
     || typeof pr.body !== "string" || !validatePrOwnership(pr.body, context).valid
-    || !isCommitSha(pr.headRefOid) || !isCommitSha(pr.baseRefOid)) throw new Error("merge_conflict_remote_identity_or_outcome_unverified");
-  return pr as typeof pr & { headRefOid: string; baseRefOid: string };
+    || !isCommitSha(pr.headRefOid)) throw new Error("merge_conflict_remote_identity_or_outcome_unverified");
+  if (!readRemoteBranch) throw new Error("merge_conflict_remote_branch_reader_unavailable");
+  const base = await readRemoteBranch(context.repo, context.baseBranch);
+  if (base.repository !== context.repo.toLowerCase() || base.branch !== context.baseBranch || !isCommitSha(base.sha)) {
+    throw new Error("merge_conflict_remote_branch_identity_unverified");
+  }
+  return { ...pr, headRefOid: pr.headRefOid, remoteBaseSha: base.sha };
+}
+
+/** Fetch pinned facts before reservation; bounded no-op classification costs no repair. */
+export async function prepareRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext,
+  prNumber: number, expectedHead: string, readRemoteBranch: DeliveryRemoteBranchReader | undefined, timeout: () => number) {
+  for (let observation = 0; observation < 2; observation++) {
+    const target = await readRepairTarget(runner, cwd, context, prNumber, readRemoteBranch);
+    if (target.headRefOid !== expectedHead || target.mergeable !== "CONFLICTING") {
+      throw new Error("merge_conflict_facts_changed_before_reservation");
+    }
+    await assertRepairWorkspace(runner, cwd, expectedHead);
+    const fetch = await runner.git(["fetch", "--no-tags", "origin", target.remoteBaseSha], cwd, timeout());
+    const fetched = await runner.git(["rev-parse", "FETCH_HEAD"], cwd, timeout());
+    if (fetch.exitCode !== 0 || fetched.exitCode !== 0 || fetched.stdout.trim() !== target.remoteBaseSha) {
+      throw new Error("merge_conflict_fetch_base_mismatch");
+    }
+    const contained = await runner.git(["merge-base", "--is-ancestor", target.remoteBaseSha, expectedHead], cwd, timeout());
+    if (contained.exitCode !== 0 && contained.exitCode !== 1) throw new Error("merge_conflict_ancestry_unavailable");
+    await assertRepairWorkspace(runner, cwd, expectedHead);
+    if (contained.exitCode === 1) return target;
+    // Re-observe PR + authoritative ref once. Never interpret no-op as repair
+    // success, manufacture a merge commit, or spend attempts on stale facts.
+  }
+  throw new Error("merge_conflict_already_contained: authoritative base is already in HEAD after two observations; GitHub conflict disagrees; no repair reserved");
 }
 
 async function assertParents(o: RepairOptions, sha: string): Promise<void> {
@@ -68,20 +100,47 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     if (result.exitCode !== 0) throw new Error(`merge_conflict_git_${args[0]}: ${result.stderr || result.stdout}`);
     return result.stdout.trim();
   };
-  if (recovering && !["committed", "pushing", "pushed"].includes(operation.phase)) {
-    throw new Error(`merge_conflict_outcome_unverified_${operation.phase}: inspect prior executor and preserved worktree; no replay`);
-  }
   await o.assertIdentity();
+  if (recovering && !["committed", "pushing", "pushed"].includes(operation.phase)) {
+    // Read-only reconciliation. An unchanged HEAD, clean index/worktree and no
+    // Git operation prove there is nothing to continue; never replay an executor.
+    const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
+    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+    if (pr.headRefOid !== operation.expectedHeadSha) throw new Error("merge_conflict_recovery_remote_outcome_unverified: no replay");
+    const auth = o.recoveryAuthorization;
+    if (!["reserved", "merging"].includes(operation.phase) || operation.commitSha
+      || !auth || auth.operationId !== operation.operationId || auth.attempt !== operation.attempt
+      || auth.expectedHeadSha !== operation.expectedHeadSha || auth.executorStopped !== true) {
+      throw new Error(`merge_conflict_outcome_unverified_${operation.phase}: clean unchanged local/remote HEAD; exact native authorization and stopped executor required; no replay`);
+    }
+    await phase("reconciled", { outcome: `authorized_no_local_or_remote_effect; current_base=${pr.remoteBaseSha}` });
+    return operation.expectedHeadSha;
+  }
   if (!recovering) {
     await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
-    await phase("merging");
+    const target = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
+    if (target.headRefOid !== operation.expectedHeadSha || target.remoteBaseSha !== operation.baseSha) {
+      throw new Error("merge_conflict_target_drift_before_merge");
+    }
     await git(["fetch", "--no-tags", "origin", operation.baseSha]);
     if (await git(["rev-parse", "FETCH_HEAD"]) !== operation.baseSha) throw new Error("merge_conflict_fetch_base_mismatch");
+    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+    await o.assertIdentity();
+    await phase("merging");
     const merge = await o.runner.git(["merge", "--no-commit", "--no-ff", operation.baseSha], o.cwd, o.timeout());
-    const mergeHead = await git(["rev-parse", "MERGE_HEAD"]);
-    if (mergeHead !== operation.baseSha) throw new Error("merge_conflict_merge_head_mismatch");
     const unmerged = await git(["diff", "--name-only", "--diff-filter=U"]);
     if (merge.exitCode !== 0 && (merge.exitCode !== 1 || !unmerged)) throw new Error(`merge_conflict_merge_failed: ${merge.stderr}`);
+    if (merge.exitCode === 0 && !unmerged) {
+      const contained = await o.runner.git(["merge-base", "--is-ancestor", operation.baseSha, "HEAD"], o.cwd, o.timeout());
+      if (contained.exitCode === 0) {
+        await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+        throw new Error("merge_conflict_noop_after_reservation: unchanged work preserved; remote conflict requires diagnosis");
+      }
+      if (contained.exitCode !== 1) throw new Error("merge_conflict_ancestry_unavailable");
+    }
+    const mergeHead = await o.runner.git(["rev-parse", "--verify", "-q", "MERGE_HEAD"], o.cwd, o.timeout());
+    if (mergeHead.exitCode !== 0) throw new Error("merge_conflict_missing_merge_state");
+    if (mergeHead.stdout.trim() !== operation.baseSha) throw new Error("merge_conflict_merge_head_mismatch");
     if (unmerged) {
       await phase("executing");
       const context = JSON.stringify({ cause: operation.cause, operationId: operation.operationId,
@@ -127,11 +186,11 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   if (!isCommitSha(commitSha)) throw new Error("merge_conflict_missing_commit_receipt");
   await o.assertIdentity();
   await assertParents(o, commitSha);
-  const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber);
+  const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
   // A moved base is not merged locally behind the reviewer's back: this commit
   // keeps the pinned parents and the delivery loop observes the latest base again.
   if (pr.headRefOid === commitSha) {
-    await phase("pushed", { outcome: `remote_confirmed; current_base=${pr.baseRefOid}` });
+    await phase("pushed", { outcome: `remote_confirmed; current_base=${pr.remoteBaseSha}` });
     return commitSha;
   }
   if (pr.headRefOid !== operation.expectedHeadSha) throw new Error("merge_conflict_remote_head_changed");
@@ -139,8 +198,8 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   await phase("pushing");
   try { await git(["push", "origin", `${commitSha}:refs/heads/${o.context.headBranch}`]); }
   catch { /* A transport failure can follow a successful push. Read back first. */ }
-  const pushed = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber);
+  const pushed = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
   if (pushed.headRefOid !== commitSha) throw new Error("merge_conflict_push_not_confirmed");
-  await phase("pushed", { outcome: `remote_confirmed; current_base=${pushed.baseRefOid}` });
+  await phase("pushed", { outcome: `remote_confirmed; current_base=${pushed.remoteBaseSha}` });
   return commitSha;
 }

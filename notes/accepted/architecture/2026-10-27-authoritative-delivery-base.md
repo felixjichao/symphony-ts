@@ -1,0 +1,18 @@
+# Agent Note: Authoritative Delivery base and no-op recovery
+Status: accepted
+
+## Problem
+#188 fixes the first #186 production repair: PR baseRefOid was an ancestor of HEAD while remote main had advanced. Fetching the PR SHA proved object identity but not branch freshness. No-op merge created no MERGE_HEAD and the unconditional read caused a budget-consuming handoff. Historical phase=merging alone does not prove what a subprocess did. This is a GitHub Delivery / Execution Continuity extension adjacent to baseline SPEC §8/§14, §9 and §17/§18.
+
+## Decision
+Domain owns a narrow repository/branch/SHA fact and async reader. Tracker reads the exact remote ref atomically and validates its ref, commit type and full SHA. CLI and continuity host inject that reader using the same sanitized, authority-fenced runner. Agent never imports tracker. PR ownership, branch identities, OPEN/no-merge state, local/remote expected HEAD and the independent base fact must all agree before repair. No freshness claim comes from baseRefOid or local origin/main.
+
+Before reserving a repair, fetch the pinned SHA, verify FETCH_HEAD and check ancestry under the existing deadline and filesystem authority. An already-contained base causes at most two remote fact observations, then a diagnostic handoff with no reservation; it never produces a fake merge commit or bypasses mergeability/review. Execution rechecks the target, separates non-conflict failures, no-op, pending clean merge and conflicts, and only requires MERGE_HEAD for an actual pending merge. Parents and push receipts keep the same pinned base; remote base re-observation is recorded separately. Every new repair HEAD passes validation, CI and independent exact-HEAD review again.
+
+Historical pre-commit recovery remains read-only until an exact native authorization matches operationId/attempt/expectedHeadSha and explicitly attests the executor has stopped. Host filesystem authority still refuses active owners or uncertain subprocess outcomes; authorization does not clear locks. Only reserved/merging with clean index/worktree, no Git operation, unchanged local/remote HEAD and verified OPEN/no-merge ownership can be retired as reconciled. CI observation resumes with the old budget and deadline. Existing merge work, later uncertain phases or unknown remote effects remain preserved and blocked. A crash after retirement can reconcile the receipt without replaying the old executor. Ordinary --resume and host-policy epoch authorization do not grant this native permission.
+
+## Alternatives considered
+Trusting PR baseRefOid or fetching local origin/main repeats the observed stale-fact failure. Adding git/ref reads directly to agent breaks the existing tracker/agent dependency boundary; injecting a domain contract preserves it. Fetching a moving branch without pinning loses exact parent/receipt identity. Empty merges, automatic success on no-op or unbounded polling weaken evidence and budgets. Automatically replaying phase=merging, abort/reset, or blanket authorization of historical executions cannot distinguish an orphan subprocess, dirty work or unobserved commit/push.
+
+## Consequences
+Legacy states remain readable and already-spent repairs remain charged. A new reconciled phase records explicit no-effect retirement, not repair success. Unavailable or drifting facts fail closed; a drift after reservation may still consume its original attempt. There is no budget reset, forced push, changed sandbox/CI/review policy or production recovery operation in this change. Isolated real Git reproductions cover the reported shape; full host gate and real GitHub verification remain operator-owned.
