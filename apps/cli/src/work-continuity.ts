@@ -13,7 +13,7 @@ import { GitHubDeliveryService } from "@symphony/tracker";
 import type { DecisionPlanningGate } from "@symphony/decision";
 import { WorkContinuityCoordinator, isActiveState, issueRoutable, type OrchestratorAuthority } from "@symphony/orchestrator";
 import type { EffectiveRuntimeController } from "./effective-runtime";
-import { FileDeliveryStateStorage, withDeliveryAuthority } from "./delivery-skill-cli";
+import { createRemoteBranchReader, FileDeliveryStateStorage, withDeliveryAuthority } from "./delivery-skill-cli";
 import { DefaultDeliveryGitGhRunner } from "./git-gh-runner";
 
 export function createHostWorkContinuity(options: {
@@ -123,7 +123,7 @@ export function createHostWorkContinuity(options: {
       }
     }
     if (!delivery?.isPaused && delivery?.mergeConflictRepair
-      && delivery.mergeConflictRepair.phase !== "pushed" && !runtime && !task && github?.pullRequest?.state === "open") {
+      && !["pushed", "reconciled"].includes(delivery.mergeConflictRepair.phase) && !runtime && !task && github?.pullRequest?.state === "open") {
       facts = { ...facts, stage: "repair", externalWait: null };
     }
     if (delivery?.landing?.phase === "intent" && github?.pullRequest
@@ -156,7 +156,7 @@ export function createHostWorkContinuity(options: {
       }
     }
     const lockBlock = deliveryAuthorityBlock(path.join(workspace, ".symphony", "delivery-authority.lock"));
-    if (lockBlock) facts = { ...facts, stage: delivery?.mergeConflictRepair && delivery.mergeConflictRepair.phase !== "pushed"
+    if (lockBlock) facts = { ...facts, stage: delivery?.mergeConflictRepair && !["pushed", "reconciled"].includes(delivery.mergeConflictRepair.phase)
       && !delivery.isPaused ? "repair" : "delivery", blocked: lockBlock };
     const latestDelivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
     if (JSON.stringify(latestDelivery) !== JSON.stringify(delivery)) {
@@ -339,6 +339,7 @@ export function createHostWorkContinuity(options: {
             const split = request.workKey.key.lastIndexOf("#");
             mutationMayHaveStarted = true;
             await runDeliverySkill({ cwd: identity.workspace!, runner, stateStorage: storage,
+              readRemoteBranch: createRemoteBranchReader(runner, identity.workspace!),
               repo: request.workKey.key.slice(0, split), issueNumber: Number(request.workKey.key.slice(split + 1)),
               workspaceKey: delivery?.workspaceKey ?? locked.issue.identifier,
               headBranch: saved?.headBranch ?? delivery?.landing?.context.headBranch ?? `symphony/${locked.issue.identifier}`,

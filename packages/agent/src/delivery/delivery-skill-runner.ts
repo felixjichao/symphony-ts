@@ -1,4 +1,4 @@
-import { assertRepairWorkspace, executeMergeConflictRepair, readRepairTarget } from "./merge-conflict-repair";
+import { assertRepairWorkspace, executeMergeConflictRepair, prepareRepairTarget } from "./merge-conflict-repair";
 import { recoverDeliveryHandoff } from "./recover-handoff";
 import { randomUUID } from "node:crypto";
 import {
@@ -16,6 +16,8 @@ import {
   type DecisionReviewTarget,
   type DecisionTask,
   type DeliveryContext,
+  type DeliveryRemoteBranchReader,
+  type DeliveryConflictRecoveryAuthorization,
   type DeliveryContinuation,
   type DeliveryHandoff,
   type DeliveryReviewStatusResult,
@@ -34,6 +36,8 @@ export interface DeliveryStateStorage {
 }
 
 export interface RunDeliverySkillOptions extends DeliverySkillConfig {
+  readonly readRemoteBranch?: DeliveryRemoteBranchReader | undefined;
+  readonly conflictRecoveryAuthorization?: DeliveryConflictRecoveryAuthorization | undefined;
   readonly canCommit?: (() => boolean) | undefined;
   readonly resumeStageOnly?: boolean;
   readonly yieldOnWait?: boolean;
@@ -380,6 +384,9 @@ async function runDeliverySkillLocked(
     gh: (args, cwd, timeout) => { guard(); return native.gh(args, cwd, timeout); },
     exec: (command, cwd, timeout, env, excludeEnvNames) => { guard(); return native.exec(command, cwd, timeout, env, excludeEnvNames); },
   };
+  const readRemoteBranch: DeliveryRemoteBranchReader | undefined = options.readRemoteBranch
+    ? async (repository, branch) => { guard(); return options.readRemoteBranch!(repository, branch); }
+    : undefined;
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
 
@@ -421,6 +428,17 @@ async function runDeliverySkillLocked(
     return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
       spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
       reason: "manual_intervention_required", handoffMarkdown: "Delivery state belongs to a different work identity" };
+  }
+  if (options.conflictRecoveryAuthorization) {
+    const auth = options.conflictRecoveryAuthorization;
+    const operation = persisted?.mergeConflictRepair;
+    if (!operation || !["reserved", "merging"].includes(operation.phase) || operation.commitSha
+      || auth.operationId !== operation.operationId || auth.attempt !== operation.attempt
+      || auth.expectedHeadSha !== operation.expectedHeadSha || auth.executorStopped !== true) {
+      return { status: "blocked", prNumber: operation?.prNumber ?? null, prUrl: null, headSha: null,
+        spentRepairs: persisted?.spentRepairs ?? 0, spentWaitSeconds: persisted?.spentWaitSeconds ?? 0,
+        reason: "manual_intervention_required", handoffMarkdown: "merge_conflict_stale_native_authorization: no replay" };
+    }
   }
   if (persisted?.isPaused && persisted.pendingCompensation && options.resume && stateStorage) {
     const compensation = await recoverDeliveryHandoff({ ...context, cwd: options.cwd, stateStorage, runner });
@@ -859,6 +877,7 @@ async function runDeliverySkillLocked(
   }
 
   const conflictRepairOptions = () => ({ context, cwd: options.cwd, runner,
+    readRemoteBranch, recoveryAuthorization: options.conflictRecoveryAuthorization,
     operation: mergeConflictRepair!,
     save: async (operation: NonNullable<PersistedDeliveryState["mergeConflictRepair"]>) => {
       mergeConflictRepair = operation;
@@ -879,7 +898,7 @@ async function runDeliverySkillLocked(
     validationCommand: options.validationCommand!, validationTimeoutMs,
     repairFn: options.repairFn ? (failure: string) => { guard(); return options.repairFn!(failure); } : undefined,
   });
-  if (mergeConflictRepair && (mergeConflictRepair.phase !== "pushed"
+  if (mergeConflictRepair && mergeConflictRepair.phase !== "reconciled" && (mergeConflictRepair.phase !== "pushed"
     || !continuation || continuation.headSha === mergeConflictRepair.expectedHeadSha)) {
     try {
       if (mergeConflictRepair.prNumber !== prNumber || landing?.phase === "intent") {
@@ -890,6 +909,16 @@ async function runDeliverySkillLocked(
     } catch (error) {
       return haltDispatch("manual_intervention_required", String(error));
     }
+  }
+  if (mergeConflictRepair?.phase === "reconciled" && continuation?.phase === "repair_pending") {
+    // Crash after the read-only recovery receipt but before the CI checkpoint.
+    if (currentHeadSha !== mergeConflictRepair.expectedHeadSha) {
+      return haltDispatch("manual_intervention_required", "merge_conflict_reconciled_remote_head_changed");
+    }
+    try { await assertRepairWorkspace(runner, options.cwd, mergeConflictRepair.expectedHeadSha); }
+    catch (error) { return haltDispatch("manual_intervention_required", String(error)); }
+    currentHeadSha = mergeConflictRepair.expectedHeadSha;
+    await checkpoint("ci");
   }
   if (continuation?.phase === "repair_pending") {
     return haltDispatch("manual_intervention_required", "repair_outcome_unverified: inspect local/remote HEAD and old executor before resuming");
@@ -1998,10 +2027,7 @@ async function runDeliverySkillLocked(
       }
       if (spentRepairs >= maxRepairs) throw new Error(`merge_conflict_budget_exhausted (${spentRepairs}/${maxRepairs})`);
       if (now() >= deadlineTimestampMs!) throw new Error("merge_conflict_deadline_exhausted");
-      const observed = await readRepairTarget(runner, options.cwd, context, prNumber);
-      if (observed.headRefOid !== currentHeadSha || observed.mergeable !== "CONFLICTING") {
-        throw new Error("merge_conflict_facts_changed_before_reservation");
-      }
+      const observed = await prepareRepairTarget(runner, options.cwd, context, prNumber, currentHeadSha!, readRemoteBranch, conflictRepairOptions().timeout);
       if (landing) {
         if (landing.phase !== "intent" || landing.prNumber !== prNumber || landing.headSha !== currentHeadSha) {
           throw new Error("merge_conflict_landing_outcome_unverified");
@@ -2013,9 +2039,9 @@ async function runDeliverySkillLocked(
       await assertRepairWorkspace(runner, options.cwd, currentHeadSha!);
       spentRepairs++;
       mergeConflictRepair = { cause: "merge_conflict", operationId: randomUUID(), attempt: spentRepairs,
-        prNumber, expectedHeadSha: currentHeadSha!, baseSha: observed.baseRefOid, phase: "reserved" };
+        prNumber, expectedHeadSha: currentHeadSha!, baseSha: observed.remoteBaseSha, phase: "reserved" };
       await checkpoint("repair_pending");
-      log(`[delivery-skill] merge_conflict repair ${spentRepairs}/${maxRepairs}: HEAD=${currentHeadSha}, base=${observed.baseRefOid}`);
+      log(`[delivery-skill] merge_conflict repair ${spentRepairs}/${maxRepairs}: HEAD=${currentHeadSha}, base=${observed.remoteBaseSha}`);
       currentHeadSha = await executeMergeConflictRepair(conflictRepairOptions());
       if (lastReviewTaskId && options.reviewGate.supersedeReviewTask) {
         guard();

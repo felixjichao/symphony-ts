@@ -8,6 +8,11 @@ describe("merge conflict recovery admission (§8/§14 extension)", () => {
     expect(isDeliveryMergeConflictRepair(receipt)).toBe(true);
     expect(isDeliveryMergeConflictRepair({ ...receipt, phase: "pushed", commitSha: "c".repeat(40), outcome: "remote_confirmed" })).toBe(true);
   });
+  it("admits a reconciled no-effect receipt but never a contradictory commit receipt", () => {
+    expect(isDeliveryMergeConflictRepair({ ...receipt, phase: "reconciled", outcome: "authorized_no_local_or_remote_effect" })).toBe(true);
+    expect(isDeliveryMergeConflictRepair({ ...receipt, phase: "reconciled" })).toBe(false);
+    expect(isDeliveryMergeConflictRepair({ ...receipt, phase: "reconciled", outcome: "authorized", commitSha: "c".repeat(40) })).toBe(false);
+  });
   it.each([
     { cause: "unmergeable" }, { attempt: 0 }, { attempt: 1.5 }, { prNumber: 0 }, { operationId: "" },
     { expectedHeadSha: "main" }, { baseSha: "origin/main" }, { phase: "pushed" },
