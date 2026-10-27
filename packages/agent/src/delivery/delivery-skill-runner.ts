@@ -1,3 +1,4 @@
+import { assertRepairWorkspace, executeMergeConflictRepair, prepareRepairTarget } from "./merge-conflict-repair";
 import { recoverDeliveryHandoff } from "./recover-handoff";
 import { randomUUID } from "node:crypto";
 import {
@@ -15,6 +16,8 @@ import {
   type DecisionReviewTarget,
   type DecisionTask,
   type DeliveryContext,
+  type DeliveryRemoteBranchReader,
+  type DeliveryConflictRecoveryAuthorization,
   type DeliveryContinuation,
   type DeliveryHandoff,
   type DeliveryReviewStatusResult,
@@ -33,6 +36,8 @@ export interface DeliveryStateStorage {
 }
 
 export interface RunDeliverySkillOptions extends DeliverySkillConfig {
+  readonly readRemoteBranch?: DeliveryRemoteBranchReader | undefined;
+  readonly conflictRecoveryAuthorization?: DeliveryConflictRecoveryAuthorization | undefined;
   readonly canCommit?: (() => boolean) | undefined;
   readonly resumeStageOnly?: boolean;
   readonly yieldOnWait?: boolean;
@@ -377,8 +382,11 @@ async function runDeliverySkillLocked(
   const runner: DeliveryGitGhRunner = {
     git: (args, cwd, timeout) => { guard(); return native.git(args, cwd, timeout); },
     gh: (args, cwd, timeout) => { guard(); return native.gh(args, cwd, timeout); },
-    exec: (command, cwd, timeout, env) => { guard(); return native.exec(command, cwd, timeout, env); },
+    exec: (command, cwd, timeout, env, excludeEnvNames) => { guard(); return native.exec(command, cwd, timeout, env, excludeEnvNames); },
   };
+  const readRemoteBranch: DeliveryRemoteBranchReader | undefined = options.readRemoteBranch
+    ? async (repository, branch) => { guard(); return options.readRemoteBranch!(repository, branch); }
+    : undefined;
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
 
@@ -421,6 +429,17 @@ async function runDeliverySkillLocked(
       spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
       reason: "manual_intervention_required", handoffMarkdown: "Delivery state belongs to a different work identity" };
   }
+  if (options.conflictRecoveryAuthorization) {
+    const auth = options.conflictRecoveryAuthorization;
+    const operation = persisted?.mergeConflictRepair;
+    if (!operation || !["reserved", "merging"].includes(operation.phase) || operation.commitSha
+      || auth.operationId !== operation.operationId || auth.attempt !== operation.attempt
+      || auth.expectedHeadSha !== operation.expectedHeadSha || auth.executorStopped !== true) {
+      return { status: "blocked", prNumber: operation?.prNumber ?? null, prUrl: null, headSha: null,
+        spentRepairs: persisted?.spentRepairs ?? 0, spentWaitSeconds: persisted?.spentWaitSeconds ?? 0,
+        reason: "manual_intervention_required", handoffMarkdown: "merge_conflict_stale_native_authorization: no replay" };
+    }
+  }
   if (persisted?.isPaused && persisted.pendingCompensation && options.resume && stateStorage) {
     const compensation = await recoverDeliveryHandoff({ ...context, cwd: options.cwd, stateStorage, runner });
     if (!compensation.success) return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
@@ -457,6 +476,7 @@ async function runDeliverySkillLocked(
 
   let continuation = persisted?.continuation;
   let landing = persisted?.landing;
+  let mergeConflictRepair = persisted?.mergeConflictRepair;
   const now = options.nowFn ?? Date.now;
   const startTimeMs = now();
   if (deadlineTimestampMs === undefined) {
@@ -482,6 +502,7 @@ async function runDeliverySkillLocked(
       await stateStorage.writeState({
         continuation,
         landing,
+        mergeConflictRepair,
         repo: context.repo,
         issueNumber: context.issueNumber,
         workspaceKey: context.workspaceKey,
@@ -855,7 +876,51 @@ async function runDeliverySkillLocked(
     );
   }
 
-  if (options.resumeStageOnly && continuation?.phase === "repair_pending") {
+  const conflictRepairOptions = () => ({ context, cwd: options.cwd, runner,
+    readRemoteBranch, recoveryAuthorization: options.conflictRecoveryAuthorization,
+    operation: mergeConflictRepair!,
+    save: async (operation: NonNullable<PersistedDeliveryState["mergeConflictRepair"]>) => {
+      mergeConflictRepair = operation;
+      await persistCurrentState();
+    },
+    timeout: () => {
+      if (now() >= deadlineTimestampMs!) throw new Error("merge_conflict_deadline_exhausted");
+      return getRepairTimeoutMs();
+    },
+    assertIdentity: async () => {
+      const branch = await runner.git(["branch", "--show-current"], options.cwd);
+      const origin = await runner.git(["remote", "get-url", "origin"], options.cwd);
+      if (branch.exitCode !== 0 || branch.stdout.trim() !== context.headBranch
+        || origin.exitCode !== 0 || !repoOriginMatches(origin.stdout, context.repo)) {
+        throw new Error("merge_conflict_workspace_identity_changed");
+      }
+    },
+    validationCommand: options.validationCommand!, validationTimeoutMs,
+    repairFn: options.repairFn ? (failure: string) => { guard(); return options.repairFn!(failure); } : undefined,
+  });
+  if (mergeConflictRepair && mergeConflictRepair.phase !== "reconciled" && (mergeConflictRepair.phase !== "pushed"
+    || !continuation || continuation.headSha === mergeConflictRepair.expectedHeadSha)) {
+    try {
+      if (mergeConflictRepair.prNumber !== prNumber || landing?.phase === "intent") {
+        throw new Error("merge_conflict_recovery_target_or_landing_unverified");
+      }
+      currentHeadSha = await executeMergeConflictRepair(conflictRepairOptions(), true);
+      await checkpoint("ci");
+    } catch (error) {
+      return haltDispatch("manual_intervention_required", String(error));
+    }
+  }
+  if (mergeConflictRepair?.phase === "reconciled" && continuation?.phase === "repair_pending") {
+    // Crash after the read-only recovery receipt but before the CI checkpoint.
+    if (currentHeadSha !== mergeConflictRepair.expectedHeadSha) {
+      return haltDispatch("manual_intervention_required", "merge_conflict_reconciled_remote_head_changed");
+    }
+    try { await assertRepairWorkspace(runner, options.cwd, mergeConflictRepair.expectedHeadSha); }
+    catch (error) { return haltDispatch("manual_intervention_required", String(error)); }
+    currentHeadSha = mergeConflictRepair.expectedHeadSha;
+    await checkpoint("ci");
+  }
+  if (continuation?.phase === "repair_pending") {
     return haltDispatch("manual_intervention_required", "repair_outcome_unverified: inspect local/remote HEAD and old executor before resuming");
   }
   if (options.resumeStageOnly && (prNumber === null || !currentHeadSha)) {
@@ -1088,6 +1153,7 @@ async function runDeliverySkillLocked(
   const previousReviews: DecisionReviewResult[] = [];
   let unresolvedFindings: readonly DecisionReviewFinding[] = [];
 
+  landing_loop: while (true) {
   delivery_loop: while (true) {
     let ciPassedChecks: PrCheck[] = [];
     let ciReason = "";
@@ -1833,11 +1899,6 @@ async function runDeliverySkillLocked(
     );
   }
 
-  if (!landing || landing.headSha !== currentHeadSha || landing.prNumber !== prNumber) {
-    landing = { intentId: randomUUID(), context, prNumber, headSha: currentHeadSha ?? "", optIn: true, phase: "intent" };
-  }
-  await persistCurrentState();
-
   // Pre-merge verification: re-read full PR state immediately before merge
   const preMergePrRes = await runner.gh(
     ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid,mergeable,state,isDraft,body,statusCheckRollup"],
@@ -1908,8 +1969,8 @@ async function runDeliverySkillLocked(
     );
   }
 
-  // 5. Verify mergeability
-  if (preMergePr.mergeable !== "MERGEABLE") {
+  // Only confirmed conflicts qualify; all other unmergeable facts retain their refusal.
+  if (preMergePr.mergeable !== "MERGEABLE" && preMergePr.mergeable !== "CONFLICTING") {
     return haltDispatch("unmergeable", `PR #${prNumber} mergeable state is '${preMergePr.mergeable}', expected 'MERGEABLE'.`);
   }
 
@@ -1958,6 +2019,48 @@ async function runDeliverySkillLocked(
       `Pre-merge review gate verification failed: ${preMergeApproval.reason}`,
     );
   }
+
+  if (preMergePr.mergeable === "CONFLICTING") {
+    try {
+      if (!stateStorage || !options.validationCommand) {
+        throw new Error("merge_conflict_executor_or_durable_validation_unavailable");
+      }
+      if (spentRepairs >= maxRepairs) throw new Error(`merge_conflict_budget_exhausted (${spentRepairs}/${maxRepairs})`);
+      if (now() >= deadlineTimestampMs!) throw new Error("merge_conflict_deadline_exhausted");
+      const observed = await prepareRepairTarget(runner, options.cwd, context, prNumber, currentHeadSha!, readRemoteBranch, conflictRepairOptions().timeout);
+      if (landing) {
+        if (landing.phase !== "intent" || landing.prNumber !== prNumber || landing.headSha !== currentHeadSha) {
+          throw new Error("merge_conflict_landing_outcome_unverified");
+        }
+        // Authoritative owned OPEN + null mergeCommit proves the legacy intent
+        // did not land. Do not clear it on a failed or ambiguous observation.
+        landing = undefined;
+      }
+      await assertRepairWorkspace(runner, options.cwd, currentHeadSha!);
+      spentRepairs++;
+      mergeConflictRepair = { cause: "merge_conflict", operationId: randomUUID(), attempt: spentRepairs,
+        prNumber, expectedHeadSha: currentHeadSha!, baseSha: observed.remoteBaseSha, phase: "reserved" };
+      await checkpoint("repair_pending");
+      log(`[delivery-skill] merge_conflict repair ${spentRepairs}/${maxRepairs}: HEAD=${currentHeadSha}, base=${observed.remoteBaseSha}`);
+      currentHeadSha = await executeMergeConflictRepair(conflictRepairOptions());
+      if (lastReviewTaskId && options.reviewGate.supersedeReviewTask) {
+        guard();
+        await options.reviewGate.supersedeReviewTask(lastReviewTaskId);
+      }
+      await checkpoint("ci");
+      log(`[delivery-skill] Conflict repair pushed ${currentHeadSha}; requiring new CI and exact-HEAD review.`);
+      if (options.yieldOnWait) return waiting();
+      continue landing_loop;
+    } catch (error) {
+      if (mergeConflictRepair) mergeConflictRepair = { ...mergeConflictRepair, outcome: String(error) };
+      return haltDispatch("manual_intervention_required", String(error));
+    }
+  }
+
+  if (!landing || landing.headSha !== currentHeadSha || landing.prNumber !== prNumber) {
+    landing = { intentId: randomUUID(), context, prNumber, headSha: currentHeadSha ?? "", optIn: true, phase: "intent" };
+  }
+  await persistCurrentState();
 
   // 执行 squash merge
   const mergeArgs = ["pr", "merge", String(prNumber), "--repo", context.repo, "--squash"];
@@ -2030,4 +2133,5 @@ async function runDeliverySkillLocked(
     spentWaitSeconds: getElapsedWaitSeconds(),
     reason: "successfully_merged",
   };
+  }
 }

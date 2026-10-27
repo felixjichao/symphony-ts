@@ -46,6 +46,12 @@ import {
 import { DECISION_MAX_TRANSPORT_RECOVERIES, mapDecisionAdapterFailure, type DecisionExecution } from "@symphony/domain/decision";
 import { canonicalJsonEqual } from "./canonical-json";
 
+export class DriverInterruption extends Error {
+  constructor(readonly reason: "heartbeat_denied" | "lease_expired" | "manual_stop", readonly status?: number) {
+    super(`Driver interrupted: ${reason}`);
+  }
+}
+
 class ExecutionBlocked extends Error {
   constructor(readonly session: DecisionSession, readonly reason: string) { super(reason); }
 }
@@ -105,7 +111,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   private activeTask: DecisionTask | null = null;
   private activeSession: DecisionSession | null = null;
   private activeLease: DecisionLease | null = null;
-  private heartbeatAuthError: BridgeHttpError | null = null;
+  private activeInterruption: DriverInterruption | null = null;
 
   constructor(options: DecisionTabDriverOptions) {
     this.transport = options.transport;
@@ -259,7 +265,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       retainCheckpoint?: boolean | undefined;
     } = {}
   ): Promise<{ receipt: SubmissionReceipt; failure: DecisionTaskFailure; superseded: boolean }> {
-    if (this.heartbeatAuthError) throw this.heartbeatAuthError;
+    // Cancellation fences only the active attempt; historical auth failures must not
+    // override fresh Bridge authority during a later recovery on this Driver.
+    this.activeAbortController?.signal.throwIfAborted();
     const details = params.details && typeof params.details === "object" ? params.details as Record<string, unknown> : {};
     const mapping = mapDecisionAdapterFailure({ code: params.error as DecisionAdapterErrorCode,
       message: params.error, retryable: params.retryable,
@@ -603,7 +611,7 @@ export class DecisionTabDriver implements DecisionTaskController {
 
   startHeartbeat(task: DecisionTask, lease: DecisionLease, onExpired?: () => void): void {
     this.stopHeartbeat();
-    this.heartbeatAuthError = null;
+    this.activeInterruption = null;
     this.heartbeatTimer = setInterval(async () => {
       if (this.shouldRun && !this.shouldRun()) { this.stop(); return; }
       try {
@@ -633,7 +641,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         }
       } catch (hbErr: unknown) {
         if (hbErr instanceof BridgeHttpError && (hbErr.status === 401 || hbErr.status === 403)) {
-          this.heartbeatAuthError = hbErr;
+          this.recordInterruption(task, new DriverInterruption("heartbeat_denied", hbErr.status));
           this.stopHeartbeat();
           if (onExpired) onExpired();
           this.onError?.(hbErr);
@@ -644,19 +652,31 @@ export class DecisionTabDriver implements DecisionTaskController {
           (hbErr.status === 404 || hbErr.status === 409 || hbErr.status === 410)
         ) {
           // Authoritative lease lost or superseded on bridge
+          this.recordInterruption(task, new DriverInterruption("heartbeat_denied", hbErr.status));
           this.stopHeartbeat();
           if (onExpired) onExpired();
           return;
         }
+        this.recordInterruption(task, new DriverInterruption("heartbeat_denied", hbErr instanceof BridgeHttpError ? hbErr.status : undefined));
         // Transient network failure during heartbeat:
         // Only stop heartbeat and abort if local lease has actually expired
         const currentExpiry = this.activeLease?.expiresAtMs ?? lease.expiresAtMs;
         if (Date.now() >= currentExpiry) {
+          this.recordInterruption(task, new DriverInterruption("lease_expired"));
           this.stopHeartbeat();
           if (onExpired) onExpired();
         }
       }
     }, this.heartbeatIntervalMs);
+  }
+
+  private recordInterruption(task: DecisionTask, interruption: DriverInterruption): void {
+    this.activeInterruption = interruption;
+    const cp = this.checkpointStore.get();
+    this.diagnose({ stage: "interrupted", taskId: task.id, kind: task.kind, revision: task.revision,
+      interruption: { reason: interruption.reason, status: interruption.status,
+        claimGeneration: cp?.leaseGeneration ?? task.claimGeneration,
+        bindingGeneration: cp?.bindingGeneration ?? 0 } });
   }
 
   stopHeartbeat(): void {
@@ -1110,29 +1130,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         });
       }
     } catch (hbErr: unknown) {
-      if (hbErr instanceof BridgeHttpError && (hbErr.status === 401 || hbErr.status === 403)) throw hbErr;
-      if (hbErr instanceof BridgeHttpError && hbErr.status === 409 &&
-        (cp.step === "waiting_response" || cp.step === "prompt_submitting")) {
-        await this.transport.request("POST", `/v1/tasks/${encodeURIComponent(cp.taskId)}/block`, {
-          owner: cp.leaseOwner, token: cp.leaseToken, generation: cp.leaseGeneration, reason: "human_required",
-        });
-        throw new ExecutionBlocked(currentSession, "human_required");
-      }
-      if (
-        hbErr instanceof BridgeHttpError &&
-        (hbErr.status === 404 || hbErr.status === 409 || hbErr.status === 410)
-      ) {
-        // Authoritative lease lost or superseded on bridge
-        this.checkpointStore.delete();
-        return null;
-      }
-      // Transient network or server error during heartbeat:
-      // If local lease is still valid (not expired), do NOT delete checkpoint!
-      if (Date.now() >= renewedExpiry) {
-        this.checkpointStore.delete();
-        return null;
-      }
-      // Local lease is unexpired: renewedExpiry stays cp.leaseExpiresAtMs
+      this.recordInterruption(currentTask, new DriverInterruption("heartbeat_denied", hbErr instanceof BridgeHttpError ? hbErr.status : undefined));
+      // Keep sent attempts/candidates intact. A denied renewal never authorizes page actions,
+      // a new Send, or a human verdict. Next poll must re-observe native authority.
+      throw hbErr;
     }
 
     if (!taskRes?.task || !sessionRes?.session) {
@@ -1226,7 +1227,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const signal = this.activeAbortController.signal;
 
       this.startHeartbeat(taskRes.task, lease, () => {
-        this.activeAbortController?.abort();
+        this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
       });
 
       try {
@@ -1307,7 +1308,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const signal = this.activeAbortController.signal;
 
       this.startHeartbeat(taskRes.task, lease, () => {
-        this.activeAbortController?.abort();
+        this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
       });
 
       try {
@@ -1336,7 +1337,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const signal = this.activeAbortController.signal;
 
       this.startHeartbeat(taskRes.task, lease, () => {
-        this.activeAbortController?.abort();
+        this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
       });
 
       try {
@@ -1412,7 +1413,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const signal = this.activeAbortController.signal;
 
       this.startHeartbeat(taskRes.task, lease, () => {
-        this.activeAbortController?.abort();
+        this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
       });
 
       try {
@@ -1678,7 +1679,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     const signal = this.activeAbortController.signal;
 
     this.startHeartbeat(task, lease, () => {
-      this.activeAbortController?.abort();
+      this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
     });
 
     try {
@@ -1865,7 +1866,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           };
         }
       }
-      throw modelErr;
+      throw signal.aborted ? signal.reason ?? modelErr : modelErr;
     }
 
     await this.assertResponseConversation(session);
@@ -1953,7 +1954,7 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // Start background lease heartbeat
     this.startHeartbeat(task, lease, () => {
-      this.activeAbortController?.abort();
+      this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
     });
 
     // Save checkpoint if not already saved
@@ -2126,8 +2127,9 @@ export class DecisionTabDriver implements DecisionTaskController {
 
   stop(): void {
     this.isRunning = false;
+    if (this.activeTask && !this.activeAbortController?.signal.aborted) this.recordInterruption(this.activeTask, new DriverInterruption("manual_stop"));
     this.stopHeartbeat();
-    this.activeAbortController?.abort();
+    this.activeAbortController?.abort(this.activeInterruption ?? new DriverInterruption("lease_expired"));
     this.activeAbortController = null;
     this.activeTask = null;
     this.activeSession = null;

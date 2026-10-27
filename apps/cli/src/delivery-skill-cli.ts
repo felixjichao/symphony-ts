@@ -1,3 +1,4 @@
+import { GitHubDeliveryService } from "@symphony/tracker";
 import { withDeliveryFileAuthority } from "./file-authority";
 import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
@@ -18,6 +19,7 @@ import {
 import {
   decisionSessionId,
   isDeliveryContinuation,
+  isDeliveryMergeConflictRepair,
   isLandingIntent,
   formatDeliveryHandoffMarkdown,
   type DecisionMaterializedPlan,
@@ -71,7 +73,9 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
     ) {
       throw new Error(`Corrupted delivery state file at ${this.filePath}: invalid state schema`);
     }
-    if (rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
+    if (rec["mergeConflictRepair"] !== undefined && (!isDeliveryMergeConflictRepair(rec["mergeConflictRepair"])
+          || rec["mergeConflictRepair"].attempt > Number(rec["spentRepairs"])) ||
+        rec["continuation"] !== undefined && !isDeliveryContinuation(rec["continuation"]) ||
         rec["landing"] !== undefined && (!isLandingIntent(rec["landing"])
           || rec["landing"].context.repo.toLowerCase() !== String(rec["repo"]).toLowerCase()
           || rec["landing"].context.issueNumber !== rec["issueNumber"]
@@ -121,6 +125,10 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   sessionId?: string | undefined;
   reason?: string | undefined;
   details?: string | undefined;
+  conflictOperation?: string | undefined;
+  conflictAttempt?: number | undefined;
+  expectedHead?: string | undefined;
+  executorStopped?: boolean | undefined;
 } {
   let action: "run" | "halt" | "recover-handoff" = "run";
   let repo: string | undefined;
@@ -143,6 +151,10 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
   let sessionId: string | undefined;
   let reason: string | undefined;
   let details: string | undefined;
+  let conflictOperation: string | undefined;
+  let conflictAttempt: number | undefined;
+  let expectedHead: string | undefined;
+  let executorStopped = false;
 
   let i = 0;
   if (argv[0] === "run" || argv[0] === "halt" || argv[0] === "recover-handoff" || argv[0] === "compensate-handoff") {
@@ -182,6 +194,14 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
       optInLand = true;
     } else if (arg === "--no-land") {
       optInLand = false;
+    } else if (arg === "--recover-conflict-operation" && i + 1 < argv.length) {
+      conflictOperation = argv[++i];
+    } else if (arg === "--recover-conflict-attempt" && i + 1 < argv.length) {
+      conflictAttempt = parseSafeNonNegativeInteger(argv[++i]!, "--recover-conflict-attempt");
+    } else if (arg === "--expected-head" && i + 1 < argv.length) {
+      expectedHead = argv[++i];
+    } else if (arg === "--confirm-executor-stopped") {
+      executorStopped = true;
     } else if (arg === "--resume") {
       resume = true;
     } else if (arg === "--required-checks" && i + 1 < argv.length) {
@@ -217,6 +237,7 @@ export function parseDeliverySkillArgs(argv: readonly string[]): {
     readyLabel,
     optInLand,
     resume,
+    conflictOperation, conflictAttempt, expectedHead, executorStopped,
     requiredChecks,
     cwd,
     bridgeUrl,
@@ -539,7 +560,16 @@ async function runDeliverySkillCliLocked(
     }
   }
 
+  const hasRecovery = parsed.conflictOperation !== undefined || parsed.conflictAttempt !== undefined
+    || parsed.expectedHead !== undefined || parsed.executorStopped;
+  if (hasRecovery && (!parsed.resume || !parsed.conflictOperation || !parsed.conflictAttempt
+    || !parsed.expectedHead || !/^[a-f0-9]{40}$/.test(parsed.expectedHead) || !parsed.executorStopped)) {
+    throw new Error("Conflict recovery requires --resume, exact operation/attempt/HEAD and --confirm-executor-stopped");
+  }
   const options: RunDeliverySkillOptions = {
+    readRemoteBranch: createRemoteBranchReader(runner, cwd),
+    ...(hasRecovery ? { resumeStageOnly: true, conflictRecoveryAuthorization: { operationId: parsed.conflictOperation!,
+      attempt: parsed.conflictAttempt!, expectedHeadSha: parsed.expectedHead!, executorStopped: true as const } } : {}),
     cwd,
     repo: parsed.repo,
     issueNumber: parsed.issueNumber,
@@ -583,4 +613,11 @@ async function runDeliverySkillCliLocked(
     io.stderr.write(`symphony delivery-skill: execution error: ${String(err)}\n`);
     return 1;
   }
+}
+
+/** Host composition keeps tracker facts outside the agent package, using the
+ * same fenced/sanitized runner as all other delivery subprocesses. */
+export function createRemoteBranchReader(runner: DeliveryGitGhRunner, cwd: string) {
+  const service = new GitHubDeliveryService({ exec: args => runner.gh(args, cwd) });
+  return service.readRemoteBranch.bind(service);
 }

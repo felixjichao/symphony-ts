@@ -7,6 +7,7 @@ import {
   DecisionBridgeClient,
   DurableDecisionStore,
   DecisionService,
+  DecisionStoreError,
 } from "@symphony/decision";
 import {
   githubDecisionRoot,
@@ -28,11 +29,11 @@ const context: DecisionContextBundle = {
   headSha: null,
 };
 
-async function realChain(seq: number) {
+async function realChain(seq: number, authorizeExecution?: () => Promise<boolean>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "review-followup-"));
   const store = new DurableDecisionStore({ storeDir: dir });
   await store.open();
-  const service = new DecisionService(store);
+  const service = new DecisionService(store, { authorizeExecution });
   const bridge = new DecisionBridge(service, { port: 0 });
   await bridge.start();
   const root = githubDecisionRoot("owner", "repo", seq);
@@ -119,9 +120,8 @@ describe("persisted Stop written during page authorization", () => {
       const driver = new DecisionTabDriver({
         transport, checkpointStore: cp, adapter, shouldRun: () => enabled,
       });
-      const outcome = await driver.runOnce();
+      await expect(driver.runOnce()).rejects.toMatchObject({ reason: "manual_stop" });
       expect(p.sends()).toBe(0);
-      expect(outcome?.status).not.toBe("completed");
       expect(f.service.getReceipt(f.task.id)?.type).not.toBe("result");
     } finally { await f.close(); }
   });
@@ -340,7 +340,7 @@ it("preserves active response evidence on heartbeat auth interruption without a 
     const errors: Error[] = [];
     const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter,
       heartbeatIntervalMs: 5, onError: error => { errors.push(error); driver.stop(); } });
-    await expect(driver.runOnce()).rejects.toThrow("Aborted");
+    await expect(driver.runOnce()).rejects.toMatchObject({ reason: "heartbeat_denied", status: 401 });
     expect(errors).toEqual([auth]);
     expect(cp.get()?.step).toBe("waiting_response");
     expect(f.service.getReceipt(f.task.id)).toBeNull();
@@ -408,3 +408,184 @@ it("recovers prompt_submitting from an exact task result after DOM shrink withou
     expect(f.service.getReceipt(f.task.id)?.type).toBe("result");
   } finally { await f.close(); }
 });
+
+
+it.each([401, 403, 404, 409, 410, "stop"] as const)("active interruption %s must not manufacture human_required", async (status) => {
+  const f = await realChain(991);
+  try {
+    const cp = new MemoryCheckpointStore();
+    const p = page("https://chatgpt.com/c/conv-1");
+    const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+    let waiting = false;
+    vi.spyOn(adapter, "executeTask").mockImplementation(async (_task, options) => {
+      cp.set({ ...cp.get()!, step: "waiting_response", baselineCount: 0 });
+      waiting = true;
+      if (status === "stop") queueMicrotask(() => driver.stop());
+      return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort", () =>
+        reject(new Error("Aborted while waiting for assistant completion")), { once: true }));
+    });
+    const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+    const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+      request: async <T>(method: string, url: string, body?: unknown): Promise<T> => {
+        if (waiting && status !== "stop" && url.endsWith("/heartbeat")) throw new BridgeHttpError("Execution denied", "conflict", status);
+        return inner.request<T>(method, url, body);
+      } };
+    const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter, heartbeatIntervalMs: 5 });
+    await expect(driver.executeClaimedTask(f.task, f.session, f.claim.lease,
+      { ...context, workItem: f.session.root })).rejects.toMatchObject({ reason: status === "stop" ? "manual_stop" : "heartbeat_denied" });
+    expect(f.service.getExecution(f.task.id)?.blocked?.reason).not.toBe("human_required");
+    expect(cp.get()?.step).toBe("waiting_response");
+    expect(f.service.getReceipt(f.task.id)).toBeNull();
+    expect(p.sends()).toBe(0);
+  } finally { await f.close(); }
+}, 15_000);
+
+it.each([401, 403, 409, 410, 503])("retains a sent checkpoint on recovery heartbeat %s and recovers without Send", async status => {
+  const f = await realChain(992);
+  try {
+    await f.service.startTask(f.task.id, f.claim.lease);
+    const cp = new MemoryCheckpointStore();
+    cp.set({ schemaVersion: 1, tabId: cp.tabId, taskId: f.task.id, sessionId: f.session.id,
+      leaseOwner: f.claim.lease.owner, leaseToken: f.claim.lease.token,
+      leaseGeneration: 1, leaseExpiresAtMs: f.claim.lease.expiresAtMs, bindingGeneration: 1,
+      step: "waiting_response", baselineCount: 0, attemptId: "a", savedAtMs: Date.now() });
+    const p = page("https://chatgpt.com/c/conv-1");
+    const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+    const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+      kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+      content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+    const wait = vi.spyOn(adapter, "waitForExistingResponse").mockResolvedValue({ result });
+    const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+    let denied = true;
+    const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+      request: async <T>(method: string, url: string, body?: unknown): Promise<T> => {
+        if (denied && url.endsWith("/heartbeat")) throw new BridgeHttpError("Denied", "conflict", status);
+        return inner.request<T>(method, url, body);
+      } };
+    const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter });
+    await expect(driver.resumeCheckpointIfAvailable()).rejects.toMatchObject({ status });
+    expect(cp.get()?.step).toBe("waiting_response");
+    expect(wait).not.toHaveBeenCalled();
+    expect(f.service.getExecution(f.task.id)?.blocked).toBeNull();
+    denied = false;
+    expect((await driver.resumeCheckpointIfAvailable())?.status).toBe("completed");
+    expect(cp.get()).toBeNull();
+    expect(f.service.getReceipt(f.task.id)?.payload).toEqual(result);
+    expect(p.sends()).toBe(0);
+  } finally { await f.close(); }
+});
+
+it("keeps unavailable target observations distinct from confirmed stale targets through the HTTP Bridge", async () => {
+  let observation: "current" | "unavailable" | "stale" = "current";
+  const f = await realChain(993, async () => {
+    if (observation === "unavailable") throw new DecisionStoreError("Observation unavailable", "execution_observation_unavailable", 503);
+    return observation === "current";
+  });
+  try {
+    const transport = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+    const heartbeat = () => transport.request("POST", `/v1/tasks/${encodeURIComponent(f.task.id)}/heartbeat`, f.claim.lease);
+    observation = "unavailable";
+    await expect(heartbeat()).rejects.toMatchObject({ status: 503, code: "execution_observation_unavailable" });
+    observation = "stale";
+    await expect(heartbeat()).rejects.toMatchObject({ status: 409 });
+    observation = "current";
+    await expect(heartbeat()).resolves.toHaveProperty("expiresAtMs");
+    expect(f.service.getExecution(f.task.id)?.blocked).toBeNull();
+    expect(f.service.getReceipt(f.task.id)).toBeNull();
+  } finally { await f.close(); }
+});
+
+it("survives an unavailable GitHub observation during a real response wait with exactly one Send", async () => {
+  let sent = () => 0;
+  let unavailable = true;
+  const f = await realChain(994, async () => {
+    if (sent() > 0 && unavailable) throw new DecisionStoreError("Unavailable", "execution_observation_unavailable", 503);
+    return true;
+  });
+  try {
+    const p = page("https://chatgpt.com/c/conv-1");
+    sent = p.sends;
+    const cp = new MemoryCheckpointStore();
+    const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window,
+      stabilizationMs: 1, checkIntervalMs: 1, responseTimeoutMs: 2000 });
+    const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+      kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+      content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+    let failures = 0;
+    const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+    const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+      request: async <T>(method: string, url: string, body?: unknown): Promise<T> => {
+        try { return await inner.request<T>(method, url, body); }
+        catch (error) {
+          if (error instanceof BridgeHttpError && error.code === "execution_observation_unavailable") {
+            failures++;
+            unavailable = false;
+            const response = new MockElement("div", { "data-message-author-role": "assistant" });
+            response.textContent = "```symphony-result\n" + JSON.stringify(result) + "\n```";
+            p.doc.body.appendChild(response);
+          }
+          throw error;
+        }
+      } };
+    const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter, heartbeatIntervalMs: 20 });
+    expect((await driver.executeClaimedTask(f.task, f.session, f.claim.lease,
+      { ...context, workItem: f.session.root })).status).toBe("completed");
+    expect(failures).toBeGreaterThan(0);
+    expect(p.sends()).toBe(1);
+    expect(f.service.getExecution(f.task.id)?.blocked).toBeNull();
+    expect(f.service.getReceipt(f.task.id)?.payload).toEqual(result);
+    expect(cp.get()).toBeNull();
+  } finally { await f.close(); }
+}, 15_000);
+
+it.each([401, 403])("same Driver recovers current authority after active heartbeat %s and polling failures", async status => {
+  for (const exhausted of [false, true]) {
+    const f = await realChain(995);
+    try {
+      const cp = new MemoryCheckpointStore();
+      const p = page("https://chatgpt.com/c/conv-1");
+      const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+      let waiting = false;
+      let mode: "active" | "offline" | "recovered" = "active";
+      vi.spyOn(adapter, "executeTask").mockImplementation(async (_task, options) => {
+        cp.set({ ...cp.get()!, step: "waiting_response", baselineCount: 0 });
+        waiting = true;
+        return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort", () =>
+          reject(new Error("Aborted while waiting")), { once: true }));
+      });
+      const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+        kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+        content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+      const wait = vi.spyOn(adapter, "waitForExistingResponse").mockResolvedValue({ result });
+      const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+      const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+        request: async <T>(method: string, url: string, body?: unknown): Promise<T> => {
+          if (mode === "offline" || mode === "active" && waiting && url.endsWith("/heartbeat")) {
+            throw new BridgeHttpError("Unauthorized", "unauthorized", status);
+          }
+          return inner.request<T>(method, url, body);
+        } };
+      const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter, heartbeatIntervalMs: 5 });
+      await expect(driver.executeClaimedTask(f.task, f.session, f.claim.lease,
+        { ...context, workItem: f.session.root })).rejects.toMatchObject({ reason: "heartbeat_denied", status });
+      expect(cp.get()?.step).toBe("waiting_response");
+      mode = "offline";
+      const failures = exhausted ? DECISION_MAX_TRANSPORT_RECOVERIES : 1;
+      for (let i = 0; i < failures; i++) await expect(driver.runOnce()).rejects.toMatchObject({ status });
+      expect(cp.get()?.recoveryFailures).toBe(failures);
+      mode = "recovered";
+      const outcome = await driver.runOnce();
+      if (exhausted) {
+        expect(outcome).toMatchObject({ status: "blocked", reason: "recovery_exhausted" });
+        expect(f.service.getExecution(f.task.id)?.blocked).toMatchObject({ reason: "recovery_exhausted", recoveryCount: failures });
+        expect(wait).not.toHaveBeenCalled();
+        expect(f.service.getReceipt(f.task.id)).toBeNull();
+      } else {
+        expect(outcome?.status).toBe("completed");
+        expect(wait).toHaveBeenCalledOnce();
+        expect(f.service.getReceipt(f.task.id)?.payload).toEqual(result);
+      }
+      expect(p.sends()).toBe(0);
+    } finally { await f.close(); }
+  }
+}, 20_000);

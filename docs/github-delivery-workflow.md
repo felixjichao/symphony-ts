@@ -339,3 +339,37 @@ by an observed merge commit for the same PR, HEAD and branches. A handoff's
 `reportDestination` records whether its receipt lives on the Issue or PR;
 retaining a business PR target does not change the destination of an explicit
 halt report. Recovery queries that same comment collection before posting.
+
+### 已确认合并冲突的有界修复（#186）
+
+绿 CI 与 exact-HEAD approve 后，若合并前权威事实仍为 owned、OPEN、非 draft、HEAD 未变的 `CONFLICTING`，Delivery 使用既有修复次数和绝对 deadline 自动修复。`UNKNOWN`、读取/解析失败、所有权或 HEAD 不符、review 证据失败以及未知 merge outcome 不进入此路径。
+
+修复前必须确认工作区分支/origin 身份，且无已有 dirty/index 改动、merge/rebase/cherry-pick 等进行态；不清理或丢弃现有工作。旧 landing intent 只有在同一 owned PR 的权威 OPEN、`mergeCommit=null` 事实下才能解除。新 landing intent 延迟至真正发起 merge 前写入。
+
+`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先独立读取 repository/base 的真实远端分支引用，精确 fetch 并检查祖先关系；可修复目标才扣除 `spentRepairs` 并 checkpoint，执行前再核验远端目标和本地 HEAD，正常 merge 同一 base SHA。内置 `codex exec --sandbox workspace-write -`（或注入的 `repairFn`）在原工作区解决冲突；CLI 与 continuity host 共用此默认路径，不依赖 profile 的 CI/review `--repair-cmd`，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。Codex prompt 由 stdin 传入；执行器接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）。执行器缺失或未配置本地验证时明确交接。
+
+本地验证与冲突检查通过后，Delivery 创建精确两父 merge commit；再次验证本地身份及远端所有权/HEAD，再普通 push，绝不 force push。base 在修复中前移不会改变已固定的 merge parents；重读最新 GitHub facts 后，新 HEAD 必须重新通过 CI、独立 exact-HEAD review 和原有 merge fence。若再次确认冲突，使用剩余预算再修复。
+
+修复进行中不移除 `symphony-ready`；continuity 展示 repair 与原生 authority 阻塞事实。重启共享原 filesystem/subprocess authority，保留次数和 deadline；有 committed 回执且远端仍为 expected HEAD 时可继续一次正常 push，pushing/pushed 回执只有远端确认新 commit 才能收敛。无完成回执的执行器、未确认 push、dirty 状态或不确定副作用不会重放，保留工作并给出具体交接原因。只有终止时执行原暂停/标签移除/报告补偿流程，Issue 不会因修复失败而关闭。
+
+验证入口：agent 的 `merge-conflict-repair.test.ts` 使用临时真实 Git/共享 bare origin，覆盖冲突到新 CI/review/合入、base 二次前移、多 owned PR、负面门禁和重启回执；CLI 的 delivery storage/continuity 测试覆盖持久化与互斥展示。真实 GitHub/完整 gate 仍由 operator-owned host 验证。
+
+### 真实 base tip、no-op 与历史 merging 恢复（#188）
+
+PR `baseRefOid` 与本地 `origin/<base>` 均不是修复目标的权威来源。tracker 原子读取 `repos/{repo}/git/ref/heads/{base}`，验证完整 ref、commit 类型与 SHA；domain 定义事实/reader，CLI 和 continuity host 用同一 fenced runner 注入 agent。远端引用不可读、响应异常、repository/branch 身份不符或 HEAD 漂移时不开始错误目标 merge。固定的 `baseSha` 用于 fetch、MERGE_HEAD、双亲验证及 push 回执；push 前后独立重读分支，回执的 `current_base` 可与 pinned base 不同。base 再前移不修改旧提交父节点，新 HEAD 重新通过本地验证、CI 和 exact-HEAD Review 后才可 fenced merge。
+
+预算预留前最多观察两组 PR/ref 事实并精确 fetch。若真实 base 已包含于当前 HEAD，但 GitHub 仍宣告冲突，以 `merge_conflict_already_contained` 交接，保留 HEAD/index/worktree、不制造提交、不扣修复次数。若事实变化则明确分类，不无限轮询。执行中的 clean merge、真实冲突、非冲突 git failure、no-op、目标漂移分别处理；实际 no-op 不读取不存在的 MERGE_HEAD，也不判修复成功。已预留后异常退出的次数仍保留。
+
+历史 `phase=reserved/merging`（包括 #171 的旧 base 祖先/no MERGE_HEAD）默认只读核验并交接，不因普通 `--resume` 重放。operator 必须先确认旧宿主和所有 Git/Codex/验证子进程已停止，并核验 native filesystem authority 没有 active owner 或未确认副作用；authority 不确定仍阻塞，以下授权不会移除/改写锁。读取原 operationId、attempt、expectedHeadSha，确认本地与 PR HEAD 同为 expectedHead、index/worktree 干净、无 merge/rebase/cherry-pick 等进行态、owned OPEN PR 无 merge outcome 后，才可在 operator host 显式运行：
+
+```sh
+symphony delivery-skill run --repo felixjichao/symphony-ts --issue 171 \
+  --workspace-key GH-171 --head symphony/GH-171 --base main --cwd /path/to/GH-171 \
+  --resume --recover-conflict-operation 2f4f656b-b46f-489b-b2aa-f57dbd6acca0 \
+  --recover-conflict-attempt 1 --expected-head 9d8c5c808cbbfeaadff18efebab49a2c48317a54 \
+  --confirm-executor-stopped --validate "npm run gate" --opt-in
+```
+
+示例 fence 来自 #188 的历史证据，执行前必须重读实际记录；bridge/review、required checks 等生产参数沿用原授权配置。该原生授权只把**无本地或远端效果**的旧记录写为 `reconciled`，返回 CI 观察；不执行旧 merge、不 abort/reset、不改预算/deadline，也不替新 HEAD 授权 approve。下一次真实修复使用新 operationId 和剩余次数。已过期 deadline/耗尽预算仍阻塞，本命令不延长或重置它们。`executing/validating/committing`、dirty/index、已有 Git 操作、未知远端结果不适用这个自动恢复原语，保持原工作并人工核验。`committed/pushing/pushed` 仍遵循原精确提交/远端回执收敛规则。
+
+隔离 Git 证据与验证范围见 [#188 conformance](conformance.md#github-delivery-authoritative-base-and-no-op-recovery-188)；此变更不对生产 #171、runtime、Decision Store 或历史预算执行任何操作。

@@ -243,7 +243,7 @@ This is a provider-neutral extension next to §4, not an additional official SPE
 | Session execution mutual exclusion & lease-fenced binding updates | `packages/decision/src/service.test.ts`: DecisionService claim mutual exclusion and lease fencing |
 | ChatGPT Web adapter & centralized DOM probes (composer, send, stop, streaming wait, conversation URL) | `apps/chatgpt-web/test/probes.test.ts`: DOM Probes; `apps/chatgpt-web/test/adapter.test.ts`: ChatGptWebAdapter, asynchronous send-button readiness; Chinese send/stop labels and current assistant markdown/code surfaces. NEST-105 real smoke verified injection/GM/claim/bootstrap send/response, accepted real dogfood #15 Plan `ready` receipt and conversation binding. Completed-response reload and active streaming reload passed after result-bearing completion fix: real dogfood #15 revision 3 accepted `ready` receipt, user message count unchanged at four (manual Start after navigation/reload; automated same-tab recovery hardened via `sessionStorage` under NEST-121). Client temporary route isolation (`isTemporaryConversationRoute`, `extractFormalConversationIdFromUrl`) verified under NEST-120 in `test/probes.test.ts` and `test/review-round13.test.ts`. Authentic access-denied and conversation-not-found pattern detection (`CONVERSATION_NOT_FOUND_PATTERNS`, taking precedence over background shell composer elements) and execution pre-flight / send-button wait route continuity checks verified in `test/scenario-a-resume.test.ts`. |
 | Prompt templates (bootstrap, plan, review SHA binding, continuation header, handoff summary) | `apps/chatgpt-web/test/prompts.test.ts`: Prompt Templates and Contracts; autonomous host landing authorization, product-intent-only human review, technical repair versus typed `evidence_unavailable` execution failure (§4 Decision extension, §17/§18); `test/extractor.test.ts` fences failure identity/HEAD; `test/fixture-e2e.test.ts` covers adapter → driver → Bridge failure receipt → fresh same-HEAD approval; `packages/agent/src/delivery/delivery-skill-runner.test.ts` verifies failed evidence review stops with zero code repairs/budget spent |
-| Decision tab driver, loopback transport (GM/Fetch), and navigation checkpoint recovery | `apps/chatgpt-web/test/transport.test.ts`, `apps/chatgpt-web/test/checkpoint.test.ts`, `apps/chatgpt-web/test/driver.test.ts`, `apps/chatgpt-web/test/userscript-entry.test.ts`, `apps/chatgpt-web/test/review-regressions.test.ts`, `apps/chatgpt-web/test/review-round13.test.ts`, `apps/chatgpt-web/test/review125-negative.test.ts`, `apps/chatgpt-web/test/review125-root-negative.test.ts`, `apps/chatgpt-web/test/scenario-a-resume.test.ts` (navigating checkpoint failure convergence across reloads, unrecoverable session rebind, temporary/root route negative protection, attempt budget and heartbeat lease preservation across steps without premature checkpoint demotion to claimed, resume stabilization and route departure/timeout rebind classification, and execution route continuity verification) |
+| Decision tab driver, loopback transport (GM/Fetch), and navigation checkpoint recovery | `apps/chatgpt-web/test/transport.test.ts`, `apps/chatgpt-web/test/checkpoint.test.ts`, `apps/chatgpt-web/test/driver.test.ts`, `apps/chatgpt-web/test/userscript-entry.test.ts`, `apps/chatgpt-web/test/review-regressions.test.ts`, `apps/chatgpt-web/test/review-round13.test.ts`, `apps/chatgpt-web/test/review125-negative.test.ts`, `apps/chatgpt-web/test/review125-root-negative.test.ts`, `apps/chatgpt-web/test/scenario-a-resume.test.ts` (navigating checkpoint failure convergence across reloads, unrecoverable session rebind, temporary/root route negative protection, attempt budget and heartbeat lease preservation across steps without premature checkpoint demotion to claimed, resume stabilization and route departure/timeout rebind classification, and execution route continuity verification); #184 heartbeat interruption/admission and sent-attempt retention regressions in `review-followup-regressions.test.ts` |
 | Multi-turn fixture (Plan → Review SHA-A → Review SHA-B) & broken-binding rollover (N → N+1) | `apps/chatgpt-web/test/fixture-e2e.test.ts`: Decision Multi-Turn Fixture and Rollover (E2E) |
 | SHA-bound review gate before auto-merge (`DeliveryReviewGate`, `DecisionReviewGate`, polling, HEAD invalidation, `landPr` verification) | `packages/domain/src/delivery.test.ts`, `packages/decision/src/review-gate.test.ts`, `packages/tracker/src/github/delivery/delivery-service.test.ts`, `packages/agent/src/delivery/delivery-skill-runner.test.ts`, `apps/cli/src/delivery-skill-cli.test.ts`, `apps/cli/src/delivery-cli.test.ts` |
 | Fixed base-object recovery; delivery consumes completed needs_human / changes_requested after store and HTTP bridge restart, with no merge | `apps/cli/src/delivery-review-recovery.test.ts` (GitHub/git and coding-agent effects are fixtures; real durable store, HTTP bridge and delivery runner) |
@@ -628,6 +628,57 @@ Retained JSON, asset hashes and desktop/390px rendered evidence: [browser ledger
 | No domain derivation or extra browser capabilities | Fingerprint registration; primitive lower-level-fact negative cases; existing type, AST and production-bundle tests | Guard restrictions retained; no new source dependencies |
 
 Sandbox executes Dashboard tests/build and root typecheck. The operator host owns full gate, CI, exact-HEAD review and no-land delivery after the coding session. See [primitive evidence ledger](evidence/dashboard-v2-primitives/README.md) for browser limits and reproduction.
+
+
+### Web heartbeat interruptions (#184; SPEC §4 Decision extension / §13 adjacent)
+
+Driver/coordinator/HTTP Bridge regressions in `apps/chatgpt-web/test/review-followup-regressions.test.ts`
+cover active heartbeat denial, Bridge authentication failure, manual Stop, retained
+sent-checkpoint recovery and receipt acceptance without another Send. CLI admission
+tests distinguish unavailable GitHub observations (503) from changed/closed targets
+(409); existing task/revision/claim/binding/HEAD and receipt fences remain required.
+`apps/chatgpt-web/test/diagnostics.test.ts` checks persisted interruption metadata
+and credential/response redaction. See the [contract note](../notes/accepted/architecture/2026-10-26-web-heartbeat-interruption.md).
+These isolated regressions do not claim a fresh production/browser fault run.
+
+PR #185 review follow-up: the same Driver instance is tested across active heartbeat
+401/403, retained sent checkpoint, repeated polling failures and restored authority.
+Recovery below budget resumes without Send; exhausted recovery records a native
+`recovery_exhausted` block instead of rethrowing historical authentication errors.
+
+## GitHub Delivery merge conflict repair (#186)
+
+固定 baseline `be10a1b79df723d6d7612b5651c8522704dafb2e` 的 §8/§14（协调/恢复）、§9（workspace）、§17/§18（验证/运行）邻接扩展，不新增 Core SPEC 强制项。
+
+| 能力 | 实现与验收证据 |
+|---|---|
+| 仅 confirmed owned OPEN 非 draft exact-HEAD CONFLICTING 可修复 | agent `delivery-skill-runner.ts` + `merge-conflict-repair.ts`；`merge-conflict-repair.test.ts` 的 UNKNOWN、读取/解析、ownership、HEAD drift、review evidence 与未知 merge outcome 负例 |
+| 同 workspace coding-agent 生产默认接线 | CLI / continuity host 共用 runner 的内置 `codex exec --sandbox workspace-write -`，不依赖 CI repair command；真实 shell + 替身 Codex 可执行文件回归验证 cwd、argv、stdin、修复与新 HEAD review，沿用预算/authority/deadline |
+| 修复进程 secret 隔离（§10 邻接） | agent 回归断言 authority wrapper 转发排除名单；CLI `git-gh-runner.test.ts` 通过生产 runner + 真实 shell/Codex 替身验证 GitHub/profile secret（含显式覆盖）不可见、Codex 凭据保留及 profile reload |
+| 精确 base 正常 merge，保留两边实现，正常 push | 同一测试使用临时真实 Git/共享 bare origin，断言两父 commit、base/feature 文件、无 force；覆盖并行 owned PR 和修复中 base 再次前移 |
+| 新 HEAD 重新 CI → 独立 exact-HEAD review → fenced merge | 完整 green + approve → base 前移 → repair → 新 CI/review → `--match-head-commit` merge 回归；tracker landPr 拒绝冲突及 host fence 保持原契约 |
+| 既有预算、deadline、durable operation 与不重放 | domain `delivery-recovery.test.ts`；agent committed/pushing/pushed 收敛、未完成 executor 各 phase 拒绝重放、后续 CI/review 新提交不误恢复旧回执；CLI storage admission、continuity authority 测试 |
+| 工作区保护与终止交接 | dirty/staged、merge/rebase 进行态保留；失败、无进展、预算/时间耗尽时明确 blocker，保留 Issue Open；修复进行中无 premature halt/标签移除 |
+
+设计：[Agent Note](../notes/accepted/architecture/2026-10-27-delivery-merge-conflict-repair.md)。测试中的 Git/工作区与 recovery entry 为真实临时资源；GitHub facts、coding executor、review verdict 为受控 fixture，不代表真实 GitHub/browser 验收。完整 gate 与真实交付由 operator-owned host after_run 执行。
+
+沙箱验证限制：workspace 全包测试中的既有 repository-bootstrap / git-supervisor 进程组检查因 macOS 沙箱禁止 `ps`，返回 `git_command_failed`（无法确认已退出进程组）；未修改该安全检查。新增 Git 状态检查及可运行的 workspace 定向测试在沙箱验证，完整进程监督测试留给 host gate。
+
+## GitHub Delivery authoritative base and no-op recovery (#188)
+
+GitHub Delivery / Execution Continuity 扩展，对应固定 baseline `be10a1b79df723d6d7612b5651c8522704dafb2e` 的 §8/§14、§9、§17/§18 邻接能力；不是新增 Core SPEC 强制项。
+
+| 能力 | 实现与隔离验收证据 |
+|---|---|
+| 真实远端分支引用，拒绝错误/不可读事实 | domain `DeliveryRemoteBranchFact/Reader`；tracker `readRemoteBranch` 与 `remote-branch.test.ts` 验证 ref/type/SHA、失败响应、slash branch；CLI `delivery-remote-branch.test.ts` 验证同 runner/cwd 注入 |
+| #171 生产形状复现与修复 | agent `merge-conflict-repair.test.ts` 的 `#171 shape` 使用真实临时 Git + bare origin：PR baseRefOid 和本地 origin/main 均为 HEAD 的直接父节点，远端 main 已前移且 PR CONFLICTING；断言选择真实 tip、双亲提交及新 HEAD review |
+| no-op 有界分类、不消耗预算、不制造成功 | 同文件：两次远端观察后 already-contained 交接，重复 resume 仍零预算；真实 no-op merge 无 MERGE_HEAD，不读取它、不提交/推送；clean merge 无需 coding executor 仍验证/Review；非冲突 git failure 单独分类 |
+| 目标漂移与 workspace 保护 | base/head branch、远端 reader repository/branch/SHA、local/remote HEAD drift 负例；预留与 merge 间 base 漂移不开始 merge；既有 dirty/staged、merge/rebase 保留 |
+| pinned receipt 与新目标分离 | 既有 base 二次前移回归继续断言旧/新双亲、不同 operation 与每个 HEAD 的 CI/review；push 前后读取真实远端 base，不以旧 approve 放行新 HEAD |
+| 历史 merging 原生精确恢复 | 真实 Git 回归覆盖无 MERGE_HEAD 的历史记录：默认不重放；精确 operationId/attempt/HEAD + stopped executor 授权仅退役干净无效果旧记录；旧 spentRepairs=1 保留，新修复=2；stale fence、dirty、进行中 merge、远端 HEAD 改变均拒绝 |
+| 重启与安全约束 | 原 reserved/executing/validating/committing 无授权不重放、committed/pushing/pushed 远端回执、budget/deadline 与 secret isolation 测试沿用；CLI storage/continuity 回归不改变 required-check/review/ownership/opt-in fence |
+
+测试为隔离资源，GitHub API、CI、review 与 coding executor 仍是 fixture；不声称已对生产 #171 执行恢复。[Agent Note](../notes/accepted/architecture/2026-10-27-authoritative-delivery-base.md) 记录跨包事实契约与替代方案，[恢复文档](github-delivery-workflow.md#真实-base-tipno-op-与历史-merging-恢复188) 给出原生精确授权路径。沙箱运行受影响包测试和根 typecheck；完整 `npm run gate` 与 GitHub 交付由 operator-owned host after_run 执行。
 
 ## §13 adjacent: Attention-first Overview (#171)
 

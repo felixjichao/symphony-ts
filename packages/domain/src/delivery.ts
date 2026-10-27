@@ -495,7 +495,20 @@ export interface LandingIntentStorage {
   write(intent: LandingIntent): Promise<void> | void;
 }
 
+/** GitHub Delivery extension, SPEC §8/§9/§14 adjacent. Receipts never authorize executor replay. */
+export interface DeliveryMergeConflictRepair {
+  readonly cause: "merge_conflict";
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly prNumber: number;
+  readonly expectedHeadSha: string;
+  readonly baseSha: string;
+  readonly phase: "reserved" | "merging" | "executing" | "validating" | "committing" | "committed" | "pushing" | "pushed" | "failed" | "reconciled";
+  readonly commitSha?: string | undefined;
+  readonly outcome?: string | undefined;
+}
 export interface PersistedDeliveryState {
+  readonly mergeConflictRepair?: DeliveryMergeConflictRepair | undefined;
   readonly continuation?: DeliveryContinuation | undefined;
   readonly landing?: LandingIntent | undefined;
   readonly repo: string;
@@ -607,4 +620,19 @@ export interface DeliverySkillResult {
   readonly reason: string;
   readonly handoffMarkdown?: string | undefined;
   readonly reviewTaskId?: string | null | undefined;
+}
+
+/** Authoritative repository branch fact; PR baseRefOid and local refs are not authority. */
+export interface DeliveryRemoteBranchFact {
+  readonly repository: string;
+  readonly branch: string;
+  readonly sha: string;
+}
+export type DeliveryRemoteBranchReader = (repository: string, branch: string) => Promise<DeliveryRemoteBranchFact>;
+/** Native operator authorization; never inferred from --resume or an old approval. */
+export interface DeliveryConflictRecoveryAuthorization {
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly expectedHeadSha: string;
+  readonly executorStopped: true;
 }

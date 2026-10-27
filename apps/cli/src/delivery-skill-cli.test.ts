@@ -1241,6 +1241,22 @@ describe("delivery-skill CLI", () => {
       expect(read).toEqual(state);
     });
 
+    it("round-trips conflict repair receipts and refuses uncharged or incomplete operations", () => {
+      const storage = new FileDeliveryStateStorage(path.join(createTempDir(), "repair.json"));
+      const operation = { cause: "merge_conflict" as const, operationId: "repair-1", attempt: 1, prNumber: 187,
+        expectedHeadSha: "a".repeat(40), baseSha: "b".repeat(40), phase: "committed" as const, commitSha: "c".repeat(40) };
+      const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 186, workspaceKey: "GH-186",
+        spentRepairs: 1, spentWaitSeconds: 10, deadlineTimestampMs: 123_000, isPaused: false, lastUpdated: "now", mergeConflictRepair: operation };
+      storage.writeState(state);
+      expect(storage.readState()).toEqual(state);
+      storage.writeState({ ...state, spentRepairs: 0 });
+      expect(() => storage.readState()).toThrow("recovery step schema");
+      storage.writeState({ ...state, mergeConflictRepair: { ...operation, commitSha: undefined } });
+      expect(() => storage.readState()).toThrow("recovery step schema");
+      storage.writeState({ ...state, mergeConflictRepair: undefined });
+      expect(storage.readState()?.mergeConflictRepair).toBeUndefined();
+    });
+
     it("throws on corrupted JSON or invalid schema", () => {
       const tempDir = createTempDir();
       const storageFile = path.join(tempDir, "corrupted.json");
