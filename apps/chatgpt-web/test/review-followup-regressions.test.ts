@@ -537,3 +537,55 @@ it("survives an unavailable GitHub observation during a real response wait with 
     expect(cp.get()).toBeNull();
   } finally { await f.close(); }
 }, 15_000);
+
+it.each([401, 403])("same Driver recovers current authority after active heartbeat %s and polling failures", async status => {
+  for (const exhausted of [false, true]) {
+    const f = await realChain(995);
+    try {
+      const cp = new MemoryCheckpointStore();
+      const p = page("https://chatgpt.com/c/conv-1");
+      const adapter = new ChatGptWebAdapter({ doc: p.doc as unknown as Document, win: p.win as unknown as Window });
+      let waiting = false;
+      let mode: "active" | "offline" | "recovered" = "active";
+      vi.spyOn(adapter, "executeTask").mockImplementation(async (_task, options) => {
+        cp.set({ ...cp.get()!, step: "waiting_response", baselineCount: 0 });
+        waiting = true;
+        return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort", () =>
+          reject(new Error("Aborted while waiting")), { once: true }));
+      });
+      const result: DecisionResult = { schemaVersion: 1, taskId: f.task.id, sessionId: f.session.id,
+        kind: "plan", revision: 1, verdict: "ready", createdAtMs: Date.now(),
+        content: { plan: "p", acceptanceCriteria: [], risks: [], clarifications: [] } };
+      const wait = vi.spyOn(adapter, "waitForExistingResponse").mockResolvedValue({ result });
+      const inner = new FetchBridgeTransport({ baseUrl: f.baseUrl });
+      const transport: BridgeTransport = { baseUrl: f.baseUrl, authToken: undefined,
+        request: async <T>(method: string, url: string, body?: unknown): Promise<T> => {
+          if (mode === "offline" || mode === "active" && waiting && url.endsWith("/heartbeat")) {
+            throw new BridgeHttpError("Unauthorized", "unauthorized", status);
+          }
+          return inner.request<T>(method, url, body);
+        } };
+      const driver = new DecisionTabDriver({ transport, checkpointStore: cp, adapter, heartbeatIntervalMs: 5 });
+      await expect(driver.executeClaimedTask(f.task, f.session, f.claim.lease,
+        { ...context, workItem: f.session.root })).rejects.toMatchObject({ reason: "heartbeat_denied", status });
+      expect(cp.get()?.step).toBe("waiting_response");
+      mode = "offline";
+      const failures = exhausted ? DECISION_MAX_TRANSPORT_RECOVERIES : 1;
+      for (let i = 0; i < failures; i++) await expect(driver.runOnce()).rejects.toMatchObject({ status });
+      expect(cp.get()?.recoveryFailures).toBe(failures);
+      mode = "recovered";
+      const outcome = await driver.runOnce();
+      if (exhausted) {
+        expect(outcome).toMatchObject({ status: "blocked", reason: "recovery_exhausted" });
+        expect(f.service.getExecution(f.task.id)?.blocked).toMatchObject({ reason: "recovery_exhausted", recoveryCount: failures });
+        expect(wait).not.toHaveBeenCalled();
+        expect(f.service.getReceipt(f.task.id)).toBeNull();
+      } else {
+        expect(outcome?.status).toBe("completed");
+        expect(wait).toHaveBeenCalledOnce();
+        expect(f.service.getReceipt(f.task.id)?.payload).toEqual(result);
+      }
+      expect(p.sends()).toBe(0);
+    } finally { await f.close(); }
+  }
+}, 20_000);

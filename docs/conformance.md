@@ -640,3 +640,8 @@ tests distinguish unavailable GitHub observations (503) from changed/closed targ
 `apps/chatgpt-web/test/diagnostics.test.ts` checks persisted interruption metadata
 and credential/response redaction. See the [contract note](../notes/accepted/architecture/2026-10-26-web-heartbeat-interruption.md).
 These isolated regressions do not claim a fresh production/browser fault run.
+
+PR #185 review follow-up: the same Driver instance is tested across active heartbeat
+401/403, retained sent checkpoint, repeated polling failures and restored authority.
+Recovery below budget resumes without Send; exhausted recovery records a native
+`recovery_exhausted` block instead of rethrowing historical authentication errors.

@@ -13,7 +13,10 @@ failure remains unknown; a GitHub outage is not established by this reproduction
 
 The coordinator propagates an aborted signal's reason before recording adapter
 failures and checks cancellation before result submission. Driver heartbeats carry
-typed interruption reasons; denial and Stop preserve the sent checkpoint. Recovery
+typed interruption reasons; denial and Stop preserve the sent checkpoint.
+Authentication errors are scoped to the active abort signal, not retained as a
+Driver-wide failure latch: later recovery and budget exhaustion use current Bridge
+authority, including on the same Driver instance. Recovery
 heartbeat failures retain the checkpoint and return the technical error without
 starting page actions or manufacturing a human verdict. Subsequent polling must
 re-observe task, claim, binding, lease, current target and receipts through the

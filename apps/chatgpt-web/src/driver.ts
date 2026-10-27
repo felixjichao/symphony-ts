@@ -112,7 +112,6 @@ export class DecisionTabDriver implements DecisionTaskController {
   private activeSession: DecisionSession | null = null;
   private activeLease: DecisionLease | null = null;
   private activeInterruption: DriverInterruption | null = null;
-  private heartbeatAuthError: BridgeHttpError | null = null;
 
   constructor(options: DecisionTabDriverOptions) {
     this.transport = options.transport;
@@ -266,7 +265,9 @@ export class DecisionTabDriver implements DecisionTaskController {
       retainCheckpoint?: boolean | undefined;
     } = {}
   ): Promise<{ receipt: SubmissionReceipt; failure: DecisionTaskFailure; superseded: boolean }> {
-    if (this.heartbeatAuthError) throw this.heartbeatAuthError;
+    // Cancellation fences only the active attempt; historical auth failures must not
+    // override fresh Bridge authority during a later recovery on this Driver.
+    this.activeAbortController?.signal.throwIfAborted();
     const details = params.details && typeof params.details === "object" ? params.details as Record<string, unknown> : {};
     const mapping = mapDecisionAdapterFailure({ code: params.error as DecisionAdapterErrorCode,
       message: params.error, retryable: params.retryable,
@@ -610,7 +611,6 @@ export class DecisionTabDriver implements DecisionTaskController {
 
   startHeartbeat(task: DecisionTask, lease: DecisionLease, onExpired?: () => void): void {
     this.stopHeartbeat();
-    this.heartbeatAuthError = null;
     this.activeInterruption = null;
     this.heartbeatTimer = setInterval(async () => {
       if (this.shouldRun && !this.shouldRun()) { this.stop(); return; }
@@ -642,7 +642,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       } catch (hbErr: unknown) {
         if (hbErr instanceof BridgeHttpError && (hbErr.status === 401 || hbErr.status === 403)) {
           this.recordInterruption(task, new DriverInterruption("heartbeat_denied", hbErr.status));
-          this.heartbeatAuthError = hbErr;
           this.stopHeartbeat();
           if (onExpired) onExpired();
           this.onError?.(hbErr);
