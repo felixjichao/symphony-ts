@@ -89,9 +89,10 @@ function fixture(issueNumber = 186, sharedOrigin?: string, launchCodex = false) 
       if (args[0] === "remote" && args[1] === "get-url") return text("https://github.com/owner/repo.git");
       return native(args, at);
     },
-    async exec(command, _at, _timeout, env) {
+    async exec(command, _at, _timeout, env, excludeEnvNames) {
       calls.push(["exec", command]);
       if (command === "validate") return failValidation ? { stdout: "", stderr: "validation failure", exitCode: 1 } : text("");
+      expect(excludeEnvNames).toEqual(["GITHUB_TOKEN", "GH_TOKEN"]);
       expect(command).toContain("codex exec --sandbox workspace-write -");
       expect(_at).toBe(cwd);
       expect(_timeout).toBeGreaterThan(0);

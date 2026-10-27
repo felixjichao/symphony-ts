@@ -7,7 +7,9 @@ export interface DeliverySubprocessResult {
 export interface DeliveryGitGhRunner {
   git(args: readonly string[], cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult>;
   gh(args: readonly string[], cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult>;
-  exec(command: string, cwd: string, timeoutMs?: number, env?: Record<string, string>): Promise<DeliverySubprocessResult>;
+  /** Explicit exclusions select the coding-agent boundary: remove these and host-configured
+   * secret names after env overrides. Omission retains the trusted host environment. */
+  exec(command: string, cwd: string, timeoutMs?: number, env?: Record<string, string>, excludeEnvNames?: readonly string[]): Promise<DeliverySubprocessResult>;
 }
 
 const TOKEN_PATTERNS = [

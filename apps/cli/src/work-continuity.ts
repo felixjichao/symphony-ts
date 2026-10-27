@@ -30,7 +30,7 @@ export function createHostWorkContinuity(options: {
 }) {
   const { controller, authority, planningGate, resolveSession, now } = options;
   const identities = new Map<string, { key: WorkKey; issueId: string | null; workspace: string | null }>();
-  const runner = options.runner ?? new DefaultDeliveryGitGhRunner();
+  const runner = options.runner ?? new DefaultDeliveryGitGhRunner(() => controller.current.excludeEnvNames);
   const add = (key: WorkKey, issueId: string | null, workspace: string | null) => {
     const id = decisionSessionId(key);
     const old = identities.get(id);

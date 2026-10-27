@@ -22,6 +22,8 @@ function killProcessGroup(pid: number | undefined): void {
 }
 
 export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
+  constructor(private readonly codingAgentExcludeEnvNames: () => readonly string[] = () => []) {}
+
   async git(args: readonly string[], cwd: string, timeoutMs = 60_000): Promise<DeliverySubprocessResult> {
     return this.runProcess("git", args, cwd, timeoutMs);
   }
@@ -35,8 +37,10 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
     cwd: string,
     timeoutMs = 60_000,
     env?: Record<string, string>,
+    excludeEnvNames?: readonly string[],
   ): Promise<DeliverySubprocessResult> {
-    return this.runProcess("/bin/sh", ["-c", command], cwd, timeoutMs, env);
+    return this.runProcess("/bin/sh", ["-c", command], cwd, timeoutMs, env,
+      excludeEnvNames === undefined ? [] : [...this.codingAgentExcludeEnvNames(), ...excludeEnvNames]);
   }
 
   private runProcess(
@@ -45,8 +49,12 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
     cwd: string,
     timeoutMs: number,
     extraEnv?: Record<string, string>,
+    excludeEnvNames: readonly string[] = [],
   ): Promise<DeliverySubprocessResult> {
     return new Promise((resolve, reject) => {
+      // Filter after overrides so an explicit env cannot reintroduce host secrets.
+      const env = { ...process.env, ...extraEnv };
+      for (const name of excludeEnvNames) delete env[name];
       const settleSubprocess = beginDeliverySubprocess();
       let child: ReturnType<typeof spawn>;
       try {
@@ -54,7 +62,7 @@ export class DefaultDeliveryGitGhRunner implements DeliveryGitGhRunner {
           cwd,
           detached: true,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, ...extraEnv },
+          env,
         });
       } catch (err) {
         settleSubprocess();

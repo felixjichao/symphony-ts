@@ -378,7 +378,7 @@ async function runDeliverySkillLocked(
   const runner: DeliveryGitGhRunner = {
     git: (args, cwd, timeout) => { guard(); return native.git(args, cwd, timeout); },
     gh: (args, cwd, timeout) => { guard(); return native.gh(args, cwd, timeout); },
-    exec: (command, cwd, timeout, env) => { guard(); return native.exec(command, cwd, timeout, env); },
+    exec: (command, cwd, timeout, env, excludeEnvNames) => { guard(); return native.exec(command, cwd, timeout, env, excludeEnvNames); },
   };
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
