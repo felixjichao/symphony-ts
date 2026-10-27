@@ -219,6 +219,25 @@ it("derives current-HEAD CI waits, review execution, accepted results, repair an
   try {
     let result = (await host.workContinuity.reconcile())[0]!;
     expect(result.diagnosis?.status).toBe("external_wait");
+    const workspace = path.join(dir, "workspaces", "GH-42");
+    const stateFile = path.join(workspace, ".symphony", "delivery-state.json");
+    const storage = new FileDeliveryStateStorage(stateFile);
+    storage.writeState({ repo: "owner/repo", issueNumber: 42, workspaceKey: "GH-42", spentRepairs: 1,
+      spentWaitSeconds: 10, deadlineTimestampMs: 100_000, isPaused: false, lastUpdated: "now",
+      mergeConflictRepair: { cause: "merge_conflict", operationId: "repair-42", attempt: 1, prNumber: 7,
+        expectedHeadSha: head, baseSha: "b".repeat(40), phase: "executing" } });
+    let release!: () => void;
+    const held = withDeliveryAuthority(workspace, () => new Promise<void>(resolve => { release = resolve; }));
+    try {
+      for (let i = 0; i < 2; i++) {
+        const busy = (await host.workContinuity.reconcile())[0]!;
+        expect(busy.diagnosis?.status).toBe("blocked");
+        expect(busy.diagnosis?.next.description).toContain("repair:");
+        expect(storage.readState()?.spentRepairs).toBe(1);
+        expect(storage.readState()?.isPaused).toBe(false);
+      }
+    } finally { release(); await held; }
+    await fs.rm(stateFile);
     remote = { ...remote, ci: { headSha: head, status: "success" } };
     expect((await host.workContinuity.reconcile())[0]?.diagnosis?.next.authority).toEqual({ kind: "internal", authority: "decision" });
     const review = await service.createReviewTask(session.id, { target: { repository: "owner/repo", prNumber: 7, headSha: head } });

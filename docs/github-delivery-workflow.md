@@ -339,3 +339,17 @@ by an observed merge commit for the same PR, HEAD and branches. A handoff's
 `reportDestination` records whether its receipt lives on the Issue or PR;
 retaining a business PR target does not change the destination of an explicit
 halt report. Recovery queries that same comment collection before posting.
+
+### 已确认合并冲突的有界修复（#186）
+
+绿 CI 与 exact-HEAD approve 后，若合并前权威事实仍为 owned、OPEN、非 draft、HEAD 未变的 `CONFLICTING`，Delivery 使用既有修复次数和绝对 deadline 自动修复。`UNKNOWN`、读取/解析失败、所有权或 HEAD 不符、review 证据失败以及未知 merge outcome 不进入此路径。
+
+修复前必须确认工作区分支/origin 身份，且无已有 dirty/index 改动、merge/rebase/cherry-pick 等进行态；不清理或丢弃现有工作。旧 landing intent 只有在同一 owned PR 的权威 OPEN、`mergeCommit=null` 事实下才能解除。新 landing intent 延迟至真正发起 merge 前写入。
+
+`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先扣除 `spentRepairs` 并 checkpoint，再 fetch/正常 merge 精确 base SHA。既有 `--repair-cmd` 或注入的 repair executor 在原工作区解决冲突，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。命令接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）；兼容诊断入口同时通过 `SYMPHONY_CI_FAILURE_DIAGNOSTICS` / `SYMPHONY_REVIEW_FINDINGS` 提供同一上下文。执行器缺失或未配置本地验证时明确交接。
+
+本地验证与冲突检查通过后，Delivery 创建精确两父 merge commit；再次验证本地身份及远端所有权/HEAD，再普通 push，绝不 force push。base 在修复中前移不会改变已固定的 merge parents；重读最新 GitHub facts 后，新 HEAD 必须重新通过 CI、独立 exact-HEAD review 和原有 merge fence。若再次确认冲突，使用剩余预算再修复。
+
+修复进行中不移除 `symphony-ready`；continuity 展示 repair 与原生 authority 阻塞事实。重启共享原 filesystem/subprocess authority，保留次数和 deadline；有 committed 回执且远端仍为 expected HEAD 时可继续一次正常 push，pushing/pushed 回执只有远端确认新 commit 才能收敛。无完成回执的执行器、未确认 push、dirty 状态或不确定副作用不会重放，保留工作并给出具体交接原因。只有终止时执行原暂停/标签移除/报告补偿流程，Issue 不会因修复失败而关闭。
+
+验证入口：agent 的 `merge-conflict-repair.test.ts` 使用临时真实 Git/共享 bare origin，覆盖冲突到新 CI/review/合入、base 二次前移、多 owned PR、负面门禁和重启回执；CLI 的 delivery storage/continuity 测试覆盖持久化与互斥展示。真实 GitHub/完整 gate 仍由 operator-owned host 验证。

@@ -122,6 +122,10 @@ export function createHostWorkContinuity(options: {
           blocked: review?.verdict === "needs_human" ? "review_requires_human" : facts.blocked };
       }
     }
+    if (!delivery?.isPaused && delivery?.mergeConflictRepair
+      && delivery.mergeConflictRepair.phase !== "pushed" && !runtime && !task && github?.pullRequest?.state === "open") {
+      facts = { ...facts, stage: "repair", externalWait: null };
+    }
     if (delivery?.landing?.phase === "intent" && github?.pullRequest
       && (github.pullRequest.headSha !== delivery.landing.headSha || github.pullRequest.number !== delivery.landing.prNumber)) {
       facts = { ...facts, blocked: "landing_target_superseded: explicit authorization for current HEAD required" };
@@ -152,7 +156,8 @@ export function createHostWorkContinuity(options: {
       }
     }
     const lockBlock = deliveryAuthorityBlock(path.join(workspace, ".symphony", "delivery-authority.lock"));
-    if (lockBlock) facts = { ...facts, stage: "delivery", blocked: lockBlock };
+    if (lockBlock) facts = { ...facts, stage: delivery?.mergeConflictRepair && delivery.mergeConflictRepair.phase !== "pushed"
+      && !delivery.isPaused ? "repair" : "delivery", blocked: lockBlock };
     const latestDelivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
     if (JSON.stringify(latestDelivery) !== JSON.stringify(delivery)) {
       facts = { ...facts, available: false, unavailableSources: [...facts.unavailableSources, "delivery_changed_during_observation"] };
