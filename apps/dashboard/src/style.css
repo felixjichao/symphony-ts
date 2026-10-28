@@ -85,3 +85,9 @@ a:hover, summary:hover { text-decoration: underline; }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; }
 #detail .detail-card { border: 1px solid var(--console-border); background: var(--console-surface); padding: 12px; min-width: 0; margin: 8px 0; }
 #detail .detail-card h4 { margin-top: 0; }
+
+/* #174: separate supplied evidence from diagnostic interpretations. */
+#detail .why-evidence { border-left: 3px solid #9bded0; background: var(--console-surface); margin: 8px 0; padding: 12px; }
+#detail .why-anomaly { border-left: 3px solid #ffb3a9; background: var(--console-surface); margin: 12px 0; padding: 12px; }
+#detail article h5, #detail article h4 { margin: 0; }
+#detail pre { overflow-x: auto; }

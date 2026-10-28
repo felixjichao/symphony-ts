@@ -50,6 +50,6 @@ export function workDetail(work: WorkProjection, snapshot: OperationalSnapshot):
   const executors = scopedExecutors(snapshot.executors, work.key);
   if (!executors.length) section.append(el("p", "未报告关联 Executor"));
   for (const item of executors) section.append(card(item.id, [["Role", item.role], ["Adapter", item.adapter], ["Status", item.status], ["Host", item.host], ["Heartbeat", timestamp(item.lastHeartbeatAt)]]));
-  section.append(el("h3", "Why · 投影证据（非完整规则执行轨迹）"), evidenceList(work.evidence, work.key, "projection"), anomalyCards(snapshot.anomalies, work.key));
+  section.append(el("h3", "Why · 投影证据（非完整规则执行轨迹）"), el("p", "以下来源事实和证据角色由只读模型提供，解释上方的派生结论。"), evidenceList(work.evidence, work.key, "projection"), anomalyCards(snapshot.anomalies, work.key));
   return section;
 }

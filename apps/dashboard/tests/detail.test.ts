@@ -61,6 +61,14 @@ describe("Work Detail diagnostic surface", () => {
     const node = workDetail(work({ ...a, evidence: [crumb(), crumb({ workKey: b, detail: "FOREIGN CRUMB" })] }), freeze(snapshot({ sources: [{ source: "decision", instance: "FOREIGN SOURCE", workKey: b, freshness: fresh }], anomalies: [{ code: "foreign", severity: "error", message: "FOREIGN ANOMALY", workKey: b, detectedAt: 1 }, { code: "global", severity: "warning", message: "GLOBAL ANOMALY", workKey: null, detectedAt: 1 }, { code: "local", severity: "error", message: "LOCAL ANOMALY", workKey: a.key, detectedAt: 1, evidence: [crumb({ workKey: b, detail: "FOREIGN NESTED" })] }], executors: [{ id: "FOREIGN EXECUTOR", role: "reviewer", adapter: "same-task", host: null, status: "busy", currentWork: b, lastHeartbeatAt: 1 }, { id: "LOCAL EXECUTOR", role: null, adapter: "same-task", host: null, status: "busy", currentWork: a.key, lastHeartbeatAt: 1 }] })));
     expect(node.textContent).not.toContain("FOREIGN"); expect(node.textContent).not.toContain("GLOBAL ANOMALY"); expect(node.textContent).toContain("证据归属不一致"); expect(node.textContent).toContain("LOCAL EXECUTOR"); expect(node.textContent).toContain("LOCAL ANOMALY");
   });
+  it("shows supplied evidence provenance before its keyboard disclosure", () => {
+    const node = workDetail(work({ evidence: [crumb({ instance: "decision-store", freshnessStatus: "stale", detail: "Review task observed" })] }), snapshot());
+    const card = node.querySelector(".why-evidence")!;
+    expect(card.textContent).toContain("decision-store");
+    expect(card.textContent).toContain("角色 supporting · freshness stale");
+    expect(card.querySelector("details")?.open).toBe(false);
+    expect(card.querySelector("summary")?.textContent).toBe("原始证据诊断");
+  });
   it("preserves legacy/empty evidence and groups without modifying inputs or inventing supporting roles", () => {
     const items = freeze([crumb({ role: undefined }), crumb({ source: "github", role: "historical" })]); const before = JSON.stringify(items);
     expect(evidenceGroups(items).map(([label]) => label)).toEqual(["decision / role 未提供", "github / historical"]); expect(JSON.stringify(items)).toBe(before);
