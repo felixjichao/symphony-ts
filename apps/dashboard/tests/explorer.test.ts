@@ -19,6 +19,12 @@ describe("Work Explorer", () => {
   it.each([["scope", "github:owner/b"], ["phase", "review"], ["attention", "needs_human"], ["github", "stale"], ["runtime", "unknown"], ["decision", "unavailable"]])("filters %s", (id, value) => {
     const { root } = setup(); change(root, id!, value!); expect(rows(root)).toHaveLength(1); expect(rows(root)[0]?.id).toBe(`work-${token(b.key)}`); root.remove();
   });
+  it("filters all repositories for a provider and excludes other providers", () => {
+    const explorer = createExplorer(); const other = work({ key: { provider: "linear", key: "TEAM-1" } });
+    const root = explorer.update(snapshot({ work: [a, b, other] }));
+    change(root, "scope", "github"); expect(rows(root).map(row => row.id)).toEqual([`work-${token(b.key)}`, `work-${token(a.key)}`]);
+    change(root, "scope", "github:owner/b"); expect(rows(root).map(row => row.id)).toEqual([`work-${token(b.key)}`]); root.remove();
+  });
   it("combines search and filters, retains them across updates, and resets", () => {
     const { explorer, root } = setup(); const search = root.querySelector<HTMLInputElement>("#explorer-search")!; search.focus(); search.value = "BETA"; search.dispatchEvent(new Event("input")); change(root, "phase", "review");
     explorer.update(snapshot({ work: [a, b] })); expect(search.value).toBe("BETA"); expect(document.activeElement).toBe(search); expect(rows(root)).toHaveLength(1);

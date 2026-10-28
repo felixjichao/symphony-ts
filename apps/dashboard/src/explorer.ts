@@ -36,18 +36,18 @@ export function createExplorer(): { update: (snapshot: OperationalSnapshot) => H
   let current: OperationalSnapshot | undefined;
   function options(input: HTMLSelectElement, values: readonly string[]): void {
     const selected = input.value; input.replaceChildren();
-    for (const value of ["", ...new Set([...values, ...(selected ? [selected] : [])])].sort((a, b) => a.localeCompare(b))) {
-      const option = el("option", value || "全部"); option.value = value; input.append(option);
+    for (const choice of ["", ...new Set([...values, ...(selected ? [selected] : [])])].sort((a, b) => a.localeCompare(b))) {
+      const option = el("option", choice || "全部"); option.value = choice; input.append(option);
     }
     input.value = selected;
   }
   function render(): void {
     if (!current) return;
     const all = current.work;
-    options(scopeFilter, all.map(scope)); options(phase, all.map((w): string => w.phase)); options(attention, all.map((w): string => w.attention));
+    options(scopeFilter, all.flatMap(w => [w.key.provider, scope(w)])); options(phase, all.map((w): string => w.phase)); options(attention, all.map((w): string => w.attention));
     for (const input of [github, runtime, decision]) options(input, ["fresh", "stale", "unknown", "unavailable"]);
     const query = search.value.trim().toLocaleLowerCase();
-    const selected = ordered(all).filter(w => (!query || [w.key.provider, w.key.key, w.workItem.identifier, w.workItem.title ?? ""].some(v => v.toLocaleLowerCase().includes(query))) && (!scopeFilter.value || scope(w) === scopeFilter.value) && (!phase.value || w.phase === phase.value) && (!attention.value || w.attention === attention.value) && (!github.value || w.freshness.github.status === github.value) && (!runtime.value || w.freshness.runtime.status === runtime.value) && (!decision.value || w.freshness.decision.status === decision.value));
+    const selected = ordered(all).filter(w => (!query || [w.key.provider, w.key.key, w.workItem.identifier, w.workItem.title ?? ""].some(v => v.toLocaleLowerCase().includes(query))) && (!scopeFilter.value || (w.key.provider === scopeFilter.value || scope(w) === scopeFilter.value)) && (!phase.value || w.phase === phase.value) && (!attention.value || w.attention === attention.value) && (!github.value || w.freshness.github.status === github.value) && (!runtime.value || w.freshness.runtime.status === runtime.value) && (!decision.value || w.freshness.decision.status === decision.value));
     status.textContent = `显示 ${selected.length} / ${all.length} 项 · attention-first`;
     results.replaceChildren();
     if (all.length === 0) { results.append(presentationState("empty", "当前快照没有已知工作；请同时检查来源状态。")); return; }

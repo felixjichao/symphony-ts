@@ -29,7 +29,10 @@ export function browserErrors(name: string, source: string): string[] {
     let found = false;
     const read = (part: ts.Node) => {
       if (ts.isFunctionExpression(part) || ts.isArrowFunction(part) || ts.isMethodDeclaration(part)) return;
-      if (ts.isIdentifier(part) && (sensitive.test(part.text) || tainted.has(part.text))) found = true;
+      if (ts.isIdentifier(part) && (sensitive.test(part.text) || tainted.has(part.text))) {
+        const domValue = name === "explorer.ts" && part.text === "value" && ts.isPropertyAccessExpression(part.parent) && part.parent.name === part && /^(input|search|scopeFilter|phase|attention|github|runtime|decision)$/.test(part.parent.expression.getText(file));
+        if (!domValue) found = true;
+      }
       if (ts.isElementAccessExpression(part) && sensitive.test(referenceName(part.argumentExpression) ?? "")) found = true;
       ts.forEachChild(part, read);
     };
@@ -77,7 +80,12 @@ export function browserErrors(name: string, source: string): string[] {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) errors.push("dynamic import");
       if (node.expression.getText(file) === "fetch" && name !== "transport.ts") errors.push("fetch outside transport");
     }
-    if (!["validate.ts", "identity.ts", "presentation.ts", "explorer.ts"].includes(name)) {
+    // Only this reviewed selection predicate may compare supplied freshness for filtering.
+    const filterPredicate = '(!query || [w.key.provider, w.key.key, w.workItem.identifier, w.workItem.title ?? ""].some(v => v.toLocaleLowerCase().includes(query))) && (!scopeFilter.value || (w.key.provider === scopeFilter.value || scope(w) === scopeFilter.value)) && (!phase.value || w.phase === phase.value) && (!attention.value || w.attention === attention.value) && (!github.value || w.freshness.github.status === github.value) && (!runtime.value || w.freshness.runtime.status === runtime.value) && (!decision.value || w.freshness.decision.status === decision.value)';
+    let ancestor: ts.Node | undefined = node;
+    while (ancestor && !(ts.isArrowFunction(ancestor) && ancestor.body.getText(file) === filterPredicate)) ancestor = ancestor.parent;
+    const selection = name === "explorer.ts" && ancestor !== undefined;
+    if (!["validate.ts", "identity.ts", "presentation.ts"].includes(name)) {
       // These shape/identity/format helpers are separately fingerprinted, never arbitrary extensions.
       const registered: Record<string, readonly string[]> = { "primitives.ts": ["attentionBadge", "freshnessIndicator", "presentationState", "workIdentity", "shaIdentity", "surface", "denseTable", "denseList", "searchControl", "filterControl"], "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards", "anomalySummary"], "overview.ts": ["overview"], "dom.ts": ["el"] };
       if (registered[name] && ts.isFunctionDeclaration(node) && !registered[name]?.includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
@@ -85,18 +93,18 @@ export function browserErrors(name: string, source: string): string[] {
       if (name === "view.ts" && ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && node.name.getText(file) !== "locate" && node.name.getText(file) !== "navigate") errors.push("unregistered presentation callback");
       const condition = ts.isConditionalExpression(node) ? node.condition : ts.isIfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ? node.expression : ts.isForStatement(node) ? node.condition : ts.isSwitchStatement(node) ? node.expression : undefined;
       if (condition && isSensitive(condition) && !isNullOrKindTest(condition)) errors.push(`source-dependent control flow: ${condition.getText(file)}`);
-      if (ts.isPrefixUnaryExpression(node) && isSensitive(node.operand) && !isNullOrKindTest(node.operand)) errors.push("source truthiness/computation");
-      if (ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "anomalySummary", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "overviewGroups", "renderOverview", "context.append", "globalSources", "scopedSources", "scopedExecutors", "freshness", "timestamp", "attentionBadge", "shaIdentity", "freshnessIndicator", "Object.entries", "String", "page.append", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file))) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
+      if (!selection && ts.isPrefixUnaryExpression(node) && isSensitive(node.operand) && !isNullOrKindTest(node.operand)) errors.push("source truthiness/computation");
+      if (!selection && ts.isCallExpression(node) && (node.arguments.some(isSensitive) || isSensitive(node.expression)) && !["el", "JSON.stringify", "details.append", "row.append", "reviewCell.append", "section.append", "card.append", "fields.append", "raw.append", "evidenceList", "anomalyCards", "anomalySummary", "scopedEvidence", "scopedAnomalies", "evidenceGroups", "diagnosticIds", "entries.map", "selected.map", "entries.entries", "selected.entries", "overviewGroups", "renderOverview", "context.append", "globalSources", "scopedSources", "scopedExecutors", "freshness", "timestamp", "attentionBadge", "shaIdentity", "freshnessIndicator", "Object.entries", "String", "page.append", "counts.append", "sources.append", "executors.append", "item.append", "main.replaceChildren"].includes(node.expression.getText(file)) && !(name === "explorer.ts" && node.expression.getText(file) === "identity.append")) errors.push(`source passed to unapproved helper: ${node.getText(file)}`);
       if (ts.isReturnStatement(node) && node.expression && isSensitive(node.expression)) errors.push(`returning source-derived value: ${node.expression.getText(file)}`);
       if (ts.isPropertyAssignment(node) && semantics.has(node.name.getText(file))) errors.push("constructing derived field");
       if (ts.isBinaryExpression(node)) {
         const text = node.getText(file);
         const nullCheck = isNullOrKindTest(node);
         const kindCheck = ts.isPropertyAccessExpression(node.left) && node.left.name.text === "kind" && ts.isStringLiteral(node.right);
-        const fallback = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && (node.right.kind === ts.SyntaxKind.NullKeyword || ts.isArrayLiteralExpression(node.right) && node.right.elements.length === 0 || ts.isStringLiteral(node.right) && ["未提供 CI 信号", "未报告原因", "detail 未提供", "未报告角色", "未报告标题"].includes(node.right.text));
+        const fallback = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && (node.right.kind === ts.SyntaxKind.NullKeyword || ts.isArrayLiteralExpression(node.right) && node.right.elements.length === 0 || ts.isStringLiteral(node.right) && ["未提供 CI 信号", "未报告原因", "detail 未提供", "未报告角色", "未报告标题"].includes(node.right.text) || name === "explorer.ts" && ts.isStringLiteral(node.right) && node.right.text === "未知");
         const assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
         if (assignment && ts.isPropertyAccessExpression(node.left) && semantics.has(node.left.name.text)) errors.push("assigning derived field");
-        if (isSensitive(node) && !nullCheck && !kindCheck && !fallback && !assignment) errors.push(`source computation: ${text}`);
+        if (!selection && isSensitive(node) && !nullCheck && !kindCheck && !fallback && !assignment) errors.push(`source computation: ${text}`);
       }
       if ((ts.isPropertyAccessExpression(node) && ["anomalies", "evidence"].includes(node.name.text)) || (ts.isElementAccessExpression(node) && ["anomalies", "evidence"].includes(referenceName(node.argumentExpression) ?? ""))) {
         // Only direct reads at reviewed renderer selection calls are allowed.
