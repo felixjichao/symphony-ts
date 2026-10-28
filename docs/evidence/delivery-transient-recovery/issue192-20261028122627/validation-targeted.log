@@ -1,0 +1,17 @@
+npm notice run @symphony/cli@0.1.0 test
+npm notice run vitest run src/durable-retry.test.ts src/delivery-transient-recovery.test.ts
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/issue-192-pr/symphony-ts/apps/cli
+
+ ✓ src/delivery-transient-recovery.test.ts (4 tests) 29445ms
+   ✓ #192 CLI source isolation and transient observations > T5 initial delivery commits source, preserves staged runtime and finishes 5634ms
+   ✓ #192 CLI source isolation and transient observations > T5 ci delivery commits source, preserves staged runtime and finishes 5754ms
+   ✓ #192 CLI source isolation and transient observations > T5 review delivery commits source, preserves staged runtime and finishes 5800ms
+   ✓ #192 CLI source isolation and transient observations > T5 conflict delivery commits source, preserves staged runtime and finishes 12256ms
+ ✓ src/durable-retry.test.ts (13 tests) 1120ms
+
+ Test Files  2 passed (2)
+      Tests  17 passed (17)
+   Start at  20:24:01
+   Duration  31.33s (transform 289ms, setup 11ms, collect 528ms, tests 30.56s, environment 0ms, prepare 63ms)
+

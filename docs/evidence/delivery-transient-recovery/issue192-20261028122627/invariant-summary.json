@@ -1,0 +1,11 @@
+{
+  "stateSnapshots": 15,
+  "deadlines": [
+    1793192480345
+  ],
+  "anyPaused": false,
+  "maximumSpentRepairs": 1,
+  "repairExecutors": 1,
+  "conflictPushes": 1,
+  "readyLabelRemovalOrHandoff": 0
+}

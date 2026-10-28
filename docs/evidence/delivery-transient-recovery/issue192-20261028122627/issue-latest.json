@@ -1,0 +1,19 @@
+{
+  "labels": [
+    {
+      "id": "LA_kwDOU79mac8AAAAC67TZ2A",
+      "name": "symphony-ready",
+      "description": "",
+      "color": "0e8a16"
+    },
+    {
+      "id": "LA_kwDOU79mac8AAAAC_wrBUQ",
+      "name": "dogfood-issue192-20261028122627",
+      "description": "Isolated #192 acceptance issue192-20261028122627",
+      "color": "5319e7"
+    }
+  ],
+  "number": 31,
+  "state": "CLOSED",
+  "url": "https://github.com/felixjichao/symphony-delivery-dogfood/issues/31"
+}

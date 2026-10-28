@@ -6,7 +6,7 @@ import { FileRetryReservationStorage } from "../src/recovery-storage";
 export const retryIssue: Issue = { id: "1", identifier: "GH-1", title: "Fixture", description: "", state: "open",
   nativeRef: { repo: "fixture/durable", number: 1 }, priority: 1, branchName: null,
   url: "https://github.com/fixture/durable/issues/1", assigneeId: null, labels: [], blockedBy: [], dispatchable: true, createdAt: 0, updatedAt: 0 };
-export function makeRetryHarness(file: string, now = 10000, monotonic = 500, onLaunch?: () => void) {
+export function makeRetryHarness(file: string, now = 10000, monotonic = 500, onLaunch?: () => void, onCleanup?: () => Promise<void>) {
   const timers: { delay: number; callback: () => void; cancelled: boolean }[] = [];
   const store = new FileRetryReservationStorage(file);
   const state = createOrchestratorRuntimeState({ pollIntervalMs: 1000, maxConcurrentAgents: 1 });
@@ -28,7 +28,7 @@ export function makeRetryHarness(file: string, now = 10000, monotonic = 500, onL
     },
     resolveWorkspacePath: () => "/fixture/workspace", retryStorage: store,
     now: () => now, monotonicNow: () => monotonic,
-    retry: { cleanupWorkspace: { removeWorkspace: async () => { cleanupCalls++; return { status: "missing" as const }; } }, maxRetryBackoffMs: () => 300000, scheduler: {
+    retry: { cleanupWorkspace: { removeWorkspace: async () => { cleanupCalls++; await onCleanup?.(); return { status: "missing" as const }; } }, maxRetryBackoffMs: () => 300000, scheduler: {
       schedule: (delay, callback) => { const t = { delay, callback, cancelled: false }; timers.push(t); return t; },
       cancel: handle => { const t = handle as typeof timers[number]; t.cancelled = true; },
     } },

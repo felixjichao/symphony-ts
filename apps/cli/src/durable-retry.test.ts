@@ -111,6 +111,47 @@ describe("native retry restart protocol", () => {
     expect(h.launches).toBe(0);
     await h.authority.shutdown();
   });
+  it("refuses terminal cleanup when another incarnation owns the durable reservation", async () => {
+    const file = fixture();
+    const old = makeRetryHarness(file);
+    old.authority.scheduleRetry({ issueId: "1", identifier: "GH-1", attempt: 1, kind: "continuation", error: null });
+    const current = makeRetryHarness(file);
+    current.authority.restoreRetries();
+    const currentRecord = current.store.load()[0];
+    old.setVisible([{ ...retryIssue, state: "closed" }]);
+    old.timers[0]!.callback(); await flush();
+    expect(old.cleanupCalls).toBe(0);
+    expect(old.authority.continuityBlock("1")).toContain("retry_recovery_unverified");
+    expect(current.store.load()[0]).toEqual(currentRecord);
+    await old.authority.shutdown(); await current.authority.shutdown();
+  });
+  it("settles its durable terminal reservation before cleanup while retaining the claim", async () => {
+    const file = fixture();
+    const workspace = path.join(path.dirname(file), "workspace");
+    fs.mkdirSync(workspace);
+    const sentinel = path.join(path.dirname(file), "sentinel");
+    fs.writeFileSync(sentinel, "keep");
+    let finishCleanup!: () => void;
+    const pending = new Promise<void>(resolve => { finishCleanup = resolve; });
+    const h = makeRetryHarness(file, 10000, 500, undefined, async () => {
+      expect(h.store.load()).toEqual([]);
+      expect(h.state.claimed.has("1")).toBe(true);
+      await pending;
+      fs.rmSync(workspace, { recursive: true });
+    });
+    h.authority.scheduleRetry({ issueId: "1", identifier: "GH-1", attempt: 1, kind: "continuation", error: null });
+    h.setVisible([{ ...retryIssue, state: "closed" }]);
+    h.timers[0]!.callback(); await flush();
+    expect(h.cleanupCalls).toBe(1);
+    expect(h.state.claimed.has("1")).toBe(true);
+    expect(fs.existsSync(workspace)).toBe(true);
+    finishCleanup(); await flush();
+    expect(fs.existsSync(workspace)).toBe(false);
+    expect(fs.existsSync(sentinel)).toBe(true);
+    expect(h.state.claimed.has("1")).toBe(false);
+    expect(h.store.load()).toEqual([]);
+    await h.authority.shutdown();
+  });
   it("does not register a timer after persistence fails, and rejects stale cancellation", async () => {
     const file = fixture();
     const h = makeRetryHarness(file);

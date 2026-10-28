@@ -1321,6 +1321,10 @@ export class OrchestratorAuthority {
     if (isTerminalState(issue.state, this.policy)) {
       // 6. terminal → 安全清理 workspace；清理期间仍持有 claim（普通 dispatch 不会
       //    抢到同一 issue），清理完成且 ownership 未被替换后再释放。
+      // Settle only our token-fenced durable reservation before the cleanup guard.
+      // Keep the in-memory claim/owner until cleanup completes; foreign records
+      // still fail the storage CAS and must never authorize workspace deletion.
+      this.forgetDurableRetry(issueId);
       await this.cleanupTerminalWorkspace(issue);
       if (this.retryOwners.get(issueId) !== token) {
         return; // 清理期间被替换 / 取消：不得 clobber 新 entry。

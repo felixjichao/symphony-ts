@@ -1,0 +1,56 @@
+{
+  "baseRefOid": "a0ef4279e446f90be028b61e620f86b3a03953ec",
+  "body": "Automated delivery for issue #31\n\nFixes felixjichao/symphony-delivery-dogfood#31\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"repo\":\"felixjichao/symphony-delivery-dogfood\",\"issueNumber\":31,\"workspaceKey\":\"GH-31\",\"headBranch\":\"symphony/GH-31\",\"baseBranch\":\"main\"} -->\n",
+  "commits": [
+    {
+      "authoredDate": "2026-10-28T12:31:23Z",
+      "authors": [
+        {
+          "email": "symphony[bot]@users.noreply.github.com",
+          "id": "",
+          "login": "",
+          "name": "symphony[bot]"
+        }
+      ],
+      "committedDate": "2026-10-28T12:31:23Z",
+      "messageBody": "",
+      "messageHeadline": "feat: implement delivery for issue #31 (GH-31)",
+      "oid": "2febab24d3bf79784596320037728b4328e4701f"
+    },
+    {
+      "authoredDate": "2026-10-28T12:34:15Z",
+      "authors": [
+        {
+          "email": "symphony[bot]@users.noreply.github.com",
+          "id": "",
+          "login": "",
+          "name": "symphony[bot]"
+        }
+      ],
+      "committedDate": "2026-10-28T12:34:15Z",
+      "messageBody": "…3953ec (attempt 1)",
+      "messageHeadline": "fix(delivery): merge observed base a0ef4279e446f90be028b61e620f86b3a0…",
+      "oid": "6b2f320e9422123bf9daca5329519d57bccbf3ce"
+    }
+  ],
+  "headRefOid": "6b2f320e9422123bf9daca5329519d57bccbf3ce",
+  "mergeCommit": {
+    "oid": "cb7c749ec64fc56f300646eb3b4a07bb4f0e0562"
+  },
+  "mergedAt": "2026-10-28T12:36:14Z",
+  "number": 32,
+  "state": "MERGED",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-28T12:34:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/40688921477/job/122818402927",
+      "name": "gate",
+      "startedAt": "2026-10-28T12:34:31Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    }
+  ],
+  "url": "https://github.com/felixjichao/symphony-delivery-dogfood/pull/32"
+}

@@ -27,7 +27,7 @@ Reproduce the production CLI boundary: `npx vitest run apps/cli/src/delivery-tra
 
 ## Real acceptance — 2026-10-28
 
-**Partial / overall profile failed:** [dogfood #29 / PR #30 ledger](issue192-20261028075031/README.md) proves actual native host, real Codex coding/conflict executor, real GitHub CI on both SHAs, independent exact-HEAD Codex Reviews and automatic merge/Issue closure despite Review 503, successful-push transport error, first ref read timeout and old PR HEAD projection. One repair executor/push, unchanged deadline and no pause/handoff are recorded. Terminal host cleanup was refused; the retained workspace prevents a full Real Integration pass. #192 remains open/Draft.
+**Historical partial / overall profile failed:** [dogfood #29 / PR #30 ledger](issue192-20261028075031/README.md) proves actual native host, real Codex coding/conflict executor, real GitHub CI on both SHAs, independent exact-HEAD Codex Reviews and automatic merge/Issue closure despite Review 503, successful-push transport error, first ref read timeout and old PR HEAD projection. One repair executor/push, unchanged deadline and no pause/handoff are recorded. Terminal host cleanup was refused; the retained workspace prevents a full Real Integration pass. This earlier run was not a full pass.
 
 [The first failed attempt](issue192-20261028072718/README.md) is retained separately. It exposed Git metadata protection when Delivery ran inside the coding sandbox. The successful Delivery segment uses operator-owned `after_run`, with the executor limited to worktree resolution and the trusted host owning checked staging. The new regression first failed with `merge_conflict_unresolved_paths`, then passed after that staging boundary fix.
 
@@ -35,6 +35,10 @@ The historical conflict safety refusal was also re-run through actual native `pr
 
 Only the explicitly authorized dogfood target was written. Production host/Bridge were not changed. No delivery state, repair budget or deadline was deleted or reset, and no manual workspace deletion substitutes for native cleanup.
 
-[Process/port and credential-file audit](process-audit.json) confirms the owned hosts/coding PIDs are gone, both fault proxy ports are closed, private credential files are removed and both issue workspaces remain.
+[Historical process/port and credential-file audit](process-audit.json) confirms the owned hosts/coding PIDs are gone, both fault proxy ports are closed, private credential files are removed and both issue workspaces remain.
 
 Post-live validation passed: 2,588 tests plus one existing opt-in skip, typecheck/build, lint and docs check, using a single Vitest worker. [Exact command/result](validation.json), [full gate log](validation-gate.log) and [earlier default-concurrency timing failures](parallel-validation-failures.txt) preserve the distinction. No safety check or assertion was weakened.
+
+## Review follow-up: full native integration passed
+
+[Fresh #31 / PR #32 acceptance](issue192-20261028122627/README.md) passed the complete conflict → repair → push → new-SHA CI/independent Review → merge → Issue closed → same-host automatic cleanup chain. Terminal retry settles only its own token-fenced durable record before cleanup, retaining claim/barrier and foreign-record refusal. CLI conflict coverage leaves an unmerged index for host staging. Full gate: 2590 passed / 1 existing opt-in skipped. Earlier failed evidence above remains unchanged.

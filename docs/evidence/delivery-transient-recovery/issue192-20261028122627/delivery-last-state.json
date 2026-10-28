@@ -1,0 +1,57 @@
+{
+  "continuation": {
+    "intentId": "5b14fc47-4b54-4268-ab1d-644fcb9c7034",
+    "headBranch": "symphony/GH-31",
+    "baseBranch": "main",
+    "headSha": "6b2f320e9422123bf9daca5329519d57bccbf3ce",
+    "prNumber": 32,
+    "optInLand": true,
+    "readyLabel": "symphony-ready",
+    "maxRepairAttempts": 3,
+    "maxWaitSeconds": 1800,
+    "requiredChecks": [
+      "gate"
+    ],
+    "repairCommand": "npm run ci:fix",
+    "validationCommand": "npm run gate",
+    "validationTimeoutMs": 600000,
+    "phase": "result_observed",
+    "reviewOperationKey": "delivery-review:5b14fc47-4b54-4268-ab1d-644fcb9c7034:github%3Afelixjichao%2Fsymphony-delivery-dogfood%2331:plan:1:1",
+    "reviewTaskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2331:review:2:felixjichao%2Fsymphony-delivery-dogfood:32:6b2f320e9422123bf9daca5329519d57bccbf3ce",
+    "reviewRevision": 2,
+    "verdict": "approve"
+  },
+  "landing": {
+    "intentId": "8fc9aa72-ac01-4e47-a306-dbdde328e3f2",
+    "context": {
+      "repo": "felixjichao/symphony-delivery-dogfood",
+      "issueNumber": 31,
+      "workspaceKey": "GH-31",
+      "headBranch": "symphony/GH-31",
+      "baseBranch": "main"
+    },
+    "prNumber": 32,
+    "headSha": "6b2f320e9422123bf9daca5329519d57bccbf3ce",
+    "optIn": true,
+    "phase": "intent"
+  },
+  "mergeConflictRepair": {
+    "cause": "merge_conflict",
+    "operationId": "bd94b174-ca91-4c9a-a636-82a4fe6b5687",
+    "attempt": 1,
+    "prNumber": 32,
+    "expectedHeadSha": "2febab24d3bf79784596320037728b4328e4701f",
+    "baseSha": "a0ef4279e446f90be028b61e620f86b3a03953ec",
+    "phase": "pushed",
+    "commitSha": "6b2f320e9422123bf9daca5329519d57bccbf3ce",
+    "outcome": "remote_confirmed; current_base=a0ef4279e446f90be028b61e620f86b3a03953ec"
+  },
+  "repo": "felixjichao/symphony-delivery-dogfood",
+  "issueNumber": 31,
+  "workspaceKey": "GH-31",
+  "spentRepairs": 1,
+  "spentWaitSeconds": 291,
+  "deadlineTimestampMs": 1793192480345,
+  "isPaused": false,
+  "lastUpdated": "2026-10-28T12:36:11.632Z"
+}

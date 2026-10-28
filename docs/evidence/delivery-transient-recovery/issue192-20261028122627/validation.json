@@ -1,0 +1,22 @@
+{
+  "command": "TMPDIR=/private/tmp VITEST_MAX_THREADS=1 VITEST_MIN_THREADS=1 npm run gate",
+  "exitCode": 0,
+  "testsPassed": 2590,
+  "existingOptInSkipped": 1,
+  "checks": [
+    "typecheck/build",
+    "all workspace tests",
+    "lint",
+    "docs:check"
+  ],
+  "regressionRedBeforeFix": {
+    "test": "settles its durable terminal reservation before cleanup while retaining the claim",
+    "observed": "cleanupCalls expected 1, received 0; 1 failed / 11 passed"
+  },
+  "regressionGreen": [
+    "terminal cleanup removes real workspace and retains sentinel",
+    "claim held while cleanup awaits",
+    "foreign incarnation durable record survives, no cleanup",
+    "CLI conflict executor leaves unmerged index; host stages and preserves both merge parents/runtime isolation"
+  ]
+}

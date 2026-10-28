@@ -100,7 +100,7 @@ async function executeDecision(task, cwd, prompt) {
 }
 try {
   save('harness-source.mjs.txt',fs.readFileSync(new URL(import.meta.url),'utf8'));
-  const sourcePatch=await git(['diff','--','packages/agent/src/delivery/merge-conflict-repair.ts'],product);save('product-source.patch',sourcePatch);
+  const sourcePatch=await git(['diff','--','packages/agent/src/delivery/merge-conflict-repair.ts','packages/orchestrator/src/authority.ts'],product);save('product-source.patch',sourcePatch);
   save('build.json',{ productCommit:(await git(['rev-parse','HEAD'],product)).trim(), productionSourcePatchSha256:crypto.createHash('sha256').update(sourcePatch).digest('hex'),cliSha256:crypto.createHash('sha256').update(fs.readFileSync(cli)).digest('hex'),codexVersion:(await run(realCodex,['--version'])).trim(),runId,root,repo,startedAt:new Date().toISOString() });
   const ghRepo = await gh(['repo','view',repo,'--json','nameWithOwner,defaultBranchRef,url']);
   if (ghRepo.nameWithOwner !== repo || ghRepo.defaultBranchRef.name !== 'main') throw new Error('Unexpected target/base; no writes allowed');
@@ -197,7 +197,7 @@ hooks:
   timeout_ms: 1800000
 agent:
   max_concurrent_agents: 1
-  max_turns: 20
+  max_turns: 1
   max_retry_backoff_ms: 300000
 codex:
   command: ${realCodex} app-server

@@ -64,7 +64,7 @@ describe("#192 CLI source isolation and transient observations", () => {
           } else if (env?.SYMPHONY_REPAIR_CAUSE === "merge_conflict") {
             executorCalls++; repaired = true;
             fs.writeFileSync(path.join(cwd, "source.txt"), "implementation\nmain implementation\n");
-            git(["add", "source.txt"]);
+            expect(git(["diff", "--name-only", "--diff-filter=U"])).toBe("source.txt");
           } else expect(command).toBe("validate");
           return ok();
         },
@@ -114,7 +114,11 @@ describe("#192 CLI source isolation and transient observations", () => {
       expect(git(["ls-tree", "-r", "--name-only", "HEAD"])).not.toContain(".symphony/");
       if (stage === "conflict") {
         expect(conflictPushes).toBe(1); expect(executorCalls).toBe(1);
+        expect(git(["rev-parse", "HEAD^1"])).toBe(reviews[0]);
         expect(git(["rev-parse", "HEAD^2"])).toBe(base);
+        expect(native(["rev-parse", "--verify", "MERGE_HEAD"]).exitCode).not.toBe(0);
+        expect(calls.some(a => a[0] === "add" && a.some(value => value.includes("source.txt")))).toBe(true);
+        expect(fs.readFileSync(path.join(cwd, ".symphony/runtime.json"), "utf8")).toBe("staged runtime\n");
         expect(reviews).toHaveLength(2);
         expect(git(["diff", "--cached", "--name-only"])).toBe("");
       } else {
