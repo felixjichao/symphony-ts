@@ -1,0 +1,16 @@
+{
+  "observations": 20,
+  "allUnpaused": true,
+  "deadlineValues": [
+    1793175983091
+  ],
+  "maxSpentRepairs": 1,
+  "repairOperationIds": [
+    "8909e927-0193-4afc-a671-cec76a5cfbfc"
+  ],
+  "repairExecutorCount": 1,
+  "repairPushCount": 1,
+  "readyLabelRemovals": 0,
+  "handoffCommentWrites": 0,
+  "scope": "All observed native Delivery states during the successful continuous-operation delivery window; terminal host cleanup is separate and failed."
+}

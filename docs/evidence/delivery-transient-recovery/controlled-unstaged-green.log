@@ -1,0 +1,21 @@
+npm notice run symphony-ts@0.1.0 npx
+npm notice run 'vitest' run packages/agent/src/delivery/merge-conflict-repair.test.ts -t host stages resolved|unresolved|executor
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/issue-192-pr/symphony-ts
+
+ ✓ packages/agent/src/delivery/merge-conflict-repair.test.ts (82 tests | 73 skipped) 17508ms
+   ✓ #192 transient delivery failures (real Git) > T7/T8 push observation stale stops with one push and executor 2134ms
+   ✓ #192 transient delivery failures (real Git) > T7/T8 push observation third stops with one push and executor 1831ms
+   ✓ #192 transient delivery failures (real Git) > T7/T8 push observation owner stops with one push and executor 1879ms
+   ✓ #192 transient delivery failures (real Git) > T7/T8 push observation auth stops with one push and executor 1803ms
+   ✓ #192 transient delivery failures (real Git) > #192 host stages resolved work when the workspace-write executor cannot write Git metadata 2258ms
+   ✓ #188 authoritative branch and no-op regression (isolated real Git) > real clean merge needs no coding executor, still validates and reviews the new HEAD 2184ms
+   ✓ #186 bounded pinned-base conflict repair > bounded handoff for executor_failure 1395ms
+   ✓ #186 bounded pinned-base conflict repair > restart after pushed receipt before CI checkpoint reconciles without executor/push replay 2314ms
+   ✓ #186 bounded pinned-base conflict repair > HEAD drift during the executor preserves the merge commit and refuses push 1710ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed | 73 skipped (82)
+   Start at  15:48:27
+   Duration  17.88s (transform 166ms, setup 0ms, collect 195ms, tests 17.51s, environment 0ms, prepare 37ms)
+

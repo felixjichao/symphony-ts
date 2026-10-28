@@ -1,0 +1,429 @@
+2026-10-28T12:31:53.639000Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-28T12:31:53.639023Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+OpenAI Codex v0.165.0-alpha.1.2
+--------
+workdir: /private/tmp/symphony192-live-IOWGFp/review-2febab24d3bf
+model: gpt-6.1-sol
+provider: openai
+approval: on-request
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a1827e-d8f5-7523-9fe9-8ce02cd88a61
+--------
+user
+You are an independent code reviewer, not the coding/repair executor. Inspect this immutable checkout at exactly 2febab24d3bf79784596320037728b4328e4701f for felixjichao/symphony-delivery-dogfood PR #32. Read AGENTS.md, actual git diff against the merge base of origin/main, source and tests. Requirements:
+In src/issue192_20261028122627.mjs, change the exported issue192_20261028122627.feature flag to true. Do not change the base flag from the branch's inherited value. Add a real Node test in test/issue192_20261028122627.test.mjs asserting feature is true. Run npm run gate and npm run lint. The trusted operator-owned after_run hook invokes the configured native delivery-skill CLI for commits, push, CI and independent Review. The coding executor must only edit source/tests and validate, then finish; do not invoke Delivery inside the coding sandbox. The acceptance harness will concurrently update the same object line on main to set base=true and add a base test, forcing a real Git conflict; the native conflict executor must preserve both feature=true and base=true. Do not hand-commit, hand-push, merge, rebase, abort or reset: the Delivery skill owns those effects. Do not weaken tests/CI or edit runtime state. This is an isolated synthetic test authorized by the maintainer.
+
+Related product issue: https://github.com/felixjichao/symphony-ts/issues/192
+The harness intentionally introduces a base conflict handled by native Delivery AFTER initial approval. Review the feature implementation relative to its inherited base; do not treat the planned coordination conflict as a product-code finding. On the repaired merge commit, confirm both feature and base implementations/tests survive. Never fabricate approval: return changes_requested/needs_human with precise findings if appropriate. Do not edit files, commit, push or merge. Local validation and exact-SHA CI are performed by the native Delivery gate. Context:
+{"context":{"strategy":"materialized","workItem":{"provider":"github","key":"felixjichao/symphony-delivery-dogfood#31"},"repository":"felixjichao/symphony-delivery-dogfood","issue":{"repository":"felixjichao/symphony-delivery-dogfood","number":31,"title":"#192 real conflict repair acceptance issue192-20261028122627","body":"In src/issue192_20261028122627.mjs, change the exported issue192_20261028122627.feature flag to true. Do not change the base flag from the branch's inherited value. Add a real Node test in test/issue192_20261028122627.test.mjs asserting feature is true. Run npm run gate and npm run lint. The trusted operator-owned after_run hook invokes the configured native delivery-skill CLI for commits, push, CI and independent Review. The coding executor must only edit source/tests and validate, then finish; do not invoke Delivery inside the coding sandbox. The acceptance harness will concurrently update the same object line on main to set base=true and add a base test, forcing a real Git conflict; the native conflict executor must preserve both feature=true and base=true. Do not hand-commit, hand-push, merge, rebase, abort or reset: the Delivery skill owns those effects. Do not weaken tests/CI or edit runtime state. This is an isolated synthetic test authorized by the maintainer.\n\nRelated product issue: https://github.com/felixjichao/symphony-ts/issues/192"},"plan":{"taskId":"github%3Afelixjichao%2Fsymphony-delivery-dogfood%2331:plan:1","revision":1,"plan":"已检查目标模块、现有 Node 测试及 npm 脚本；未发现 AGENTS.md，遵循用户提供的约束。本轮仅规划，未修改文件或运行验证。执行步骤：1. 将 src/issue192_20261028122627.mjs 导出对象的 feature 改为 true，保留分支继承的 base 值（当前为 false）。2. 新增 test/issue192_20261028122627.test.mjs，使用 node:test、node:assert/strict 导入实际模块并断言 feature === true。3. 依次运行 npm run gate 和 npm run lint，确认均成功。4. 检查差异仅包含目标源码和新增测试，然后结束编码执行。由可信 after_run hook 调用原生 Delivery CLI，负责提交、推送、CI、独立 Review 及冲突处理。","acceptanceCriteria":["编码阶段 feature 为 true，base 保持继承值不变。","新增指定路径的真实 Node 测试，断言实际导出对象的 feature 为 true，并被现有 npm test 通配符发现。","npm run gate 与 npm run lint 均退出 0。","并发 main 更新产生真实 Git 冲突后，原生冲突执行器保留 feature=true、base=true，以及 feature 测试和新增 base 测试；最终验证与 CI 通过。","编码执行器仅修改源码和测试并验证，不调用 Delivery，不手动提交、推送、合并、rebase、abort 或 reset，不修改运行时状态或削弱测试及 CI。","提交、推送、CI 和独立 Review 由可信 after_run hook 驱动的 Delivery 完成。"],"risks":["WORKFLOW.md 包含编码代理直接调用 Delivery 的旧指令；本任务明确禁止，须以本次用户要求为准。","解决冲突时不能整行选择任一版本，否则可能丢失 feature=true 或 base=true。"],"clarifications":[]},"pullRequest":{"repository":"felixjichao/symphony-delivery-dogfood","prNumber":32,"headSha":"2febab24d3bf79784596320037728b4328e4701f","baseRef":"main","headRef":"symphony/GH-31","title":"feat: delivery for #31 (GH-31)","body":"Automated delivery for issue #31\n\nFixes felixjichao/symphony-delivery-dogfood#31\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"repo\":\"felixjichao/symphony-delivery-dogfood\",\"issueNumber\":31,\"workspaceKey\":\"GH-31\",\"headBranch\":\"symphony/GH-31\",\"baseBranch\":\"main\"} -->\n"},"diff":{"patch":"diff --git a/src/issue192_20261028122627.mjs b/src/issue192_20261028122627.mjs\nindex 349122b..0b32fcf 100644\n--- a/src/issue192_20261028122627.mjs\n+++ b/src/issue192_20261028122627.mjs\n@@ -1 +1 @@\n-export const issue192_20261028122627 = { feature: false, base: false };\n+export const issue192_20261028122627 = { feature: true, base: false };\ndiff --git a/test/issue192_20261028122627.test.mjs b/test/issue192_20261028122627.test.mjs\nnew file mode 100644\nindex 0000000..9171f6f\n--- /dev/null\n+++ b/test/issue192_20261028122627.test.mjs\n@@ -0,0 +1,8 @@\n+import assert from \"node:assert/strict\";\n+import { test } from \"node:test\";\n+\n+import { issue192_20261028122627 } from \"../src/issue192_20261028122627.mjs\";\n+\n+test(\"issue192_20261028122627 enables feature\", () => {\n+  assert.equal(issue192_20261028122627.feature, true);\n+});\n","files":["src/issue192_20261028122627.mjs","test/issue192_20261028122627.test.mjs"],"truncated":false},"ci":{"state":"SUCCESS","summary":"All 1 required checks and 1 current checks succeeded","checks":[{"name":"gate","status":"COMPLETED","conclusion":"SUCCESS","url":"https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/40688514128/job/122817013210"}]},"repositoryInstructions":null,"previousReviews":[],"unresolvedFindings":[]}}
+2026-10-28T12:31:56.939265Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-28T12:31:56.939293Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-10-28T12:31:58.590372Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+codex
+我会核对指定 SHA、仓库指令和实际差异，检查源码及测试；验证与 CI 结果以原生 Delivery gate 为准。
+exec
+/bin/zsh -lc "pwd; git rev-parse HEAD; rg --files -g 'AGENTS.md' -g 'package.json' -g '*issue192_20261028122627*' -g '*lint*'; cat /Users/jichao/.agents/skills/code-review/SKILL.md" in /private/tmp/symphony192-live-IOWGFp/review-2febab24d3bf
+ succeeded in 0ms:
+/private/tmp/symphony192-live-IOWGFp/review-2febab24d3bf
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-nPEhagNv' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-su11ptoi' (errno=Operation not permitted)
+2febab24d3bf79784596320037728b4328e4701f
+src/issue192_20261028122627.mjs
+scripts/lint.mjs
+package.json
+test/issue192_20261028122627.test.mjs
+---
+name: code-review
+description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
+---
+
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+
+- **Standards**: does the code conform to this repo's documented coding standards?
+- **Spec**: does the code faithfully implement the originating issue / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If they didn't specify one, ask for it.
+
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+
+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.), fetched via the workflow in the tracker doc.
+2. A path the user passed as an argument.
+3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Search the repo for every file that documents how code should be written. When `CODING_STANDARDS.md` or `CONTRIBUTING.md` exists, it must be on the list.
+
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+
+- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation. Like any standard here, skip anything tooling already enforces.
+
+Each smell reads *what it is* → *how to fix*; match it against the diff:
+
+- **Mysterious Name**: a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
+- **Duplicated Code**: the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
+- **Feature Envy**: a method that reaches into another object's data more than its own. → move the method onto the data it envies.
+- **Data Clumps**: the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession**: a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
+- **Repeated Switches**: the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery**: one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
+- **Divergent Change**: one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
+- **Speculative Generality**: abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains**: long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
+- **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
+- **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+
+### 4. Spawn both sub-agents in parallel
+
+Issue both sub-agent calls together, in the foreground, and aggregate the reports they return.
+
+**Standards sub-agent prompt** should include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
+- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** should include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+
+codex
+将按 code-review 技能并行检查代码规范与需求符合性，结果汇总到审查结论中。
+exec
+/bin/zsh -lc "git rev-parse origin/main; git merge-base origin/main HEAD; git diff origin/main...HEAD; git log origin/main..HEAD --oneline; rg --files --hidden -g '"'!'"\\.git/**'; for p in /AGENTS.md /private/AGENTS.md /private/tmp/AGENTS.md /private/tmp/symphony192-live-IOWGFp/AGENTS.md; do if [ -f \""'$p" ]; then cat "$p"; fi; done' in /private/tmp/symphony192-live-IOWGFp/review-2febab24d3bf
+ succeeded in 0ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-SEtskd4E' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-6ZBFhC0I' (errno=Operation not permitted)
+a0ef4279e446f90be028b61e620f86b3a03953ec
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-eEBmu83S' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-cXZPh2uZ' (errno=Operation not permitted)
+b7442b678cfae2645d975fb128f9b4708d5eda58
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-8aaG3uVr' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-2jsLerhL' (errno=Operation not permitted)
+diff --git a/src/issue192_20261028122627.mjs b/src/issue192_20261028122627.mjs
+index 349122b..0b32fcf 100644
+--- a/src/issue192_20261028122627.mjs
++++ b/src/issue192_20261028122627.mjs
+@@ -1 +1 @@
+-export const issue192_20261028122627 = { feature: false, base: false };
++export const issue192_20261028122627 = { feature: true, base: false };
+diff --git a/test/issue192_20261028122627.test.mjs b/test/issue192_20261028122627.test.mjs
+new file mode 100644
+index 0000000..9171f6f
+--- /dev/null
++++ b/test/issue192_20261028122627.test.mjs
+@@ -0,0 +1,8 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++
++import { issue192_20261028122627 } from "../src/issue192_20261028122627.mjs";
++
++test("issue192_20261028122627 enables feature", () => {
++  assert.equal(issue192_20261028122627.feature, true);
++});
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-wRtZJULD' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-Pf7mBSRu' (errno=Operation not permitted)
+2febab2 feat: implement delivery for issue #31 (GH-31)
+src/issue192_20261028072718.mjs
+src/legacy.mjs
+src/issue192_20261028075031.mjs
+src/issue192_20261028122627.mjs
+src/math.mjs
+.github/workflows/ci.yml
+scripts/lint.mjs
+scripts/ci-fix.mjs
+conflict.txt
+package.json
+.gitignore
+README.md
+WORKFLOW.md
+test/issue192_20261028075031_base.test.mjs
+test/issue192_20261028122627.test.mjs
+test/issue192_20261028075031.test.mjs
+test/math.test.mjs
+
+exec
+/bin/zsh -lc 'cat package.json scripts/lint.mjs .github/workflows/ci.yml README.md WORKFLOW.md src/issue192_20261028122627.mjs test/issue192_20261028122627.test.mjs test/issue192_20261028075031.test.mjs test/issue192_20261028075031_base.test.mjs; git show b7442b678cfae2645d975fb128f9b4708d5eda58:src/issue192_20261028122627.mjs; git status --porcelain' in /private/tmp/symphony192-live-IOWGFp/review-2febab24d3bf
+ succeeded in 0ms:
+{
+  "name": "symphony-delivery-dogfood",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated synthetic target for the Symphony GitHub delivery dogfood (NEST-94 / #83).",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "lint": "node scripts/lint.mjs",
+    "gate": "npm test",
+    "ci": "npm test && npm run lint",
+    "ci:fix": "node scripts/ci-fix.mjs"
+  }
+}
+// CI-only lint gate: rejects console.log in src/. The local `gate` script runs
+// only the unit tests, so a src/ file with console.log passes locally but fails
+// CI — the deterministic fault the repair scenario relies on.
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+
+const srcDir = path.resolve(process.cwd(), "src");
+const offenders = [];
+
+function walk(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walk(full);
+    } else if (entry.isFile() && entry.name.endsWith(".mjs")) {
+      const lines = readFileSync(full, "utf8").split(/\r?\n/);
+      lines.forEach((line, index) => {
+        if (line.includes("console.log(")) {
+          offenders.push(`${path.relative(process.cwd(), full)}:${index + 1}: console.log is not allowed in src/`);
+        }
+      });
+    }
+  }
+}
+
+walk(srcDir);
+
+if (offenders.length > 0) {
+  console.error("lint failed:");
+  for (const offender of offenders) console.error(`  ${offender}`);
+  process.exit(1);
+}
+console.log("lint ok");
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Unit tests
+        run: npm test
+      - name: Lint (CI-only)
+        run: npm run lint
+# GitHub delivery dogfood target template
+
+Synthetic target repository for the opt-in real GitHub + real Codex end-to-end
+dogfood (NEST-94 / #83). It is intentionally tiny and credential-free:
+
+```text
+open issue + symphony-ready
+  → Symphony dispatch + workspace bootstrap
+  → real Codex implements + validates
+  → delivery skill commits / pushes / opens PR
+  → GitHub Actions CI
+       ├─ failure → real Codex repair (`npm run ci:fix`) → push → green
+       └─ green
+  → automatic squash merge (opt-in)
+  → `Fixes #N` closes the issue
+  → Symphony terminal reconciliation + workspace cleanup
+```
+
+## Layout
+
+- `src/math.mjs`, `test/math.test.mjs` — the feature the dogfood issue asks for.
+- `scripts/lint.mjs` — a CI-only lint gate that rejects `console.log` in `src/`.
+  The local `gate` runs only the unit tests, so CI is stricter than the local
+  gate; the `repair` scenario injects a `console.log` fault into this repository
+  before dispatch, forcing one real CI failure that real Codex must fix.
+- `scripts/ci-fix.mjs` — the real Codex repair entry, run by the delivery skill
+  with `SYMPHONY_CI_FAILURE_DIAGNOSTICS`.
+- `WORKFLOW.md` — the reference profile, with `<owner/repo>` rendered by the
+  harness (`symphony dogfood github`) or replaced by hand.
+- `.github/workflows/ci.yml` — runs `npm test` and the CI-only `npm run lint`.
+
+The product repository's harness documentation is in
+[docs/github-delivery-dogfood.md](../../docs/github-delivery-dogfood.md).
+
+## Manual use
+
+1. Create an isolated repository and copy this directory's contents into it.
+2. Replace `<owner/repo>` in `WORKFLOW.md` with the target slug and commit.
+3. Export `GITHUB_TOKEN`, then run `symphony <path-to-WORKFLOW.md>`.
+4. Create an issue labeled `symphony-ready` that asks for `subtract(a, b)`.
+
+Do not point this template at a production repository.
+---
+# Symphony reference profile — closed-loop GitHub delivery.
+#
+# `symphony dogfood github` renders this into a run directory with felixjichao/symphony-delivery-dogfood
+# replaced by the authorized dogfood target. Operators may also copy it into the
+# target repository and run `symphony <path-to-WORKFLOW.md>` by hand.
+tracker:
+  kind: github
+  provider:
+    repo: felixjichao/symphony-delivery-dogfood # REQUIRED: repository Symphony reads issues from (owner/repo)
+    token: $GITHUB_TOKEN # REQUIRED: export a token with repo scope
+  required_labels:
+    - symphony-ready
+  active_states:
+    - open
+  terminal_states:
+    - closed
+
+polling:
+  interval_ms: 30000
+
+workspace:
+  root: ./workspaces
+
+hooks:
+  after_create: |
+    set -eu
+    symphony repo-bootstrap \
+      --repo https://github.com/felixjichao/symphony-delivery-dogfood.git \
+      --workspace-key "$SYMPHONY_WORKSPACE_KEY"
+  timeout_ms: 120000
+
+agent:
+  max_concurrent_agents: 1
+  max_turns: 20
+  max_retry_backoff_ms: 300000
+
+codex:
+  command: codex app-server
+  approval_policy: never
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+---
+
+You are the coding agent for GitHub issue #{{ issue.native_ref.number }}
+({{ issue.identifier }}).
+
+Title: {{ issue.title }}
+
+Body:
+{{ issue.description }}
+
+Work autonomously to completion. A human does not merge for you.
+
+1. Inspect the repository and implement the change the issue asks for.
+2. Run the project's local gate — the same command the delivery skill is
+   configured with through `--validate` below — until it passes.
+3. Deliver the change end to end with the delivery skill:
+
+   ```sh
+   set -eu
+   delivery_branch="$(git branch --show-current)"
+   delivery_key="${delivery_branch#symphony/}"
+   test -n "$delivery_key" && test "$delivery_branch" != "$delivery_key"
+   base_branch="${SYMPHONY_DELIVERY_BASE:-$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')}"
+   base_branch="${base_branch:-main}"
+   resume_flag=""
+   if [ -f .symphony/delivery-state.json ] && grep -q '"isPaused"[[:space:]]*:[[:space:]]*true' .symphony/delivery-state.json; then
+     resume_flag="--resume"
+   fi
+   symphony delivery-skill run \
+     --repo {{ issue.native_ref.repo }} \
+     --issue {{ issue.native_ref.number }} \
+     --workspace-key "$delivery_key" \
+     --head "$delivery_branch" \
+     --base "$base_branch" \
+     --validate "${SYMPHONY_DELIVERY_VALIDATE:-npm run gate}" \
+     --repair-cmd "${SYMPHONY_DELIVERY_REPAIR_CMD:-npm run ci:fix}" \
+     $resume_flag \
+     --opt-in
+   ```
+
+   `--repair-cmd` is the repair entry: on a CI failure the skill runs it with the
+   failure logs in `SYMPHONY_CI_FAILURE_DIAGNOSTICS`, re-runs `--validate`,
+   commits, pushes, and re-checks CI — up to `--max-repairs` attempts.
+
+4. If the delivery skill hands back a blocker (budget exhausted, conflicting or
+   unmergeable pull request, ambiguous requirement), summarize it and stop. Do
+   not guess, and never merge by hand.
+export const issue192_20261028122627 = { feature: true, base: false };
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { issue192_20261028122627 } from "../src/issue192_20261028122627.mjs";
+
+test("issue192_20261028122627 enables feature", () => {
+  assert.equal(issue192_20261028122627.feature, true);
+});
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { issue192_20261028075031 } from "../src/issue192_20261028075031.mjs";
+
+test("issue192_20261028075031 enables feature", () => {
+  assert.equal(issue192_20261028075031.feature, true);
+});
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { issue192_20261028075031 } from '../src/issue192_20261028075031.mjs';
+test('base implementation survives issue192-20261028075031', () => assert.equal(issue192_20261028075031.base, true));
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-Rz1Cyw1z' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-yoVqGU26' (errno=Operation not permitted)
+export const issue192_20261028122627 = { feature: false, base: false };
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-wASzQvor' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-K45o1464' (errno=Operation not permitted)
+
+collab: Wait
+codex
+{"verdict":"approve","findings":[]}
+tokens used
+30,525
+{"verdict":"approve","findings":[]}

@@ -1,0 +1,16 @@
+{
+  "ownedProcessesRemaining": [],
+  "hostAndCodingServerAlive": {
+    "51331": false,
+    "73167": false
+  },
+  "proxyPortOpen": false,
+  "authDirectoryPresent": false,
+  "bridgeTokenPresent": false,
+  "workspacePresent": false,
+  "sentinelPresent": true,
+  "retryStorage": {
+    "schemaVersion": 1,
+    "reservations": []
+  }
+}

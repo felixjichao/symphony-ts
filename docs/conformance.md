@@ -699,3 +699,20 @@ The Work panel filters current supplied projections by stable display text, prov
 ## §13 adjacent: Work Detail current state (#173)
 
 `apps/dashboard/tests/detail.test.ts` covers supplied current states, missing data, exact review targets, partial freshness and full WorkKey isolation; existing integration and focus tests exercise routing and retained diagnostics. `examples/smoke.ts` captures desktop and narrow current-detail screenshots and exercises keyboard disclosure and full SHAs. [Browser evidence](evidence/dashboard-v2-detail/README.md) records the built demo smoke plus deterministic planning-ready, coding, stale-review, partial/missing, terminal and needs-human desktop/narrow screenshots; CI, exact-HEAD Review and Delivery remain pending. [Agent Note](../notes/accepted/architecture/2026-10-28-work-detail-current-state.md) records the presentation boundary.
+
+## GitHub Delivery transient observations and staging (#192)
+
+固定 Symphony baseline `be10a1b79df723d6d7612b5651c8522704dafb2e`，§8/§14、§9 邻接扩展，§17/§18 验收，不扩大 Core 契约。
+
+| 能力 | 实现 / 证据 |
+|---|---|
+| 四条提交路径统一源码暂存隔离、检查返回码 | agent `source-staging.ts`：NUL 枚举 + literal pathspec；普通提交保留 runtime index，merge 保留双亲并拒绝 staged runtime；真实 Git 和 CLI 入口 T3/T5 |
+| 同 task/revision 的有界 Review 观测重试 | 原 poll/yield + absolute deadline，三次连续失败；domain validated optional counter；认证/损坏/身份变化拒绝；T1/T7/T8 |
+| Terminal retry 清理前结清当前持久化 ownership | orchestrator 保留 claim/barrier，按 token CAS 移除自身 reservation；未知/其他实例记录仍拒绝删除；CLI file-storage 回归覆盖真实目录删除与跨实例 fencing |
+| 单次冲突 push 后只读有界确认 | authoritative head ref + owned PR projection 均匹配 commit receipt；三次观察，不重放 push/executor；新 SHA CI/Review；T2/T4/T6/T7/T8 |
+
+[设计与替代方案](../notes/accepted/architecture/2026-10-28-delivery-transient-observations.md)；[本地证据及 live 待验收边界](evidence/delivery-transient-recovery/README.md)。真实 dogfood 完整自动修复与同一 host 清理已验收，原 conflict 安全拒绝能力保留。
+
+#192 historical first live follow-up: [actual dogfood ledger](evidence/delivery-transient-recovery/issue192-20261028075031/README.md) proves real transient recovery → two-parent repair → current-SHA CI/independent Codex Review → automatic merge/Issue closure, with one repair executor/push and preserved deadline. Workspace-write resolves files while the trusted host checks markers, validates and stages; an unstaged-resolution regression protects that boundary. **That run failed full Real Integration:** native host terminal cleanup was refused; the fresh pass below resolves it. The original conflict `merge_rejected` safety refusal was re-run and retained; no browser UI or live auth/exhaustion/third-SHA acceptance is claimed.
+
+#193 review follow-up: [fresh full native pass](evidence/delivery-transient-recovery/issue192-20261028122627/README.md) closes the prior cleanup blocker. Token-fenced durable settlement precedes cleanup while claim/barrier remain held; foreign/unknown records still refuse deletion. CLI conflict mock leaves the index unmerged and proves host staging, two parents and runtime isolation. Real dogfood #31 / PR #32 passed all four fault injections through new-SHA CI/independent Review, automatic merge/closure and same-host `cleanup_completed status=removed`; 2590 local tests passed plus one existing opt-in skip. The preceding failed ledger is historical evidence.

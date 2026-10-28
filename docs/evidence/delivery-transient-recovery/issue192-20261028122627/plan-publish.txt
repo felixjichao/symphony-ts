@@ -1,0 +1,48 @@
+{
+  "status": "published",
+  "commentId": 6468959855,
+  "plan": {
+    "schemaVersion": 1,
+    "sessionId": "github:felixjichao/symphony-delivery-dogfood#31",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2331:plan:1",
+    "revision": 1,
+    "triggerKind": "initial",
+    "requirements": {
+      "title": "#192 real conflict repair acceptance issue192-20261028122627",
+      "body": "In src/issue192_20261028122627.mjs, change the exported issue192_20261028122627.feature flag to true. Do not change the base flag from the branch's inherited value. Add a real Node test in test/issue192_20261028122627.test.mjs asserting feature is true. Run npm run gate and npm run lint. The trusted operator-owned after_run hook invokes the configured native delivery-skill CLI for commits, push, CI and independent Review. The coding executor must only edit source/tests and validate, then finish; do not invoke Delivery inside the coding sandbox. The acceptance harness will concurrently update the same object line on main to set base=true and add a base test, forcing a real Git conflict; the native conflict executor must preserve both feature=true and base=true. Do not hand-commit, hand-push, merge, rebase, abort or reset: the Delivery skill owns those effects. Do not weaken tests/CI or edit runtime state. This is an isolated synthetic test authorized by the maintainer.\n\nRelated product issue: https://github.com/felixjichao/symphony-ts/issues/192",
+      "clarifications": [],
+      "fingerprint": "f67c6cc80c3bb6e1c4e66bbed2dafe57fa8a5cdc7b30848d974de8c0bdcb39c5"
+    },
+    "previousTaskId": null,
+    "status": "completed",
+    "result": {
+      "schemaVersion": 1,
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2331:plan:1",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#31",
+      "revision": 1,
+      "createdAtMs": 1793190440016,
+      "kind": "plan",
+      "verdict": "ready",
+      "content": {
+        "plan": "已检查目标模块、现有 Node 测试及 npm 脚本；未发现 AGENTS.md，遵循用户提供的约束。本轮仅规划，未修改文件或运行验证。执行步骤：1. 将 src/issue192_20261028122627.mjs 导出对象的 feature 改为 true，保留分支继承的 base 值（当前为 false）。2. 新增 test/issue192_20261028122627.test.mjs，使用 node:test、node:assert/strict 导入实际模块并断言 feature === true。3. 依次运行 npm run gate 和 npm run lint，确认均成功。4. 检查差异仅包含目标源码和新增测试，然后结束编码执行。由可信 after_run hook 调用原生 Delivery CLI，负责提交、推送、CI、独立 Review 及冲突处理。",
+        "acceptanceCriteria": [
+          "编码阶段 feature 为 true，base 保持继承值不变。",
+          "新增指定路径的真实 Node 测试，断言实际导出对象的 feature 为 true，并被现有 npm test 通配符发现。",
+          "npm run gate 与 npm run lint 均退出 0。",
+          "并发 main 更新产生真实 Git 冲突后，原生冲突执行器保留 feature=true、base=true，以及 feature 测试和新增 base 测试；最终验证与 CI 通过。",
+          "编码执行器仅修改源码和测试并验证，不调用 Delivery，不手动提交、推送、合并、rebase、abort 或 reset，不修改运行时状态或削弱测试及 CI。",
+          "提交、推送、CI 和独立 Review 由可信 after_run hook 驱动的 Delivery 完成。"
+        ],
+        "risks": [
+          "WORKFLOW.md 包含编码代理直接调用 Delivery 的旧指令；本任务明确禁止，须以本次用户要求为准。",
+          "解决冲突时不能整行选择任一版本，否则可能丢失 feature=true 或 base=true。"
+        ],
+        "clarifications": []
+      }
+    },
+    "publishedCommentId": 6468959855,
+    "publishedAtMs": 1793190443088,
+    "createdAtMs": 1793190399111,
+    "updatedAtMs": 1793190443088
+  }
+}

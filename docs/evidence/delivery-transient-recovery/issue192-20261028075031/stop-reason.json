@@ -1,0 +1,9 @@
+{
+  "at": "2026-10-28T08:08:57.577248+00:00",
+  "reason": "operator_graceful_stop_after_native_cleanup_refused",
+  "nativeDeliveryCompleted": true,
+  "nativeDeliveryDeadlineExhausted": false,
+  "harnessOuterDeadlineExhausted": false,
+  "rawHarnessGuardMessage": "Live acceptance deadline exhausted",
+  "explanation": "The original harness used the same guard message for deadline/cancellation. Driver SIGINT at 08:05 followed observed cleanup_refused at 08:00:37; it did not reset or expire the native Delivery deadline."
+}

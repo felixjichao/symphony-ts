@@ -14,7 +14,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: 
 const ok = (value: unknown): DeliverySubprocessResult => ({ stdout: JSON.stringify(value), stderr: "", exitCode: 0 });
 const text = (stdout: string): DeliverySubprocessResult => ({ stdout, stderr: "", exitCode: 0 });
 
-function fixture(issueNumber = 186, sharedOrigin?: string, launchCodex = false) {
+function fixture(issueNumber = 186, sharedOrigin?: string, launchCodex = false, trackedRuntime = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-repair-")); dirs.push(dir);
   const cwd = path.join(dir, "work"); const origin = sharedOrigin ?? path.join(dir, "origin.git");
   fs.mkdirSync(cwd);
@@ -35,8 +35,15 @@ function fixture(issueNumber = 186, sharedOrigin?: string, launchCodex = false) 
   git(["config", "user.name", "Test"]); git(["config", "user.email", "test@example.invalid"]);
   if (!sharedOrigin) {
     fs.writeFileSync(path.join(cwd, "source.txt"), "original\n");
+    fs.writeFileSync(path.join(cwd, ".gitignore"), ".symphony/\n");
     fs.writeFileSync(path.join(cwd, "AGENTS.md"), "Preserve both implementations.\n");
-    git(["add", "."]); git(["commit", "-m", "seed"]); git(["remote", "add", "origin", origin]);
+    git(["add", "."]);
+    if (trackedRuntime) {
+      fs.mkdirSync(path.join(cwd, ".symphony"));
+      fs.writeFileSync(path.join(cwd, ".symphony/tracked.json"), "inherited state");
+      git(["add", "-f", ".symphony/tracked.json"]);
+    }
+    git(["commit", "-m", "seed"]); git(["remote", "add", "origin", origin]);
   }
   git(["switch", "-c", context.headBranch]);
   fs.writeFileSync(path.join(cwd, "source.txt"), "PR implementation\n");
@@ -118,7 +125,7 @@ execFileSync("git", ["add", "source.txt"]);
           env: { ...process.env, ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
         const launched = JSON.parse(fs.readFileSync(path.join(dir, "launch.json"), "utf8"));
         expect(launched.args).toEqual(["exec", "--sandbox", "workspace-write", "-"]);
-        expect(launched.cwd).toBe(cwd);
+        expect(fs.realpathSync(launched.cwd)).toBe(fs.realpathSync(cwd));
         expect(launched.prompt).toContain(env!.SYMPHONY_REPAIR_CONTEXT);
         return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.status ?? 1 };
       }
@@ -151,7 +158,7 @@ execFileSync("git", ["add", "source.txt"]);
   };
   let clock = Date.now();
   const options: RunDeliverySkillOptions = { ...context, cwd, runner, stateStorage: storage, resumeStageOnly: true,
-    readRemoteBranch: async (repository, branch) => ({ repository, branch, sha: base() }),
+    readRemoteBranch: async (repository, branch) => ({ repository, branch, sha: branch === "main" ? base() : head() }),
     validationCommand: "validate", requiredChecks: ["gate"], reviewGate, optInLand: true,
     maxRepairAttempts: 3, maxWaitSeconds: 100, nowFn: () => clock, sleepFn: async () => { clock += 1000; } };
   return { cwd, origin, context, native, git, originalHead, advanceBase, head, base, storage, states, calls, reviews, superseded, options,
@@ -159,6 +166,263 @@ execFileSync("git", ["add", "source.txt"]);
     setOnApprove: (fn: typeof onApprove) => { onApprove = fn; }, setOnRepair: (fn: typeof onRepair) => { onRepair = fn; },
     setPr: (fn: typeof overridePr) => { overridePr = fn; }, failValidation: () => { failValidation = true; } };
 }
+
+describe("#192 transient delivery failures (real Git)", () => {
+  it("T1 retries the same Review task after a timeout and lands without pausing", async () => {
+    const f = fixture();
+    const gate = f.options.reviewGate!;
+    const reads: string[] = [];
+    const result = await runDeliverySkill({ ...f.options, reviewGate: { ...gate,
+      async getReviewStatus(id) {
+        reads.push(id);
+        if (reads.length === 1) throw new Error("ETIMEDOUT");
+        return gate.getReviewStatus(id);
+      },
+    } });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(reads).toEqual([f.originalHead, f.originalHead]);
+    expect(f.reviews).toEqual([f.originalHead]);
+    expect(f.paused()).toBe(false);
+  });
+
+  it.each([false, true])("T2/T4 observes a delayed PR projection after one push (transport error=%s)", async transport => {
+    const f = fixture(); f.advanceBase();
+    let observations = 0;
+    let pushes = 0;
+    f.setPr((args, pr) => {
+      if (pushes && args.some(a => a.includes("baseRefOid")) && observations++ < 1) pr.headRefOid = f.originalHead;
+    });
+    const result = await runDeliverySkill({ ...f.options, runner: { ...f.options.runner,
+      async git(args, cwd, timeout) {
+        const result = await f.options.runner.git(args, cwd, timeout);
+        if (args[0] === "push") {
+          pushes++;
+          if (transport) return { stdout: "", stderr: "connection reset", exitCode: 1 };
+        }
+        return result;
+      },
+      async gh(args, cwd, timeout) {
+        if (transport && pushes && args.some(a => a.includes("baseRefOid")) && observations++ === 0) {
+          return { stdout: "", stderr: "connection reset", exitCode: 1 };
+        }
+        return f.options.runner.gh(args, cwd, timeout);
+      },
+    } });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(pushes).toBe(1); expect(f.repairCount()).toBe(1);
+    expect(f.reviews).toContain(f.head()); expect(f.paused()).toBe(false);
+  });
+
+  it.each(["timeout", "auth", "corrupt", "identity", "session"])("T7/T8 rejects %s without replay or unsafe approval", async kind => {
+    const f = fixture(); const gate = f.options.reviewGate!;
+    let reads = 0;
+    const result = await runDeliverySkill({ ...f.options, reviewGate: { ...gate,
+      async getReviewStatus(id) {
+        reads++;
+        if (kind === "identity" || kind === "session") {
+          const status = await gate.getReviewStatus(id);
+          return { ...status, ...(kind === "identity" ? { taskId: "foreign" } : {}),
+            ...(kind === "session" && status.result ? { result: { ...status.result, sessionId: "foreign" } } : {}) };
+        }
+        throw new Error(kind === "timeout" ? "ETIMEDOUT" : kind === "auth" ? "HTTP 403 forbidden" : "corrupted result");
+      },
+    } });
+    expect(result.status).toBe("blocked");
+    expect(reads).toBe(kind === "timeout" ? 3 : 1);
+    expect(f.reviews).toEqual([f.originalHead]);
+    expect(f.calls.filter(a => a[1] === "edit" && a.includes("--remove-label"))).toHaveLength(1);
+    expect(f.calls.some(a => a[0] === "pr" && a[1] === "merge")).toBe(false);
+  });
+
+  it("T7 keeps the Review failure budget and operation across native stage yields", async () => {
+    const f = fixture(); const gate = f.options.reviewGate!;
+    const keys: Array<string | undefined> = [];
+    const options = { ...f.options, yieldOnWait: true, reviewGate: { ...gate,
+      async ensureReviewTask(session, target, context, options) {
+        keys.push(options?.operationKey);
+        return gate.ensureReviewTask(session, target, context, options);
+      },
+      async getReviewStatus() { throw new Error("fetch failed"); },
+    } } satisfies RunDeliverySkillOptions;
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    expect(f.storage.readState()?.isPaused).toBe(false);
+    const deadline = f.storage.readState()?.deadlineTimestampMs;
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    expect((await runDeliverySkill(options)).status).toBe("blocked");
+    expect(new Set(keys).size).toBe(1);
+    expect(f.storage.readState()?.continuation?.reviewReadFailures).toBe(3);
+    expect(f.storage.readState()?.deadlineTimestampMs).toBe(deadline);
+  });
+
+  it.each(["stale", "third", "owner", "auth"])("T7/T8 push observation %s stops with one push and executor", async kind => {
+    const f = fixture(); f.advanceBase(); let pushed = false; let observations = 0;
+    f.setPr((args, pr) => {
+      if (!pushed || !args.some(a => a.includes("baseRefOid"))) return;
+      observations++;
+      if (kind === "stale") pr.headRefOid = f.originalHead;
+      if (kind === "third") pr.headRefOid = "e".repeat(40);
+      if (kind === "owner") pr.body = "foreign";
+    });
+    const result = await runDeliverySkill({ ...f.options, runner: { ...f.options.runner,
+      async git(args, cwd, timeout) {
+        const result = await f.options.runner.git(args, cwd, timeout);
+        if (args[0] === "push") pushed = true;
+        return result;
+      },
+      async gh(args, cwd, timeout) {
+        if (kind === "auth" && pushed && args.some(a => a.includes("baseRefOid"))) {
+          observations++;
+          return { stdout: "", stderr: "HTTP 403 forbidden", exitCode: 1 };
+        }
+        return f.options.runner.gh(args, cwd, timeout);
+      },
+    } });
+    expect(result.status).toBe("blocked");
+    expect(observations).toBe(kind === "stale" ? 3 : 1);
+    expect(f.calls.filter(a => a[0] === "push")).toHaveLength(1);
+    expect(f.repairCount()).toBe(1);
+    expect(f.calls.some(a => a[0] === "pr" && a[1] === "merge")).toBe(false);
+    if (kind === "stale") expect(result.handoffMarkdown).toContain("exhausted 3/3");
+  });
+
+  it("T8 HEAD movement during a transient Review read requires a fresh task and current-SHA CI", async () => {
+    const f = fixture(); const gate = f.options.reviewGate!;
+    const keys: Array<string | undefined> = []; let failed = false;
+    const result = await runDeliverySkill({ ...f.options, reviewGate: { ...gate,
+      async ensureReviewTask(session, target, context, options) {
+        keys.push(options?.operationKey);
+        return gate.ensureReviewTask(session, target, context, options);
+      },
+      async getReviewStatus(id) {
+        if (!failed) {
+          failed = true;
+          fs.writeFileSync(path.join(f.cwd, "new-head.txt"), "new implementation");
+          f.git(["add", "new-head.txt"]); f.git(["commit", "-m", "new head"]);
+          f.git(["push", "origin", f.context.headBranch]);
+          throw new Error("ETIMEDOUT");
+        }
+        return gate.getReviewStatus(id);
+      },
+    } });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(f.reviews).toEqual([f.originalHead, f.head()]);
+    expect(new Set(keys).size).toBe(2);
+    expect(f.superseded).toEqual([f.originalHead]);
+    expect(f.paused()).toBe(false);
+  });
+
+  it("#192 host stages resolved work when the workspace-write executor cannot write Git metadata", async () => {
+    const f = fixture(); f.advanceBase(); let executorCalls = 0;
+    const result = await runDeliverySkill({ ...f.options, repairFn: () => {
+      executorCalls++;
+      fs.writeFileSync(path.join(f.cwd, "source.txt"), "PR implementation\nmain changes\n");
+      // Actual Codex workspace-write protects .git; leave the resolved file unstaged.
+      expect(f.git(["diff", "--name-only", "--diff-filter=U"])).toContain("source.txt");
+      return true;
+    } });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(executorCalls).toBe(1); expect(result.spentRepairs).toBe(1);
+    expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
+    expect(f.git(["show", "HEAD:source.txt"])).toBe("PR implementation\nmain changes");
+  });
+
+  it("T6 waits for new-SHA CI instead of reusing old CI and approval", async () => {
+    const f = fixture(); let advanced = false; let pending = 0;
+    f.setOnApprove(() => { if (!advanced) { advanced = true; f.advanceBase(); } });
+    f.setPr((args, pr) => {
+      if (pr.headRefOid !== f.originalHead && args.includes("headRefOid,statusCheckRollup,mergeable,state") && pending++ < 2) {
+        expect(f.reviews).toEqual([f.originalHead]);
+        pr.statusCheckRollup = [];
+      }
+    });
+    const result = await runDeliverySkill(f.options);
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(pending).toBeGreaterThanOrEqual(3);
+    expect(f.reviews).toEqual([f.originalHead, f.head()]);
+    expect(f.paused()).toBe(false);
+  });
+
+  it("T8 rejects an authoritative remote third SHA even when PR projection stays old", async () => {
+    const f = fixture(); f.advanceBase(); let pushed = false;
+    const result = await runDeliverySkill({ ...f.options,
+      readRemoteBranch: async (repo, branch) => pushed && branch === f.context.headBranch
+        ? { repository: repo, branch, sha: "e".repeat(40) } : f.options.readRemoteBranch!(repo, branch),
+      runner: { ...f.options.runner, async git(args, cwd, timeout) {
+        const result = await f.options.runner.git(args, cwd, timeout);
+        if (args[0] === "push") pushed = true;
+        return result;
+      } },
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.handoffMarkdown).toContain("remote_head_changed");
+    expect(f.calls.filter(a => a[0] === "push")).toHaveLength(1);
+    expect(f.calls.some(a => a[0] === "pr" && a[1] === "merge")).toBe(false);
+  });
+
+  it("T7 post-push observation keeps the original total deadline and repair count", async () => {
+    const f = fixture(); f.advanceBase(); let pushed = false;
+    f.setPr((args, pr) => { if (pushed && args.some(a => a.includes("baseRefOid"))) pr.headRefOid = f.originalHead; });
+    const result = await runDeliverySkill({ ...f.options, maxWaitSeconds: 1,
+      runner: { ...f.options.runner, async git(args, cwd, timeout) {
+        const result = await f.options.runner.git(args, cwd, timeout);
+        if (args[0] === "push") pushed = true;
+        return result;
+      } },
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.handoffMarkdown).toContain("deadline_exhausted");
+    expect(result.spentRepairs).toBe(1);
+    expect(new Set(f.states.map(s => s.deadlineTimestampMs)).size).toBe(1);
+    expect(f.calls.filter(a => a[0] === "push")).toHaveLength(1);
+  });
+
+  it("T5 refuses pre-staged runtime for a merge before spending budget", async () => {
+    const f = fixture(); f.advanceBase();
+    fs.mkdirSync(path.join(f.cwd, ".symphony"));
+    fs.writeFileSync(path.join(f.cwd, ".symphony/runtime.json"), "staged runtime");
+    f.git(["add", "-f", ".symphony/runtime.json"]);
+    const before = f.git(["diff", "--cached"]);
+    const result = await runDeliverySkill(f.options);
+    expect(result.status).toBe("blocked");
+    expect(result.handoffMarkdown).toContain("staged_delivery_state");
+    expect(result.spentRepairs).toBe(0);
+    expect(f.git(["diff", "--cached"])).toBe(before);
+    expect(f.repairCount()).toBe(0);
+  });
+
+  it("staging failure cannot be mistaken for a successful source commit", async () => {
+    const f = fixture();
+    fs.writeFileSync(path.join(f.cwd, "new-file.txt"), "implementation");
+    const result = await runDeliverySkill({ ...f.options, resumeStageOnly: false, runner: { ...f.options.runner,
+      async git(args, cwd, timeout) {
+        if (args[0] === "add") return { stdout: "", stderr: "index.lock exists", exitCode: 1 };
+        return f.options.runner.git(args, cwd, timeout);
+      },
+    } });
+    expect(result.status).toBe("blocked");
+    expect(result.handoffMarkdown).toContain("source staging failed");
+    expect(f.git(["rev-parse", "HEAD"])).toBe(f.originalHead);
+    expect(f.calls.some(a => a[0] === "push" || a[0] === "commit")).toBe(false);
+  });
+
+  it.each([false, true])("T3 commits a real merge with ignored runtime files (tracked=%s)", async tracked => {
+    const f = fixture(186, undefined, false, tracked); f.advanceBase();
+    fs.mkdirSync(path.join(f.cwd, ".symphony"), { recursive: true });
+    fs.writeFileSync(path.join(f.cwd, ".symphony/runtime.json"), "runtime");
+    if (tracked) fs.writeFileSync(path.join(f.cwd, ".symphony/tracked.json"), "local runtime update");
+    const result = await runDeliverySkill(f.options);
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(f.git(["show", "HEAD:source.txt"])).toBe("PR implementation\nmain changes");
+    expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
+    expect(f.git(["ls-tree", "-r", "--name-only", "HEAD"])).not.toContain(".symphony/runtime.json");
+    expect(f.git(["diff", "HEAD^", "HEAD", "--", ".symphony"])).toBe("");
+    if (tracked) {
+      expect(f.git(["show", "HEAD:.symphony/tracked.json"])).toBe("inherited state");
+      expect(fs.readFileSync(path.join(f.cwd, ".symphony/tracked.json"), "utf8")).toBe("local runtime update");
+    }
+    expect(fs.readFileSync(path.join(f.cwd, ".symphony/runtime.json"), "utf8")).toBe("runtime");
+  });
+});
 
 describe("#188 authoritative branch and no-op regression (isolated real Git)", () => {
   it("#171 shape: stale PR base and origin/main are HEAD's direct parent; uses remote tip and correct parents", async () => {
@@ -474,7 +738,7 @@ describe("#186 bounded pinned-base conflict repair", () => {
     expect(await executeMergeConflictRepair(helper, true)).toBe(f.head());
     expect(record.phase).toBe("pushed");
     f.setPr((_args, pr) => { pr.headRefOid = operation.expectedHeadSha; });
-    await expect(executeMergeConflictRepair(helper, true)).rejects.toThrow("push_outcome_unverified");
+    await expect(executeMergeConflictRepair(helper, true)).rejects.toThrow("push_not_confirmed");
     expect(f.calls.some(a => a[0] === "push")).toBe(false);
   });
 

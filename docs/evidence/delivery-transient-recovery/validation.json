@@ -1,0 +1,25 @@
+{
+  "command": "TMPDIR=/private/tmp VITEST_MAX_THREADS=1 VITEST_MIN_THREADS=1 npm run gate",
+  "result": "passed",
+  "testsPassed": 2588,
+  "existingOptInSkipped": 1,
+  "checks": [
+    "typecheck/build",
+    "all workspace tests",
+    "lint",
+    "docs:check"
+  ],
+  "priorAttempts": [
+    {
+      "configuration": "default concurrency, concurrent with live acceptance",
+      "failedTests": 3,
+      "area": "unchanged workspace process-supervisor/race timing tests"
+    },
+    {
+      "configuration": "default concurrency, live host stopped",
+      "failedTests": 1,
+      "area": "unchanged repository-bootstrap-race close/timer timing test"
+    }
+  ],
+  "note": "Worker concurrency changed; no assertion, timeout, safety check or test skip was changed. Real-integration overall result remains incomplete due to cleanup_refused."
+}

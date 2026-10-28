@@ -373,3 +373,13 @@ symphony delivery-skill run --repo felixjichao/symphony-ts --issue 171 \
 示例 fence 来自 #188 的历史证据，执行前必须重读实际记录；bridge/review、required checks 等生产参数沿用原授权配置。该原生授权只把**无本地或远端效果**的旧记录写为 `reconciled`，返回 CI 观察；不执行旧 merge、不 abort/reset、不改预算/deadline，也不替新 HEAD 授权 approve。下一次真实修复使用新 operationId 和剩余次数。已过期 deadline/耗尽预算仍阻塞，本命令不延长或重置它们。`executing/validating/committing`、dirty/index、已有 Git 操作、未知远端结果不适用这个自动恢复原语，保持原工作并人工核验。`committed/pushing/pushed` 仍遵循原精确提交/远端回执收敛规则。
 
 隔离 Git 证据与验证范围见 [#188 conformance](conformance.md#github-delivery-authoritative-base-and-no-op-recovery-188)；此变更不对生产 #171、runtime、Decision Store 或历史预算执行任何操作。
+
+### 持续运行中的暂时读取失败（#192）
+
+Review 状态读取仅对已识别的网络、超时、服务暂不可用错误重读，最多连续三次，且受原 absolute deadline 约束；原 task/session/revision/HEAD、operation key 和已消耗修复次数不变，stage yield 保留失败计数。认证、权限、身份或结果损坏仍明确交接。HEAD 前移会重新等待当前 SHA 的 CI 并创建对应 Review。
+
+冲突修复 push 后最多进行三次只读对账，沿用 poll interval 与总期限：远端精确 head ref 和 owned PR HEAD 投影都匹配 commit receipt 才进入新 SHA 的 CI/Review。暂旧或可识别的暂时读取故障先等待；第三个 SHA、所有权/身份变化和未知 merge outcome 拒绝。push 返回 transport error 后也只观察事实，不重复 push 或 executor。
+
+四条提交路径统一枚举并暂存源码，检查 Git 返回码，排除 `.symphony`。普通提交保留原 runtime index；merge 提交拒绝已暂存 runtime，保留 merge 双亲，已跟踪但未改变的 runtime 只继承原树版本，不把本地 runtime 更新提交。无法收敛或额度耗尽时沿用一次逻辑暂停和原标签/报告补偿。以上不增加进程崩溃后的 executor/commit 重放或预算续期能力。
+
+真实 workspace-write 运行时，编码执行器只改源码并验证；commit/push/Delivery 由 operator-owned `after_run` 在可信宿主执行。冲突执行器同样只解决工作文件，不写受保护 Git metadata；host 先检查冲突标记、验证，再统一暂存并检查 index 无未解决条目、runtime 隔离及双亲后提交。见 [#192 真实运行及剩余 cleanup 阻断](evidence/delivery-transient-recovery/issue192-20261028075031/README.md)。

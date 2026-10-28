@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { AgentError, type AgentAttemptOptions, type AgentAttemptResult } from "@symphony/agent";
-import type { Issue, OrchestratorRuntimeState } from "@symphony/domain";
+import type { DurableRetryReservation, Issue, OrchestratorRuntimeState } from "@symphony/domain";
 import { createWorkspaceManager, type WorkspaceManager } from "@symphony/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -153,6 +153,7 @@ interface Harness {
   readonly tracker: FakeTracker;
   readonly diagnostics: RetryDiagnostic[];
   readonly outcomes: WorkerTerminalOutcome[];
+  readonly durableRecords: Map<string, DurableRetryReservation>;
 }
 
 function makeHarness(manager: WorkspaceManager): Harness {
@@ -163,6 +164,7 @@ function makeHarness(manager: WorkspaceManager): Harness {
   const diagnostics: RetryDiagnostic[] = [];
   const outcomes: WorkerTerminalOutcome[] = [];
   const contexts: AttemptContext[] = [];
+  const durableRecords = new Map<string, DurableRetryReservation>();
 
   const createAttemptOptions: AttemptOptionsFactory = (context) => {
     contexts.push(context);
@@ -172,6 +174,17 @@ function makeHarness(manager: WorkspaceManager): Harness {
   const authority = new OrchestratorAuthority({
     state,
     policy: POLICY,
+    retryStorage: {
+      load: () => [...durableRecords.values()],
+      put: (record, expectedToken) => {
+        if ((durableRecords.get(record.issueId)?.token ?? null) !== expectedToken) throw new Error("Stale retry");
+        durableRecords.set(record.issueId, record);
+      },
+      remove: (issueId, token) => {
+        if (durableRecords.get(issueId)?.token !== token) throw new Error("Stale retry");
+        durableRecords.delete(issueId);
+      },
+    },
     runner: runner.run,
     createAttemptOptions,
     tracker,
@@ -182,12 +195,16 @@ function makeHarness(manager: WorkspaceManager): Harness {
     retry: {
       scheduler,
       maxRetryBackoffMs: () => 300_000,
-      cleanupWorkspace: { removeWorkspace: (identifier: string) => manager.removeWorkspace(identifier) },
+      cleanupWorkspace: { removeWorkspace: (identifier: string) => {
+        expect(durableRecords.size).toBe(0);
+        expect(state.claimed.size).toBe(1);
+        return manager.removeWorkspace(identifier);
+      } },
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
     },
   });
 
-  return { authority, state, runner, scheduler, tracker, diagnostics, outcomes };
+  return { authority, state, runner, scheduler, tracker, diagnostics, outcomes, durableRecords };
 }
 
 const tempRoots: string[] = [];
@@ -217,6 +234,7 @@ describe("terminal retry refresh 的真实 workspace 清理", () => {
     h.runner.last.reject(new AgentError("port_exit", "died"));
     await h.authority.waitForIdle();
     const entry = h.state.retryAttempts.get(issue.id)!;
+    expect(h.durableRecords.get(issue.id)?.phase).toBe("scheduled");
 
     // issue 在 retry refresh 时已变为 terminal → 安全清理 workspace。
     h.tracker.issues.set(issue.id, { ...issue, state: "Done" });
@@ -224,6 +242,7 @@ describe("terminal retry refresh 的真实 workspace 清理", () => {
     await waitFor(async () => !(await pathExists(workspace.path)));
 
     expect(await pathExists(workspace.path)).toBe(false);
+    expect(h.durableRecords.size).toBe(0);
     expect(h.state.claimed.has(issue.id)).toBe(false);
     expect(h.state.retryAttempts.has(issue.id)).toBe(false);
     expect(h.diagnostics).toEqual([expect.objectContaining({ kind: "cleanup_completed", cleanupStatus: "removed", issueId: issue.id, identifier: issue.identifier })]);

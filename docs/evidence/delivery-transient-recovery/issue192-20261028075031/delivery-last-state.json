@@ -1,0 +1,58 @@
+{
+  "continuation": {
+    "intentId": "968d4c50-dbc9-4179-872c-abf1d1e77707",
+    "headBranch": "symphony/GH-29",
+    "baseBranch": "main",
+    "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "prNumber": 30,
+    "optInLand": true,
+    "readyLabel": "symphony-ready",
+    "maxRepairAttempts": 3,
+    "maxWaitSeconds": 1800,
+    "requiredChecks": [
+      "gate"
+    ],
+    "repairCommand": "npm run ci:fix",
+    "validationCommand": "npm run gate",
+    "validationTimeoutMs": 600000,
+    "phase": "result_observed",
+    "reviewOperationKey": "delivery-review:968d4c50-dbc9-4179-872c-abf1d1e77707:github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:plan:1:1",
+    "reviewTaskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:2:felixjichao%2Fsymphony-delivery-dogfood:30:c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "reviewRevision": 2,
+    "verdict": "approve"
+  },
+  "landing": {
+    "intentId": "00e29876-8e0e-4d49-b8c3-16866265445d",
+    "context": {
+      "repo": "felixjichao/symphony-delivery-dogfood",
+      "issueNumber": 29,
+      "workspaceKey": "GH-29",
+      "headBranch": "symphony/GH-29",
+      "baseBranch": "main"
+    },
+    "prNumber": 30,
+    "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "optIn": true,
+    "phase": "observed",
+    "mergeCommitSha": "09222d9744542a708e52ac81e0532a6403d6a7b7"
+  },
+  "mergeConflictRepair": {
+    "cause": "merge_conflict",
+    "operationId": "8909e927-0193-4afc-a671-cec76a5cfbfc",
+    "attempt": 1,
+    "prNumber": 30,
+    "expectedHeadSha": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea",
+    "baseSha": "21207bef5b29290176bb6f32e768dc79f8c551f1",
+    "phase": "pushed",
+    "commitSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "outcome": "remote_confirmed; current_base=21207bef5b29290176bb6f32e768dc79f8c551f1"
+  },
+  "repo": "felixjichao/symphony-delivery-dogfood",
+  "issueNumber": 29,
+  "workspaceKey": "GH-29",
+  "spentRepairs": 1,
+  "spentWaitSeconds": 252,
+  "deadlineTimestampMs": 1793175983091,
+  "isPaused": false,
+  "lastUpdated": "2026-10-28T08:00:35.524Z"
+}

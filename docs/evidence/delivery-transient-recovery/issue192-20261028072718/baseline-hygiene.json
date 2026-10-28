@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-28T07:36:35.245806+00:00",
+  "sha": "5ab598c3333c03a3d2c4cd1f227550ee0ce949b3",
+  "removedFromSourceIndex": [
+    ".symphony/delivery-state.json"
+  ],
+  "inheritedForeignIssueNumber": 13,
+  "currentRunIssue": 28,
+  "currentRunWorkspaceExists": false,
+  "note": "Scenario baseline hygiene only: old issue runtime was accidentally tracked on main, without a .gitignore. Removed from source index before the new workspace exists; no live state/budget was reset."
+}

@@ -9,6 +9,8 @@
 
 ## 当前 posture
 
+- #192：源码暂存与有界暂时读取恢复已实现；审查补齐 terminal retry 持久化 ownership 结清顺序及 CLI 未暂存冲突回归。真实 dogfood #31 / PR #32 完成四类故障注入后的自动修复、新 SHA CI/独立 Review、合入关闭及同一 host 自动 workspace 清理；全量 gate 2590 passed / 1 既有 opt-in skip。[完整验收证据](evidence/delivery-transient-recovery/issue192-20261028122627/README.md)。
+
 - #188：修复目标改为独立读取真实远端 base ref，保留 pinned SHA 与回执；no-op 在预留前两次有界观察，事实冲突交接且零预算。历史 reserved/merging 无效果状态经 operation/attempt/HEAD 精确原生授权退役，普通 resume 不重放、不重置预算或 deadline。隔离 Git 重现 #171 的旧 PR base + 过期 origin/main，覆盖 clean/conflict/no-op、漂移与恢复；新增 tracker/CLI 回归。见 [验收证据](conformance.md#github-delivery-authoritative-base-and-no-op-recovery-188)；完整 gate 与真实 GitHub 交付留给 operator-owned after_run。
 
 - #186：实现 confirmed CONFLICTING 的有界 pinned-base merge 修复，复用 repair/deadline 预算；新增 durable operation/commit/push 回执、工作区与远端身份检查、新 HEAD CI/exact-HEAD review 闭环，以及 continuity repair 展示。未确认 executor/push 结果保留工作并交接，不重放；Core SPEC 不变（§8/§14、§9、§17/§18 邻接扩展）。临时真实 Git 回归与本地定向验证见 [conformance](conformance.md#github-delivery-merge-conflict-repair-186)；完整 host gate 与真实交付待 after_run 验证。

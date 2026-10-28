@@ -1,0 +1,78 @@
+{
+  "sha": "6b2f320e9422123bf9daca5329519d57bccbf3ce",
+  "node_id": "C_kwDOU79madoAKDZiMmYzMjBlOTQyMjEyM2JmOWRhY2E1MzI5NTE5ZDU3YmNjYmYzY2U",
+  "commit": {
+    "author": {
+      "name": "symphony[bot]",
+      "email": "symphony[bot]@users.noreply.github.com",
+      "date": "2026-10-28T12:34:15Z"
+    },
+    "committer": {
+      "name": "symphony[bot]",
+      "email": "symphony[bot]@users.noreply.github.com",
+      "date": "2026-10-28T12:34:15Z"
+    },
+    "message": "fix(delivery): merge observed base a0ef4279e446f90be028b61e620f86b3a03953ec (attempt 1)",
+    "tree": {
+      "sha": "63c320492225cb1f392ec53fed34f972b6f26fbb",
+      "url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/git/trees/63c320492225cb1f392ec53fed34f972b6f26fbb"
+    },
+    "url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/git/commits/6b2f320e9422123bf9daca5329519d57bccbf3ce",
+    "comment_count": 0,
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    }
+  },
+  "url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/commits/6b2f320e9422123bf9daca5329519d57bccbf3ce",
+  "html_url": "https://github.com/felixjichao/symphony-delivery-dogfood/commit/6b2f320e9422123bf9daca5329519d57bccbf3ce",
+  "comments_url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/commits/6b2f320e9422123bf9daca5329519d57bccbf3ce/comments",
+  "author": null,
+  "committer": null,
+  "parents": [
+    {
+      "sha": "2febab24d3bf79784596320037728b4328e4701f",
+      "url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/commits/2febab24d3bf79784596320037728b4328e4701f",
+      "html_url": "https://github.com/felixjichao/symphony-delivery-dogfood/commit/2febab24d3bf79784596320037728b4328e4701f"
+    },
+    {
+      "sha": "a0ef4279e446f90be028b61e620f86b3a03953ec",
+      "url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/commits/a0ef4279e446f90be028b61e620f86b3a03953ec",
+      "html_url": "https://github.com/felixjichao/symphony-delivery-dogfood/commit/a0ef4279e446f90be028b61e620f86b3a03953ec"
+    }
+  ],
+  "stats": {
+    "total": 6,
+    "additions": 5,
+    "deletions": 1
+  },
+  "files": [
+    {
+      "sha": "bf60b91693c17aa7fa9a70e11ef0e74209cd777c",
+      "filename": "src/issue192_20261028122627.mjs",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "changes": 2,
+      "blob_url": "https://github.com/felixjichao/symphony-delivery-dogfood/blob/6b2f320e9422123bf9daca5329519d57bccbf3ce/src%2Fissue192_20261028122627.mjs",
+      "raw_url": "https://github.com/felixjichao/symphony-delivery-dogfood/raw/6b2f320e9422123bf9daca5329519d57bccbf3ce/src%2Fissue192_20261028122627.mjs",
+      "contents_url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/contents/src%2Fissue192_20261028122627.mjs?ref=6b2f320e9422123bf9daca5329519d57bccbf3ce",
+      "patch": "@@ -1 +1 @@\n-export const issue192_20261028122627 = { feature: true, base: false };\n+export const issue192_20261028122627 = { feature: true, base: true };"
+    },
+    {
+      "sha": "63f3d0cef0aa1d817f1f702fd04315a70235ac73",
+      "filename": "test/issue192_20261028122627_base.test.mjs",
+      "status": "added",
+      "additions": 4,
+      "deletions": 0,
+      "changes": 4,
+      "blob_url": "https://github.com/felixjichao/symphony-delivery-dogfood/blob/6b2f320e9422123bf9daca5329519d57bccbf3ce/test%2Fissue192_20261028122627_base.test.mjs",
+      "raw_url": "https://github.com/felixjichao/symphony-delivery-dogfood/raw/6b2f320e9422123bf9daca5329519d57bccbf3ce/test%2Fissue192_20261028122627_base.test.mjs",
+      "contents_url": "https://api.github.com/repos/felixjichao/symphony-delivery-dogfood/contents/test%2Fissue192_20261028122627_base.test.mjs?ref=6b2f320e9422123bf9daca5329519d57bccbf3ce",
+      "patch": "@@ -0,0 +1,4 @@\n+import test from 'node:test';\n+import assert from 'node:assert/strict';\n+import { issue192_20261028122627 } from '../src/issue192_20261028122627.mjs';\n+test('base implementation survives issue192-20261028122627', () => assert.equal(issue192_20261028122627.base, true));"
+    }
+  ]
+}

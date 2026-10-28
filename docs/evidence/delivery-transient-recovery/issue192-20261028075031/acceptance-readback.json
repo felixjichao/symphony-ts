@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-28T08:04:59.099208+00:00",
+  "status": "delivery_and_transient_recovery_passed_cleanup_failed",
+  "issue": 29,
+  "pr": 30,
+  "repairCommit": "c37fcf7ea8fa6b342187e1d013a30314ef863369",
+  "mergeCommit": "09222d9744542a708e52ac81e0532a6403d6a7b7",
+  "repairExecutors": 1,
+  "repairPushes": 1,
+  "spentRepairs": 1,
+  "isPaused": false,
+  "landingPhase": "observed",
+  "workspacePresent": true,
+  "sentinelAlive": true,
+  "durableRetryReservationsAtReadback": [],
+  "cleanupLog": "workspace_cleanup outcome=failed reason=cleanup_refused at 2026-10-28T08:00:37.155Z",
+  "note": "No manual workspace deletion or reset; continuous-operation faults recovered and native Delivery returned success, but full real-integration cleanup criterion did not pass."
+}

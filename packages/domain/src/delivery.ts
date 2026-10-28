@@ -477,6 +477,8 @@ export interface DeliveryContinuation {
   readonly reviewTaskId?: string | undefined;
   readonly reviewRevision?: number | undefined;
   readonly reviewOperationKey?: string | undefined;
+  /** Consecutive transient observation failures; retained across stage yields. */
+  readonly reviewReadFailures?: number | undefined;
   readonly verdict?: "approve" | "changes_requested" | "needs_human" | undefined;
 }
 export interface LandingIntent {
