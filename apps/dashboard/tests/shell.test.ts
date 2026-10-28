@@ -57,7 +57,7 @@ it("supports skip navigation and preserves visible Work diagnostics on polling",
   expect(root.querySelector<HTMLDetailsElement>("#work details")?.open).toBe(true);
   root.querySelector<HTMLAnchorElement>(".skip-link")!.click();
   expect(document.activeElement?.id).toBe("page-heading");
-  expect(root.querySelectorAll("button,form,input,textarea")).toHaveLength(0);
+  expect(root.querySelectorAll("form,textarea")).toHaveLength(0);
 });
 
 

@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Work Explorer selection boundary](accepted/architecture/2026-10-28-work-explorer.md) — #172 presentation-only discovery and persistent controls.
+
 - [Web heartbeat interruptions](accepted/architecture/2026-10-26-web-heartbeat-interruption.md) — #184: typed cancellation, retained sent attempts and unavailable GitHub admission.
 
 - [Decision evidence failures](accepted/architecture/2026-10-26-decision-evidence-failure.md) — 区分代码审查 verdict 与证据不可用 executor failure，保留修复预算。

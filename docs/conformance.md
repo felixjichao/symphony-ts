@@ -691,3 +691,7 @@ GitHub Delivery / Execution Continuity 扩展，对应固定 baseline `be10a1b79
 | Keyboard / narrow viewport | Existing shell focus tests; optional Overview renderer checks outline and overflow at 1280/390px; browser sandbox limitation in evidence ledger |
 
 Sandbox: Dashboard 11 files / 173 tests passed; root typecheck and Dashboard build passed. [Agent Note](../notes/accepted/architecture/2026-10-26-attention-first-overview.md) and [controlled evidence / reproduction](evidence/dashboard-v2-overview/README.md). Host owns full gate, CI, exact-HEAD review and self-hosted Delivery receipts after this coding session.
+
+## §13 adjacent: Work Explorer (#172)
+
+The Work panel filters current supplied projections by stable display text, provider/repository WorkKey scope, phase, attention and individual source freshness; it retains attention-first ordering and complete WorkKey routes. It displays supplied exact-HEAD approval and independent SHA identities without inferring approval. Empty snapshot and zero matches are distinct. `apps/dashboard/tests/explorer.test.ts` covers multi-repository identity, filters, combined search/reset, polling state and freshness; `examples/smoke.ts` includes keyboard and narrow overflow interactions. The fingerprinted Explorer and typed projection guard constrain presentation changes. [Agent Note](../notes/accepted/architecture/2026-10-28-work-explorer.md) records the selection boundary. Host gate, CI, exact-HEAD review and Delivery remain operator after_run steps.

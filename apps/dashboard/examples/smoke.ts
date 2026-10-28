@@ -40,6 +40,16 @@ try {
     await page.screenshot({ path: `${evidenceDir}/narrow-${name.toLowerCase()}.png`, fullPage: true });
   }
   await page.getByRole("navigation").getByRole("link", { name: "Work", exact: true }).click();
+  // Exercise native discovery controls on the actual narrow Work page.
+  const search = page.locator("#explorer-search"); await search.focus(); await page.keyboard.type("beta");
+  assert.equal(await page.locator("#work tbody tr").count(), 1);
+  assert.ok((await page.locator("#work tbody").innerText()).includes("demo/beta#1"));
+  await page.locator("#explorer-scope").selectOption("github:demo/alpha");
+  await page.getByText("没有工作匹配当前筛选；可重置筛选。", { exact: false }).waitFor();
+  await page.screenshot({ path: `${evidenceDir}/narrow-explorer-filtered.png`, fullPage: true });
+  await page.locator("#explorer-reset").focus(); await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#work tbody tr").count(), 2);
+  assert.ok(await page.locator(".explorer-results").evaluate((node: HTMLElement) => node.scrollWidth > node.clientWidth));
   const link = page.locator("tbody a").first(); await link.click(); await page.getByText("已定位 github:", { exact: false }).waitFor();
   const pane = page.locator("#detail");
   await pane.getByRole("heading", { name: "Why", exact: false }).waitFor();

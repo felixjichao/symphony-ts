@@ -297,3 +297,7 @@ Implemented horizontal DOM-native primitives, console tokens, Work-table reuse, 
 ### Dashboard V2 Overview — #171
 
 Attention-first presentation implemented on #169/#170: supplied needs-human/failed → degraded/anomaly association → waiting → remaining current work; compact supplied counts, system health, source posture, executor ownership and global/work anomaly visibility. Stable WorkKey navigation and last-successful snapshot retention remain intact. No Read Model extension or frontend projector added. Sandbox validation and controlled artifacts are recorded in [Overview evidence](evidence/dashboard-v2-overview/README.md). Full host gate, CI, exact-HEAD review and Delivery remain pending operator after_run; no production acceptance is claimed here.
+
+### Dashboard V2 Work Explorer — #172
+
+Implemented presentation-only search and filters over current Work projections, source-specific freshness, attention-first ordering and WorkKey navigation. Dashboard tests and root typecheck are sandbox checks; browser smoke, full gate, CI, exact-HEAD review and Delivery are host validation steps. No workflow mutation or historical search is added.

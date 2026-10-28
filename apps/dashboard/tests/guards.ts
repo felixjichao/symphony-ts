@@ -58,7 +58,7 @@ export function browserErrors(name: string, source: string): string[] {
       if (specifier && ts.isStringLiteral(specifier)) {
         const value = specifier.text;
         if (!value.startsWith("./") && !(value === "@symphony/operations" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly)) errors.push("browser import boundary");
-        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|primitives|overview|style\.css)$/.test(value)) errors.push("unapproved local module");
+        if (value.startsWith("./") && !/^\.\/(identity|presentation|transport|validate|polling|view|dom|detail|evidence|anomaly|routing|primitives|overview|explorer|style\.css)$/.test(value)) errors.push("unapproved local module");
         if (value.includes("examples") || value.includes("tests")) errors.push("Node/test graph in browser");
       }
     }
@@ -77,7 +77,7 @@ export function browserErrors(name: string, source: string): string[] {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) errors.push("dynamic import");
       if (node.expression.getText(file) === "fetch" && name !== "transport.ts") errors.push("fetch outside transport");
     }
-    if (!["validate.ts", "identity.ts", "presentation.ts"].includes(name)) {
+    if (!["validate.ts", "identity.ts", "presentation.ts", "explorer.ts"].includes(name)) {
       // These shape/identity/format helpers are separately fingerprinted, never arbitrary extensions.
       const registered: Record<string, readonly string[]> = { "primitives.ts": ["attentionBadge", "freshnessIndicator", "presentationState", "workIdentity", "shaIdentity", "surface", "denseTable", "denseList", "searchControl", "filterControl"], "detail.ts": ["workDetail"], "evidence.ts": ["evidenceList"], "anomaly.ts": ["anomalyCards", "anomalySummary"], "overview.ts": ["overview"], "dom.ts": ["el"] };
       if (registered[name] && ts.isFunctionDeclaration(node) && !registered[name]?.includes(node.name?.text ?? "")) errors.push("unregistered presentation helper");
