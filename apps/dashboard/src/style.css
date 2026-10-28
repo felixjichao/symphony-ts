@@ -72,3 +72,9 @@ a:hover, summary:hover { text-decoration: underline; }
 #overview article section { margin-top: var(--space-2); }
 #overview .overview-counts dd { font-size: var(--text-body); margin-right: var(--space-3); }
 #overview .badge { max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+
+/* #172: controls wrap independently of the horizontally scrollable table. */
+#work { overflow: visible; }
+.explorer-controls { display: flex; flex-wrap: wrap; align-items: end; }
+.explorer-controls button { margin: 8px; padding: 8px; font: inherit; }
+.explorer-results { overflow-x: auto; max-width: 100%; }
