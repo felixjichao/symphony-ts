@@ -231,7 +231,7 @@ export class GitHubDeliveryService {
       throw new Error("remote_branch_identity_invalid");
     }
     const result = await this.runner.exec(["api", `repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`]);
-    if (result.exitCode !== 0) throw new Error("remote_branch_unavailable");
+    if (result.exitCode !== 0) throw new Error(`remote_branch_unavailable: ${result.stderr}`);
     const raw: unknown = JSON.parse(result.stdout);
     if (!raw || typeof raw !== "object" || !("ref" in raw) || raw.ref !== `refs/heads/${branch}`
       || !("object" in raw) || !raw.object || typeof raw.object !== "object"

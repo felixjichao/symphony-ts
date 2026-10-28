@@ -24,6 +24,10 @@ describe("#188 authoritative repository branch fact", () => {
     } });
     await expect(service.readRemoteBranch("owner/repo", "main")).rejects.toThrow("remote_branch_malformed");
   });
+  it.each(["ETIMEDOUT", "HTTP 403 forbidden", "HTTP 503 Service Unavailable"])("#192 preserves read failure classification: %s", async stderr => {
+    const service = new GitHubDeliveryService({ async exec() { return { exitCode: 1, stderr, stdout: "" }; } });
+    await expect(service.readRemoteBranch("owner/repo", "main")).rejects.toThrow(`remote_branch_unavailable: ${stderr}`);
+  });
   it.each(["failure", "json"])("fails closed on %s", async kind => {
     const service = new GitHubDeliveryService({ async exec() {
       return { exitCode: kind === "failure" ? 1 : 0, stderr: "unavailable", stdout: "{bad" };

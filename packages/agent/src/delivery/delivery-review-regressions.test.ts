@@ -41,8 +41,8 @@ const options = { ...context, cwd: "/fixture", optInLand: false, maxWaitSeconds:
 
 describe("third-review delivery regressions", () => {
   it.each(
-    [false, true].flatMap((tracked) => [false, true].flatMap((staged) => [false, true].map((repair) => ({ tracked, staged, repair })))),
-  )("commits source without runtime state: %j", async ({ tracked, staged, repair }) => {
+    [false, true].flatMap((tracked) => [false, true].flatMap((staged) => [false, true].flatMap((repair) => [false, true].map((ignored) => ({ tracked, staged, repair, ignored }))))),
+  )("commits source without runtime state: %j", async ({ tracked, staged, repair, ignored }) => {
     const cwd = mkdtempSync(join(tmpdir(), "delivery-state-commit-"));
     const git = (args: readonly string[], commandCwd = cwd) => execFileSync("git", [...args], { cwd: commandCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     try {
@@ -52,14 +52,16 @@ describe("third-review delivery regressions", () => {
       writeFileSync(join(cwd, "source.txt"), "before\n");
       mkdirSync(join(cwd, ".symphony"));
       if (tracked) writeFileSync(join(cwd, ".symphony/delivery-state.json"), "old tracked state\n");
+      if (ignored) writeFileSync(join(cwd, ".gitignore"), ".symphony/\n");
       git(["add", "."]);
+      if (tracked && ignored) git(["add", "-f", ".symphony/delivery-state.json"]);
       git(["commit", "-m", "seed"]);
       writeFileSync(join(cwd, "source.txt"), "after\n");
       const statePath = join(cwd, ".symphony/delivery-state.json");
       let stagedState = "pre-staged runtime state\n";
       if (staged) {
         writeFileSync(statePath, stagedState);
-        git(["add", ".symphony/delivery-state.json"]);
+        git(["add", "-f", ".symphony/delivery-state.json"]);
       }
       let repaired = false;
       const nested = join(cwd, "nested");
@@ -89,7 +91,7 @@ describe("third-review delivery regressions", () => {
         writeFileSync(join(cwd, "source.txt"), "repaired\n");
         if (staged) {
           stagedState = readFileSync(statePath, "utf8");
-          git(["add", ".symphony/delivery-state.json"]);
+          git(["add", "-f", ".symphony/delivery-state.json"]);
         }
         return true;
       }, stateStorage: {

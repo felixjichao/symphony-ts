@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Bounded Delivery observations and staging](accepted/architecture/2026-10-28-delivery-transient-observations.md) — #192: checked literal staging, retained Review observation budget and single-push confirmation.
+
 - [Work Explorer selection boundary](accepted/architecture/2026-10-28-work-explorer.md) — #172 presentation-only discovery and persistent controls.
 
 - [Web heartbeat interruptions](accepted/architecture/2026-10-26-web-heartbeat-interruption.md) — #184: typed cancellation, retained sent attempts and unavailable GitHub admission.

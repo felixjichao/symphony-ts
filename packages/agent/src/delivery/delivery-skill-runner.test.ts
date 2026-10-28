@@ -38,6 +38,7 @@ class MockDeliveryRunner implements DeliveryGitGhRunner {
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
+    if (args[0] === "ls-files") return { stdout: "src/index.ts\0", stderr: "", exitCode: 0 };
     if (args[0] === "show" && typeof args[1] === "string" && (args[1] === "HEAD:AGENTS.md" || args[1].endsWith(":AGENTS.md"))) {
       return { stdout: "# Symphony Workspace Rules", stderr: "", exitCode: 0 };
     }

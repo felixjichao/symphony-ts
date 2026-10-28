@@ -1,3 +1,5 @@
+import { SOURCE_PATHS, stageSourceChanges } from "./source-staging";
+import { isTransientReadError } from "./transient-read";
 import { assertRepairWorkspace, executeMergeConflictRepair, prepareRepairTarget } from "./merge-conflict-repair";
 import { recoverDeliveryHandoff } from "./recover-handoff";
 import { randomUUID } from "node:crypto";
@@ -50,11 +52,6 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly log?: (msg: string) => void;
   readonly signal?: AbortSignal | undefined;
 }
-
-// SPEC §11.5: durable delivery state belongs to the workspace, never a source commit.
-// Commit --only uses these paths even for previously staged state, preserving its
-// original index entry and the local budget file.
-const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony/**"] as const;
 
 const DEFAULT_READY_LABEL = "symphony-ready";
 const DEFAULT_MAX_REPAIRS = 3;
@@ -378,7 +375,10 @@ async function runDeliverySkillLocked(
 ): Promise<DeliverySkillResult> {
   const validationTimeoutMs = options.validationTimeoutMs ?? 600_000;
   const native = options.runner;
-  const guard = () => { if (options.canCommit && !options.canCommit()) throw new Error("Delivery stopped before effect"); };
+  const guard = () => {
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Delivery canceled");
+    if (options.canCommit && !options.canCommit()) throw new Error("Delivery stopped before effect");
+  };
   const runner: DeliveryGitGhRunner = {
     git: (args, cwd, timeout) => { guard(); return native.git(args, cwd, timeout); },
     gh: (args, cwd, timeout) => { guard(); return native.gh(args, cwd, timeout); },
@@ -879,6 +879,7 @@ async function runDeliverySkillLocked(
   const conflictRepairOptions = () => ({ context, cwd: options.cwd, runner,
     readRemoteBranch, recoveryAuthorization: options.conflictRecoveryAuthorization,
     operation: mergeConflictRepair!,
+    sleep: () => sleep(Math.min(pollInterval, Math.max(0, (deadlineTimestampMs! - now()) / 1000))),
     save: async (operation: NonNullable<PersistedDeliveryState["mergeConflictRepair"]>) => {
       mergeConflictRepair = operation;
       await persistCurrentState();
@@ -948,8 +949,10 @@ async function runDeliverySkillLocked(
   // ==========================================
   log("[delivery-skill] Phase 3: Committing changes...");
   const statusRes = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+  if (statusRes.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${statusRes.stderr}`);
   if (statusRes.stdout.trim().length > 0) {
-    await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
+    const staged = await stageSourceChanges(runner, options.cwd);
+    if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
     const commitType = options.commitType ?? "feat";
     const commitMsg =
       options.commitMessage ?? `${commitType}: implement delivery for issue #${context.issueNumber} (${context.workspaceKey})`;
@@ -1344,6 +1347,7 @@ async function runDeliverySkillLocked(
 
         // 核对是否有代码改动
         const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+        if (diffCheck.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${diffCheck.stderr}`);
         if (diffCheck.stdout.trim().length === 0) {
           return haltDispatch(
             "ci_failed_max_repairs",
@@ -1351,7 +1355,8 @@ async function runDeliverySkillLocked(
           );
         }
 
-        await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
+        const staged = await stageSourceChanges(runner, options.cwd);
+        if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
         const fixCommitRes = await runner.git(
           ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
           options.cwd,
@@ -1612,7 +1617,8 @@ async function runDeliverySkillLocked(
       unresolvedFindings: [...unresolvedFindings],
     };
 
-    const operationKey = `delivery-review:${continuation?.intentId ?? randomUUID()}:${options.plan?.taskId ?? "none"}:${options.plan?.revision ?? 0}`;
+    const sameReviewTarget = continuation?.headSha === currentHeadSha && continuation.prNumber === prNumber;
+    const operationKey = (sameReviewTarget ? continuation?.reviewOperationKey : undefined) ?? `delivery-review:${sameReviewTarget ? continuation!.intentId : randomUUID()}:${options.plan?.taskId ?? "none"}:${options.plan?.revision ?? 0}`;
     await checkpoint("review_intent", { reviewOperationKey: operationKey });
     let reviewTask: DecisionTask;
     try {
@@ -1623,6 +1629,13 @@ async function runDeliverySkillLocked(
         reviewContext,
         { operationKey, reuseCompleted: true },
       );
+      if (reviewTask.kind !== "review" || reviewTask.sessionId !== resolvedSessionId
+        || reviewTask.target.headSha !== currentHeadSha || reviewTask.target.prNumber !== prNumber
+        || reviewTask.target.repository.toLowerCase() !== context.repo.toLowerCase()
+        || (continuation?.reviewTaskId !== undefined && (continuation.reviewTaskId !== reviewTask.id
+          || continuation.reviewRevision !== reviewTask.revision))) {
+        return haltDispatch("manual_intervention_required", "Review task identity/revision changed during continuation");
+      }
       lastReviewTaskId = reviewTask.id;
       await checkpoint("review_wait", { reviewTaskId: reviewTask.id, reviewRevision: reviewTask.revision });
       log(`[delivery-skill] Ensured ReviewTask: ${reviewTask.id} (status: ${reviewTask.status})`);
@@ -1675,10 +1688,23 @@ async function runDeliverySkillLocked(
       try {
         statusResult = await options.reviewGate.getReviewStatus(reviewTask.id);
       } catch (err) {
-        return haltDispatch(
-          "manual_intervention_required",
-          `Failed to get review status for task ${reviewTask.id}: ${String(err)}`,
-        );
+        guard();
+        const failures = (continuation?.reviewReadFailures ?? 0) + 1;
+        await checkpoint("review_wait", { reviewReadFailures: failures });
+        if (!isTransientReadError(err) || failures >= 3) {
+          return haltDispatch("manual_intervention_required",
+            `Failed to get review status for task ${reviewTask.id}; observations ${failures}/3: ${String(err)}`);
+        }
+        log(`[delivery-skill] Review read unavailable (${failures}/3): ${String(err)}`);
+        if (options.yieldOnWait) return waiting();
+        await sleep(Math.min(reviewPollInterval, Math.max(0, (deadlineTimestampMs! - now()) / 1000)));
+        continue;
+      }
+      guard();
+      if (now() >= deadlineTimestampMs!) return haltDispatch("ci_wait_timeout", "Review observation exceeded delivery deadline");
+      if (continuation?.reviewReadFailures) await checkpoint("review_wait", { reviewReadFailures: 0 });
+      if (statusResult.taskId !== reviewTask.id) {
+        return haltDispatch("manual_intervention_required", "Review status identity changed during continuation");
       }
 
       if (statusResult.status === "completed") {
@@ -1690,7 +1716,7 @@ async function runDeliverySkillLocked(
           );
         }
 
-        if (reviewResult.taskId !== reviewTask.id || reviewResult.revision !== reviewTask.revision
+        if (reviewResult.sessionId !== resolvedSessionId || reviewResult.taskId !== reviewTask.id || reviewResult.revision !== reviewTask.revision
           || reviewResult.target.headSha !== currentHeadSha || reviewResult.target.prNumber !== prNumber
           || reviewResult.target.repository.toLowerCase() !== context.repo.toLowerCase()) {
           return haltDispatch("manual_intervention_required", "Review result identity/target changed during continuation");
@@ -1797,6 +1823,7 @@ async function runDeliverySkillLocked(
           }
 
           const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+          if (diffCheck.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${diffCheck.stderr}`);
           if (diffCheck.stdout.trim().length === 0) {
             return haltDispatch(
               "review_changes_requested_max_repairs",
@@ -1804,7 +1831,8 @@ async function runDeliverySkillLocked(
             );
           }
 
-          await runner.git(["add", "-A", "--", ...SOURCE_PATHS], options.cwd);
+          const staged = await stageSourceChanges(runner, options.cwd);
+          if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
           const fixCommitRes = await runner.git(
             ["commit", "--only", "-m", `fix(review): address review findings (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
             options.cwd,

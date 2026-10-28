@@ -28,6 +28,7 @@ class MockCliRunner implements DeliveryGitGhRunner {
 
   async git(args: readonly string[], cwd: string): Promise<DeliverySubprocessResult> {
     this.gitCalls.push({ args, cwd });
+    if (args[0] === "ls-files") return { stdout: "src/index.ts\0", stderr: "", exitCode: 0 };
     if (args[0] === "diff" && args.some((a) => typeof a === "string" && a.includes("..."))) {
       return {
         stdout: "diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n",
