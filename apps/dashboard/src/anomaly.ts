@@ -10,7 +10,7 @@ export function anomalyCards(items: readonly OperationalAnomaly[], key: WorkKey 
   if (selected.length === 0) section.append(el("p", "当前快照未报告异常"));
   const ids = diagnosticIds(selected.map(anomalyIdentity), "anomaly");
   for (const [index, entry] of selected.entries()) {
-    const card = el("article"); card.id = ids[index]!;
+    const card = el("article"); card.className = "why-anomaly"; card.id = ids[index]!;
     card.append(el("h4", entry.code), el("p", `severity: ${entry.severity}`), el("p", entry.message), el("p", `WorkKey: ${JSON.stringify(entry.workKey)} · 检测 ${timestamp(entry.detectedAt)}`), evidenceList(entry.evidence ?? [], key, card.id));
     section.append(card);
   }

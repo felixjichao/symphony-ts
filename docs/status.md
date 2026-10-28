@@ -307,3 +307,7 @@ Implemented presentation-only search and filters over current Work projections, 
 ### Dashboard V2 Work Detail current state — #173
 
 Implemented scan-first supplied conclusion, execution, PR/CI/review identities, source freshness and WorkKey-scoped executors; the existing Why area remains below. Sandbox checks cover Dashboard tests and root typecheck. Browser screenshots, full gate, CI, exact-HEAD review and production Delivery remain host validation and are not claimed here.
+
+### Dashboard V2 Work Detail Why — #174
+
+The Why surface presents supplied source/role evidence and provenance alongside separately labelled conclusion, freshness and Work-scoped anomalies; exact review targets remain independently visible. Global anomalies remain in System. Raw evidence uses keyboard-accessible disclosures with refresh state retention. Dashboard tests and root typecheck passed. [Browser evidence](evidence/work-detail-why/README.md) retains the reviewed `3f69e85` captures plus expanded diagnostic acceptance; CI now has an exact-PR-HEAD browser job with retained artifacts. Host gate, CI, exact-HEAD Review and Delivery for the repair remain runner-owned.

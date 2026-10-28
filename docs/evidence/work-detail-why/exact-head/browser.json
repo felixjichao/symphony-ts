@@ -1,0 +1,36 @@
+{
+  "head": "3f69e85b0220ac3fb2648d162133a597b3d88bd1",
+  "trackedChanges": [],
+  "recordedAt": "2026-10-28T14:59:08.444269+00:00",
+  "command": "SYMPHONY_BROWSER_MODULE=<installed playwright 1.62.1/index.mjs> SYMPHONY_CHROMIUM=<installed Edge> SYMPHONY_BROWSER_EVIDENCE=docs/evidence/work-detail-why/exact-head node_modules/.bin/tsx apps/dashboard/examples/detail-visual.ts",
+  "result": {
+    "browser": "156.0.4314.50",
+    "cases": [
+      "planning-ready",
+      "active-coding",
+      "waiting-stale-review",
+      "partial-missing",
+      "terminal",
+      "needs-human"
+    ],
+    "screenshots": 12
+  },
+  "sha256": {
+    "apps/dashboard/examples/detail-visual.ts": "963b5f0744d449836962b397243ad23df957a61d4034916076225a96b2f5fa99",
+    "apps/dashboard/dist/assets/index-CRojp-1f.js": "6bb72456b3cfc3b0d5d0cb6b58f5e75ad8995e58712cfa913f13a88ef1f5ec24",
+    "apps/dashboard/dist/assets/index-Dw93ForQ.css": "bc1c83be5c8144178ef8a009f71bf8c2eecc7ac9e003591dca598406a339f373",
+    "apps/dashboard/dist/index.html": "2f79e9785a6e0c1960968f21e93c8657cd2c5cd21b29b331b519580635018f37",
+    "docs/evidence/work-detail-why/exact-head/active-coding-desktop.png": "28d229a92bbcdac6dc0c30f1a996b4b33422897188b9f14db7fdb7bc34545554",
+    "docs/evidence/work-detail-why/exact-head/active-coding-narrow.png": "689d62ece8bf69f80b5d27aa85b19f594e378607a6e6d46fceb1547ac57d53b6",
+    "docs/evidence/work-detail-why/exact-head/needs-human-desktop.png": "186be341ef04412ec1b470541f9d7a1b13fa8a92805eeaf670493bbb5074c6b0",
+    "docs/evidence/work-detail-why/exact-head/needs-human-narrow.png": "3c712e7291583e0c48dc3585666d408fc45754379cb4e872e7883669c8eb531a",
+    "docs/evidence/work-detail-why/exact-head/partial-missing-desktop.png": "f1f06dee3722c85cc3df895cfd438a9e1839eb377a68322f0bd5efd74fe3be45",
+    "docs/evidence/work-detail-why/exact-head/partial-missing-narrow.png": "eb24dba31e54d355aff5acfd473f9f1e5ae94b43e2470c7f9e79d725cd8193e1",
+    "docs/evidence/work-detail-why/exact-head/planning-ready-desktop.png": "7fa870691f43944f624afe45460410f5f8fd777b5deefafa1b72dc887082548d",
+    "docs/evidence/work-detail-why/exact-head/planning-ready-narrow.png": "5b8c98608a8cafe448498343ef3338830b7d974be7b8c214c164da08a5923d8b",
+    "docs/evidence/work-detail-why/exact-head/terminal-desktop.png": "3c413e18478609d911a80320166f869a3978b95de7361f092e434a7dac6a76b9",
+    "docs/evidence/work-detail-why/exact-head/terminal-narrow.png": "745771a67331ad1ddfa95d9fc1dbaed27ee2e05c73b6dfbe22e1af9e5bc44216",
+    "docs/evidence/work-detail-why/exact-head/waiting-stale-review-desktop.png": "ad108410e6111dfb65ebc1ef0d6dbee0c942b3411e9a33e78005f2959c719e84",
+    "docs/evidence/work-detail-why/exact-head/waiting-stale-review-narrow.png": "9ab8404f2b8f300b5d9e4269e4e9f0af1b8cd94bb269a136d432d0e59f910031"
+  }
+}

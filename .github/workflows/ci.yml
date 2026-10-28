@@ -18,3 +18,34 @@ jobs:
         run: npm ci
       - name: Gate (typecheck + test + lint + docs:check)
         run: npm run gate
+
+  detail-browser:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build exact-HEAD workspaces
+        run: npm run typecheck
+      - name: Install Chromium for Dashboard acceptance
+        run: npm exec -w @symphony/dashboard -- playwright install --with-deps chromium
+      - name: Work Detail browser and visual acceptance
+        id: detail-browser
+        env:
+          SYMPHONY_BROWSER_EVIDENCE: ${{ runner.temp }}/work-detail-why
+        run: npm run browser:detail -w @symphony/dashboard
+      - name: Retain exact-HEAD Dashboard browser evidence
+        if: ${{ always() && steps.detail-browser.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: work-detail-why-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/work-detail-why/
+          if-no-files-found: error
+          retention-days: 30
