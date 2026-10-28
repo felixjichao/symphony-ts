@@ -160,3 +160,7 @@ The failed manifest and successful recovery evidence are both retained; this
 result includes that operator recovery, rather than claiming an uninterrupted
 harness pass. Foreign/conflict refusal evidence remains from the 2026-10-05
 real runs (`ownership_refusal` / `merge_rejected`), with both PRs still open.
+
+## #192 real transient-recovery follow-up (2026-10-28)
+
+The dedicated [opt-in acceptance script](../scripts/acceptance/delivery-transient-live.mjs) uses the actual native host/Decision Bridge, real Codex coding and independent Reviews, operator-owned `after_run` Delivery and the default sandboxed conflict executor. [Evidence](evidence/delivery-transient-recovery/issue192-20261028075031/README.md) records real fault recovery, repaired-SHA CI/Review, automatic PR #30 merge and Issue #29 closure. Native terminal cleanup was refused, so the full profile is **not passed**. The existing `conflict` scenario's `merge_rejected` safety meaning is unchanged and was separately re-verified on PR #7. The [earlier failed attempt](evidence/delivery-transient-recovery/issue192-20261028072718/README.md) is retained; no restart, state reset or manual deletion is disguised as uninterrupted cleanup success.

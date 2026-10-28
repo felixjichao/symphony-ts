@@ -381,3 +381,5 @@ Review 状态读取仅对已识别的网络、超时、服务暂不可用错误�
 冲突修复 push 后最多进行三次只读对账，沿用 poll interval 与总期限：远端精确 head ref 和 owned PR HEAD 投影都匹配 commit receipt 才进入新 SHA 的 CI/Review。暂旧或可识别的暂时读取故障先等待；第三个 SHA、所有权/身份变化和未知 merge outcome 拒绝。push 返回 transport error 后也只观察事实，不重复 push 或 executor。
 
 四条提交路径统一枚举并暂存源码，检查 Git 返回码，排除 `.symphony`。普通提交保留原 runtime index；merge 提交拒绝已暂存 runtime，保留 merge 双亲，已跟踪但未改变的 runtime 只继承原树版本，不把本地 runtime 更新提交。无法收敛或额度耗尽时沿用一次逻辑暂停和原标签/报告补偿。以上不增加进程崩溃后的 executor/commit 重放或预算续期能力。
+
+真实 workspace-write 运行时，编码执行器只改源码并验证；commit/push/Delivery 由 operator-owned `after_run` 在可信宿主执行。冲突执行器同样只解决工作文件，不写受保护 Git metadata；host 先检查冲突标记、验证，再统一暂存并检查 index 无未解决条目、runtime 隔离及双亲后提交。见 [#192 真实运行及剩余 cleanup 阻断](evidence/delivery-transient-recovery/issue192-20261028075031/README.md)。

@@ -1,0 +1,70 @@
+[
+  {
+    "task": {
+      "schemaVersion": 1,
+      "id": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:1:felixjichao%2Fsymphony-delivery-dogfood:30:9f9e8db67db04e2878ecbef2c58bff5f59ad3cea",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#29",
+      "kind": "review",
+      "revision": 1,
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 30,
+        "headSha": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+      },
+      "status": "superseded",
+      "lease": null,
+      "claimGeneration": 1,
+      "createdAtMs": 1793174226072,
+      "updatedAtMs": 1793174356982
+    },
+    "result": {
+      "schemaVersion": 1,
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:1:felixjichao%2Fsymphony-delivery-dogfood:30:9f9e8db67db04e2878ecbef2c58bff5f59ad3cea",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#29",
+      "revision": 1,
+      "createdAtMs": 1793174286802,
+      "kind": "review",
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 30,
+        "headSha": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+      },
+      "verdict": "approve",
+      "findings": []
+    }
+  },
+  {
+    "task": {
+      "schemaVersion": 1,
+      "id": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:2:felixjichao%2Fsymphony-delivery-dogfood:30:c37fcf7ea8fa6b342187e1d013a30314ef863369",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#29",
+      "kind": "review",
+      "revision": 2,
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 30,
+        "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369"
+      },
+      "status": "completed",
+      "lease": null,
+      "claimGeneration": 1,
+      "createdAtMs": 1793174361549,
+      "updatedAtMs": 1793174424547
+    },
+    "result": {
+      "schemaVersion": 1,
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:2:felixjichao%2Fsymphony-delivery-dogfood:30:c37fcf7ea8fa6b342187e1d013a30314ef863369",
+      "sessionId": "github:felixjichao/symphony-delivery-dogfood#29",
+      "revision": 2,
+      "createdAtMs": 1793174423782,
+      "kind": "review",
+      "target": {
+        "repository": "felixjichao/symphony-delivery-dogfood",
+        "prNumber": 30,
+        "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369"
+      },
+      "verdict": "approve",
+      "findings": []
+    }
+  }
+]

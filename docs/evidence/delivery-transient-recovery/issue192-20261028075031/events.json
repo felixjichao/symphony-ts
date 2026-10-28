@@ -1,0 +1,118 @@
+[
+  {
+    "at": "2026-10-28T07:50:36.603Z",
+    "name": "scenario_seed_pushed",
+    "sha": "686887fce65363022640f18149c85d4dc113877a",
+    "file": "src/issue192_20261028075031.mjs"
+  },
+  {
+    "at": "2026-10-28T07:50:39.997Z",
+    "name": "issue_created",
+    "issue": 29,
+    "url": "https://github.com/felixjichao/symphony-delivery-dogfood/issues/29",
+    "label": "dogfood-issue192-20261028075031"
+  },
+  {
+    "at": "2026-10-28T07:50:41.134Z",
+    "name": "codex_decision_started",
+    "kind": "plan",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:plan:1",
+    "revision": 1,
+    "target": null
+  },
+  {
+    "at": "2026-10-28T07:51:29.028Z",
+    "name": "codex_decision_completed",
+    "kind": "plan",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:plan:1",
+    "revision": 1,
+    "target": null,
+    "verdict": "ready"
+  },
+  {
+    "at": "2026-10-28T07:51:33.068Z",
+    "name": "transparent_wrapper_self_test_passed",
+    "entries": 10
+  },
+  {
+    "at": "2026-10-28T07:51:36.058Z",
+    "name": "native_host_started",
+    "pid": 19694,
+    "issue": 29,
+    "bridgePort": 52124
+  },
+  {
+    "at": "2026-10-28T07:53:44.199Z",
+    "name": "ignored_runtime_observed",
+    "path": ".symphony/runtime-probe.json",
+    "content": "real runtime file\n"
+  },
+  {
+    "at": "2026-10-28T07:56:34.507Z",
+    "name": "base_conflict_injected",
+    "sha": "21207bef5b29290176bb6f32e768dc79f8c551f1",
+    "prNumber": 30,
+    "originalHead": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+  },
+  {
+    "at": "2026-10-28T07:57:07.220Z",
+    "name": "injected_review_read_503",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:1:felixjichao%2Fsymphony-delivery-dogfood:30:9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+  },
+  {
+    "at": "2026-10-28T07:57:12.010Z",
+    "name": "codex_decision_started",
+    "kind": "review",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:1:felixjichao%2Fsymphony-delivery-dogfood:30:9f9e8db67db04e2878ecbef2c58bff5f59ad3cea",
+    "revision": 1,
+    "target": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 30,
+      "headSha": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+    }
+  },
+  {
+    "at": "2026-10-28T07:58:07.695Z",
+    "name": "codex_decision_completed",
+    "kind": "review",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:1:felixjichao%2Fsymphony-delivery-dogfood:30:9f9e8db67db04e2878ecbef2c58bff5f59ad3cea",
+    "revision": 1,
+    "target": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 30,
+      "headSha": "9f9e8db67db04e2878ecbef2c58bff5f59ad3cea"
+    },
+    "verdict": "approve"
+  },
+  {
+    "at": "2026-10-28T07:59:25.444Z",
+    "name": "codex_decision_started",
+    "kind": "review",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:2:felixjichao%2Fsymphony-delivery-dogfood:30:c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "revision": 2,
+    "target": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 30,
+      "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369"
+    }
+  },
+  {
+    "at": "2026-10-28T08:00:24.562Z",
+    "name": "codex_decision_completed",
+    "kind": "review",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:review:2:felixjichao%2Fsymphony-delivery-dogfood:30:c37fcf7ea8fa6b342187e1d013a30314ef863369",
+    "revision": 2,
+    "target": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 30,
+      "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369"
+    },
+    "verdict": "approve"
+  },
+  {
+    "at": "2026-10-28T08:05:00.734Z",
+    "name": "acceptance_failed",
+    "error": "Error: Live acceptance deadline exhausted",
+    "issue": 29
+  }
+]

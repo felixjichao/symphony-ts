@@ -9,7 +9,7 @@
 
 ## 当前 posture
 
-- #192：源码暂存改为 Git 枚举 + literal pathspec，统一四条提交路径；Review 读取与冲突 push 后事实确认有界重试，保留任务身份、总期限和修复预算。真实临时 Git 与 CLI 故障验收见 [证据](evidence/delivery-transient-recovery/README.md)。原 dogfood 自动修复成功链路待真实验收，整体 issue 尚未完全收口。
+- #192：源码暂存与暂时读取故障恢复已实现；真实 dogfood #29 / PR #30 在 Review 503、push 回包错误、ref 读取失败及旧 PR 投影后自动修复、通过新 SHA CI/独立 Review 并合入关闭。验收同时补上可信 host 暂存边界，保持 workspace-write。terminal cleanup 被原生 guard 拒绝，完整 Real Integration 尚未通过，PR 保持 Draft；[真实证据与阻断项](evidence/delivery-transient-recovery/issue192-20261028075031/README.md)。
 
 - #188：修复目标改为独立读取真实远端 base ref，保留 pinned SHA 与回执；no-op 在预留前两次有界观察，事实冲突交接且零预算。历史 reserved/merging 无效果状态经 operation/attempt/HEAD 精确原生授权退役，普通 resume 不重放、不重置预算或 deadline。隔离 Git 重现 #171 的旧 PR base + 过期 origin/main，覆盖 clean/conflict/no-op、漂移与恢复；新增 tracker/CLI 回归。见 [验收证据](conformance.md#github-delivery-authoritative-base-and-no-op-recovery-188)；完整 gate 与真实 GitHub 交付留给 operator-owned after_run。
 

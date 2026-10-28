@@ -311,6 +311,21 @@ describe("#192 transient delivery failures (real Git)", () => {
     expect(f.paused()).toBe(false);
   });
 
+  it("#192 host stages resolved work when the workspace-write executor cannot write Git metadata", async () => {
+    const f = fixture(); f.advanceBase(); let executorCalls = 0;
+    const result = await runDeliverySkill({ ...f.options, repairFn: () => {
+      executorCalls++;
+      fs.writeFileSync(path.join(f.cwd, "source.txt"), "PR implementation\nmain changes\n");
+      // Actual Codex workspace-write protects .git; leave the resolved file unstaged.
+      expect(f.git(["diff", "--name-only", "--diff-filter=U"])).toContain("source.txt");
+      return true;
+    } });
+    expect(result.status, result.handoffMarkdown).toBe("completed");
+    expect(executorCalls).toBe(1); expect(result.spentRepairs).toBe(1);
+    expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
+    expect(f.git(["show", "HEAD:source.txt"])).toBe("PR implementation\nmain changes");
+  });
+
   it("T6 waits for new-SHA CI instead of reusing old CI and approval", async () => {
     const f = fixture(); let advanced = false; let pending = 0;
     f.setOnApprove(() => { if (!advanced) { advanced = true; f.advanceBase(); } });

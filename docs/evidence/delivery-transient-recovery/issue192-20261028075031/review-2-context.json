@@ -1,0 +1,67 @@
+{
+  "context": {
+    "strategy": "materialized",
+    "workItem": {
+      "provider": "github",
+      "key": "felixjichao/symphony-delivery-dogfood#29"
+    },
+    "repository": "felixjichao/symphony-delivery-dogfood",
+    "issue": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "number": 29,
+      "title": "#192 real conflict repair acceptance issue192-20261028075031",
+      "body": "In src/issue192_20261028075031.mjs, change the exported issue192_20261028075031.feature flag to true. Do not change the base flag from the branch's inherited value. Add a real Node test in test/issue192_20261028075031.test.mjs asserting feature is true. Run npm run gate and npm run lint. The trusted operator-owned after_run hook invokes the configured native delivery-skill CLI for commits, push, CI and independent Review. The coding executor must only edit source/tests and validate, then finish; do not invoke Delivery inside the coding sandbox. The acceptance harness will concurrently update the same object line on main to set base=true and add a base test, forcing a real Git conflict; the native conflict executor must preserve both feature=true and base=true. Do not hand-commit, hand-push, merge, rebase, abort or reset: the Delivery skill owns those effects. Do not weaken tests/CI or edit runtime state. This is an isolated synthetic test authorized by the maintainer.\n\nRelated product issue: https://github.com/felixjichao/symphony-ts/issues/192"
+    },
+    "plan": {
+      "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2329:plan:1",
+      "revision": 1,
+      "plan": "已只读检查目标模块、现有 Node 测试、npm 脚本及 CI；未发现 AGENTS.md，未修改文件或运行验证。执行步骤：1. 将 src/issue192_20261028075031.mjs 中 feature 改为 true，保留分支继承的 base 值（当前为 false）。2. 新建 test/issue192_20261028075031.test.mjs，使用 node:test 和 node:assert/strict 导入真实模块，并断言 assert.equal(issue192_20261028075031.feature, true)。3. 分别运行 npm run gate 和 npm run lint，记录结果后结束编码执行。4. 由可信 after_run hook 调用原生 Delivery CLI，负责提交、推送、CI、独立 Review 及冲突处理。",
+      "acceptanceCriteria": [
+        "编码阶段仅修改指定源文件并新增指定测试文件；feature=true，base 保持继承值。",
+        "新增测试由现有 test/*.test.mjs 自动发现，实际导入模块并严格断言 feature=true。",
+        "npm run gate 和 npm run lint 均退出码为 0，保留已有测试及 CI 配置。",
+        "main 并发修改引发真实 Git 冲突后，原生冲突执行器保留 feature=true 和 base=true，并保留、通过双方测试。",
+        "编码执行器不调用 Delivery，不手动提交、推送、合并、rebase、abort 或 reset，不修改运行时状态。",
+        "交付流程的 CI 与独立 Review 由可信 hook 驱动完成。"
+      ],
+      "risks": [
+        "gate 仅运行测试，不包含 lint；必须分别执行两个命令。",
+        "WORKFLOW.md 含直接调用 Delivery 的旧指引；本任务的显式指令优先，编码执行器验证完成即结束。",
+        "冲突解决时必须保留 main 引入的 base=true，不能用编码阶段的 base=false 覆盖。"
+      ],
+      "clarifications": []
+    },
+    "pullRequest": {
+      "repository": "felixjichao/symphony-delivery-dogfood",
+      "prNumber": 30,
+      "headSha": "c37fcf7ea8fa6b342187e1d013a30314ef863369",
+      "baseRef": "main",
+      "headRef": "symphony/GH-29",
+      "title": "feat: delivery for #29 (GH-29)",
+      "body": "Automated delivery for issue #29\n\nFixes felixjichao/symphony-delivery-dogfood#29\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"repo\":\"felixjichao/symphony-delivery-dogfood\",\"issueNumber\":29,\"workspaceKey\":\"GH-29\",\"headBranch\":\"symphony/GH-29\",\"baseBranch\":\"main\"} -->\n"
+    },
+    "diff": {
+      "patch": "diff --git a/src/issue192_20261028075031.mjs b/src/issue192_20261028075031.mjs\nindex ebca23f..d3838da 100644\n--- a/src/issue192_20261028075031.mjs\n+++ b/src/issue192_20261028075031.mjs\n@@ -1 +1 @@\n-export const issue192_20261028075031 = { feature: false, base: true };\n+export const issue192_20261028075031 = { feature: true, base: true };\ndiff --git a/test/issue192_20261028075031.test.mjs b/test/issue192_20261028075031.test.mjs\nnew file mode 100644\nindex 0000000..d4a6654\n--- /dev/null\n+++ b/test/issue192_20261028075031.test.mjs\n@@ -0,0 +1,8 @@\n+import assert from \"node:assert/strict\";\n+import { test } from \"node:test\";\n+\n+import { issue192_20261028075031 } from \"../src/issue192_20261028075031.mjs\";\n+\n+test(\"issue192_20261028075031 enables feature\", () => {\n+  assert.equal(issue192_20261028075031.feature, true);\n+});\n",
+      "files": [
+        "src/issue192_20261028075031.mjs",
+        "test/issue192_20261028075031.test.mjs"
+      ],
+      "truncated": false
+    },
+    "ci": {
+      "state": "SUCCESS",
+      "summary": "All 1 required checks and 1 current checks succeeded",
+      "checks": [
+        {
+          "name": "gate",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/felixjichao/symphony-delivery-dogfood/actions/runs/40653594797/job/122699228244"
+        }
+      ]
+    },
+    "repositoryInstructions": null,
+    "previousReviews": [],
+    "unresolvedFindings": []
+  }
+}

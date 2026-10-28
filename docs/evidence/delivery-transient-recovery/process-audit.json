@@ -1,0 +1,42 @@
+{
+  "at": "2026-10-28T08:13:35.919348+00:00",
+  "ownedProcessesStillRunning": [],
+  "faultProxyPorts": [
+    {
+      "port": 60504,
+      "acceptingConnections": false
+    },
+    {
+      "port": 52124,
+      "acceptingConnections": false
+    }
+  ],
+  "credentialFilesRemoved": true,
+  "scope": "Only run-owned roots/processes/ports inspected. No production process was signalled.",
+  "knownHostAndCodingPidsAtReadback": [
+    {
+      "pid": 74711,
+      "exists": false
+    },
+    {
+      "pid": 25035,
+      "exists": false
+    },
+    {
+      "pid": 59255,
+      "exists": false
+    },
+    {
+      "pid": 19694,
+      "exists": false
+    }
+  ],
+  "workspaceRootsStillExist": {
+    "/private/tmp/symphony192-live-gExxRI": true,
+    "/private/tmp/symphony192-live-vgUvzM": true
+  },
+  "issueWorkspacesRetained": {
+    "28": true,
+    "29": true
+  }
+}

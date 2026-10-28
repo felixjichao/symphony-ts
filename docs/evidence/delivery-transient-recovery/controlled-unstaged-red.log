@@ -1,0 +1,84 @@
+npm notice run symphony-ts@0.1.0 npx
+npm notice run 'vitest' run packages/agent/src/delivery/merge-conflict-repair.test.ts -t host stages resolved
+
+ RUN  v2.1.9 /Users/jichao/.codex/worktrees/issue-192-pr/symphony-ts
+
+ ❯ packages/agent/src/delivery/merge-conflict-repair.test.ts (82 tests | 1 failed | 81 skipped) 1522ms
+   × #192 transient delivery failures (real Git) > #192 host stages resolved work when the workspace-write executor cannot write Git metadata 1522ms
+     → ## 🚨 Symphony Delivery Handoff Report
+
+**触发原因**：`manual_intervention_required`
+**详细信息**：Error: merge_conflict_unresolved_paths
+
+---
+
+### 1. 任务与交付状态
+- **Repository**: `owner/repo`
+- **Issue**: #186
+- **Branch**: `symphony/GH-186`
+- **PR**: [#187](https://github.com/owner/repo/pull/187)
+- **Head SHA**: `ba490923cf`
+- **Handoff ID**: `handoff-owner-repo-186-1793173698337-ia7sqq`
+<!-- symphony:handoff-id: handoff-owner-repo-186-1793173698337-ia7sqq -->
+
+### 2. 预算消耗情况
+- **修复重试消耗**: 1 / 3 次上限
+- **CI 等待时间消耗**: 0s / 100s 上限
+
+### 3. 调度控制与交接说明
+- **Issue 状态保持**: Open（未完成，绝不误关闭）
+- **标签操作**: 已从 Issue #186 移除 `symphony-ready` 标签，**已自动停止当前任务派发与 Continuation 循环**。
+- **恢复操作指引**:
+  1. 人工排查上述详情或 CI 日志中的 blocker / 失败项；
+  2. 修复问题后，在 GitHub Issue #186 上重新添加 `symphony-ready` 标签以恢复 Symphony 自动调度。
+: expected 'blocked' to be 'completed' // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agent/src/delivery/merge-conflict-repair.test.ts > #192 transient delivery failures (real Git) > #192 host stages resolved work when the workspace-write executor cannot write Git metadata
+AssertionError: ## 🚨 Symphony Delivery Handoff Report
+
+**触发原因**：`manual_intervention_required`
+**详细信息**：Error: merge_conflict_unresolved_paths
+
+---
+
+### 1. 任务与交付状态
+- **Repository**: `owner/repo`
+- **Issue**: #186
+- **Branch**: `symphony/GH-186`
+- **PR**: [#187](https://github.com/owner/repo/pull/187)
+- **Head SHA**: `ba490923cf`
+- **Handoff ID**: `handoff-owner-repo-186-1793173698337-ia7sqq`
+<!-- symphony:handoff-id: handoff-owner-repo-186-1793173698337-ia7sqq -->
+
+### 2. 预算消耗情况
+- **修复重试消耗**: 1 / 3 次上限
+- **CI 等待时间消耗**: 0s / 100s 上限
+
+### 3. 调度控制与交接说明
+- **Issue 状态保持**: Open（未完成，绝不误关闭）
+- **标签操作**: 已从 Issue #186 移除 `symphony-ready` 标签，**已自动停止当前任务派发与 Continuation 循环**。
+- **恢复操作指引**:
+  1. 人工排查上述详情或 CI 日志中的 blocker / 失败项；
+  2. 修复问题后，在 GitHub Issue #186 上重新添加 `symphony-ready` 标签以恢复 Symphony 自动调度。
+: expected 'blocked' to be 'completed' // Object.is equality
+
+Expected: "completed"
+Received: "blocked"
+
+ ❯ packages/agent/src/delivery/merge-conflict-repair.test.ts:323:51
+    321|       return true;
+    322|     } });
+    323|     expect(result.status, result.handoffMarkdown).toBe("completed");
+       |                                                   ^
+    324|     expect(executorCalls).toBe(1); expect(result.spentRepairs).toBe(1);
+    325|     expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 81 skipped (82)
+   Start at  15:48:16
+   Duration  1.91s (transform 176ms, setup 0ms, collect 208ms, tests 1.52s, environment 0ms, prepare 38ms)
+

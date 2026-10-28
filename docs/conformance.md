@@ -711,3 +711,5 @@ The Work panel filters current supplied projections by stable display text, prov
 | 单次冲突 push 后只读有界确认 | authoritative head ref + owned PR projection 均匹配 commit receipt；三次观察，不重放 push/executor；新 SHA CI/Review；T2/T4/T6/T7/T8 |
 
 [设计与替代方案](../notes/accepted/architecture/2026-10-28-delivery-transient-observations.md)；[本地证据及 live 待验收边界](evidence/delivery-transient-recovery/README.md)。真实 dogfood 自动修复成功链路尚未验收，保留原 conflict 安全拒绝能力，不标记整体完成。
+
+#192 live follow-up: [actual dogfood ledger](evidence/delivery-transient-recovery/issue192-20261028075031/README.md) proves real transient recovery → two-parent repair → current-SHA CI/independent Codex Review → automatic merge/Issue closure, with one repair executor/push and preserved deadline. Workspace-write resolves files while the trusted host checks markers, validates and stages; an unstaged-resolution regression protects that boundary. **Full Real Integration remains failed/incomplete:** native host terminal cleanup was refused. The original conflict `merge_rejected` safety refusal was re-run and retained; no browser UI or live auth/exhaustion/third-SHA acceptance is claimed.

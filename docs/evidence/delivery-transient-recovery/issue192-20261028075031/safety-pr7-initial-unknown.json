@@ -1,0 +1,10 @@
+{
+  "baseRefName": "main",
+  "body": "Automated changes for issue #6\n\nFixes felixjichao/symphony-delivery-dogfood#6\n\n<!-- symphony-delivery-marker: {\"schemaVersion\":1,\"repo\":\"felixjichao/symphony-delivery-dogfood\",\"issueNumber\":6,\"workspaceKey\":\"dogfood-conflict-nest94-conflict-20261005\",\"headBranch\":\"symphony/dogfood-conflict-nest94-conflict-20261005\",\"baseBranch\":\"main\"} -->\n",
+  "headRefName": "symphony/dogfood-conflict-nest94-conflict-20261005",
+  "headRefOid": "6a7bf2a03b2f4c779ef006da38f839133688be40",
+  "mergeable": "UNKNOWN",
+  "number": 7,
+  "state": "OPEN",
+  "url": "https://github.com/felixjichao/symphony-delivery-dogfood/pull/7"
+}

@@ -25,8 +25,16 @@ Reproduce the production CLI boundary: `npx vitest run apps/cli/src/delivery-tra
 
 `TMPDIR=/private/tmp npm run gate` passed: strict typecheck/build, 2,564 tests passed and one existing opt-in compatibility test skipped, lint and documentation checks. The command ran with local process-inspection permission for the existing `ps`-based supervision tests. Earlier sandbox runs failed that permission check; the ordinary macOS temporary-directory alias also exposed existing `/var` versus `/private/var` cwd assertions. Canonical `/private/tmp` resolved those environment-only failures without changing workspace safety code.
 
-## Live acceptance boundary
+## Real acceptance — 2026-10-28
 
-**Pending:** the original isolated `felixjichao/symphony-delivery-dogfood` conflict → repair → push → actual new-SHA CI → independent exact-HEAD Review → merge → Issue closed → host cleanup run. The existing `conflict` dogfood scenario remains a `merge_rejected` safety test; it is not repair-success evidence. No local controlled fixture is called a live GitHub/Review pass.
+**Partial / overall profile failed:** [dogfood #29 / PR #30 ledger](issue192-20261028075031/README.md) proves actual native host, real Codex coding/conflict executor, real GitHub CI on both SHAs, independent exact-HEAD Codex Reviews and automatic merge/Issue closure despite Review 503, successful-push transport error, first ref read timeout and old PR HEAD projection. One repair executor/push, unchanged deadline and no pause/handoff are recorded. Terminal host cleanup was refused; the retained workspace prevents a full Real Integration pass. #192 remains open/Draft.
 
-This change does not authorize production execution, changes to the running host or adding `symphony-ready`. No production recovery or state reset was performed. Full live closeout remains required before marking #192 fully accepted.
+[The first failed attempt](issue192-20261028072718/README.md) is retained separately. It exposed Git metadata protection when Delivery ran inside the coding sandbox. The successful Delivery segment uses operator-owned `after_run`, with the executor limited to worktree resolution and the trusted host owning checked staging. The new regression first failed with `merge_conflict_unresolved_paths`, then passed after that staging boundary fix.
+
+The historical conflict safety refusal was also re-run through actual native `pr land` and returned `merge_rejected`; its unchanged OPEN/CONFLICTING PR is distinct from repair success. Browser/Userscript UI, live exhaustion, auth and third-SHA negative injections are not claimed.
+
+Only the explicitly authorized dogfood target was written. Production host/Bridge were not changed. No delivery state, repair budget or deadline was deleted or reset, and no manual workspace deletion substitutes for native cleanup.
+
+[Process/port and credential-file audit](process-audit.json) confirms the owned hosts/coding PIDs are gone, both fault proxy ports are closed, private credential files are removed and both issue workspaces remain.
+
+Post-live validation passed: 2,588 tests plus one existing opt-in skip, typecheck/build, lint and docs check, using a single Vitest worker. [Exact command/result](validation.json), [full gate log](validation-gate.log) and [earlier default-concurrency timing failures](parallel-validation-failures.txt) preserve the distinction. No safety check or assertion was weakened.

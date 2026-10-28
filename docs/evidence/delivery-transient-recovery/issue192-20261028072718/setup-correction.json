@@ -1,0 +1,33 @@
+{
+  "at": "2026-10-28T07:35:01.745306+00:00",
+  "cause": "Extra closing parenthesis in generated transparent wrapper prevented read-only admission",
+  "correction": "Corrected wrapper syntax before any coding executor or Delivery repair had started; same host and Decision store retained, no state/budget reset",
+  "wrappers": [
+    {
+      "wrapper": "gh",
+      "beforeSha256": "5b0c0d89f8d02633a106a525a01166a85a315e0436afb164768665725fae902d",
+      "afterSha256": "d41bebf21637ddace194407e9bbf1e83ba52cec73cc0a152db33e04552f70135"
+    },
+    {
+      "wrapper": "git",
+      "beforeSha256": "5b0c0d89f8d02633a106a525a01166a85a315e0436afb164768665725fae902d",
+      "afterSha256": "d41bebf21637ddace194407e9bbf1e83ba52cec73cc0a152db33e04552f70135"
+    },
+    {
+      "wrapper": "symphony",
+      "beforeSha256": "5b0c0d89f8d02633a106a525a01166a85a315e0436afb164768665725fae902d",
+      "afterSha256": "d41bebf21637ddace194407e9bbf1e83ba52cec73cc0a152db33e04552f70135"
+    },
+    {
+      "wrapper": "codex",
+      "beforeSha256": "5b0c0d89f8d02633a106a525a01166a85a315e0436afb164768665725fae902d",
+      "afterSha256": "d41bebf21637ddace194407e9bbf1e83ba52cec73cc0a152db33e04552f70135"
+    }
+  ],
+  "secondCorrection": {
+    "at": "2026-10-28T07:42:40.472137+00:00",
+    "cause": "Forced process.exit could truncate large JSON responses on pipes, preventing admission with Malformed JSON stream",
+    "correction": "Use natural Node exit to drain stdout; validate generated syntax and complete real paginated PR JSON before host launch in reproducible harness",
+    "currentRunWorkspaceExists": false
+  }
+}

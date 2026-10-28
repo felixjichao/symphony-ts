@@ -1,0 +1,51 @@
+[
+  {
+    "at": "2026-10-28T07:27:23.358Z",
+    "name": "scenario_seed_pushed",
+    "sha": "78e9ffcf1e52d253ae8c5fcef08ed190b426ff15",
+    "file": "src/issue192_20261028072718.mjs"
+  },
+  {
+    "at": "2026-10-28T07:27:26.538Z",
+    "name": "issue_created",
+    "issue": 28,
+    "url": "https://github.com/felixjichao/symphony-delivery-dogfood/issues/28",
+    "label": "dogfood-issue192-20261028072718"
+  },
+  {
+    "at": "2026-10-28T07:27:27.689Z",
+    "name": "codex_decision_started",
+    "kind": "plan",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2328:plan:1",
+    "revision": 1,
+    "target": null
+  },
+  {
+    "at": "2026-10-28T07:28:32.488Z",
+    "name": "codex_decision_completed",
+    "kind": "plan",
+    "taskId": "github%3Afelixjichao%2Fsymphony-delivery-dogfood%2328:plan:1",
+    "revision": 1,
+    "target": null,
+    "verdict": "ready"
+  },
+  {
+    "at": "2026-10-28T07:28:37.454Z",
+    "name": "native_host_started",
+    "pid": 59255,
+    "issue": 28,
+    "bridgePort": 60504
+  },
+  {
+    "at": "2026-10-28T07:42:57.594Z",
+    "name": "ignored_runtime_observed",
+    "path": ".symphony/runtime-probe.json",
+    "content": "real runtime file\n"
+  },
+  {
+    "at": "2026-10-28T07:44:12.629Z",
+    "name": "acceptance_failed",
+    "error": "Error: Native Delivery paused; no automatic replay",
+    "issue": 28
+  }
+]

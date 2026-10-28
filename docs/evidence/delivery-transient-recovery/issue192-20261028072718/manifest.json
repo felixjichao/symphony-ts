@@ -1,0 +1,10 @@
+{
+  "runId": "issue192-20261028072718",
+  "repo": "felixjichao/symphony-delivery-dogfood",
+  "issue": 28,
+  "status": "failed",
+  "finishedAt": "2026-10-28T07:44:12.750Z",
+  "isolatedRoot": "/private/tmp/symphony192-live-gExxRI",
+  "processesStopped": true,
+  "scope": "Native host + real Codex app-server/codex exec + native Decision bridge/CLI + real GitHub CI/merge/cleanup; explicit observation/ACK fault injection; no browser UI claim"
+}

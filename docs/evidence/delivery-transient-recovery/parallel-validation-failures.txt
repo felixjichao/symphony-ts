@@ -1,0 +1,67 @@
+Concurrent run
+Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 超时 terminate 触发组终止，exit 报告携带 cleanupConfirmed，受管进程真实退出
+Error: PID file was not written within 3000ms: /private/tmp/symphony-git-supervisor-test-pt0Rjb/sleepy-git.pid
+ ❯ waitForPidFile src/git-supervisor.test.ts:67:13
+     65|     }
+     66|     if (Date.now() >= deadline) {
+     67|       throw new Error(`PID file was not written within ${timeoutMs}ms:…
+       |             ^
+     68|     }
+     69|     await new Promise((resolve) => setTimeout(resolve, 50));
+ ❯ src/git-supervisor.test.ts:244:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/git-supervisor.test.ts > GitOperationSupervisor (NEST-119 A 修订方案) > 请求方（客户端连接）提前退出后，登记保留在监督者并由其终止受管组
+Error: PID file was not written within 3000ms: /private/tmp/symphony-git-supervisor-test-zqSa0W/orphan-git.pid
+ ❯ waitForPidFile src/git-supervisor.test.ts:67:13
+     65|     }
+     66|     if (Date.now() >= deadline) {
+     67|       throw new Error(`PID file was not written within ${timeoutMs}ms:…
+       |             ^
+     68|     }
+     69|     await new Promise((resolve) => setTimeout(resolve, 50));
+ ❯ src/git-supervisor.test.ts:282:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/repository-bootstrap-race.test.ts > 正常 close 收尾与 timeout 的收尾所有权 > close 接管收尾后停掉原 timer：慢确认期间无假 timeout、零组终止信号，命令以成功收敛
+AssertionError: expected 'git_command_timeout' to be 'missing_remote_default_branch' // Object.is equality
+
+Expected: "missing_remote_default_branch"
+Received: "git_command_timeout"
+
+ ❯ src/repository-bootstrap-race.test.ts:136:57
+    134|       expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+    135|       // 命令（含慢确认）全部成功收敛，流程推进到远端默认分支探测失败。
+    136|       expect((thrown as RepositoryBootstrapError).code).toBe("missing_…
+       |                                                         ^
+    137|       expect((thrown as RepositoryBootstrapError).code).not.toBe("git_…
+    138|       // 全程零 SIGKILL：timer 在 close 接管时被停止（审查 Suggestion …
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+ 
+
+Default-concurrency follow-up
+Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/repository-bootstrap-race.test.ts > 正常 close 收尾与 timeout 的收尾所有权 > close 接管收尾后停掉原 timer：慢确认期间无假 timeout、零组终止信号，命令以成功收敛
+AssertionError: expected 'git_command_timeout' to be 'missing_remote_default_branch' // Object.is equality
+
+Expected: "missing_remote_default_branch"
+Received: "git_command_timeout"
+
+ ❯ src/repository-bootstrap-race.test.ts:136:57
+    134|       expect(thrown).toBeInstanceOf(RepositoryBootstrapError);
+    135|       // 命令（含慢确认）全部成功收敛，流程推进到远端默认分支探测失败。
+    136|       expect((thrown as RepositoryBootstrapError).code).toBe("missing_…
+       |                                                         ^
+    137|       expect((thrown as RepositoryBootstrapError).code).not.toBe("git_…
+    138|       // 全程零 SIGKILL：timer 在 close 接管时被停止（审查 Suggestion …
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ 
