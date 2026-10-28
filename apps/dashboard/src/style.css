@@ -78,3 +78,10 @@ a:hover, summary:hover { text-decoration: underline; }
 .explorer-controls { display: flex; flex-wrap: wrap; align-items: end; }
 .explorer-controls button { margin: 8px; padding: 8px; font: inherit; }
 .explorer-results { overflow-x: auto; max-width: 100%; }
+
+/* #173: supplied conclusions and identities occupy separate scan-first surfaces. */
+#detail .detail-conclusion { border-left: 4px solid var(--console-focus); padding: 4px 16px 16px; background: var(--console-surface); margin-top: 20px; }
+#detail .detail-conclusion h3 { margin-top: 12px; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; }
+#detail .detail-card { border: 1px solid var(--console-border); background: var(--console-surface); padding: 12px; min-width: 0; margin: 8px 0; }
+#detail .detail-card h4 { margin-top: 0; }

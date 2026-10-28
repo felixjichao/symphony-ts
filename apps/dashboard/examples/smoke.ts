@@ -40,8 +40,10 @@ try {
     await page.screenshot({ path: `${evidenceDir}/narrow-${name.toLowerCase()}.png`, fullPage: true });
   }
   await page.getByRole("navigation").getByRole("link", { name: "Work", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("#page-heading")?.textContent === "Work");
   // Exercise native discovery controls on the actual narrow Work page.
   const search = page.locator("#explorer-search"); await search.focus(); await page.keyboard.type("beta");
+  await page.waitForFunction(() => document.querySelectorAll("#work tbody tr").length === 1);
   assert.equal(await page.locator("#work tbody tr").count(), 1);
   assert.ok((await page.locator("#work tbody").innerText()).includes("demo/beta#1"));
   await page.locator("#explorer-scope").selectOption("github:demo/alpha");
@@ -55,6 +57,11 @@ try {
   await pane.getByRole("heading", { name: "Why", exact: false }).waitFor();
   for (const letter of ["a", "b", "c"]) assert.ok((await pane.innerText()).includes(letter.repeat(40)));
   await pane.getByText("review_result_target_mismatch", { exact: true }).first().waitFor();
+  await pane.getByRole("heading", { name: "当前执行 / PR / Review 标识" }).waitFor();
+  await page.screenshot({ path: `${evidenceDir}/narrow-current-detail.png`, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: `${evidenceDir}/current-detail.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
   const raw = pane.locator("summary").first(); await raw.focus(); await page.keyboard.press("Enter");
   assert.ok(await pane.locator("details[open] pre").count() > 0);
   await page.locator("details").evaluateAll((nodes: HTMLDetailsElement[]) => nodes.forEach(node => { node.open = false; }));

@@ -14,6 +14,24 @@ function reviewWork(): WorkProjection {
 function crumb(overrides: Partial<ProjectionEvidence> = {}): ProjectionEvidence { return { source: "decision", code: "review_task_running", observedAt: 1, detail: "task fact", role: "supporting", field: "status", value: "running", taskId: "same-task", revision: 3, target, ...overrides }; }
 afterEach(() => { document.body.replaceChildren(); window.history.replaceState(null, "", "/"); });
 describe("Work Detail diagnostic surface", () => {
+  it.each([
+    ["planning", "waiting", "waiting_for_plan"], ["ready", "normal", null], ["coding", "normal", null],
+    ["ci", "waiting", "waiting_for_ci"], ["review", "waiting", "waiting_for_review"],
+    ["coding", "waiting", "retry_backoff"], ["planning", "needs_human", "needs_human"],
+    ["completed", "normal", null],
+  ] as const)("renders supplied %s current context", (phase, attention, reason) => {
+    const w = work({ phase, attention, waiting: reason === null ? null : { reason, since: 1 }, planning: { sessionStatus: null, taskStatus: null, planVerdict: "ready" }, execution: { issueId: "issue-1", attempt: 2, status: "streaming_turn", workspacePath: "/work/a", startedAtMs: 1, retryInMs: 3000 }, ci: { status: "pending" }, review: null });
+    const node = workDetail(w, snapshot());
+    for (const value of [phase, attention, "ready", "issue-1", "/work/a", "3000", "pending", "未提供审查信号"]) expect(node.textContent).toContain(value);
+    if (reason !== null) expect(node.textContent).toContain(reason);
+  });
+  it("shows missing sections and preserves source links without accepting executable URLs", () => {
+    const node = workDetail(work({ workItem: { identifier: "one", title: null, url: "javascript:alert(1)" }, execution: null, pullRequest: null, ci: null, review: null }), snapshot({ sources: [], executors: [] }));
+    expect(node.querySelector("a")).toBeNull();
+    for (const value of ["未提供", "未报告关联 Executor", "未提供 Work 专属来源状态", "未提供全局来源状态"]) expect(node.textContent).toContain(value);
+    const linked = workDetail(work({ workItem: { identifier: "one", title: "Title", url: "https://example.com/issue" } }), snapshot());
+    expect(linked.querySelector("a")?.href).toBe("https://example.com/issue");
+  });
   it("keeps all exact targets and supplied contradictory conclusions independently visible", () => {
     const w = reviewWork(); const node = workDetail(freeze(w), freeze(snapshot())); document.body.append(node);
     for (const text of [sha, old, resultSha, "当前 PR HEAD", "ReviewTask target HEAD", "结果 / approval target HEAD", "投影 taskTarget", "same-task", "approve", "不表示当前 HEAD 获批", "phase: review", "attention: waiting", "waiting_for_review"]) expect(node.textContent).toContain(text);

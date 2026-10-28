@@ -301,3 +301,7 @@ Attention-first presentation implemented on #169/#170: supplied needs-human/fail
 ### Dashboard V2 Work Explorer — #172
 
 Implemented presentation-only search and filters over current Work projections, source-specific freshness, attention-first ordering and WorkKey navigation. Dashboard tests and root typecheck are sandbox checks; browser smoke, full gate, CI, exact-HEAD review and Delivery are host validation steps. No workflow mutation or historical search is added.
+
+### Dashboard V2 Work Detail current state — #173
+
+Implemented scan-first supplied conclusion, execution, PR/CI/review identities, source freshness and WorkKey-scoped executors; the existing Why area remains below. Sandbox checks cover Dashboard tests and root typecheck. Browser screenshots, full gate, CI, exact-HEAD review and production Delivery remain host validation and are not claimed here.
