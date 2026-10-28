@@ -6,7 +6,7 @@ Run `issue192-20261028122627`, 2026-10-28 12:26–12:36 UTC. [Issue #31](https:/
 
 Terminal retry refresh now CAS-removes its own durable reservation before cleanup, retaining the in-memory claim and cleanup barrier. Unknown/foreign reservations remain protected by the unchanged cleanup guard. File-storage regression failed before the fix (`cleanupCalls`: expected 1, received 0), then passed; additional coverage refuses cleanup under another incarnation's record.
 
-The CLI conflict executor mock only edits the working file and explicitly verifies the index remains unmerged. Host staging, both merge parents, resolved index/MERGE_HEAD and runtime exclusion/preservation are asserted. [Local validation](validation.json): full gate passed, **2590 passed / 1 existing opt-in skipped**; [gate log](validation-gate.log), [targeted log](validation-targeted.log).
+The CLI conflict executor mock only edits the working file and explicitly verifies the index remains unmerged. Host staging, both merge parents, resolved index/MERGE_HEAD and runtime exclusion/preservation are asserted. [Local validation](validation.json): full gate passed, **2590 passed / 1 existing opt-in skipped**; [initial gate log](validation-gate.log), [final gate including owner-package regression](validation-final-gate.log), [targeted log](validation-targeted.log).
 
 ## Native trace
 

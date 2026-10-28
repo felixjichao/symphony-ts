@@ -18,5 +18,7 @@
     "claim held while cleanup awaits",
     "foreign incarnation durable record survives, no cleanup",
     "CLI conflict executor leaves unmerged index; host stages and preserves both merge parents/runtime isolation"
-  ]
+  ],
+  "finalOwnerPackageRegression": "packages/orchestrator/src/retry-workspace.test.ts uses token-fenced durable storage with real WorkspaceManager; verifies empty durable records and held claim at deletion",
+  "finalGateLog": "validation-final-gate.log"
 }
