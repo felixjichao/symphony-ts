@@ -1,0 +1,467 @@
+{
+  "head": "3f69e85b0220ac3fb2648d162133a597b3d88bd1",
+  "trackedChanges": [
+    ".github/workflows/ci.yml",
+    "apps/dashboard/README.md",
+    "apps/dashboard/examples/detail-visual.ts",
+    "apps/dashboard/package.json",
+    "docs/conformance.md",
+    "docs/status.md",
+    "docs/testing.md",
+    "package-lock.json"
+  ],
+  "startedAt": "2026-10-28T15:05:59.167Z",
+  "browser": "156.0.4314.50",
+  "assets": {
+    "index-CRojp-1f.js": "6bb72456b3cfc3b0d5d0cb6b58f5e75ad8995e58712cfa913f13a88ef1f5ec24",
+    "index-Dw93ForQ.css": "bc1c83be5c8144178ef8a009f71bf8c2eecc7ac9e003591dca598406a339f373",
+    "index.html": "2f79e9785a6e0c1960968f21e93c8657cd2c5cd21b29b331b519580635018f37"
+  },
+  "harnessSha256": "aa1221cb614fd080ce55db6ebdb07fd04079eeb9c7ea42d0b3bf8379716fb184",
+  "cases": [
+    {
+      "name": "planning-ready",
+      "viewport": "desktop",
+      "expected": [
+        "phase: ready",
+        "Plan verdict",
+        "ready",
+        "未提供审查信号"
+      ],
+      "forbidden": [],
+      "screenshot": "planning-ready-desktop.png",
+      "sha256": "7fa870691f43944f624afe45460410f5f8fd777b5deefafa1b72dc887082548d"
+    },
+    {
+      "name": "planning-ready",
+      "viewport": "narrow",
+      "expected": [
+        "phase: ready",
+        "Plan verdict",
+        "ready",
+        "未提供审查信号"
+      ],
+      "forbidden": [],
+      "screenshot": "planning-ready-narrow.png",
+      "sha256": "5b8c98608a8cafe448498343ef3338830b7d974be7b8c214c164da08a5923d8b"
+    },
+    {
+      "name": "active-coding",
+      "viewport": "desktop",
+      "expected": [
+        "phase: coding",
+        "streaming_turn",
+        "/work/owner-a"
+      ],
+      "forbidden": [],
+      "screenshot": "active-coding-desktop.png",
+      "sha256": "28d229a92bbcdac6dc0c30f1a996b4b33422897188b9f14db7fdb7bc34545554"
+    },
+    {
+      "name": "active-coding",
+      "viewport": "narrow",
+      "expected": [
+        "phase: coding",
+        "streaming_turn",
+        "/work/owner-a"
+      ],
+      "forbidden": [],
+      "screenshot": "active-coding-narrow.png",
+      "sha256": "689d62ece8bf69f80b5d27aa85b19f594e378607a6e6d46fceb1547ac57d53b6"
+    },
+    {
+      "name": "waiting-stale-review",
+      "viewport": "desktop",
+      "expected": [
+        "waiting_for_review",
+        "approved_stale_head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Review task observed",
+        "decision-store",
+        "supporting"
+      ],
+      "forbidden": [],
+      "screenshot": "waiting-stale-review-desktop.png",
+      "sha256": "ad108410e6111dfb65ebc1ef0d6dbee0c942b3411e9a33e78005f2959c719e84"
+    },
+    {
+      "name": "waiting-stale-review",
+      "viewport": "narrow",
+      "expected": [
+        "waiting_for_review",
+        "approved_stale_head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Review task observed",
+        "decision-store",
+        "supporting"
+      ],
+      "forbidden": [],
+      "screenshot": "waiting-stale-review-narrow.png",
+      "sha256": "9ab8404f2b8f300b5d9e4269e4e9f0af1b8cd94bb269a136d432d0e59f910031"
+    },
+    {
+      "name": "partial-missing",
+      "viewport": "desktop",
+      "expected": [
+        "phase: unknown",
+        "decision: unavailable",
+        "未提供",
+        "未报告关联 Executor"
+      ],
+      "forbidden": [],
+      "screenshot": "partial-missing-desktop.png",
+      "sha256": "f1f06dee3722c85cc3df895cfd438a9e1839eb377a68322f0bd5efd74fe3be45"
+    },
+    {
+      "name": "partial-missing",
+      "viewport": "narrow",
+      "expected": [
+        "phase: unknown",
+        "decision: unavailable",
+        "未提供",
+        "未报告关联 Executor"
+      ],
+      "forbidden": [],
+      "screenshot": "partial-missing-narrow.png",
+      "sha256": "eb24dba31e54d355aff5acfd473f9f1e5ae94b43e2470c7f9e79d725cd8193e1"
+    },
+    {
+      "name": "terminal",
+      "viewport": "desktop",
+      "expected": [
+        "phase: completed",
+        "attention: normal",
+        "未提供"
+      ],
+      "forbidden": [],
+      "screenshot": "terminal-desktop.png",
+      "sha256": "3c413e18478609d911a80320166f869a3978b95de7361f092e434a7dac6a76b9"
+    },
+    {
+      "name": "terminal",
+      "viewport": "narrow",
+      "expected": [
+        "phase: completed",
+        "attention: normal",
+        "未提供"
+      ],
+      "forbidden": [],
+      "screenshot": "terminal-narrow.png",
+      "sha256": "745771a67331ad1ddfa95d9fc1dbaed27ee2e05c73b6dfbe22e1af9e5bc44216"
+    },
+    {
+      "name": "needs-human",
+      "viewport": "desktop",
+      "expected": [
+        "phase: planning",
+        "attention: needs_human",
+        "needs_human"
+      ],
+      "forbidden": [],
+      "screenshot": "needs-human-desktop.png",
+      "sha256": "186be341ef04412ec1b470541f9d7a1b13fa8a92805eeaf670493bbb5074c6b0"
+    },
+    {
+      "name": "needs-human",
+      "viewport": "narrow",
+      "expected": [
+        "phase: planning",
+        "attention: needs_human",
+        "needs_human"
+      ],
+      "forbidden": [],
+      "screenshot": "needs-human-narrow.png",
+      "sha256": "3c712e7291583e0c48dc3585666d408fc45754379cb4e872e7883669c8eb531a"
+    },
+    {
+      "name": "read-model-review",
+      "viewport": "desktop",
+      "expected": [
+        "waiting_for_review",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "demo-review / 1"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-review-desktop.png",
+      "sha256": "cc827f9bc1a9497ec14f3d929e2a7b2b4e9b47f2ab35952fabd3c9043a2b913a"
+    },
+    {
+      "name": "read-model-review",
+      "viewport": "narrow",
+      "expected": [
+        "waiting_for_review",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "demo-review / 1"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-review-narrow.png",
+      "sha256": "c22adf5bf29fc180914c77a53ada4a2c038236857f197ab0a36b38e1f4adaa6b"
+    },
+    {
+      "name": "read-model-target-mismatch",
+      "viewport": "desktop",
+      "expected": [
+        "review_target_head_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-target-mismatch-desktop.png",
+      "sha256": "562bb917fe80cd1e6151d5b783cd119d58894ce153365aca90d9250fd9486009"
+    },
+    {
+      "name": "read-model-target-mismatch",
+      "viewport": "narrow",
+      "expected": [
+        "review_target_head_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-target-mismatch-narrow.png",
+      "sha256": "d766e8e5eba13714fce0016a549a960f0d00d025e8fcf4ebaec65194033eca90"
+    },
+    {
+      "name": "read-model-result-mismatch",
+      "viewport": "desktop",
+      "expected": [
+        "review_result_target_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-result-mismatch-desktop.png",
+      "sha256": "f3d5e0084661061f24237c9ab756bb3b50214c2bb2b26a9deda4ee6ed273aba4"
+    },
+    {
+      "name": "read-model-result-mismatch",
+      "viewport": "narrow",
+      "expected": [
+        "review_result_target_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-result-mismatch-narrow.png",
+      "sha256": "7daf2aa26862354a65d88e604af7871a43e699be66f7647e0c084bf903e9d7ff"
+    },
+    {
+      "name": "read-model-partial",
+      "viewport": "desktop",
+      "expected": [
+        "decision: unavailable",
+        "demo_unavailable"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-partial-desktop.png",
+      "sha256": "04c1059a6c54e9a9606b6f7ee14ffcf96c3f35881ed96345cac8a146ee57c95e"
+    },
+    {
+      "name": "read-model-partial",
+      "viewport": "narrow",
+      "expected": [
+        "decision: unavailable",
+        "demo_unavailable"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-partial-narrow.png",
+      "sha256": "9e4000845681ec920ab5880bbe6e3eed45d7f03f87379d1b171d5f16ad8fc287"
+    },
+    {
+      "name": "read-model-conflict",
+      "viewport": "desktop",
+      "expected": [
+        "conflicting_active_review_tasks",
+        "demo-conflicting-review"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-conflict-desktop.png",
+      "sha256": "dae1ff30e4d740c5225c29896b8408a02b491b0c522bd0dd5c215e051303daa6"
+    },
+    {
+      "name": "read-model-conflict",
+      "viewport": "narrow",
+      "expected": [
+        "conflicting_active_review_tasks",
+        "demo-conflicting-review"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-conflict-narrow.png",
+      "sha256": "122bd320c208a2815a7242e590490c79770aa2d13c5160a28bf432f56aeeaef4"
+    },
+    {
+      "name": "read-model-terminal",
+      "viewport": "desktop",
+      "expected": [
+        "phase: completed",
+        "execution_on_terminal_work",
+        "streaming_turn"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-terminal-desktop.png",
+      "sha256": "913f125b45becc6f0165b823a6cde45fe659ee6961f81f3d234eb5b55b74fdbd"
+    },
+    {
+      "name": "read-model-terminal",
+      "viewport": "narrow",
+      "expected": [
+        "phase: completed",
+        "execution_on_terminal_work",
+        "streaming_turn"
+      ],
+      "forbidden": [],
+      "screenshot": "read-model-terminal-narrow.png",
+      "sha256": "c4059e1e8c21e9ed7dfba0154a9ac9e07292ebe25ebb35f3791cd0b8a6b938d6"
+    },
+    {
+      "name": "stale-approval",
+      "viewport": "desktop",
+      "expected": [
+        "approved_stale_head",
+        "旧 HEAD / 陈旧批准",
+        "review_approval_head_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "forbidden": [],
+      "screenshot": "stale-approval-desktop.png",
+      "sha256": "a7c7f8f360f6b186731b8a98290e20925de8eab74c91da0b56878b797e1acd3e"
+    },
+    {
+      "name": "stale-approval",
+      "viewport": "narrow",
+      "expected": [
+        "approved_stale_head",
+        "旧 HEAD / 陈旧批准",
+        "review_approval_head_mismatch",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "forbidden": [],
+      "screenshot": "stale-approval-narrow.png",
+      "sha256": "283049f57221ba2c3363460830597b9852de405638963d9a982e818778a8f3d5"
+    },
+    {
+      "name": "github-failure",
+      "viewport": "desktop",
+      "expected": [
+        "github: unavailable",
+        "github_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "github-failure-desktop.png",
+      "sha256": "87e0b73850e46671eeacc73c564cb938e170357c800c4907b9537e815cc2631b"
+    },
+    {
+      "name": "github-failure",
+      "viewport": "narrow",
+      "expected": [
+        "github: unavailable",
+        "github_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "github-failure-narrow.png",
+      "sha256": "c02723c9f0ba64a1f876e913be4a7070576cdf8630887d242c44fe097874d315"
+    },
+    {
+      "name": "runtime-failure",
+      "viewport": "desktop",
+      "expected": [
+        "runtime: unavailable",
+        "runtime_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "runtime-failure-desktop.png",
+      "sha256": "c64a35c0feed98c24fd1ed892fb388c87687514e00c0ac4adec66ce9d5a60b5b"
+    },
+    {
+      "name": "runtime-failure",
+      "viewport": "narrow",
+      "expected": [
+        "runtime: unavailable",
+        "runtime_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "runtime-failure-narrow.png",
+      "sha256": "8edd57c80c4698550b27e300e462e9758e4b6c23adc6f605b6120a8b7084113b"
+    },
+    {
+      "name": "decision-failure",
+      "viewport": "desktop",
+      "expected": [
+        "decision: unavailable",
+        "decision_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "decision-failure-desktop.png",
+      "sha256": "b15918d35d33d6ea98611000248c601c6dae6a4463e689459e475f3ace19d494"
+    },
+    {
+      "name": "decision-failure",
+      "viewport": "narrow",
+      "expected": [
+        "decision: unavailable",
+        "decision_failure"
+      ],
+      "forbidden": [],
+      "screenshot": "decision-failure-narrow.png",
+      "sha256": "60c7c8f47509ad5ae89d82a90a41600aed5bc6c30df26f3eb07587d35aa83f8e"
+    },
+    {
+      "name": "contradiction-isolation",
+      "viewport": "desktop",
+      "expected": [
+        "decision_active_task_on_completed_session",
+        "severity: error",
+        "LOCAL SOURCE",
+        "证据归属不一致",
+        "Supplied supporting fact",
+        "Supplied superseding fact",
+        "Supplied discarded_freshness fact",
+        "Supplied historical fact"
+      ],
+      "forbidden": [
+        "FOREIGN",
+        "GLOBAL DIAGNOSTIC"
+      ],
+      "screenshot": "contradiction-isolation-desktop.png",
+      "sha256": "3bc1b6d3a354a0a12d566bae99f0bbdcbd9ccd961ae235dfa3906622d1731ad0"
+    },
+    {
+      "name": "contradiction-isolation",
+      "viewport": "narrow",
+      "expected": [
+        "decision_active_task_on_completed_session",
+        "severity: error",
+        "LOCAL SOURCE",
+        "证据归属不一致",
+        "Supplied supporting fact",
+        "Supplied superseding fact",
+        "Supplied discarded_freshness fact",
+        "Supplied historical fact"
+      ],
+      "forbidden": [
+        "FOREIGN",
+        "GLOBAL DIAGNOSTIC"
+      ],
+      "screenshot": "contradiction-isolation-narrow.png",
+      "sha256": "56b13ee1f47308fd3594f0ef4bb96c83646cddd69a4f0bb9cbecd4323a4a06d6"
+    }
+  ],
+  "checks": [
+    "keyboard Enter opens raw evidence",
+    "actual polling retains disclosure and focus",
+    "global diagnostics rendered separately in System"
+  ],
+  "artifacts": {
+    "fixtures.json": "1c995f37af9c801889d00f5b6130b6b0df2fd318369e7d58e79af96165a2d760",
+    "keyboard-refresh.png": "0fabb5df0c2981e1878da9ec36addc770fb357de13c4b44478f2d4bf9449ec47",
+    "global-system.png": "6e852dc0a9934c75badbf5f2c60da4be370ae325bd289986966949718a6aa43b"
+  },
+  "status": "passed",
+  "error": null
+}

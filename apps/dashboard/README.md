@@ -48,7 +48,7 @@ Browser tsc uses generated ignored `.contracts` declarations, without Node ambie
 
 ## Real browser smoke
 
-Build first. Use an already installed Playwright module and Chromium; this task does not install/download browsers or add Playwright infrastructure:
+Build first. The general smoke accepts an installed Playwright module and Chromium:
 
 ```sh
 npm run build -w @symphony/dashboard
@@ -75,3 +75,15 @@ Regenerate the controlled matrix with `npx tsx apps/dashboard/examples/primitive
 Overview prioritizes supplied human/failed work, degraded or anomaly-associated work, waiting, then other current work. Active counts come from the supplied summary. Source posture remains visible with empty scope; the persistent transport notice separates last successful response time/errors from snapshot generation time. Compact anomalies link context to WorkKey through work entries; full evidence remains in Work Detail / System. See [Overview acceptance artifacts](../../docs/evidence/dashboard-v2-overview/README.md) for controlled scenarios and optional narrow/keyboard rendering.
 
 Work Explorer (#172) searches display identity/title and filters provider/repository scope, phase, attention and each source's freshness. Controls retain their values during polling and navigation; reset clears them. Repository scope is available for repository-shaped WorkKeys. Zero matches and an empty snapshot are distinct. The optional Chromium smoke exercises keyboard search/reset and narrow table overflow.
+
+## Work Detail Why browser acceptance (#174)
+
+```sh
+npm run typecheck
+npm exec -w @symphony/dashboard -- playwright install --with-deps chromium
+npm run browser:detail -w @symphony/dashboard
+```
+
+The package command builds the Dashboard and runs `examples/detail-visual.ts` against the built same-origin demo. It uses the pinned Playwright dev dependency; an installed browser can be selected with `SYMPHONY_CHROMIUM`. Output defaults to `.symphony/evidence/work-detail-why` (override with `SYMPHONY_BROWSER_EVIDENCE`). Assertions cover desktop/390px supplied diagnostics, independent review targets, source failures, evidence roles, full-WorkKey isolation, global diagnostics, keyboard disclosure and real polling focus/open retention. Screenshots, supplied fixtures and `browser.json` retain HEAD, tracked changes, browser version and SHA-256 hashes. A failed assertion fails the command and records a failed report.
+
+CI runs this acceptance after the canonical gate and uploads evidence as `work-detail-why-<checkout SHA>` for 30 days, including partial evidence when browser assertions fail. Retained local evidence and its exact baseline are indexed in the [Why acceptance ledger](../../docs/evidence/work-detail-why/README.md). Controlled browser acceptance does not establish live provider or delivery acceptance.

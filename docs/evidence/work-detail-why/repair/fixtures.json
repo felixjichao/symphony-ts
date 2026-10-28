@@ -1,0 +1,4804 @@
+[
+  {
+    "name": "planning-ready",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "ready",
+          "attention": "normal",
+          "waiting": null,
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": "completed",
+            "planVerdict": "ready"
+          },
+          "execution": null,
+          "pullRequest": null,
+          "ci": null,
+          "review": null,
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "phase: ready",
+      "Plan verdict",
+      "ready",
+      "未提供审查信号"
+    ]
+  },
+  {
+    "name": "active-coding",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": "completed",
+            "planVerdict": "ready"
+          },
+          "execution": {
+            "issueId": "GH-1",
+            "attempt": 2,
+            "status": "streaming_turn",
+            "workspacePath": "/work/owner-a",
+            "startedAtMs": 1790000000000,
+            "retryInMs": null
+          },
+          "pullRequest": null,
+          "ci": null,
+          "review": null,
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "phase: coding",
+      "streaming_turn",
+      "/work/owner-a"
+    ]
+  },
+  {
+    "name": "waiting-stale-review",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "review",
+          "attention": "waiting",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1790000000000
+          },
+          "planning": null,
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/owner/a/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "owner/a",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "approval": "approved_stale_head",
+            "task": {
+              "kind": "review",
+              "taskId": "review-1",
+              "revision": 1,
+              "target": {
+                "repository": "owner/a",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "status": "completed",
+              "createdAtMs": 1790000000000,
+              "updatedAtMs": 1790000000000
+            },
+            "result": {
+              "taskId": "review-1",
+              "revision": 1,
+              "createdAtMs": 1790000000000,
+              "outcome": {
+                "kind": "review",
+                "verdict": "approve",
+                "target": {
+                  "repository": "owner/a",
+                  "prNumber": 2,
+                  "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "waiting_for_review",
+      "approved_stale_head",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "Review task observed",
+      "decision-store",
+      "supporting"
+    ]
+  },
+  {
+    "name": "partial-missing",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "unknown",
+          "attention": "degraded",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": null,
+          "review": null,
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "unknown",
+              "lastAttemptAt": null,
+              "reason": "not_observed"
+            },
+            "decision": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1790000000000,
+              "reason": "source_unavailable"
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "phase: unknown",
+      "decision: unavailable",
+      "未提供",
+      "未报告关联 Executor"
+    ]
+  },
+  {
+    "name": "terminal",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "completed",
+          "attention": "normal",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": null,
+          "review": null,
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "phase: completed",
+      "attention: normal",
+      "未提供"
+    ]
+  },
+  {
+    "name": "needs-human",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1790000000000,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "planning",
+          "attention": "needs_human",
+          "waiting": {
+            "reason": "needs_human",
+            "since": 1790000000000
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": "completed",
+            "planVerdict": "needs_human"
+          },
+          "execution": null,
+          "pullRequest": null,
+          "ci": null,
+          "review": null,
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [],
+      "anomalies": []
+    },
+    "expected": [
+      "phase: planning",
+      "attention: needs_human",
+      "needs_human"
+    ]
+  },
+  {
+    "name": "read-model-review",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959074,
+      "health": "healthy",
+      "summary": {
+        "active": 2,
+        "waiting": 2,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 0,
+        "anomalyCount": 0
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "review",
+          "attention": "waiting",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959079
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/alpha",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959079,
+              "updatedAtMs": 1793199959079,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959079,
+              "entityTimestampMs": 1793199959079,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959079,
+              "entityTimestampMs": 1793199959079,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "review",
+          "attention": "waiting",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959079
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/beta",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959079,
+              "updatedAtMs": 1793199959079,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959079,
+              "lastAttemptAt": 1793199959079
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959079,
+              "entityTimestampMs": 1793199959079,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959079,
+              "entityTimestampMs": 1793199959079,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959079,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959079,
+            "lastAttemptAt": 1793199959079
+          }
+        }
+      ],
+      "anomalies": []
+    },
+    "expected": [
+      "waiting_for_review",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "demo-review / 1"
+    ]
+  },
+  {
+    "name": "read-model-target-mismatch",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959080,
+      "health": "degraded",
+      "summary": {
+        "active": 2,
+        "waiting": 2,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 2,
+        "anomalyCount": 2
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959080
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/alpha",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959080,
+              "updatedAtMs": 1793199959080,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959080
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/beta",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959080,
+              "updatedAtMs": 1793199959080,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "review_target_head_mismatch",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "message": "Active review task 'demo-review' targets SHA bbbbbbb, but current PR #2 HEAD is aaaaaaa",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        },
+        {
+          "code": "review_target_head_mismatch",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "message": "Active review task 'demo-review' targets SHA bbbbbbb, but current PR #2 HEAD is aaaaaaa",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "review_target_head_mismatch",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+  },
+  {
+    "name": "read-model-result-mismatch",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959080,
+      "health": "degraded",
+      "summary": {
+        "active": 2,
+        "waiting": 2,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 2,
+        "anomalyCount": 4
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959080
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/alpha",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959080,
+              "updatedAtMs": 1793199959080,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "result": {
+              "taskId": "demo-review",
+              "revision": 1,
+              "createdAtMs": 1793199959080,
+              "outcome": {
+                "kind": "review",
+                "verdict": "approve",
+                "target": {
+                  "repository": "demo/alpha",
+                  "prNumber": 2,
+                  "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+                }
+              }
+            },
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_result_target",
+              "detail": "result target demo/alpha#2@ccccccc",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.target",
+              "value": "demo/alpha#2@cccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task target demo/alpha#2@bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target",
+              "value": "demo/alpha#2@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "code": "review_verdict_approve",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.verdict",
+              "value": "approve"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959080
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/beta",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959080,
+              "updatedAtMs": 1793199959080,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "result": {
+              "taskId": "demo-review",
+              "revision": 1,
+              "createdAtMs": 1793199959080,
+              "outcome": {
+                "kind": "review",
+                "verdict": "approve",
+                "target": {
+                  "repository": "demo/beta",
+                  "prNumber": 2,
+                  "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+                }
+              }
+            },
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959080,
+              "lastAttemptAt": 1793199959080
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_result_target",
+              "detail": "result target demo/beta#2@ccccccc",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.target",
+              "value": "demo/beta#2@cccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task target demo/beta#2@bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target",
+              "value": "demo/beta#2@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "decision",
+              "code": "review_verdict_approve",
+              "detail": "rev 1",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.verdict",
+              "value": "approve"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959080,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959080,
+            "lastAttemptAt": 1793199959080
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "review_result_target_mismatch",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "message": "Review result target mismatch for task 'demo-review' (rev 1): result targets demo/alpha#2@ccccccc but task targets demo/alpha#2@bbbbbbb",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_result_target",
+              "detail": "result target demo/alpha#2@ccccccc",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.target",
+              "value": "demo/alpha#2@cccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task target demo/alpha#2@bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target",
+              "value": "demo/alpha#2@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
+        },
+        {
+          "code": "review_result_target_mismatch",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "message": "Review result target mismatch for task 'demo-review' (rev 1): result targets demo/beta#2@ccccccc but task targets demo/beta#2@bbbbbbb",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_result_target",
+              "detail": "result target demo/beta#2@ccccccc",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+              },
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "field": "result.outcome.target",
+              "value": "demo/beta#2@cccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task target demo/beta#2@bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_result_target_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target",
+              "value": "demo/beta#2@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
+        },
+        {
+          "code": "review_target_head_mismatch",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "message": "Active review task 'demo-review' targets SHA bbbbbbb, but current PR #2 HEAD is aaaaaaa",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        },
+        {
+          "code": "review_target_head_mismatch",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "message": "Active review task 'demo-review' targets SHA bbbbbbb, but current PR #2 HEAD is aaaaaaa",
+          "detectedAt": 1793199959080,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "review_task_target",
+              "detail": "task demo-review target bbbbbbb",
+              "observedAt": 1793199959080,
+              "entityTimestampMs": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "field": "task.target.headSha",
+              "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "pr_head_sha",
+              "detail": "PR #2 HEAD aaaaaaa",
+              "observedAt": 1793199959080,
+              "freshnessStatus": "fresh",
+              "ruleId": "review_target_head_mismatch",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.headSha",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "review_result_target_mismatch",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ]
+  },
+  {
+    "name": "read-model-partial",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959081,
+      "health": "degraded",
+      "summary": {
+        "active": 2,
+        "waiting": 0,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 2,
+        "anomalyCount": 0
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1793199959081,
+              "reason": "demo_unavailable"
+            }
+          },
+          "evidence": [
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1793199959081,
+              "reason": "demo_unavailable"
+            }
+          },
+          "evidence": [
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "unavailable",
+            "observedAt": null,
+            "lastAttemptAt": 1793199959081,
+            "reason": "demo_unavailable"
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "unavailable",
+            "observedAt": null,
+            "lastAttemptAt": 1793199959081,
+            "reason": "demo_unavailable"
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        }
+      ],
+      "anomalies": []
+    },
+    "expected": [
+      "decision: unavailable",
+      "demo_unavailable"
+    ]
+  },
+  {
+    "name": "read-model-conflict",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959081,
+      "health": "degraded",
+      "summary": {
+        "active": 2,
+        "waiting": 2,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 2,
+        "anomalyCount": 2
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959081
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/alpha",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959081,
+              "updatedAtMs": 1793199959081,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-conflicting-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-conflicting-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "review",
+          "attention": "degraded",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1793199959081
+          },
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/beta",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959081,
+              "updatedAtMs": 1793199959081,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-conflicting-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-conflicting-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_review",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "code": "issue_open",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "open"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "conflicting_active_review_tasks",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "message": "Multiple active review tasks (demo-conflicting-review, demo-review) exist for demo/alpha#2",
+          "detectedAt": 1793199959081,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-conflicting-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-conflicting-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            }
+          ]
+        },
+        {
+          "code": "conflicting_active_review_tasks",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "message": "Multiple active review tasks (demo-conflicting-review, demo-review) exist for demo/beta#2",
+          "detectedAt": 1793199959081,
+          "evidence": [
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-conflicting-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-conflicting-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "instance": "demo:decision",
+              "code": "active_review_task_running",
+              "detail": "task demo-review (rev 1) targeting SHA aaaaaaa",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "conflicting_active_review_tasks",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "conflicting_active_review_tasks",
+      "demo-conflicting-review"
+    ]
+  },
+  {
+    "name": "read-model-terminal",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 1793199959081,
+      "health": "degraded",
+      "summary": {
+        "active": 0,
+        "waiting": 0,
+        "retrying": 0,
+        "needsHuman": 0,
+        "degradedWork": 2,
+        "anomalyCount": 2
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "workItem": {
+            "identifier": "demo/alpha#1",
+            "title": null,
+            "url": "https://github.com/demo/alpha/issues/1"
+          },
+          "phase": "completed",
+          "attention": "degraded",
+          "waiting": null,
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": {
+            "issueId": "demo/alpha#1",
+            "attempt": null,
+            "status": "streaming_turn",
+            "workspacePath": "/demo",
+            "startedAtMs": 1793199959081,
+            "retryInMs": null
+          },
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/alpha",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959081,
+              "updatedAtMs": 1793199959081,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "issue_closed",
+              "detail": "issue state is closed",
+              "observedAt": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "github",
+              "code": "issue_closed",
+              "detail": "https://github.com/demo/alpha/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_completed",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "target": {
+                "repository": "demo/alpha",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            },
+            {
+              "source": "runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:runtime",
+              "freshnessStatus": "fresh",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            },
+            {
+              "source": "runtime",
+              "instance": "demo:runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1 status streaming_turn",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "workItem": {
+            "identifier": "demo/beta#1",
+            "title": null,
+            "url": "https://github.com/demo/beta/issues/1"
+          },
+          "phase": "completed",
+          "attention": "degraded",
+          "waiting": null,
+          "planning": {
+            "sessionStatus": "active",
+            "taskStatus": null,
+            "planVerdict": null
+          },
+          "execution": {
+            "issueId": "demo/beta#1",
+            "attempt": null,
+            "status": "streaming_turn",
+            "workspacePath": "/demo",
+            "startedAtMs": 1793199959081,
+            "retryInMs": null
+          },
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/demo/alpha/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "demo/beta",
+              "prNumber": 2,
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": {
+              "kind": "review",
+              "taskId": "demo-review",
+              "revision": 1,
+              "status": "running",
+              "createdAtMs": 1793199959081,
+              "updatedAtMs": 1793199959081,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "result": null,
+            "approval": "pending"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1793199959081,
+              "lastAttemptAt": 1793199959081
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "rev 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "taskId": "demo-review",
+              "revision": 1,
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "task.status",
+              "value": "running"
+            },
+            {
+              "source": "decision",
+              "code": "session_active",
+              "detail": "demo",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:decision",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "sessionId": "demo-session",
+              "field": "session.status",
+              "value": "active"
+            },
+            {
+              "source": "github",
+              "code": "ci_success",
+              "detail": null,
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "ci.status",
+              "value": "success"
+            },
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "issue_closed",
+              "detail": "issue state is closed",
+              "observedAt": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "github",
+              "code": "issue_closed",
+              "detail": "https://github.com/demo/beta/issues/1",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "ruleId": "phase_completed",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "github",
+              "code": "pr_open",
+              "detail": "PR #2",
+              "observedAt": 1793199959081,
+              "instance": "demo:github",
+              "freshnessStatus": "fresh",
+              "role": "historical",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "target": {
+                "repository": "demo/beta",
+                "prNumber": 2,
+                "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "field": "pullRequest.state",
+              "value": "open"
+            },
+            {
+              "source": "runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "instance": "demo:runtime",
+              "freshnessStatus": "fresh",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            },
+            {
+              "source": "runtime",
+              "instance": "demo:runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1 status streaming_turn",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "demo:decision",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "demo:executor",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "demo:github",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "demo:runtime",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1793199959081,
+            "lastAttemptAt": 1793199959081
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "execution_on_terminal_work",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/alpha#1"
+          },
+          "message": "Active runtime attempt 1 (streaming_turn) observed on terminal GitHub work (issue closed)",
+          "detectedAt": 1793199959081,
+          "evidence": [
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "issue_closed",
+              "detail": "issue state is closed",
+              "observedAt": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "runtime",
+              "instance": "demo:runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1 status streaming_turn",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/alpha#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            }
+          ]
+        },
+        {
+          "code": "execution_on_terminal_work",
+          "severity": "warning",
+          "workKey": {
+            "provider": "github",
+            "key": "demo/beta#1"
+          },
+          "message": "Active runtime attempt 1 (streaming_turn) observed on terminal GitHub work (issue closed)",
+          "detectedAt": 1793199959081,
+          "evidence": [
+            {
+              "source": "github",
+              "instance": "demo:github",
+              "code": "issue_closed",
+              "detail": "issue state is closed",
+              "observedAt": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "issue.state",
+              "value": "closed"
+            },
+            {
+              "source": "runtime",
+              "instance": "demo:runtime",
+              "code": "attempt_streaming_turn",
+              "detail": "attempt 1 status streaming_turn",
+              "observedAt": 1793199959081,
+              "entityTimestampMs": 1793199959081,
+              "freshnessStatus": "fresh",
+              "ruleId": "execution_on_terminal_work",
+              "role": "supporting",
+              "workKey": {
+                "provider": "github",
+                "key": "demo/beta#1"
+              },
+              "field": "attempt.status",
+              "value": "streaming_turn"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "phase: completed",
+      "execution_on_terminal_work",
+      "streaming_turn"
+    ]
+  },
+  {
+    "name": "stale-approval",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 5,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "review",
+          "attention": "waiting",
+          "waiting": {
+            "reason": "waiting_for_review",
+            "since": 1790000000000
+          },
+          "planning": null,
+          "execution": null,
+          "pullRequest": {
+            "number": 2,
+            "url": "https://github.com/owner/a/pull/2",
+            "state": "open",
+            "isDraft": false,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mergeable": null
+          },
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": {
+              "repository": "owner/a",
+              "prNumber": 2,
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "approval": "approved_stale_head",
+            "task": {
+              "kind": "review",
+              "taskId": "review-1",
+              "revision": 1,
+              "target": {
+                "repository": "owner/a",
+                "prNumber": 2,
+                "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "status": "completed",
+              "createdAtMs": 1790000000000,
+              "updatedAtMs": 1790000000000
+            },
+            "result": {
+              "taskId": "review-1",
+              "revision": 1,
+              "createdAtMs": 1790000000000,
+              "outcome": {
+                "kind": "review",
+                "verdict": "approve",
+                "target": {
+                  "repository": "owner/a",
+                  "prNumber": 2,
+                  "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "executor",
+          "instance": "demo",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "review_approval_head_mismatch",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "message": "Supplied approval targets an older HEAD",
+          "detectedAt": 1790000000000,
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "approved_stale_head",
+      "旧 HEAD / 陈旧批准",
+      "review_approval_head_mismatch",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+  },
+  {
+    "name": "github-failure",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 5,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1790000000000,
+              "reason": "github_failure"
+            },
+            "runtime": {
+              "status": "unknown",
+              "lastAttemptAt": null,
+              "reason": "not_observed"
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "executor",
+          "instance": "demo",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        }
+      ],
+      "anomalies": []
+    },
+    "expected": [
+      "github: unavailable",
+      "github_failure"
+    ]
+  },
+  {
+    "name": "runtime-failure",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 5,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "stale",
+              "observedAt": 1790000000000,
+              "lastAttemptAt": 1790000000000
+            },
+            "runtime": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1790000000000,
+              "reason": "runtime_failure"
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "executor",
+          "instance": "demo",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        }
+      ],
+      "anomalies": []
+    },
+    "expected": [
+      "runtime: unavailable",
+      "runtime_failure"
+    ]
+  },
+  {
+    "name": "decision-failure",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 5,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "stale",
+              "observedAt": 1790000000000,
+              "lastAttemptAt": 1790000000000
+            },
+            "runtime": {
+              "status": "unknown",
+              "lastAttemptAt": null,
+              "reason": "not_observed"
+            },
+            "decision": {
+              "status": "unavailable",
+              "observedAt": null,
+              "lastAttemptAt": 1790000000000,
+              "reason": "decision_failure"
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Review task observed",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [],
+      "sources": [
+        {
+          "source": "executor",
+          "instance": "demo",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        }
+      ],
+      "anomalies": []
+    },
+    "expected": [
+      "decision: unavailable",
+      "decision_failure"
+    ]
+  },
+  {
+    "name": "contradiction-isolation",
+    "data": {
+      "schemaVersion": 1,
+      "generatedAt": 5,
+      "health": "healthy",
+      "summary": {
+        "active": 7,
+        "waiting": 3,
+        "retrying": 0,
+        "needsHuman": 2,
+        "degradedWork": 4,
+        "anomalyCount": 9
+      },
+      "work": [
+        {
+          "key": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Representative work",
+            "url": "https://github.com/owner/a/issues/1"
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": {
+            "sessionStatus": "completed",
+            "taskStatus": "running",
+            "planVerdict": null
+          },
+          "execution": null,
+          "pullRequest": null,
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Supplied supporting fact",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Supplied superseding fact",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "superseding",
+              "freshnessStatus": "fresh"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Supplied discarded_freshness fact",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "discarded_freshness",
+              "freshnessStatus": "fresh"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "Supplied historical fact",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "historical",
+              "freshnessStatus": "fresh"
+            },
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "FOREIGN EVIDENCE",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh",
+              "workKey": {
+                "provider": "other",
+                "key": "owner/a#1"
+              }
+            }
+          ]
+        },
+        {
+          "key": {
+            "provider": "other",
+            "key": "owner/a#1"
+          },
+          "workItem": {
+            "identifier": "owner/a#1",
+            "title": "Example",
+            "url": null
+          },
+          "phase": "coding",
+          "attention": "normal",
+          "waiting": null,
+          "planning": null,
+          "execution": null,
+          "pullRequest": null,
+          "ci": {
+            "status": "success"
+          },
+          "review": {
+            "currentHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taskTarget": null,
+            "task": null,
+            "result": null,
+            "approval": "unknown"
+          },
+          "freshness": {
+            "github": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "runtime": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            },
+            "decision": {
+              "status": "fresh",
+              "observedAt": 1,
+              "lastAttemptAt": 2
+            }
+          },
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "FOREIGN WORK",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh"
+            }
+          ]
+        }
+      ],
+      "executors": [
+        {
+          "id": "FOREIGN EXECUTOR",
+          "role": null,
+          "adapter": "demo",
+          "host": null,
+          "status": "busy",
+          "currentWork": {
+            "provider": "other",
+            "key": "owner/a#1"
+          },
+          "lastHeartbeatAt": 1790000000000
+        }
+      ],
+      "sources": [
+        {
+          "source": "decision",
+          "instance": "LOCAL SOURCE",
+          "workKey": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "FOREIGN SOURCE",
+          "workKey": {
+            "provider": "other",
+            "key": "owner/a#1"
+          },
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1,
+            "lastAttemptAt": 2
+          }
+        }
+      ],
+      "anomalies": [
+        {
+          "code": "decision_active_task_on_completed_session",
+          "severity": "error",
+          "workKey": {
+            "provider": "github",
+            "key": "owner/a#1"
+          },
+          "message": "Active task on completed session",
+          "detectedAt": 1790000000000,
+          "evidence": [
+            {
+              "source": "decision",
+              "code": "review_task_running",
+              "detail": "FOREIGN NESTED",
+              "observedAt": 1790000000000,
+              "instance": "decision-store",
+              "role": "supporting",
+              "freshnessStatus": "fresh",
+              "workKey": {
+                "provider": "other",
+                "key": "owner/a#1"
+              }
+            }
+          ]
+        },
+        {
+          "code": "foreign_anomaly",
+          "severity": "error",
+          "workKey": {
+            "provider": "other",
+            "key": "owner/a#1"
+          },
+          "message": "FOREIGN ANOMALY",
+          "detectedAt": 1790000000000
+        },
+        {
+          "code": "global_diagnostic",
+          "severity": "warning",
+          "workKey": null,
+          "message": "GLOBAL DIAGNOSTIC",
+          "detectedAt": 1790000000000
+        }
+      ]
+    },
+    "expected": [
+      "decision_active_task_on_completed_session",
+      "severity: error",
+      "LOCAL SOURCE",
+      "证据归属不一致",
+      "Supplied supporting fact",
+      "Supplied superseding fact",
+      "Supplied discarded_freshness fact",
+      "Supplied historical fact"
+    ],
+    "forbidden": [
+      "FOREIGN",
+      "GLOBAL DIAGNOSTIC"
+    ]
+  }
+]
