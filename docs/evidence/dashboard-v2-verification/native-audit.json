@@ -1,0 +1,1142 @@
+{
+  "observedAtUtc": "2026-10-29T14:45:08.697802+00:00",
+  "decisionSource": {
+    "path": "/Volumes/Data/symphony-runtime/state/decision/store.json",
+    "sha256": "af4e701f8939609ffa09300fa84385df4dbac94ffc1bbd4f624dbc94b15cd316",
+    "bytes": 2263041
+  },
+  "decisionTransactionSequence": 648,
+  "ledgerSource": {
+    "path": "/Volumes/Data/symphony-runtime/state/workspaces/.symphony-host/recovery-ledger.json",
+    "sha256": "429e434aeb0fde098b9d3aa32a87397fa393b55c3eb7aec92108d60ba56ad0de",
+    "bytes": 64565
+  },
+  "requestsSource": {
+    "path": "/Volumes/Data/symphony-runtime/state/workspaces/.symphony-host/recovery.json",
+    "sha256": "cb24e7f540162638d0086d130245b53e15ccef03c6a15fa0e41a1440876c1aab",
+    "bytes": 848
+  },
+  "children": [
+    {
+      "issue": 169,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23169:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 1,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1792936474016,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23169:review:1:felixjichao%2Fsymphony-ts:178:47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+          "kind": "review",
+          "revision": 1,
+          "status": "superseded",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 178,
+            "headSha": "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0"
+          },
+          "claimGeneration": 1,
+          "verdict": "needs_human",
+          "receiptType": "result",
+          "acceptedAtMs": 1792942132274,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23169:review:2:felixjichao%2Fsymphony-ts:178:c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+          "kind": "review",
+          "revision": 2,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 178,
+            "headSha": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2"
+          },
+          "claimGeneration": 2,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1792995628814,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": true,
+      "globalExactHeadTaskIds": [
+        "github%3Afelixjichao%2Fsymphony-ts%23169:review:2:felixjichao%2Fsymphony-ts:178:c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2"
+      ],
+      "delivery": {
+        "source": {
+          "path": "/Volumes/Data/symphony-runtime/state/workspaces/GH-169/.symphony/delivery-state.json",
+          "sha256": "1803179b1c688501beb5eb3e7890cdb4f1b492203cec2b30590b096bc4021d2a",
+          "bytes": 2465
+        },
+        "issueNumber": 169,
+        "isPaused": true,
+        "pauseReason": "review_needs_human",
+        "lastUpdated": "2026-10-25T15:29:06.495Z",
+        "pendingCompensation": false,
+        "commentPosted": true,
+        "commentVerifyStatus": "posted",
+        "readyLabelRemoved": true,
+        "spentRepairs": 0,
+        "spentWaitSeconds": 628,
+        "continuation": {
+          "intentId": "bc043d04-9004-4364-a0ae-b3026b5167d9",
+          "headSha": "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+          "prNumber": 178,
+          "phase": "result_observed",
+          "reviewTaskId": "github%3Afelixjichao%2Fsymphony-ts%23169:review:1:felixjichao%2Fsymphony-ts:178:47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+          "reviewRevision": 1,
+          "verdict": "needs_human"
+        },
+        "handoff": {
+          "handoffId": "handoff-felixjichao-symphony-ts-169-1792942138132-m9rgz7",
+          "reason": "review_needs_human",
+          "headSha": "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+          "prNumber": 178,
+          "reportDestination": "pr",
+          "commentPosted": true
+        },
+        "handoffDetailsBytes": 804
+      },
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#169\",\"delivery:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "cf78f11a9204fa6886f42c6e36e097994d18d994c3f12cc24d60ebff0b192417",
+            "expectedAction": "delivery:recover",
+            "target": "[null,null,null,0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "lifecycleGeneration": 1,
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#169\",\"delivery:blocked\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": {
+            "id": "4153ab9e284346661066f2ce9c9c0ce19d074398819fa6b0f98ee072e7eb11d4",
+            "expectedAction": "delivery:blocked",
+            "target": "{\"handoffId\":\"handoff-felixjichao-symphony-ts-169-1792942138132-m9rgz7\",\"headSha\":\"47b3c3f15db4f563ec65140d9ef5cf8d9de630c0\"}",
+            "epoch": 2,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "review_needs_human"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#169\",\"review:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "9e40f9178680d196d9c1b70df6d053005b576b53b1e4ab258b0745aa97a5c6e1",
+            "expectedAction": "review:recover",
+            "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23169:review:2:felixjichao%2Fsymphony-ts:178:c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2\",\"revision\":2},{\"repository\":\"felixjichao/symphony-ts\",\"prNumber\":178,\"headSha\":\"c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2\"},{\"handoffId\":\"handoff-felixjichao-symphony-ts-169-1792942138132-m9rgz7\",\"headSha\":\"47b3c3f15db4f563ec65140d9ef5cf8d9de630c0\"},0]",
+            "epoch": 1,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "human_required"
+            },
+            "fence": {
+              "leaseGeneration": 1,
+              "bindingGeneration": 1,
+              "expectedHeadSha": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 170,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23170:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 2,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793008919131,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23170:review:1:felixjichao%2Fsymphony-ts:181:d77d946632fd763e868a37aaa12af257d663c073",
+          "kind": "review",
+          "revision": 1,
+          "status": "superseded",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 181,
+            "headSha": "d77d946632fd763e868a37aaa12af257d663c073"
+          },
+          "claimGeneration": 1,
+          "verdict": "changes_requested",
+          "receiptType": "result",
+          "acceptedAtMs": 1793010123266,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23170:review:2:felixjichao%2Fsymphony-ts:181:8620dfca6b615210ec8b8ae680aaf97a49382ec8",
+          "kind": "review",
+          "revision": 2,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 181,
+            "headSha": "8620dfca6b615210ec8b8ae680aaf97a49382ec8"
+          },
+          "claimGeneration": 1,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1793010846619,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": true,
+      "globalExactHeadTaskIds": [
+        "github%3Afelixjichao%2Fsymphony-ts%23170:review:2:felixjichao%2Fsymphony-ts:181:8620dfca6b615210ec8b8ae680aaf97a49382ec8"
+      ],
+      "delivery": null,
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#170\",\"plan:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "cb042393c8639e1c420889b0ee9599444945eccc89e167e154f04c173d236050",
+            "expectedAction": "plan:recover",
+            "target": "[{\"taskId\":\"github%3Afelixjichao%2Fsymphony-ts%23170:plan:1\",\"revision\":1},null,null,0]",
+            "epoch": 1,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "human_required"
+            },
+            "fence": {
+              "leaseGeneration": 1,
+              "bindingGeneration": 0,
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#170\",\"delivery:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "b73c13efe4d4c94a3574bf90d6e7bc4a016f3554ffd034c80d9270706e980132",
+            "expectedAction": "delivery:recover",
+            "target": "[null,null,null,0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "lifecycleGeneration": 1,
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 171,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23171:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 1,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793021233016,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23171:review:1:felixjichao%2Fsymphony-ts:183:9d8c5c808cbbfeaadff18efebab49a2c48317a54",
+          "kind": "review",
+          "revision": 1,
+          "status": "superseded",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 183,
+            "headSha": "9d8c5c808cbbfeaadff18efebab49a2c48317a54"
+          },
+          "claimGeneration": 2,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1793070206095,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23171:review:2:felixjichao%2Fsymphony-ts:183:fc628b794b5b9f60a5666e60375c28a07a757525",
+          "kind": "review",
+          "revision": 2,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 183,
+            "headSha": "fc628b794b5b9f60a5666e60375c28a07a757525"
+          },
+          "claimGeneration": 1,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1793110554349,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": true,
+      "globalExactHeadTaskIds": [
+        "github%3Afelixjichao%2Fsymphony-ts%23171:review:2:felixjichao%2Fsymphony-ts:183:fc628b794b5b9f60a5666e60375c28a07a757525"
+      ],
+      "delivery": null,
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#171\",\"delivery:recover\"]",
+          "epoch": 7,
+          "attempts": 0,
+          "incident": {
+            "id": "5725b1e9910289724cea513c0588d8a1b756c5f20537618dbb045cbda25706d4",
+            "expectedAction": "delivery:recover",
+            "target": "[null,{\"repository\":\"felixjichao/symphony-ts\",\"prNumber\":183,\"headSha\":\"fc628b794b5b9f60a5666e60375c28a07a757525\"},null,0]",
+            "epoch": 7,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "expectedHeadSha": "fc628b794b5b9f60a5666e60375c28a07a757525",
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#171\",\"review:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#171\",\"delivery:blocked\"]",
+          "epoch": 7,
+          "attempts": 0,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#171\",\"repair:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": null
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 172,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23172:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 1,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793154933060,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23172:review:1:felixjichao%2Fsymphony-ts:190:af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39",
+          "kind": "review",
+          "revision": 1,
+          "status": "superseded",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 190,
+            "headSha": "af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39"
+          },
+          "claimGeneration": 1,
+          "verdict": "changes_requested",
+          "receiptType": "result",
+          "acceptedAtMs": 1793155791126,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23172:review:2:felixjichao%2Fsymphony-ts:190:abd6c65d280fc9649ca27809aad6a0663f4340a2",
+          "kind": "review",
+          "revision": 2,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 190,
+            "headSha": "abd6c65d280fc9649ca27809aad6a0663f4340a2"
+          },
+          "claimGeneration": 1,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1793156442037,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": true,
+      "globalExactHeadTaskIds": [
+        "github%3Afelixjichao%2Fsymphony-ts%23172:review:2:felixjichao%2Fsymphony-ts:190:abd6c65d280fc9649ca27809aad6a0663f4340a2"
+      ],
+      "delivery": null,
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#172\",\"delivery:recover\"]",
+          "epoch": 3,
+          "attempts": 0,
+          "incident": {
+            "id": "0f615f9309b4d37764422dc3943a550a390a68ce66bce800bb5831efe271cb35",
+            "expectedAction": "delivery:recover",
+            "target": "[null,null,null,0]",
+            "epoch": 3,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "lifecycleGeneration": 1,
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 173,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23173:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 1,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793157019111,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": false,
+      "globalExactHeadTaskIds": [],
+      "delivery": {
+        "source": {
+          "path": "/Volumes/Data/symphony-runtime/state/workspaces/GH-173/.symphony/delivery-state.json",
+          "sha256": "45c0ddcf817b3c7b4d837bed8fcd8b875352f1a6ff73805e2f76121e926d966f",
+          "bytes": 299789
+        },
+        "issueNumber": 173,
+        "isPaused": true,
+        "pauseReason": "manual_intervention_required",
+        "lastUpdated": "2026-10-28T05:44:48.237Z",
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "unverified",
+        "readyLabelRemoved": true,
+        "spentRepairs": 0,
+        "spentWaitSeconds": 252,
+        "continuation": {
+          "intentId": null,
+          "headSha": null,
+          "prNumber": null,
+          "phase": null,
+          "reviewTaskId": null,
+          "reviewRevision": null,
+          "verdict": null
+        },
+        "handoff": {
+          "handoffId": "handoff-felixjichao-symphony-ts-173-1793166233292-wxwp96",
+          "reason": "manual_intervention_required",
+          "headSha": null,
+          "prNumber": null,
+          "reportDestination": "issue",
+          "commentPosted": false
+        },
+        "handoffDetailsBytes": 279123
+      },
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#173\",\"delivery:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "2c7c525d70763b3f81ffb0880042442274a0844b4bd458c950a586b8c2136a3e",
+            "expectedAction": "delivery:recover",
+            "target": "[null,null,null,0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "lifecycleGeneration": 1,
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#173\",\"delivery:blocked\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": {
+            "id": "70ffa5266a48bb089d682cf95f19a644c3d040b25f3c8beb957c7284ba277dc5",
+            "expectedAction": "delivery:blocked",
+            "target": "{\"handoffId\":\"handoff-felixjichao-symphony-ts-173-1793166233292-wxwp96\",\"headSha\":null}",
+            "epoch": 2,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "manual_intervention_required"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#173\",\"handoff:recover\"]",
+          "epoch": 1,
+          "attempts": 1,
+          "incident": {
+            "id": "8e2d80a554721be9fecb763d7c3bd969046d7907d13ba9826df4be4604ed01b1",
+            "expectedAction": "handoff:recover",
+            "target": "[null,null,{\"handoffId\":\"handoff-felixjichao-symphony-ts-173-1793166233292-wxwp96\",\"headSha\":null},0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "recovery_outcome_unverified"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": [
+        {
+          "invocationId": "a16ed3b9-3115-44d0-8ac0-9212609e90ed",
+          "workKey": {
+            "provider": "github",
+            "key": "felixjichao/symphony-ts#173"
+          },
+          "stage": "handoff",
+          "action": "compensate",
+          "handoffRef": {
+            "handoffId": "handoff-felixjichao-symphony-ts-173-1793166233292-wxwp96",
+            "headSha": null
+          },
+          "fence": {}
+        }
+      ]
+    },
+    {
+      "issue": 174,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23174:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 1,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793193481493,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23174:review:1:felixjichao%2Fsymphony-ts:194:3f69e85b0220ac3fb2648d162133a597b3d88bd1",
+          "kind": "review",
+          "revision": 1,
+          "status": "superseded",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 194,
+            "headSha": "3f69e85b0220ac3fb2648d162133a597b3d88bd1"
+          },
+          "claimGeneration": 1,
+          "verdict": "changes_requested",
+          "receiptType": "result",
+          "acceptedAtMs": 1793199448614,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23174:review:2:felixjichao%2Fsymphony-ts:194:a296d907bea1fcd7e3dc272a922b6d03c9b68237",
+          "kind": "review",
+          "revision": 2,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 194,
+            "headSha": "a296d907bea1fcd7e3dc272a922b6d03c9b68237"
+          },
+          "claimGeneration": 1,
+          "verdict": "approve",
+          "receiptType": "result",
+          "acceptedAtMs": 1793203129224,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": true,
+      "globalExactHeadTaskIds": [
+        "github%3Afelixjichao%2Fsymphony-ts%23174:review:2:felixjichao%2Fsymphony-ts:194:a296d907bea1fcd7e3dc272a922b6d03c9b68237"
+      ],
+      "delivery": null,
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#174\",\"coding:retry\"]",
+          "epoch": 2,
+          "attempts": 1,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#174\",\"delivery:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": {
+            "id": "233ceb830d4b328382be07b1c623e2c807966f6c51a9fc6cdde1c42cef3202af",
+            "expectedAction": "delivery:recover",
+            "target": "[null,{\"repository\":\"felixjichao/symphony-ts\",\"prNumber\":194,\"headSha\":\"a296d907bea1fcd7e3dc272a922b6d03c9b68237\"},null,0]",
+            "epoch": 2,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "expectedHeadSha": "a296d907bea1fcd7e3dc272a922b6d03c9b68237",
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#174\",\"delivery:blocked\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "747e99754c5951eea10f3cf4f3b85e5333b185cee669feb3519b37c73ca86b8d",
+            "expectedAction": "delivery:blocked",
+            "target": "{\"handoffId\":\"handoff-felixjichao-symphony-ts-174-1793200407330-dxinyg\",\"headSha\":\"a296d907bea1fcd7e3dc272a922b6d03c9b68237\"}",
+            "epoch": 1,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "ci_wait_timeout"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 175,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23175:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 3,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793237434310,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23175:review:1:felixjichao%2Fsymphony-ts:195:95a8c2e93b2549a18b9024fdc005a4e26319222c",
+          "kind": "review",
+          "revision": 1,
+          "status": "completed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 195,
+            "headSha": "95a8c2e93b2549a18b9024fdc005a4e26319222c"
+          },
+          "claimGeneration": 1,
+          "verdict": "changes_requested",
+          "receiptType": "result",
+          "acceptedAtMs": 1793239979570,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        }
+      ],
+      "exactHeadApprovalVerified": false,
+      "globalExactHeadTaskIds": [],
+      "delivery": {
+        "source": {
+          "path": "/Volumes/Data/symphony-runtime/state/workspaces/GH-175/.symphony/delivery-state.json",
+          "sha256": "9d2c40e609466ca1b17b8ecc817effb60acb4785b4bce0aa658daeb7047d0778",
+          "bytes": 299844
+        },
+        "issueNumber": 175,
+        "isPaused": true,
+        "pauseReason": "review_changes_requested_max_repairs",
+        "lastUpdated": "2026-10-29T02:31:34.199Z",
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "failed",
+        "readyLabelRemoved": true,
+        "spentRepairs": 1,
+        "spentWaitSeconds": 1546,
+        "continuation": {
+          "intentId": "3aca7e2a-85d1-4743-b9f1-1b9355829abd",
+          "headSha": "95a8c2e93b2549a18b9024fdc005a4e26319222c",
+          "prNumber": 195,
+          "phase": "repair_pending",
+          "reviewTaskId": "github%3Afelixjichao%2Fsymphony-ts%23175:review:1:felixjichao%2Fsymphony-ts:195:95a8c2e93b2549a18b9024fdc005a4e26319222c",
+          "reviewRevision": 1,
+          "verdict": "changes_requested"
+        },
+        "handoff": {
+          "handoffId": "handoff-felixjichao-symphony-ts-175-1793241088542-luyl29",
+          "reason": "review_changes_requested_max_repairs",
+          "headSha": "95a8c2e93b2549a18b9024fdc005a4e26319222c",
+          "prNumber": 195,
+          "reportDestination": "pr",
+          "commentPosted": false
+        },
+        "handoffDetailsBytes": 278329
+      },
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#175\",\"plan:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#175\",\"delivery:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": {
+            "id": "bcbe0b7a5ce1087c2cee3ac4779e2fa25bc58c1e10c4b5501ca7217821de0084",
+            "expectedAction": "delivery:recover",
+            "target": "[null,{\"repository\":\"felixjichao/symphony-ts\",\"prNumber\":195,\"headSha\":\"95a8c2e93b2549a18b9024fdc005a4e26319222c\"},null,0]",
+            "epoch": 2,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "expectedHeadSha": "95a8c2e93b2549a18b9024fdc005a4e26319222c",
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#175\",\"coding:retry\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "a576b49ce621b9c22ffde3146cbd7e448f959636e37a03ebfc098a57fca17cb9",
+            "expectedAction": "coding:retry",
+            "target": "runtime",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "worker_launch_unverified"
+            },
+            "fence": {
+              "retryToken": "blocked::914e50ac-d60e-4b8e-8884-2d78b016e88e::1",
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#175\",\"handoff:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "1de2b791163001e07fe3ac1005503405aac5f6f7c8526094687618a428c29900",
+            "expectedAction": "handoff:recover",
+            "target": "[null,null,{\"handoffId\":\"handoff-felixjichao-symphony-ts-175-1793241088542-luyl29\",\"headSha\":\"95a8c2e93b2549a18b9024fdc005a4e26319222c\"},0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "worker_launch_unverified"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": []
+    },
+    {
+      "issue": 176,
+      "tasks": [
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23176:plan:1",
+          "kind": "plan",
+          "revision": 1,
+          "status": "completed",
+          "target": null,
+          "claimGeneration": 2,
+          "verdict": "ready",
+          "receiptType": "result",
+          "acceptedAtMs": 1793246452583,
+          "receiptChecks": {
+            "taskId": true,
+            "sessionId": true,
+            "revision": true,
+            "generation": true,
+            "claimTokenEquality": true,
+            "payloadEquality": true,
+            "targetEquality": true,
+            "acceptedBeforeMerge": true
+          }
+        },
+        {
+          "taskId": "github%3Afelixjichao%2Fsymphony-ts%23176:review:1:felixjichao%2Fsymphony-ts:196:d62f07132e2ff31f70710358da326c2d4ecc1bb4",
+          "kind": "review",
+          "revision": 1,
+          "status": "claimed",
+          "target": {
+            "repository": "felixjichao/symphony-ts",
+            "prNumber": 196,
+            "headSha": "d62f07132e2ff31f70710358da326c2d4ecc1bb4"
+          },
+          "claimGeneration": 1,
+          "verdict": null,
+          "receiptType": null,
+          "acceptedAtMs": null,
+          "receiptChecks": null
+        }
+      ],
+      "exactHeadApprovalVerified": false,
+      "globalExactHeadTaskIds": [],
+      "delivery": {
+        "source": {
+          "path": "/Volumes/Data/symphony-runtime/state/workspaces/GH-176/.symphony/delivery-state.json",
+          "sha256": "1f6958cb7086f259290462c3411dffa1705d134c3ac467daca342a13c2703cab",
+          "bytes": 300764
+        },
+        "issueNumber": 176,
+        "isPaused": true,
+        "pauseReason": "manual_intervention_required",
+        "lastUpdated": "2026-10-29T10:15:18.808Z",
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "unverified",
+        "readyLabelRemoved": true,
+        "spentRepairs": 0,
+        "spentWaitSeconds": 321,
+        "continuation": {
+          "intentId": null,
+          "headSha": null,
+          "prNumber": null,
+          "phase": null,
+          "reviewTaskId": null,
+          "reviewRevision": null,
+          "verdict": null
+        },
+        "handoff": {
+          "handoffId": "handoff-felixjichao-symphony-ts-176-1793268777421-5go0o2",
+          "reason": "manual_intervention_required",
+          "headSha": null,
+          "prNumber": null,
+          "reportDestination": "issue",
+          "commentPosted": false
+        },
+        "handoffDetailsBytes": 280064
+      },
+      "currentBudgets": [
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#176\",\"plan:recover\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#176\",\"coding:retry\"]",
+          "epoch": 2,
+          "attempts": 0,
+          "incident": null
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#176\",\"delivery:recover\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "0e199019efee53c37cc84083ce8f272a6bb9e4ee0c693c739a614145546a9644",
+            "expectedAction": "delivery:recover",
+            "target": "[null,null,null,0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "delivery_subprocess_outcome_unverified"
+            },
+            "fence": {
+              "lifecycleGeneration": 172,
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#176\",\"delivery:blocked\"]",
+          "epoch": 1,
+          "attempts": 0,
+          "incident": {
+            "id": "a4fc8cfe6a0dee02c28dca57147a16fcbd175597ff97a5a2d2964e9d6f9497bc",
+            "expectedAction": "delivery:blocked",
+            "target": "{\"handoffId\":\"handoff-felixjichao-symphony-ts-176-1793268777421-5go0o2\",\"headSha\":null}",
+            "epoch": 1,
+            "blockedReason": "human_required",
+            "failure": {
+              "classification": "human_required",
+              "reason": "manual_intervention_required"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        },
+        {
+          "scope": "[\"github\",\"felixjichao/symphony-ts#176\",\"handoff:recover\"]",
+          "epoch": 1,
+          "attempts": 1,
+          "incident": {
+            "id": "b9332208f8815be1e64ac2da12f1112695d629f4193aa195e4dc90833fce72ee",
+            "expectedAction": "handoff:recover",
+            "target": "[null,null,{\"handoffId\":\"handoff-felixjichao-symphony-ts-176-1793268777421-5go0o2\",\"headSha\":null},0]",
+            "epoch": 1,
+            "blockedReason": "outcome_unknown",
+            "failure": {
+              "classification": "outcome_unknown",
+              "reason": "recovery_outcome_unverified"
+            },
+            "fence": {
+              "hasLeaseToken": false
+            }
+          }
+        }
+      ],
+      "pendingRecoveryRequests": [
+        {
+          "invocationId": "eeb57254-7a0e-40de-9a73-ee9ed068e8ec",
+          "workKey": {
+            "provider": "github",
+            "key": "felixjichao/symphony-ts#176"
+          },
+          "stage": "handoff",
+          "action": "compensate",
+          "handoffRef": {
+            "handoffId": "handoff-felixjichao-symphony-ts-176-1793268777421-5go0o2",
+            "headSha": null
+          },
+          "fence": {}
+        }
+      ]
+    }
+  ]
+}
