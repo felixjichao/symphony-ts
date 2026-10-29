@@ -314,4 +314,4 @@ The Why surface presents supplied source/role evidence and provenance alongside 
 
 ### Dashboard V2 Executors and System — #175
 
-The Dashboard renders supplied executor ownership, individual source freshness, system health, anomaly scope and independent polling posture. Work links use full WorkKey identity. Browser evidence and host delivery validation remain pending; no production acceptance is claimed.
+The Dashboard renders supplied executor ownership, individual source freshness, system health, anomaly scope and independent polling posture. Work links use full WorkKey identity. An independent exact-PR-HEAD CI job now runs `browser:operational` after the canonical gate and retains SHA-labelled browser reports and screenshots for 30 days, including partial evidence on failure. Local Dashboard tests, root typecheck and Chromium acceptance passed. Host CI, exact-HEAD review and delivery validation remain pending; no production acceptance is claimed.

@@ -33,7 +33,9 @@ try {
     }
   }
   await page.goto(`${server.url}/#executors`); await page.locator("#executors a").first().click(); await page.locator("#detail-heading").waitFor();
-  await page.locator("#nav-system").focus(); await page.keyboard.press("Enter"); assert.equal(await page.evaluate(() => document.activeElement?.id), "page-heading");
+  await page.locator("#nav-system").focus(); await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.activeElement?.id === "page-heading");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "page-heading");
   await page.route("**/api/operations/snapshot", route => route.abort());
   await page.evaluate(() => { document.dispatchEvent(new Event("visibilitychange")); });
   await page.getByText(/刷新失败，显示上次成功快照/).waitFor(); assert.ok((await page.locator("#system").innerText()).includes("WORK SIGNAL"));

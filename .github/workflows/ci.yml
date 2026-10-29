@@ -49,3 +49,34 @@ jobs:
           path: ${{ runner.temp }}/work-detail-why/
           if-no-files-found: error
           retention-days: 30
+
+  operational-browser:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build exact-HEAD workspaces
+        run: npm run typecheck
+      - name: Install Chromium for Dashboard acceptance
+        run: npm exec -w @symphony/dashboard -- playwright install --with-deps chromium
+      - name: Executors and System browser and visual acceptance
+        id: operational-browser
+        env:
+          SYMPHONY_BROWSER_EVIDENCE: ${{ runner.temp }}/operational-views
+        run: npm run browser:operational -w @symphony/dashboard
+      - name: Retain exact-HEAD operational browser evidence
+        if: ${{ always() && steps.operational-browser.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-views-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/operational-views/
+          if-no-files-found: error
+          retention-days: 30
