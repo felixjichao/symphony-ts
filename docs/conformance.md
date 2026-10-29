@@ -728,3 +728,5 @@ Dashboard-only presentation of supplied executor inventory, source freshness, sy
 ## §13 adjacent: Dashboard V2 closeout (#176)
 
 Production status composition and read-only boundary tests remain in `apps/cli/src/status.test.ts` and `apps/cli/src/status-boundaries.test.ts`; the [closeout ledger](evidence/dashboard-v2-closeout/README.md) indexes child evidence and controlled production browser results and outstanding self-hosting verification. #176 acceptance and host validation are pending.
+
+#176 review follow-up: the `production-status-browser` CI job runs the production composition smoke on a clean PR HEAD and retains the SHA-labelled report and screenshots. The closeout ledger records the observed #176 stable-host/workspace identities, build and restart boundary, while retaining historical and manual-delivery gaps; CI execution and exact-HEAD review remain pending until actually observed.

@@ -193,3 +193,7 @@ Opt-in real #192 reproduction: `node_modules/.bin/tsx scripts/acceptance/deliver
 ## Dashboard V2 closeout (#176)
 
 The [closeout ledger](evidence/dashboard-v2-closeout/README.md) indexes production-path and child evidence, including controlled browser results and outstanding self-hosting gaps. The production smoke is `node --import tsx apps/cli/scripts/status-smoke.mjs` with `SYMPHONY_BROWSER_MODULE` and an installed `SYMPHONY_CHROMIUM`; it requires a built CLI. Browser evidence does not replace semantic tests or the host-owned gate.
+
+### Production status closeout browser (#176)
+
+The `production-status-browser` CI job runs `node --import tsx apps/cli/scripts/status-smoke.mjs` after a clean exact-HEAD checkout and full build, with Playwright Chromium. It uploads a SHA-labelled report and screenshots for 30 days. The report records source commit/tree, harness and fixture hashes and built assets; controlled source facts do not establish live external-source acceptance.

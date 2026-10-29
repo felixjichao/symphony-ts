@@ -100,7 +100,8 @@ try {
   assert.ok(network.length > 20 && network.every(item => item.method === "GET" && item.path === "/api/operations/snapshot"));
   assert.deepEqual(errors, []);
   const hashes = await Promise.all((await readdir(`${assets}/assets`)).map(async file => ({ file, sha256: createHash("sha256").update(await readFile(`${assets}/assets/${file}`)).digest("hex") })));
-  console.log(JSON.stringify({ harnessSha256: createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex"), evidenceDir, sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), workingTree: execFileSync("git", ["status", "--short"], { cwd: root, encoding: "utf8" }).trim(), browser: await browser.version(), mode: "controlled production composition + actual executable empty scope", externalLive: "not run", results, assets: hashes, networkRequests: network.length, getOnly: true, pageErrors: errors }, null, 2));
+  const fixtureSha256 = createHash("sha256").update(await readFile(fileURLToPath(new URL("../src/status-fixtures.ts", import.meta.url)))).digest("hex");
+  console.log(JSON.stringify({ fixtureSha256, sourceTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), harnessSha256: createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex"), evidenceDir, sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), workingTree: execFileSync("git", ["status", "--short"], { cwd: root, encoding: "utf8" }).trim(), browser: await browser.version(), mode: "controlled production composition + actual executable empty scope", externalLive: "not run", results, assets: hashes, networkRequests: network.length, getOnly: true, pageErrors: errors }, null, 2));
 } finally {
   await browser.close(); await site?.stop(); await proc?.close(); await tracker?.close();
   if (dir) await rm(dir, { recursive: true, force: true });
