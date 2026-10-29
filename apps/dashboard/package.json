@@ -8,7 +8,8 @@
     "test": "vitest run",
     "demo": "tsx examples/main.ts",
     "dev": "tsx examples/main.ts --dev",
-    "browser:detail": "npm run build && tsx --tsconfig tsconfig.node.json examples/detail-visual.ts"
+    "browser:detail": "npm run build && tsx --tsconfig tsconfig.node.json examples/detail-visual.ts",
+    "browser:operational": "npm run build && tsx --tsconfig tsconfig.node.json examples/operational-visual.ts"
   },
   "dependencies": {
     "@symphony/observability": "*",

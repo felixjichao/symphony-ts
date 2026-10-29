@@ -1,12 +1,13 @@
 import type { OperationalSnapshot } from "@symphony/operations";
 import type { Observation } from "./polling";
 import { destination, destinations } from "./routing";
-import { findWork, token } from "./identity";
-import { freshness, timestamp } from "./presentation";
+import { findWork } from "./identity";
+import { timestamp } from "./presentation";
 import { el } from "./dom";
 import { createExplorer } from "./explorer";
 import { workDetail } from "./detail";
-import { anomalyCards } from "./anomaly";
+import { executors as renderExecutors } from "./executors";
+import { system as renderSystem, updateTransport } from "./system";
 import { overview as renderOverview } from "./overview";
 export function mount(root: HTMLElement, mode: string = "demo"): { update: (state: Observation) => void; destroy: () => void } {
   const header = el("header"); header.append(el("p", "SYMPHONY / OBSERVATION PLANE"), el("h1", "Operator Console"), el("strong", mode === "production" ? "当前生产只读观测 · 显式 WorkKey scope（非全局清单）" : "演示数据 · 只读 · 非生产状态面"));
@@ -64,27 +65,19 @@ export function mount(root: HTMLElement, mode: string = "demo"): { update: (stat
   return {
     update(state) {
       notice.textContent = state.error ? `${state.snapshot ? "刷新失败，显示上次成功快照" : "尚未取得快照"} · ${state.error} · 上次成功响应 ${timestamp(state.receivedAt)}` : state.snapshot ? `已收到当前快照 · 响应时间 ${timestamp(state.receivedAt)}` : "加载快照…";
+      const transport = content.querySelector<HTMLElement>("#system-transport");
+      if (transport) updateTransport(transport, state);
       if (!state.snapshot || state.snapshot === current) return;
       const focused = document.activeElement?.id;
       const open = new Set([...main.querySelectorAll("details[open]")].map(d => d.id));
       current = state.snapshot;
       const overview = renderOverview(current);
-      const sources = el("section"); sources.append(el("h2", "来源新鲜度"), el("p", `系统健康: ${current.health} · 快照生成 ${timestamp(current.generatedAt)}`));
-      for (const source of current.sources) sources.append(el("p", `${source.source} / ${source.instance} ${source.workKey ? `${source.workKey.provider}:${source.workKey.key}` : ""} · ${freshness(source.freshness)}`));
-      const executors = el("section"); executors.append(el("h2", "Executor inventory"));
-      // Empty inventory is only called observed-empty when an executor source says fresh.
-      if (current.executors.length === 0) executors.append(el("p", "当前快照清单为空；是否已观测、未配置或不可用请见下方 executor 来源状态。"));
-      for (const source of current.sources.filter(s => s.source === "executor")) executors.append(el("p", `Executor 来源: ${freshness(source.freshness)}`));
-      for (const executor of current.executors) {
-        const item = el("p", `${executor.id} · ${executor.role ?? "未报告角色"} · ${executor.adapter} · ${executor.status} · 心跳 ${timestamp(executor.lastHeartbeatAt)}`);
-        if (executor.currentWork !== null) { const link = el("a", `${executor.currentWork.provider}:${executor.currentWork.key}`); link.href = `#${token(executor.currentWork)}`; item.append(" · ", link); }
-        executors.append(item);
-      }
+      const sources = renderSystem(current, state);
+      const executors = renderExecutors(current);
       const table = explorer.update(current);
-      const cards = anomalyCards(current.anomalies, null);
       overview.dataset["page"] = "Overview"; table.dataset["page"] = "Work";
-      sources.dataset["page"] = "System"; executors.dataset["page"] = "Executors"; cards.dataset["page"] = "System";
-      content.replaceChildren(overview, table, sources, executors, cards);
+      sources.dataset["page"] = "System"; executors.dataset["page"] = "Executors";
+      content.replaceChildren(overview, table, sources, executors);
       for (const details of main.querySelectorAll("details")) if (open.has(details.id)) details.open = true;
       if (focused) document.getElementById(focused)?.focus();
       locate();

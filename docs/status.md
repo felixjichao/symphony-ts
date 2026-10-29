@@ -311,3 +311,7 @@ Implemented scan-first supplied conclusion, execution, PR/CI/review identities, 
 ### Dashboard V2 Work Detail Why — #174
 
 The Why surface presents supplied source/role evidence and provenance alongside separately labelled conclusion, freshness and Work-scoped anomalies; exact review targets remain independently visible. Global anomalies remain in System. Raw evidence uses keyboard-accessible disclosures with refresh state retention. Dashboard tests and root typecheck passed. [Browser evidence](evidence/work-detail-why/README.md) retains the reviewed `3f69e85` captures plus expanded diagnostic acceptance; CI now has an exact-PR-HEAD browser job with retained artifacts. Host gate, CI, exact-HEAD Review and Delivery for the repair remain runner-owned.
+
+### Dashboard V2 Executors and System — #175
+
+The Dashboard renders supplied executor ownership, individual source freshness, system health, anomaly scope and independent polling posture. Work links use full WorkKey identity. Browser evidence and host delivery validation remain pending; no production acceptance is claimed.

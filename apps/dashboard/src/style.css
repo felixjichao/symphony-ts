@@ -91,3 +91,6 @@ a:hover, summary:hover { text-decoration: underline; }
 #detail .why-anomaly { border-left: 3px solid #ffb3a9; background: var(--console-surface); margin: 12px 0; padding: 12px; }
 #detail article h5, #detail article h4 { margin: 0; }
 #detail pre { overflow-x: auto; }
+
+/* #175: supplied source details can contain long instance names and failure reasons. */
+#executors .badge, #system .badge { max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
