@@ -75,6 +75,11 @@ export function deliveryLifecycleAuthorityPath(cwd: string): string {
   const key = createHash("sha256").update(path.join(parent, path.basename(absolute))).digest("hex");
   return path.join(parent, ".symphony-host", "delivery-authorities", `${key}.lock`);
 }
+/** Shared by upgraded hosts and offline maintenance; kept outside issue workspaces. */
+export function hostMaintenanceAuthorityPath(root: string): string {
+  fs.mkdirSync(root, { recursive: true });
+  return path.join(fs.realpathSync(root), ".symphony-host", "host-maintenance.lock");
+}
 export async function withDeliveryLifecycleAuthority<T>(cwd: string, action: () => Promise<T>): Promise<T> {
   const authority = acquireFileAuthority(deliveryLifecycleAuthorityPath(cwd));
   try { return await action(); } finally { authority.release(); }

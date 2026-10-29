@@ -62,7 +62,8 @@ export interface SubmissionReceipt {
 export interface OperationReceipt {
   readonly schemaVersion: 1;
   readonly operationKey: string;
-  readonly kind: "create-plan-task" | "create-review-task" | "rebind-session" | "publish-plan";
+  readonly kind: "create-plan-task" | "create-review-task" | "rebind-session" | "publish-plan" | "external-work-completion";
+  readonly externalCompletion?: import("@symphony/domain").ExternalDeliverySettlementReceipt | undefined;
   readonly sessionId: string;
   readonly target?: DecisionReviewTarget | null | undefined;
   readonly triggerKind?: string | undefined;

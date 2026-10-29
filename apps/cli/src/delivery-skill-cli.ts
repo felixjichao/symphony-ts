@@ -1,5 +1,6 @@
 import { GitHubDeliveryService } from "@symphony/tracker";
 import { withDeliveryFileAuthority } from "./file-authority";
+import { hasExternalSettlementFence } from "./external-settlement-journal";
 import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +22,7 @@ import {
   isDeliveryContinuation,
   isDeliveryMergeConflictRepair,
   isLandingIntent,
+  validateExternalDeliveryState,
   formatDeliveryHandoffMarkdown,
   type DecisionMaterializedPlan,
   type DeliveryHandoff,
@@ -87,7 +89,9 @@ export class FileDeliveryStateStorage implements DeliveryStateStorage {
       || handoff.reportDestination === "pr" && handoff.prNumber === null)) {
       throw new Error("Corrupted delivery report destination");
     }
-    return rec as unknown as PersistedDeliveryState;
+    const state = rec as unknown as PersistedDeliveryState;
+    validateExternalDeliveryState(state);
+    return state;
   }
 
   writeState(state: PersistedDeliveryState): void {
@@ -260,7 +264,14 @@ export async function runDeliverySkillCli(
   customReviewGate?: DeliveryReviewGate,
 ): Promise<number> {
   try {
+    if (argv[0] === "prepare-external" || argv[0] === "settle-external") {
+      return (await import("./external-settlement")).runExternalSettlementCli(argv, io, customRunner);
+    }
     const parsed = parseDeliverySkillArgs(argv);
+    if (parsed.repo && parsed.issueNumber && hasExternalSettlementFence(path.dirname(path.resolve(parsed.cwd ?? process.cwd())),
+      { provider: "github", key: `${parsed.repo}#${parsed.issueNumber}` })) {
+      throw new Error("External completion is fenced; ordinary Delivery commands cannot replay it");
+    }
     return await withDeliveryAuthority(parsed.cwd ?? process.cwd(), () => runDeliverySkillCliLocked(argv, io, customRunner, customReviewGate));
   } catch (error) {
     io.stderr.write(`symphony delivery-skill: ${String(error)}\n`);

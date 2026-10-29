@@ -33,7 +33,7 @@ symphony repo-bootstrap --repo <url> [--target <path>] [--branch <name>] [--work
 
 交付与自动合入工作流 Skill 子命令契约（NEST-91 / #80）：
 ```text
-symphony delivery-skill [run|halt] --repo <owner/repo> --issue <number> [options]
+symphony delivery-skill [run|halt|recover-handoff] --repo <owner/repo> --issue <number> [options]
 ```
 - `run` 动作：执行 inspect → validate → commit → push → create/reuse PR → inspect CI → fix failures loop → land 闭环；
 - `halt` 动作：显式触发交接中断，自动移除 Issue 上的 `symphony-ready` 标签以停止派发，并在控制台与 Issue 上输出交接报告；
@@ -128,3 +128,7 @@ Open the `http://127.0.0.1:<port>` URL in the `status_surface` log. Default is o
 Existing local `--decision-store` and authenticated `--decision-bridge-url` modes reuse their configured backend. Unconfigured Decision/inventory is unknown; configured failures are unavailable, retaining other sources. Only canonical GitHub WorkKeys are accepted. Production GitHub observation requires the GitHub tracker profile with the public `https://api.github.com` API base; GHES and other providers safely report unavailable without forwarding their credentials or falling back to another GitHub login. GitHub association supports the verified default `GH-N` / `symphony/GH-N` convention and repository default branch; custom identities are not guessed. The status surface cannot create work, claim tasks, merge PRs or repair sources. A status startup failure logs `status_start_failed` while orchestration continues. Loopback snapshots can contain work identifiers and paths; do not publish the port. History, analytics, streaming and operator actions remain deferred.
 
 Validation and foreground Chromium commands are in the [status acceptance ledger](../../docs/evidence/status-surface/README.md).
+
+### 外部交付离线结算
+
+`symphony delivery-skill prepare-external --request draft.json` 生成绑定原生 snapshot 与远端目标的授权文件；`settle-external --request authorized.json` 预览，追加 `--apply` 执行。必须先停止相关 host、Bridge 与 executor；见 [完整操作与恢复说明](../../docs/external-delivery-settlement.md)。

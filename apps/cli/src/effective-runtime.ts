@@ -31,6 +31,7 @@ export interface EffectiveRuntime {
 }
 
 export interface EffectiveRuntimeControllerOptions {
+  readonly beforeCommit?: ((runtime: EffectiveRuntime) => void) | undefined;
   readonly workflowPath: string;
   readonly registry: TrackerAdapterRegistry;
   readonly env?: TrackerEnv | undefined;
@@ -46,6 +47,7 @@ export class EffectiveRuntimeController {
   private readonly logger: StructuredLogger;
   private readonly observers: ReturnType<typeof createRuntimeLogObservers>;
   private readonly onCommit: ((runtime: EffectiveRuntime) => void) | undefined;
+  private readonly beforeCommit: ((runtime: EffectiveRuntime) => void) | undefined;
 
   private currentRuntime: EffectiveRuntime | null = null;
   private closed = false;
@@ -58,6 +60,7 @@ export class EffectiveRuntimeController {
     this.logger = options.logger;
     this.observers = options.observers;
     this.onCommit = options.onCommit;
+    this.beforeCommit = options.beforeCommit;
   }
 
   public get current(): EffectiveRuntime {
@@ -170,6 +173,7 @@ export class EffectiveRuntimeController {
       scheduling,
     };
 
+    this.beforeCommit?.(nextRuntime);
     this.currentRuntime = nextRuntime;
 
     if (this.authority !== null) {

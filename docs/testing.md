@@ -197,3 +197,7 @@ The [closeout ledger](evidence/dashboard-v2-closeout/README.md) indexes producti
 ### Production status closeout browser (#176)
 
 The `production-status-browser` CI job runs `node --import tsx apps/cli/scripts/status-smoke.mjs` after a clean exact-HEAD checkout and full build, with Playwright Chromium. It uploads a SHA-labelled report and screenshots for 30 days. The report records source commit/tree, harness and fixture hashes and built assets; controlled source facts do not establish live external-source acceptance.
+
+## 外部交付离线结算
+
+定向入口：`npm test -w @symphony/cli -- --run src/external-settlement.test.ts`。配套 domain、tracker、agent、Decision 测试分别覆盖严格授权、GET 目标绑定、原生回执保留与事务取消。使用真实临时原生存储及被 SIGKILL 的维护子进程，验证中断重入、活跃 owner 拒绝、热重载 root 互斥、预算/历史回执保留与 cleanup 后 fence；不使用生产状态，也不计为真实 GitHub 验收。提交前仍运行 `npm run gate`。

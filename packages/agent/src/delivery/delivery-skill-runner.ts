@@ -10,6 +10,7 @@ import {
   formatPrBody,
   githubDecisionRoot,
   validatePrOwnership,
+  validateExternalDeliveryState,
   type CheckConclusion,
   type CheckState,
   type DecisionMaterializedContext,
@@ -428,6 +429,13 @@ async function runDeliverySkillLocked(
     return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
       spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
       reason: "manual_intervention_required", handoffMarkdown: "Delivery state belongs to a different work identity" };
+  }
+  if (persisted?.externalSettlement) {
+    validateExternalDeliveryState(persisted);
+    return { status: "blocked", prNumber: persisted.externalSettlement.target.prNumber, prUrl: null,
+      headSha: persisted.externalSettlement.target.headSha, spentRepairs: persisted.spentRepairs,
+      spentWaitSeconds: persisted.spentWaitSeconds, reason: "manual_intervention_required",
+      handoffMarkdown: "Work was explicitly settled as external completion; Delivery will not replay" };
   }
   if (options.conflictRecoveryAuthorization) {
     const auth = options.conflictRecoveryAuthorization;

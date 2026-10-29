@@ -3,6 +3,7 @@
 import path from "node:path";
 import { FileDeliveryStateStorage } from "./delivery-skill-cli";
 import { deliveryAuthorityBlock, withDeliveryLifecycleAuthority } from "./file-authority";
+import { readExternalSettlementJournal } from "./external-settlement-journal";
 
 export async function withDeliveryCleanupAuthority<T>(cwd: string, remove: () => Promise<T>): Promise<T> {
   return withDeliveryLifecycleAuthority(cwd, async () => {
@@ -11,6 +12,14 @@ export async function withDeliveryCleanupAuthority<T>(cwd: string, remove: () =>
     // Schema errors deliberately propagate. Neither a terminal Issue nor a dead
     // owner establishes that an unacknowledged external effect is safe to erase.
     const state = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json")).readState();
+    const journal = state ? readExternalSettlementJournal(path.dirname(cwd), { provider: "github", key: `${state.repo}#${state.issueNumber}` }) : null;
+    if (journal || state?.externalSettlement) {
+      if (!journal || journal.phase !== "complete" || !state?.externalSettlement
+        || JSON.stringify(journal.receipt) !== JSON.stringify(state.externalSettlement)) {
+        throw new Error("Workspace cleanup blocked: external settlement is incomplete");
+      }
+      return remove();
+    }
     const continuation = state?.continuation;
     const landing = state?.landing;
     // Auto-land completes from result_observed, rather than the no-land ready

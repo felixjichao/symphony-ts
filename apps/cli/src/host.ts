@@ -1,4 +1,6 @@
 import { startStatusSurface, githubStatusSource, type StatusOptions, type StatusSources } from "./status";
+import { acquireFileAuthority, hostMaintenanceAuthorityPath } from "./file-authority";
+import { hasExternalSettlementFence } from "./external-settlement-journal";
 import { createHostRecovery } from "./host-recovery";
 import { FileRecoveryLedger } from "./recovery-ledger";
 import { withDeliveryCleanupAuthority } from "./delivery-cleanup";
@@ -143,12 +145,19 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     ? new TrackerAdapterRegistry(options.trackerProfiles)
     : new TrackerAdapterRegistry([createGitHubAdapterProfile({ onMalformedRecord: observers.onMalformedRecord })]);
 
+  const rootAuthorities = new Map<string, ReturnType<typeof acquireFileAuthority>>();
+  let hostActive = false;
+  const holdRoot = (root: string) => {
+    const file = hostMaintenanceAuthorityPath(root);
+    if (!rootAuthorities.has(file)) rootAuthorities.set(file, acquireFileAuthority(file));
+  };
   const controller = new EffectiveRuntimeController({
     workflowPath,
     registry,
     env: options.env,
     logger,
     observers,
+    beforeCommit: runtime => { if (hostActive) holdRoot(runtime.serviceConfig.workspace.root); },
   });
 
   let reportFailure!: (error: unknown) => void;
@@ -345,6 +354,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
       const recoverySession = resolveIssueSessionId(issue, getEffectiveRepo());
       const recoveryKey = recoverySession ? parseDecisionSessionRootFromId(recoverySession) : { provider: controller.current.serviceConfig.tracker.kind, key: issue.id };
+      if (hasExternalSettlementFence(controller.current.serviceConfig.workspace.root, recoveryKey)) return false;
       if (recovery.blocked(recoveryKey)) return false;
       if (options.canDispatch && !options.canDispatch(issue, context)) {
         return false;
@@ -448,6 +458,12 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         }
         observers.lifecycle({ event: "shutdown", outcome: errors.length ? "failed" : "completed" });
         try { logger.close(); } catch (error) { errors.push(error); }
+        for (const lock of rootAuthorities.values()) {
+          if (errors.length) lock.update(true);
+          lock.release();
+        }
+        rootAuthorities.clear();
+        hostActive = false;
         if (errors.length) throw new AggregateError(errors, "Host shutdown failed");
       })().then(resolveStop, rejectStop);
       return stopPromise;
@@ -477,6 +493,8 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
         observers.lifecycle({ event: "startup", outcome: "started" });
         startPromise = (async () => {
           try {
+            hostActive = true;
+            holdRoot(controller.current.serviceConfig.workspace.root);
             watcher.startMonitoring();
             if (stopping) return;
             await loop.start();

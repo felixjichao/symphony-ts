@@ -2,6 +2,7 @@
  * @symphony/domain — GitHub delivery and auto-merge policy types and pure functions (SPEC §11.5 / MVP.3).
  */
 import { createHash } from "node:crypto";
+import type { ExternalDeliverySettlementReceipt } from "./external-delivery";
 import type { DecisionReviewTarget, DecisionTask, DecisionResult } from "./decision";
 import type { DecisionContextBundle, DecisionMaterializedPlan } from "./decision-context";
 
@@ -511,6 +512,8 @@ export interface DeliveryMergeConflictRepair {
   readonly outcome?: string | undefined;
 }
 export interface PersistedDeliveryState {
+  /** Explicit operator-settled external completion; original step flags stay historical. */
+  readonly externalSettlement?: ExternalDeliverySettlementReceipt | undefined;
   readonly mergeConflictRepair?: DeliveryMergeConflictRepair | undefined;
   readonly continuation?: DeliveryContinuation | undefined;
   readonly landing?: LandingIntent | undefined;

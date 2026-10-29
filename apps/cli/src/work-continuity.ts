@@ -2,6 +2,7 @@ import { RecoveryIncidentReporter } from "./recovery-reporter";
 import { deliveryAuthorityBlock } from "./file-authority";
 import { createHash } from "node:crypto";
 import { FileWorkRecoveryStorage } from "./recovery-storage";
+import { hasExternalSettlementFence } from "./external-settlement-journal";
 /** Composition of authoritative sources. No operations/read-model dependency. */
 import fs from "node:fs";
 import path from "node:path";
@@ -51,6 +52,10 @@ export function createHostWorkContinuity(options: {
     if (!issue) return { observation: { ...base, available: false, unavailableSources: ["tracker_work_not_visible"] }, issue: null };
     const workspace = identity?.workspace ?? controller.current.workspaceManager.resolveWorkspacePath(issue.identifier);
     const delivery = new FileDeliveryStateStorage(path.join(workspace, ".symphony", "delivery-state.json")).readState();
+    if (hasExternalSettlementFence(path.dirname(workspace), key)) {
+      return { observation: { ...base, active: isActiveState(issue.state, controller.current.scheduling.policy),
+        stage: "merge", blocked: "external_delivery_settled_or_pending: explicit maintenance required" }, issue };
+    }
     const decision = planningGate ? (await planningGate.continuityWork()).find(work => decisionSessionId(work.workKey) === decisionSessionId(key)) : undefined;
     options.recovery?.resumeAuthorizedRetry(authority, issue.id, key);
     const runtime = authority.continuityOwner(issue.id);

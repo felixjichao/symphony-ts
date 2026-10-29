@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   DECISION_EXECUTION_PHASES,
+  parseExternalDeliverySettlementReceipt,
   parseDecisionSession,
   parseDecisionTask,
   parseDecisionResult,
@@ -427,6 +428,16 @@ export function validateStoreRecord(record: DecisionStoreRecord): void {
           `Operation receipt ${op.operationKey} target does not match task ${t.id} target`
         );
       }
+    } else if (op.kind === "external-work-completion") {
+      const receipt = parseExternalDeliverySettlementReceipt(op.externalCompletion);
+      if (op.operationKey !== `external-settlement:${receipt.operationId}` || op.entityId !== op.sessionId || op.sessionId !== decisionSessionId({ provider: "github",
+        key: `${receipt.context.repo}#${receipt.context.issueNumber}` }) || !op.resultingSession
+        || op.resultingSession.id !== op.sessionId || op.resultingSession.status !== "completed"
+        || !canonicalJsonEqual(record.sessions[op.sessionId], op.resultingSession)
+        || Object.values(record.tasks).some(t => t.sessionId === op.sessionId && ["pending", "claimed", "running"].includes(t.status))) {
+        throw new CorruptedStoreError("Invalid external work completion receipt");
+      }
+      parseDecisionSession(op.resultingSession);
     } else if (op.kind === "rebind-session") {
       if (op.entityId !== op.sessionId) {
         throw new CorruptedStoreError(`Operation receipt entityId does not match sessionId`);

@@ -3,7 +3,7 @@ import { acquireFileAuthority } from "./file-authority";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { WorkRecoveryRequest } from "@symphony/domain";
+import type { WorkRecoveryRequest, WorkKey } from "@symphony/domain";
 import { RECOVERY_ACTIONS, formatWorkKey } from "@symphony/domain";
 import type { WorkRecoveryStorage } from "@symphony/orchestrator";
 
@@ -96,6 +96,15 @@ export class FileWorkRecoveryStorage implements WorkRecoveryStorage {
       snapshot.requests = snapshot.requests.filter(r => JSON.stringify(r) !== JSON.stringify(request));
     });
   }
+  retireForExternalCompletion(key: WorkKey, expected: readonly WorkRecoveryRequest[]): void {
+    this.mutate(snapshot => {
+      const matches = (r: WorkRecoveryRequest) => formatWorkKey(r.workKey) === formatWorkKey(key);
+      if (snapshot.requests.filter(matches).some(r => !expected.some(old => JSON.stringify(old) === JSON.stringify(r)))) {
+        throw new Error("New recovery invocation refuses external settlement");
+      }
+      snapshot.requests = snapshot.requests.filter(r => !matches(r));
+    });
+  }
 }
 
 
@@ -108,6 +117,16 @@ export function withStorageMutation(file: string, action: () => void): void {
 
 import type { DurableRetryReservation, RetryReservationStorage } from "@symphony/domain";
 export class FileRetryReservationStorage implements RetryReservationStorage {
+  retireForExternalCompletion(key: WorkKey, expected: readonly DurableRetryReservation[]): void {
+    this.mutate(records => {
+      if (records.some(r => !r.workKey)) throw new Error("Unscoped retry requires separate verification");
+      const matches = (r: DurableRetryReservation) => !!r.workKey && formatWorkKey(r.workKey) === formatWorkKey(key);
+      if (records.filter(matches).some(r => !expected.some(old => JSON.stringify(old) === JSON.stringify(r)))) {
+        throw new Error("New retry owner refuses external settlement");
+      }
+      for (let i = records.length - 1; i >= 0; i--) if (matches(records[i]!)) records.splice(i, 1);
+    });
+  }
   constructor(private readonly file: string) {}
   load(): readonly DurableRetryReservation[] {
     if (!fs.existsSync(this.file)) return [];

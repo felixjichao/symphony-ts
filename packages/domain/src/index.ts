@@ -124,3 +124,4 @@ export * from "./decision-continuity";
 
 export { isDeliveryContinuation, isLandingIntent, isDeliveryMergeConflictRepair } from "./delivery-recovery";
 export * from "./recovery-policy";
+export * from "./external-delivery";

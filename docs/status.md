@@ -9,7 +9,9 @@
 
 ## 当前 posture
 
-- #168 审计后续：GitHub Delivery 交接正文统一限制为 60,000 UTF-16 单元；保留完整原生 details、handoff marker 和预算，截断提示提供原长度与 SHA-256。新增首次发布、补偿重发和 ACK 丢失去重回归；完整宿主 gate 通过（2,609 passed，1 个既有 opt-in skipped），[验证指纹](evidence/dashboard-v2-verification/bounded-handoff-validation.json) 已归档。此为本地修复，未部署到运行 host；外部交付结算及历史 Decision 回执例外仍待处置。
+- #168 外部交付离线结算已实现本地协议：严格授权与 snapshot CAS、root/Delivery/Decision 互斥、外部完成独立回执、原始预算/诊断保留、精确 recovery/retry 退役及崩溃重入。新增定向 37 用例通过，完整宿主 gate 2,646 passed / 1 既有 opt-in skipped；[验证证据](evidence/external-delivery-settlement/README.md) 已归档。尚未部署或结算生产任务，历史最终 HEAD Review 缺失仍保留。见 [操作说明](external-delivery-settlement.md)。
+
+- #168 审计后续：GitHub Delivery 交接正文统一限制为 60,000 UTF-16 单元；保留完整原生 details、handoff marker 和预算，截断提示提供原长度与 SHA-256。新增首次发布、补偿重发和 ACK 丢失去重回归；完整宿主 gate 通过（2,609 passed，1 个既有 opt-in skipped），[验证指纹](evidence/dashboard-v2-verification/bounded-handoff-validation.json) 已归档。此为本地修复，未部署到运行 host；生产外部交付结算及历史 Decision 回执例外仍待处置。
 
 - #192：源码暂存与有界暂时读取恢复已实现；审查补齐 terminal retry 持久化 ownership 结清顺序及 CLI 未暂存冲突回归。真实 dogfood #31 / PR #32 完成四类故障注入后的自动修复、新 SHA CI/独立 Review、合入关闭及同一 host 自动 workspace 清理；全量 gate 2590 passed / 1 既有 opt-in skip。[完整验收证据](evidence/delivery-transient-recovery/issue192-20261028122627/README.md)。
 

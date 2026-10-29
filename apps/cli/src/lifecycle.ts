@@ -81,7 +81,8 @@ export async function runCli(argv: readonly string[], options: RunCliOptions = {
         "       symphony recovery list|show|authorize <ledger-file> [incident-id]\n" +
         "       symphony repo-bootstrap --repo <url> [options]\n" +
         "       symphony workspace bootstrap --repo <url> [options]\n" +
-        "       symphony delivery-skill [run|halt] [options]\n" +
+        "       symphony delivery-skill [run|halt|recover-handoff] [options]\n" +
+        "       symphony delivery-skill prepare-external|settle-external --request <json> [--apply]\n" +
         "       symphony pr <action> [options]\n" +
         "       symphony dogfood github --target <owner/repo> [options]\n" +
         "       symphony decision bridge --store <dir> [options]\n" +

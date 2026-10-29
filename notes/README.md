@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Offline external delivery settlement](accepted/architecture/2026-10-29-offline-external-delivery-settlement.md) — #168 audit follow-up: exact external receipt, offline native fences and crash-resumable journal.
+
 - [Bounded Delivery handoff comments](accepted/architecture/2026-10-29-bounded-delivery-handoff-comments.md) — #168 audit follow-up: bounded visible diagnostics, preserved native details and stable compensation identity.
 
 - [Bounded Delivery observations and staging](accepted/architecture/2026-10-28-delivery-transient-observations.md) — #192: checked literal staging, retained Review observation budget and single-push confirmation.
