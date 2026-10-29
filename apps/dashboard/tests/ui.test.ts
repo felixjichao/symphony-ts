@@ -31,7 +31,7 @@ describe("read-only dashboard component", () => {
   });
   it.each<SourceFreshness>([fresh, { status: "stale", observedAt: 1, lastAttemptAt: 2 }, { status: "unknown", lastAttemptAt: null, reason: "source_not_configured" }, { status: "unavailable", observedAt: null, lastAttemptAt: 2, reason: "unreachable" }])("shows source $status on system/work and empty executor inventory", f => {
     const { root, view } = setup(); view.update({ snapshot: snapshot({ health: "unavailable", work: [work({ freshness: { github: f, runtime: f, decision: f } })], sources: [{ source: "executor", instance: "demo", freshness: f }] }) });
-    expect(root.textContent).toContain(`系统健康: unavailable`); expect(root.textContent).toContain(`Executor 来源: ${f.status}`); expect(root.textContent).toContain(`GitHub: ${f.status}`); expect(root.textContent).toContain("清单为空");
+    expect(root.textContent).toContain(`系统健康: unavailable`); expect(root.textContent).toContain(`executor / demo · ${f.status}`); expect(root.textContent).toContain(`GitHub: ${f.status}`); expect(root.textContent).toContain("清单为空");
   });
   it("retains the last snapshot on observational failure, then recovers", () => {
     const { root, view } = setup(); const data = snapshot(); view.update({ snapshot: data, receivedAt: 5 }); view.update({ snapshot: data, receivedAt: 5, error: "HTTP 502" });

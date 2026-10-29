@@ -126,7 +126,7 @@ try {
   await page.getByRole("heading", { name: "全局异常（未关联 WorkKey）", exact: true }).waitFor();
   const system = await page.locator("main").innerText();
   assert.ok(system.includes("GLOBAL DIAGNOSTIC"));
-  assert.ok(!system.includes("Active task on completed session"));
+  assert.ok(system.includes("Active task on completed session"));
   report.artifacts["global-system.png"] = hash(await page.screenshot({ path: `${output}/global-system.png`, fullPage: true }));
   report.checks.push("global diagnostics rendered separately in System");
   assert.deepEqual(errors, [], "browser page errors");

@@ -51,11 +51,11 @@ describe("mechanical observation boundaries", () => {
   });
   it("locks approved shape/format/rank helpers to a closed implementation", () => {
     // Updating these fingerprints requires reviewing the helper and its negative cases.
-    const approved: Record<string, string> = {"explorer.ts": "0ca4394115177bd4a86f3f6c2cfca02fd8fd09bc10a1db885f44584918517e01", "overview.ts": "06c84b516e621492c1b602a4daf4abb75cad1b9f235d38df59388ab220ea98f9", "primitives.ts": "632a9c21ae837509d69a13aa228af220c58decc0bb827b5264d102ecb65ea298", "identity.ts": "24248436240094cd957bb9df3514b108f230b520082852adbe6c38a7d79933f1", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "6874db36d4543c774fc3ff80f705ba97c2670ebe8187d4c1315ff7e49b75870b", "evidence.ts": "548e98463210370156031aa0c129750975ecd3c3d9a7dfa7b82adba5cb6ca181", "anomaly.ts": "13c1c4caf753055a44baea451ffd22ea1be870946f29d370a57ff3c3c397503c"};
+    const approved: Record<string, string> = {"executors.ts": "4c18b30a95c62721c1791bf7ca404d4120c9c7df6954fcad17a371e47c6df58d", "system.ts": "41fea2e2e602712a0a4d0ef879cf681151ec3bee6e93dea652c5f6908a70c638", "explorer.ts": "0ca4394115177bd4a86f3f6c2cfca02fd8fd09bc10a1db885f44584918517e01", "overview.ts": "06c84b516e621492c1b602a4daf4abb75cad1b9f235d38df59388ab220ea98f9", "primitives.ts": "632a9c21ae837509d69a13aa228af220c58decc0bb827b5264d102ecb65ea298", "identity.ts": "24248436240094cd957bb9df3514b108f230b520082852adbe6c38a7d79933f1", "presentation.ts": "603a0fab571eea7fc51ec9c74010821bfa0659c9b4b893825c332a34403d4d61", "validate.ts": "061dda844bf4a06694d478a90dd6b1278c92091b6fe6a3d7adff2c34b8268250", "dom.ts": "8f759452e1c4bff636f4224bb4bcc66a90e7e7f72d3372ddd8b71e44dd7188e1", "detail.ts": "6874db36d4543c774fc3ff80f705ba97c2670ebe8187d4c1315ff7e49b75870b", "evidence.ts": "548e98463210370156031aa0c129750975ecd3c3d9a7dfa7b82adba5cb6ca181", "anomaly.ts": "13c1c4caf753055a44baea451ffd22ea1be870946f29d370a57ff3c3c397503c"};
     for (const [name, digest] of Object.entries(approved)) expect(createHash("sha256").update(readFileSync(path.join(root, "apps/dashboard/src", name))).digest("hex"), name).toBe(digest);
   });
   it("checks every browser module, including local helpers", () => {
-    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts", "routing.ts", "primitives.ts", "overview.ts", "explorer.ts"];
+    const allowed = ["identity.ts", "presentation.ts", "transport.ts", "validate.ts", "polling.ts", "view.ts", "main.ts", "dom.ts", "detail.ts", "evidence.ts", "anomaly.ts", "routing.ts", "primitives.ts", "overview.ts", "explorer.ts", "executors.ts", "system.ts"];
     for (const file of files(path.join(root, "apps/dashboard/src")).filter(f => f.endsWith(".ts"))) {
       expect(allowed).toContain(path.basename(file));
       expect(browserErrors(path.basename(file), readFileSync(file, "utf8")), file).toEqual([]);
@@ -85,7 +85,7 @@ describe("mechanical observation boundaries", () => {
     'return {code: "review_target_head_mismatch", severity: "warning"};',
     'return {freshnessStatus: "stale"};',
   ])("rejects diagnostics-derived semantics in every new renderer: %s", body => {
-    for (const name of ["detail.ts", "evidence.ts", "anomaly.ts", "overview.ts", "explorer.ts"]) expect(browserErrors(name, `function inferred(w) { ${body} }`).length).toBeGreaterThan(0);
+    for (const name of ["detail.ts", "evidence.ts", "anomaly.ts", "overview.ts", "explorer.ts", "executors.ts", "system.ts"]) expect(browserErrors(name, `function inferred(w) { ${body} }`).length).toBeGreaterThan(0);
   });
   it.each(["detail.ts", "evidence.ts", "anomaly.ts", "overview.ts"])("rejects fetch aliases in %s", name => {
     expect(browserErrors(name, 'const {fetch: send} = window; send("/mutate");')).toContain("fetch capability reference outside fixed invocation");
