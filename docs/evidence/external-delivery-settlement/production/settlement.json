@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-29T16:54:53.523158+00:00",
+  "release": {
+    "sha": "ae4fb1132f789b97e172d32315694adee5b31f9e",
+    "path": "/Volumes/Data/symphony-runtime/releases/ae4fb1132f789b97e172d32315694adee5b31f9e",
+    "binarySha256": "b9642c7a5aa69fd7fb0654f8dd1f5d3c95905ad123d84361e660f0adc2821eda",
+    "workingTree": "clean"
+  },
+  "merge": {
+    "pr": 198,
+    "url": "https://github.com/felixjichao/symphony-ts/pull/198",
+    "commit": "f1fb14f5ef4d8592d0ca79c077a4e1fd23409302"
+  },
+  "ci": {
+    "run": 40913738062,
+    "head": "ae4fb1132f789b97e172d32315694adee5b31f9e",
+    "jobs": {
+      "gate": "success",
+      "detail-browser": "success",
+      "operational-browser": "success",
+      "production-status-browser": "success"
+    }
+  },
+  "workspaceRoot": "/Volumes/Data/symphony-runtime/state/workspaces",
+  "backup": {
+    "path": "/Volumes/Data/symphony-runtime/state/backups/external-settlement-20261029T164914Z",
+    "private": true,
+    "excludes": [
+      "node_modules",
+      ".cache"
+    ],
+    "archives": {
+      "GH-169.tar.gz": "6f7e8d0b30a0b8f13317f3ac41b1f8b8e92e9a0821f76370a1330aa52dc729ff",
+      "GH-173.tar.gz": "5718d8b1582dc173f30d0c57227d3b0389b66c1281fd549e7dbb61321a19798b",
+      "GH-175.tar.gz": "1318be2922155edf4301bb3656ccc0ebc4a4c41f98cc8ff6a9133eb17e7682b4",
+      "GH-176.tar.gz": "a8c6c5224b21dcba528895c4dff1a83efbb59692e676d4a1b69cb3675074caa0"
+    }
+  },
+  "nativeDecision": {
+    "sequenceBefore": 648,
+    "sequenceAfterSettlement": 652,
+    "sequenceObserved": 652,
+    "resultsPreserved": true,
+    "submissionReceiptsPreserved": true,
+    "executableTasks": 0,
+    "oldClaimedReviewCancelled": true,
+    "beforeSnapshotSha256": "af4e701f8939609ffa09300fa84385df4dbac94ffc1bbd4f624dbc94b15cd316",
+    "afterSnapshotSha256": "e8cdfce5edbd9bcc49fc5b3e38c88d852a98d01d0c4987d9710a64735dec65b3"
+  },
+  "nativeQueues": {
+    "recoveryRequests": 0,
+    "retryReservations": 0,
+    "ledgerBytesPreserved": true,
+    "ledgerSha256": "429e434aeb0fde098b9d3aa32a87397fa393b55c3eb7aec92108d60ba56ad0de"
+  },
+  "settlements": {
+    "169": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "external_completion",
+        "operationId": "1025ad22-9bd4-46db-8115-3894e42d239f",
+        "requestHash": "8fad9f3e4537a2202c6ab1bd42738df19b36937e8e8efdd533de1fbc94337738",
+        "sourceStateHash": "1803179b1c688501beb5eb3e7890cdb4f1b492203cec2b30590b096bc4021d2a",
+        "context": {
+          "repo": "felixjichao/symphony-ts",
+          "issueNumber": 169,
+          "workspaceKey": "GH-169",
+          "headBranch": "symphony/GH-169",
+          "baseBranch": "main"
+        },
+        "target": {
+          "prNumber": 178,
+          "headSha": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+          "mergeCommitSha": "cb671b740b84802fc231bed88e8d67277ac9f48c"
+        },
+        "operator": "Codex (user-authorized maintenance)",
+        "reason": "User authorized controlled production settlement in this chat on 2026-10-30. Remote closed/merged identity reverified; historical missing final-HEAD Review evidence remains an exception.",
+        "settledAtMs": 1793292588741
+      },
+      "nativeHistoryPreserved": true,
+      "repeatApplyNoDecisionWrite": true,
+      "preservedHistory": {
+        "spentRepairs": 0,
+        "spentWaitSeconds": 628,
+        "deadlineTimestampMs": 1792943310101,
+        "isPaused": true,
+        "pendingCompensation": false,
+        "commentPosted": true,
+        "commentVerifyStatus": "posted",
+        "detailsUtf8Bytes": 804,
+        "detailsSha256": "b04fe768030085df2c0ae9766d9a432c21c8dbc5f26f36e4da8988705b32ed0f"
+      }
+    },
+    "173": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "external_completion",
+        "operationId": "b53da634-a475-4a3c-835d-e8aec808c3d6",
+        "requestHash": "bfaf38f9d53268c02c91f2beca6453e2ddbacf90614abfc24948becaa48f396d",
+        "sourceStateHash": "45c0ddcf817b3c7b4d837bed8fcd8b875352f1a6ff73805e2f76121e926d966f",
+        "context": {
+          "repo": "felixjichao/symphony-ts",
+          "issueNumber": 173,
+          "workspaceKey": "GH-173",
+          "headBranch": "symphony/GH-173",
+          "baseBranch": "main"
+        },
+        "target": {
+          "prNumber": 191,
+          "headSha": "caa16c9cafc79e182dfd4623fb1985e5e40963ff",
+          "mergeCommitSha": "3b5eb8ff0b33c5a8c0fb81301017c10fbf638bb5"
+        },
+        "operator": "Codex (user-authorized maintenance)",
+        "reason": "User authorized controlled production settlement in this chat on 2026-10-30. Remote closed/merged identity reverified; historical missing final-HEAD Review evidence remains an exception.",
+        "settledAtMs": 1793292595992
+      },
+      "nativeHistoryPreserved": true,
+      "repeatApplyNoDecisionWrite": true,
+      "preservedHistory": {
+        "spentRepairs": 0,
+        "spentWaitSeconds": 252,
+        "deadlineTimestampMs": 1793167781207,
+        "isPaused": true,
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "unverified",
+        "detailsUtf8Bytes": 279123,
+        "detailsSha256": "b3c2d5be94a6bb3871bbeefb8e491f16952855ac9a0bd710d1daace6fe6d9ac9"
+      }
+    },
+    "175": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "external_completion",
+        "operationId": "12c19e0c-57c2-4345-b1f7-61ca7a493c4a",
+        "requestHash": "917a67faa7d0eb10c7b54a526dd243c6e93084149f8a7ab932028e9919e432ed",
+        "sourceStateHash": "9d2c40e609466ca1b17b8ecc817effb60acb4785b4bce0aa658daeb7047d0778",
+        "context": {
+          "repo": "felixjichao/symphony-ts",
+          "issueNumber": 175,
+          "workspaceKey": "GH-175",
+          "headBranch": "symphony/GH-175",
+          "baseBranch": "main"
+        },
+        "target": {
+          "prNumber": 195,
+          "headSha": "be7dc2f5beec530f7ef770ce72522ed20be668b2",
+          "mergeCommitSha": "53d6d1b01fe3c9e742af2cd26b90338545d9cea1"
+        },
+        "operator": "Codex (user-authorized maintenance)",
+        "reason": "User authorized controlled production settlement in this chat on 2026-10-30. Remote closed/merged identity reverified; historical missing final-HEAD Review evidence remains an exception.",
+        "settledAtMs": 1793292604137
+      },
+      "nativeHistoryPreserved": true,
+      "repeatApplyNoDecisionWrite": true,
+      "preservedHistory": {
+        "spentRepairs": 1,
+        "spentWaitSeconds": 1546,
+        "deadlineTimestampMs": 1793244942415,
+        "isPaused": true,
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "failed",
+        "detailsUtf8Bytes": 278329,
+        "detailsSha256": "a81e92271af180c4de4b70ec9de85dd6402cef64ba0e1963ca5246dd396efabf"
+      }
+    },
+    "176": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "external_completion",
+        "operationId": "65c9a97b-2f96-40ff-a979-9893bed46a04",
+        "requestHash": "0675d6396b99506382f33fdd4df1b437d9a7216d93fd9f874ec3a2f7196040ed",
+        "sourceStateHash": "1f6958cb7086f259290462c3411dffa1705d134c3ac467daca342a13c2703cab",
+        "context": {
+          "repo": "felixjichao/symphony-ts",
+          "issueNumber": 176,
+          "workspaceKey": "GH-176",
+          "headBranch": "symphony/GH-176",
+          "baseBranch": "main"
+        },
+        "target": {
+          "prNumber": 196,
+          "headSha": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+          "mergeCommitSha": "9fd0f6d4834c9ca0e96f445d4a29c9de87d57775"
+        },
+        "operator": "Codex (user-authorized maintenance)",
+        "reason": "User authorized controlled production settlement in this chat on 2026-10-30. Remote closed/merged identity reverified; historical missing final-HEAD Review evidence remains an exception.",
+        "settledAtMs": 1793292611770
+      },
+      "nativeHistoryPreserved": true,
+      "repeatApplyNoDecisionWrite": true,
+      "preservedHistory": {
+        "spentRepairs": 0,
+        "spentWaitSeconds": 321,
+        "deadlineTimestampMs": 1793270256416,
+        "isPaused": true,
+        "pendingCompensation": true,
+        "commentPosted": false,
+        "commentVerifyStatus": "unverified",
+        "detailsUtf8Bytes": 280064,
+        "detailsSha256": "1fd8ccb71b6522a209d28488693e361a02cf8064aec319bee8b7d85949093bcf"
+      }
+    }
+  },
+  "cleanup": {
+    "issues": [
+      169,
+      173,
+      175,
+      176
+    ],
+    "api": "createHost.cleanupWorkspace.removeWorkspaceForIssue",
+    "workspaceRootUnchanged": true,
+    "ledgerBytesPreserved": true
+  },
+  "postCleanupReplay": {
+    "nativeSnapshotUnchanged": true,
+    "noWorkspaceRecreation": true
+  },
+  "runtime": {
+    "oldOwners": {
+      "host": 34206,
+      "bridge": 34168
+    },
+    "newOwners": {
+      "bridge": 78607,
+      "host": 78609
+    },
+    "restoredAtUtc": "2026-10-29T16:52:21.543101+00:00",
+    "terminalQueriesVerified": [
+      169,
+      173,
+      175,
+      176
+    ],
+    "drivers": "restored to enabled polling; no executable native tasks"
+  },
+  "historicalExceptions": {
+    "missingFinalHeadDecisionApproval": [
+      173,
+      175,
+      176
+    ],
+    "fabricatedApproval": false,
+    "autonomousSelfHostingClaimed": false,
+    "parent168Closed": false
+  },
+  "journalSha256": {
+    "0212105d9dba4f0dde8d862176f14313a75908178aa5ec929a946f481b24360a.json": "36e7998a16f99c704fd641cf5e578c0f43cc393d874e4d22e57db04749859951",
+    "6f56cf7bf946668450544686c9b562e876518fc6cd623dfda2f45a6324ac2396.json": "1547e2cfead983e1dde73178bea994f1f474dfd5003c397c2bd173e1e43a498b",
+    "b16f3550d1da94a90b263576473266df306f42512e286ee07fbb7ce23573cc57.json": "5e335c43faf29ec7e125ca5237f35f212e5e95561f8a5a59d7686fa71ab3e4ae",
+    "f2151dba7f2ec96ec675519d8a8d73e2ad2ec730ea4de4be9ce19b6cd07d1137.json": "75ac59542f6f884e92734feb2df1f274d8cee0196cbd2697004e9570213a7149"
+  }
+}

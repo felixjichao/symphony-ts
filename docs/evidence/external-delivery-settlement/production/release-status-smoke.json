@@ -1,0 +1,160 @@
+{
+  "fixtureSha256": "993e08d6578b8eb2bf1d6f29260a8dbdf6f13aec6f28f716d0bed839b93e4de8",
+  "sourceTree": "14552db8f9d74fee8c291bde45855bb9f1d5315c",
+  "harnessSha256": "0d33668ccbc74dcd4453c43a2353e4a909dfbe7d4ab1170f2ee18b3303327881",
+  "evidenceDir": "/private/tmp/settlement-production-status-ae4fb11",
+  "sourceCommit": "ae4fb1132f789b97e172d32315694adee5b31f9e",
+  "workingTree": "",
+  "browser": "156.0.4314.50",
+  "mode": "controlled production composition + actual executable empty scope",
+  "externalLive": "not run",
+  "results": [
+    {
+      "scenario": "healthy",
+      "phase": "coding",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "ci",
+      "phase": "ci",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "review",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "executor-wait",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_human",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_clarification",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "conflict",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "stale",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "partial",
+      "phase": "unknown",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "target-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "approval-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "result-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "terminal",
+      "phase": "completed",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "completed",
+      "phase": "completed",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "active-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "empty-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "unknown-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "unavailable-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "transport-interruption-recovery",
+      "result": "passed"
+    },
+    {
+      "scenario": "built-executable-different-cwd-empty-scope",
+      "result": "passed"
+    }
+  ],
+  "assets": [
+    {
+      "file": "index-BijFHgMo.js",
+      "sha256": "e26c48537d0ee461c055e1d175faca7ee5179e1e5e4b6748a4f2a47197bc18dc"
+    },
+    {
+      "file": "index-Cs1G-csv.css",
+      "sha256": "4a03c803f75c8189e7fd5db7ffa13abd87d8e2c0187cde37ddbff0ac4a6795e7"
+    }
+  ],
+  "networkRequests": 42,
+  "getOnly": true,
+  "pageErrors": []
+}

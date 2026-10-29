@@ -51,3 +51,9 @@ The `f15ae9f` release was built and selected on 2026-10-28 before #174 and #175 
 ## Exact-HEAD production browser CI
 
 The `production-status-browser` CI job checks out the PR HEAD, verifies a clean working tree after build, and runs `apps/cli/scripts/status-smoke.mjs` through the production status composition. The SHA-labelled `production-status-closeout-<HEAD>` artifact retains `report.json` and the desktop/narrow screenshots for 30 days, including available partial evidence if the smoke fails. The report records the source commit and tree, harness and fixture SHA-256, built asset hashes, scenario outcomes and browser version. The committed dirty-tree host report above remains historical supplemental evidence; this job's result is established only by the actual CI run for the reviewed HEAD.
+
+## 2026-10-30 native external reconciliation
+
+[Production maintenance evidence](../external-delivery-settlement/production/README.md) records PR #198, fixed stable release `ae4fb11`, exact-HEAD CI, four explicit external completions (#169/#173/#175/#176), precise request/retry retirement, native workspace cleanup, duplicate replay and restored host/Bridge/Drivers. Decision sequence 648 → 652; historical results/receipts, diagnostics, budgets and recovery ledger were preserved. The old #176 claimed Review was cancelled, not completed with an invented verdict.
+
+This closes the observed native-state mismatch through operator-authorized external settlement. #173/#175/#176 still have no historical final-HEAD native approval, the historical autonomous execution chain remains scoped to existing evidence, and remaining parent browser-matrix/exception acceptance is separate. #168 remains open.
