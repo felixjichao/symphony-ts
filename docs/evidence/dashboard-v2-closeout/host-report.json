@@ -1,0 +1,158 @@
+{
+  "harnessSha256": "7fbe1deda44eda195799672f58ee9490af64fc8c994ef047b24834c5dbaed13c",
+  "evidenceDir": "/Volumes/Data/symphony-runtime/state/workspaces/GH-176/.symphony/evidence/dashboard-v2-closeout",
+  "sourceCommit": "53d6d1b01fe3c9e742af2cd26b90338545d9cea1",
+  "workingTree": "M README.md\n M apps/cli/scripts/status-smoke.mjs\n M apps/cli/src/status-fixtures.ts\n M apps/cli/src/status.test.ts\n M apps/dashboard/README.md\n M docs/architecture.md\n M docs/conformance.md\n M docs/status.md\n M docs/testing.md\n?? docs/evidence/dashboard-v2-closeout/",
+  "browser": "156.0.4314.50",
+  "mode": "controlled production composition + actual executable empty scope",
+  "externalLive": "not run",
+  "results": [
+    {
+      "scenario": "healthy",
+      "phase": "coding",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "ci",
+      "phase": "ci",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "review",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "executor-wait",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_human",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_clarification",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "conflict",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "stale",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "partial",
+      "phase": "unknown",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "target-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "approval-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "result-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "terminal",
+      "phase": "completed",
+      "attention": "degraded",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "completed",
+      "phase": "completed",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "active-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "empty-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "unknown-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "result": "passed"
+    },
+    {
+      "scenario": "unavailable-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "degraded",
+      "result": "passed"
+    },
+    {
+      "scenario": "transport-interruption-recovery",
+      "result": "passed"
+    },
+    {
+      "scenario": "built-executable-different-cwd-empty-scope",
+      "result": "passed"
+    }
+  ],
+  "assets": [
+    {
+      "file": "index-BijFHgMo.js",
+      "sha256": "e26c48537d0ee461c055e1d175faca7ee5179e1e5e4b6748a4f2a47197bc18dc"
+    },
+    {
+      "file": "index-Cs1G-csv.css",
+      "sha256": "4a03c803f75c8189e7fd5db7ffa13abd87d8e2c0187cde37ddbff0ac4a6795e7"
+    }
+  ],
+  "networkRequests": 42,
+  "getOnly": true,
+  "pageErrors": []
+}

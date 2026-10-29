@@ -141,7 +141,7 @@ Operational observation consumers can use the [operations readers](packages/oper
 
 ## Read-only Dashboard
 
-[Dashboard](apps/dashboard/README.md) provides Overview, an attention-first Work list and WorkKey-addressable Work Detail with evidence, anomaly and freshness diagnostics over the OperationalSnapshot HTTP endpoint. Run `npm run build -w @symphony/dashboard` then `npm run demo -w @symphony/dashboard` for loopback-only **演示数据**. This is a local demo; production source/lifecycle wiring is available through the [local production status surface](#local-production-status-surface). Authenticated external live acceptance is not claimed; see the [acceptance ledger](docs/evidence/status-surface/README.md).
+[Dashboard](apps/dashboard/README.md) provides Overview, an attention-first Work Explorer, WorkKey-addressable Work Detail, Executors and System with evidence, anomaly and freshness diagnostics over the OperationalSnapshot HTTP endpoint. Run `npm run build -w @symphony/dashboard` then `npm run demo -w @symphony/dashboard` for loopback-only **演示数据**. This is a local demo; production source/lifecycle wiring is available through the [local production status surface](#local-production-status-surface). Authenticated external live acceptance is not claimed; see the [acceptance ledger](docs/evidence/status-surface/README.md).
 
 
 ## Local production status surface

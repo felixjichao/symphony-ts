@@ -1,8 +1,8 @@
-/* global process, console, fetch, document */
+/* global process, console, fetch, document, innerWidth */
 /** Explicit foreground Chromium acceptance. Run with node --import tsx. No browser downloads. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,9 @@ const { chromium } = await import(modulePath);
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const assets = fileURLToPath(new URL("../dist/status-assets", import.meta.url));
 const browser = await chromium.launch({ headless: true, ...(process.env.SYMPHONY_CHROMIUM ? { executablePath: process.env.SYMPHONY_CHROMIUM } : {}) });
-const page = await browser.newPage();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const evidenceDir = process.env.SYMPHONY_BROWSER_EVIDENCE ?? ".symphony/evidence/dashboard-v2-closeout";
+await mkdir(evidenceDir, { recursive: true });
 const network = [], errors = [], results = [];
 page.on("request", request => { if (request.url().includes("/api/")) network.push({ method: request.method(), path: new URL(request.url()).pathname }); });
 page.on("pageerror", error => errors.push(error.message));
@@ -29,18 +31,22 @@ try {
     await page.locator("#detail-heading").waitFor();
     assert.ok((await page.locator("header").innerText()).includes("当前生产只读观测"));
     const snapshot = await fetch(`${site.url}/api/operations/snapshot`).then(response => response.json());
+    await page.locator("#nav-overview").click();
+    await page.locator("#overview").waitFor({ state: "visible" });
     assert.ok((await page.locator("#overview").innerText()).includes(`系统健康: ${snapshot.health}`));
     const shownCounts = await page.locator("#overview dd").allTextContents();
     assert.deepEqual(shownCounts, [snapshot.summary.active, snapshot.summary.waiting, snapshot.summary.needsHuman, snapshot.summary.retrying, snapshot.summary.degradedWork, snapshot.summary.anomalyCount].map(String));
+    await page.goBack(); await page.locator("#detail-heading").waitFor();
     const first = snapshot.work[0]; const text = await page.locator("#detail").innerText();
     for (const expected of [first.phase, first.attention, first.key.key, first.freshness.github.status, first.freshness.runtime.status, first.waiting?.reason].filter(Boolean)) assert.ok(text.includes(expected), `${scenario}: ${expected}`);
     assert.ok(!(text.includes(statusKeys[1].key)));
     for (const anomaly of snapshot.anomalies.filter(item => item.workKey?.key === first.key.key)) assert.ok(text.includes(anomaly.code));
     if (scenario === "result-mismatch") for (const letter of ["a", "b", "c"]) assert.ok(text.includes(letter.repeat(40)));
-    await page.locator("tbody a").nth(1).click();
+    await page.locator("#nav-work").click();
+    await page.locator("#work tbody a").nth(1).click();
     await page.waitForFunction(key => document.querySelector("#detail-heading")?.textContent?.includes(key), statusKeys[1].key);
     assert.ok((await page.locator("#detail").innerText()).includes(statusKeys[1].key));
-    await page.goBack(); await page.waitForFunction(key => document.querySelector("#detail-heading")?.textContent?.includes(key), statusKeys[0].key);
+    await page.goBack(); await page.goBack(); await page.waitForFunction(key => document.querySelector("#detail-heading")?.textContent?.includes(key), statusKeys[0].key);
     assert.ok((await page.locator("#detail").innerText()).includes(statusKeys[0].key));
     await page.reload(); await page.locator("#detail-heading").waitFor();
     const summary = page.locator("#detail summary").first(); await summary.focus(); await page.keyboard.press("Enter");
@@ -53,6 +59,23 @@ try {
     results.push({ scenario, phase: first.phase, attention: first.attention, health: snapshot.health, result: "passed" });
     await site.stop(); site = undefined;
   }
+  site = await startStatusSurface({ workKeys: statusKeys, assets }, statusFacts("result-mismatch"));
+  for (const viewport of [{ name: "desktop", width: 1280, height: 900 }, { name: "narrow", width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    // Start on a different destination so activating Overview changes the hash
+    // and exercises the same heading-focus behavior as subsequent navigation.
+    await page.goto(`${site.url}/#system`);
+    for (const name of ["overview", "work", "executors", "system"]) {
+      await page.locator(`#nav-${name}`).focus(); await page.keyboard.press("Enter");
+      await page.waitForFunction(expected => document.querySelector("#page-heading")?.textContent?.toLowerCase() === expected, name);
+      assert.equal(await page.evaluate(() => document.activeElement?.id), "page-heading");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: `${evidenceDir}/${name}-${viewport.name}.png`, fullPage: true });
+    }
+    await page.goto(`${site.url}/${route}`); await page.locator("#detail-heading").waitFor();
+    await page.screenshot({ path: `${evidenceDir}/detail-${viewport.name}.png`, fullPage: true });
+  }
+  await site.stop(); site = undefined;
   site = await startStatusSurface({ workKeys: statusKeys, assets }, statusFacts("review"));
   const url = site.url; const port = Number(new URL(url).port);
   await page.goto(`${url}/${route}`); await page.locator("#detail-heading").waitFor();
@@ -77,7 +100,8 @@ try {
   assert.ok(network.length > 20 && network.every(item => item.method === "GET" && item.path === "/api/operations/snapshot"));
   assert.deepEqual(errors, []);
   const hashes = await Promise.all((await readdir(`${assets}/assets`)).map(async file => ({ file, sha256: createHash("sha256").update(await readFile(`${assets}/assets/${file}`)).digest("hex") })));
-  console.log(JSON.stringify({ sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), workingTree: "Production code at sourceCommit; evidence regenerated separately", browser: await browser.version(), mode: "controlled production composition + actual executable empty scope", externalLive: "not run", results, assets: hashes, networkRequests: network.length, getOnly: true, pageErrors: errors }, null, 2));
+  const fixtureSha256 = createHash("sha256").update(await readFile(fileURLToPath(new URL("../src/status-fixtures.ts", import.meta.url)))).digest("hex");
+  console.log(JSON.stringify({ fixtureSha256, sourceTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), harnessSha256: createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex"), evidenceDir, sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), workingTree: execFileSync("git", ["status", "--short"], { cwd: root, encoding: "utf8" }).trim(), browser: await browser.version(), mode: "controlled production composition + actual executable empty scope", externalLive: "not run", results, assets: hashes, networkRequests: network.length, getOnly: true, pageErrors: errors }, null, 2));
 } finally {
   await browser.close(); await site?.stop(); await proc?.close(); await tracker?.close();
   if (dir) await rm(dir, { recursive: true, force: true });

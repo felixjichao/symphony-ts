@@ -80,3 +80,38 @@ jobs:
           path: ${{ runner.temp }}/operational-views/
           if-no-files-found: error
           retention-days: 30
+
+  production-status-browser:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build exact-HEAD workspaces
+        run: npm run typecheck
+      - name: Install Chromium for production acceptance
+        run: npm exec -w @symphony/dashboard -- playwright install --with-deps chromium
+      - name: Production status browser acceptance
+        id: production-status-browser
+        env:
+          SYMPHONY_BROWSER_MODULE: ${{ github.workspace }}/node_modules/playwright/index.mjs
+          SYMPHONY_BROWSER_EVIDENCE: ${{ runner.temp }}/production-status-closeout
+        run: |
+          test -z "$(git status --porcelain)"
+          mkdir -p "$SYMPHONY_BROWSER_EVIDENCE"
+          node --import tsx apps/cli/scripts/status-smoke.mjs > "$SYMPHONY_BROWSER_EVIDENCE/report.json"
+      - name: Retain exact-HEAD production status evidence
+        if: ${{ always() && steps.production-status-browser.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-status-closeout-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/production-status-closeout/
+          if-no-files-found: error
+          retention-days: 30
