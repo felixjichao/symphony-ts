@@ -11,6 +11,8 @@ domain 唯一拥有严格 request/receipt 与 snapshot 指纹；tracker 只验�
 
 prepared/complete journal 位于 workspace 外，固定完整授权与原状态，作为 dispatch/cleanup fence；同一请求可在崩溃后重入。精确原记录退役 recovery/retry，保留预算、deadline、flags、原始 details 和 ledger。已完成 Decision result/receipt 不改，不生成最终 HEAD Review。completed session 不能普通 reopen，普通 delivery/recover-handoff 不能穿透 fence。host admission 检查所有已提交 root，以及独立于 planning 的原生 Decision 完成回执；本地使用 Decision owner 的只读 committed-snapshot reader，Bridge 使用认证只读查询且不缓存，故障拒绝。显式 store 优先于环境 Bridge，沿用后端配置优先级。
 
+CLI 外部结算入口使用静态装配：coordinator 复用原生 CLI storage，动态分块会反向导入含顶层 await 的 executable entry，造成未解决 await 循环。真实打包 executable 的 preview 回归验证退出码和原生状态不变。
+
 ## Alternatives considered
 
 - 在线结算：旧 executor 与 Bridge 的跨进程效果不由一把锁覆盖；先采用可核验的离线维护，避免隐含撤销活跃执行权。

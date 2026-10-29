@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fork } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { DurableDecisionStore, DecisionService, validateStoreRecord } from "@symphony/decision";
@@ -373,4 +373,20 @@ it("retains settlement authority across root reload and restart with planning di
       url: "https://github.com/owner/repo/issues/44" });
     expect(hooks).toBe(1);
   } finally { await writer.close(); await restarted.stop(); }
+});
+
+it("previews through the built executable without a dynamic-import/top-level-await cycle", async () => {
+  const f = await fixture();
+  const file = path.join(f.dir, "authorized-preview.json");
+  fs.writeFileSync(file, JSON.stringify(f.request));
+  const bin = fileURLToPath(new URL("../dist/bin/symphony.js", import.meta.url));
+  const result = spawnSync(process.execPath, [bin, "delivery-skill", "settle-external", "--request", file],
+    { encoding: "utf8", timeout: 3000 });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.signal).toBeNull();
+  expect(JSON.parse(result.stdout)).toMatchObject({ mode: "preview", request: f.request });
+  expect(result.stderr).not.toContain("unsettled top-level await");
+  expect(f.storage.readState()).toEqual(f.original);
+  expect(readExternalSettlementJournal(f.root, f.key)).toBeNull();
 });

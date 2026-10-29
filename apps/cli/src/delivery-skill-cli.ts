@@ -1,6 +1,7 @@
 import { GitHubDeliveryService } from "@symphony/tracker";
 import { withDeliveryFileAuthority } from "./file-authority";
 import { hasExternalSettlementFence } from "./external-settlement-journal";
+import { runExternalSettlementCli } from "./external-settlement";
 import { writeDurableJson } from "./recovery-storage";
 import fs from "node:fs";
 import path from "node:path";
@@ -265,7 +266,7 @@ export async function runDeliverySkillCli(
 ): Promise<number> {
   try {
     if (argv[0] === "prepare-external" || argv[0] === "settle-external") {
-      return (await import("./external-settlement")).runExternalSettlementCli(argv, io, customRunner);
+      return runExternalSettlementCli(argv, io, customRunner);
     }
     const parsed = parseDeliverySkillArgs(argv);
     if (parsed.repo && parsed.issueNumber && hasExternalSettlementFence(path.dirname(path.resolve(parsed.cwd ?? process.cwd())),

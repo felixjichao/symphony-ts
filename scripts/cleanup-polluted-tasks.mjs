@@ -68,11 +68,11 @@ function record(value, keys) {
 function string(value) {
   requireValue(typeof value === "string" && value.trim().length > 0, "expected nonempty string");
 }
-function integer(value, minimum = 0) {
+function integer$1(value, minimum = 0) {
   requireValue(typeof value === "number" && Number.isSafeInteger(value) && value >= minimum, "expected safe integer");
 }
 function timestamp(value) {
-  integer(value);
+  integer$1(value);
   requireValue(value <= 864e13, "timestamp outside UTC range");
 }
 function oneOf(value, choices) {
@@ -108,7 +108,7 @@ function validateRoot(value) {
     const match = /^(.*)#([1-9][0-9]*)$/.exec(root["key"]);
     requireValue(match !== null, "invalid GitHub issue key");
     repository(match[1]);
-    integer(Number(match[2]), 1);
+    integer$1(Number(match[2]), 1);
   }
   return value;
 }
@@ -117,10 +117,10 @@ function decisionSessionId(root) {
   return `${root.provider}:${root.key}`;
 }
 function parseDecisionReviewTarget(value) {
-  const target = record(value, ["repository", "prNumber", "headSha"]);
-  repository(target["repository"]);
-  integer(target["prNumber"], 1);
-  requireValue(typeof target["headSha"] === "string" && /^[0-9a-f]{40}$/.test(target["headSha"]), "expected full lowercase HEAD SHA");
+  const target2 = record(value, ["repository", "prNumber", "headSha"]);
+  repository(target2["repository"]);
+  integer$1(target2["prNumber"], 1);
+  requireValue(typeof target2["headSha"] === "string" && /^[0-9a-f]{40}$/.test(target2["headSha"]), "expected full lowercase HEAD SHA");
   return value;
 }
 function parseDecisionSessionRootFromId(sessionId) {
@@ -135,12 +135,12 @@ function validateSessionId(value) {
 }
 function decisionTaskId(task) {
   validateSessionId(task.sessionId);
-  integer(task.revision, 1);
+  integer$1(task.revision, 1);
   oneOf(task.kind, ["plan", "review"]);
   const prefix = `${encodeURIComponent(task.sessionId)}:${task.kind}:${task.revision}`;
   if (task.kind === "plan") return prefix;
-  const target = parseDecisionReviewTarget(task.target);
-  return `${prefix}:${encodeURIComponent(target.repository)}:${target.prNumber}:${target.headSha}`;
+  const target2 = parseDecisionReviewTarget(task.target);
+  return `${prefix}:${encodeURIComponent(target2.repository)}:${target2.prNumber}:${target2.headSha}`;
 }
 function parseExecutorBinding(value) {
   const binding = record(value, ["schemaVersion", "adapter", "externalSessionRef", "resumeUri", "generation"]);
@@ -148,7 +148,7 @@ function parseExecutorBinding(value) {
   string(binding["adapter"]);
   string(binding["externalSessionRef"]);
   if (binding["resumeUri"] !== null) string(binding["resumeUri"]);
-  integer(binding["generation"], 1);
+  integer$1(binding["generation"], 1);
   return value;
 }
 function times(object) {
@@ -162,7 +162,7 @@ function parseDecisionSession(value) {
   const root = validateRoot(session["root"]);
   requireValue(session["id"] === decisionSessionId(root), "session/root mismatch");
   oneOf(session["status"], ["active", "completed", "broken-binding"]);
-  integer(session["bindingGeneration"]);
+  integer$1(session["bindingGeneration"]);
   times(session);
   if (session["binding"] !== null) {
     const binding = parseExecutorBinding(session["binding"]);
@@ -175,7 +175,7 @@ function parseDecisionLease(value) {
   const lease = record(value, ["owner", "token", "generation", "expiresAtMs"]);
   string(lease["owner"]);
   string(lease["token"]);
-  integer(lease["generation"], 1);
+  integer$1(lease["generation"], 1);
   timestamp(lease["expiresAtMs"]);
   return value;
 }
@@ -186,9 +186,9 @@ function parseDecisionTask(value) {
   const task = record(value, ["schemaVersion", "id", "sessionId", "kind", "revision", "status", "lease", "claimGeneration", "lastClaimToken", "createdAtMs", "updatedAtMs", ...kind === "review" ? ["target"] : []]);
   version(task["schemaVersion"]);
   validateSessionId(task["sessionId"]);
-  integer(task["revision"], 1);
+  integer$1(task["revision"], 1);
   oneOf(task["status"], ["pending", "claimed", "running", "completed", "failed", "cancelled", "superseded"]);
-  integer(task["claimGeneration"]);
+  integer$1(task["claimGeneration"]);
   times(task);
   if (task["lastClaimToken"] !== null) string(task["lastClaimToken"]);
   requireValue(task["claimGeneration"] === 0 === (task["lastClaimToken"] === null), "claim history mismatch");
@@ -211,7 +211,7 @@ function parseDecisionResult(value) {
   const result = record(value, ["schemaVersion", "taskId", "sessionId", "kind", "revision", "createdAtMs", "verdict", ...kind === "plan" ? ["content"] : ["target", "findings"]]);
   version(result["schemaVersion"]);
   validateSessionId(result["sessionId"]);
-  integer(result["revision"], 1);
+  integer$1(result["revision"], 1);
   timestamp(result["createdAtMs"]);
   if (kind === "plan") {
     oneOf(result["verdict"], ["ready", "needs_clarification", "needs_human"]);
@@ -320,10 +320,10 @@ function supersedeDecisionTask(task, now) {
 function isDecisionReviewApproved(task, result, current) {
   try {
     validateDecisionResultForTask(task, result);
-    const { sessionId, ...target } = current;
+    const { sessionId, ...target2 } = current;
     validateSessionId(sessionId);
-    parseDecisionReviewTarget(target);
-    return task.kind === "review" && result.kind === "review" && task.status === "completed" && result.verdict === "approve" && task.sessionId === sessionId && sameTarget(task.target, target) && result.createdAtMs <= task.updatedAtMs;
+    parseDecisionReviewTarget(target2);
+    return task.kind === "review" && result.kind === "review" && task.status === "completed" && result.verdict === "approve" && task.sessionId === sessionId && sameTarget(task.target, target2) && result.createdAtMs <= task.updatedAtMs;
   } catch {
     return false;
   }
@@ -362,7 +362,7 @@ function reopenDecisionSession(session, now) {
 function boolean(value) {
   requireValue(typeof value === "boolean", "expected boolean");
 }
-function sha(value) {
+function sha$1(value) {
   requireValue(typeof value === "string" && /^[0-9a-f]{40}$/.test(value), "expected full lowercase 40-char SHA");
 }
 function parseDecisionContextBundle(value) {
@@ -373,8 +373,8 @@ function parseDecisionContextBundle(value) {
     const obj2 = record(value, ["strategy", "workItem", "repository", "prNumber", "headSha"]);
     const workItem2 = validateRoot(obj2["workItem"]);
     repository(obj2["repository"]);
-    if (obj2["prNumber"] !== null) integer(obj2["prNumber"], 1);
-    if (obj2["headSha"] !== null) sha(obj2["headSha"]);
+    if (obj2["prNumber"] !== null) integer$1(obj2["prNumber"], 1);
+    if (obj2["headSha"] !== null) sha$1(obj2["headSha"]);
     return {
       strategy: "connector",
       workItem: workItem2,
@@ -400,7 +400,7 @@ function parseDecisionContextBundle(value) {
   repository(obj["repository"]);
   const rawIssue = record(obj["issue"], ["repository", "number", "title", "body"]);
   repository(rawIssue["repository"]);
-  integer(rawIssue["number"], 1);
+  integer$1(rawIssue["number"], 1);
   string(rawIssue["title"]);
   requireValue(typeof rawIssue["body"] === "string", "expected issue body string");
   const issue = {
@@ -413,7 +413,7 @@ function parseDecisionContextBundle(value) {
   if (obj["plan"] !== null) {
     const rawPlan = record(obj["plan"], ["taskId", "revision", "plan", "acceptanceCriteria", "risks", "clarifications"]);
     string(rawPlan["taskId"]);
-    integer(rawPlan["revision"], 1);
+    integer$1(rawPlan["revision"], 1);
     string(rawPlan["plan"]);
     strings(rawPlan["acceptanceCriteria"]);
     strings(rawPlan["risks"]);
@@ -431,8 +431,8 @@ function parseDecisionContextBundle(value) {
   if (obj["pullRequest"] !== null) {
     const rawPr = record(obj["pullRequest"], ["repository", "prNumber", "headSha", "baseRef", "headRef", "title", "body"]);
     repository(rawPr["repository"]);
-    integer(rawPr["prNumber"], 1);
-    sha(rawPr["headSha"]);
+    integer$1(rawPr["prNumber"], 1);
+    sha$1(rawPr["headSha"]);
     string(rawPr["baseRef"]);
     string(rawPr["headRef"]);
     string(rawPr["title"]);
@@ -524,20 +524,20 @@ function parseDecisionContextBundle(value) {
     unresolvedFindings
   };
 }
-function validateDecisionContextForTask(context, task, session) {
+function validateDecisionContextForTask(context2, task, session) {
   parseDecisionTask(task);
-  parseDecisionContextBundle(context);
+  parseDecisionContextBundle(context2);
   if (session !== void 0) {
     parseDecisionSession(session);
     requireValue(task.sessionId === session.id, "task sessionId mismatch with session id");
     requireValue(
-      context.workItem.provider === session.root.provider && context.workItem.key === session.root.key,
+      context2.workItem.provider === session.root.provider && context2.workItem.key === session.root.key,
       "context workItem mismatch with session root"
     );
   } else {
     const expectedRoot = parseDecisionSessionRootFromId(task.sessionId);
     requireValue(
-      context.workItem.provider === expectedRoot.provider && context.workItem.key === expectedRoot.key,
+      context2.workItem.provider === expectedRoot.provider && context2.workItem.key === expectedRoot.key,
       "context workItem mismatch with task session root"
     );
   }
@@ -548,44 +548,44 @@ function validateDecisionContextForTask(context, task, session) {
     const expectedRepo = match[1];
     const expectedIssueNum = Number(match[2]);
     requireValue(
-      context.repository === expectedRepo,
+      context2.repository === expectedRepo,
       "context repository mismatch with session root repository"
     );
-    if (context.strategy === "materialized") {
+    if (context2.strategy === "materialized") {
       requireValue(
-        context.issue.repository === expectedRepo,
+        context2.issue.repository === expectedRepo,
         "materialized issue repository mismatch with session root repository"
       );
       requireValue(
-        context.issue.number === expectedIssueNum,
+        context2.issue.number === expectedIssueNum,
         "materialized issue number mismatch with session root issue number"
       );
     }
   }
   if (task.kind === "review") {
-    if (context.strategy === "connector") {
+    if (context2.strategy === "connector") {
       requireValue(
-        context.repository === task.target.repository && context.prNumber === task.target.prNumber && context.headSha === task.target.headSha,
+        context2.repository === task.target.repository && context2.prNumber === task.target.prNumber && context2.headSha === task.target.headSha,
         "connector review context repository/prNumber/headSha mismatch with task target"
       );
     } else {
       requireValue(
-        context.repository === task.target.repository,
+        context2.repository === task.target.repository,
         "materialized review context repository mismatch with task target"
       );
       requireValue(
-        context.pullRequest !== null,
+        context2.pullRequest !== null,
         "materialized review context must include pullRequest metadata"
       );
       requireValue(
-        context.pullRequest.repository === task.target.repository && context.pullRequest.prNumber === task.target.prNumber && context.pullRequest.headSha === task.target.headSha,
+        context2.pullRequest.repository === task.target.repository && context2.pullRequest.prNumber === task.target.prNumber && context2.pullRequest.headSha === task.target.headSha,
         "materialized review context pullRequest mismatch with task target"
       );
     }
   } else {
-    if (context.strategy === "materialized") {
+    if (context2.strategy === "materialized") {
       requireValue(
-        context.issue.repository === context.repository,
+        context2.issue.repository === context2.repository,
         "materialized plan context issue repository mismatch with context repository"
       );
     }
@@ -606,6 +606,37 @@ const DECISION_EXECUTION_PHASES = [
   "result_extracted",
   "completed"
 ];
+function integer(value, minimum = 0) {
+  requireValue(typeof value === "number" && Number.isSafeInteger(value) && value >= minimum, "invalid integer");
+}
+function sha(value, length) {
+  requireValue(typeof value === "string" && new RegExp(`^[a-f0-9]{${length}}$`).test(value), "invalid digest");
+}
+function context(value) {
+  const c = record(value, ["repo", "issueNumber", "workspaceKey", "headBranch", "baseBranch"]);
+  for (const key of ["repo", "workspaceKey", "headBranch", "baseBranch"]) string(c[key]);
+  requireValue(typeof c["repo"] === "string" && /^[\w.-]+\/[\w.-]+$/.test(c["repo"]) && c["repo"].split("/").every((part) => part !== "." && part !== ".."), "invalid public GitHub repository");
+  integer(c["issueNumber"], 1);
+  return c;
+}
+function target(value) {
+  const t = record(value, ["prNumber", "headSha", "mergeCommitSha"]);
+  integer(t["prNumber"], 1);
+  sha(t["headSha"], 40);
+  sha(t["mergeCommitSha"], 40);
+  return t;
+}
+function parseExternalDeliverySettlementReceipt(value) {
+  const r = record(value, ["schemaVersion", "kind", "operationId", "requestHash", "sourceStateHash", "context", "target", "operator", "reason", "settledAtMs"]);
+  requireValue(r["schemaVersion"] === 1 && r["kind"] === "external_completion", "invalid external completion receipt");
+  for (const key of ["operationId", "operator", "reason"]) string(r[key]);
+  sha(r["requestHash"], 64);
+  sha(r["sourceStateHash"], 64);
+  integer(r["settledAtMs"]);
+  context(r["context"]);
+  target(r["target"]);
+  return r;
+}
 function canonicalJsonStringify(value) {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -653,6 +684,54 @@ class DecisionService {
   /** Read-only operational view from the already-open store. */
   observeWork(root) {
     return this.store.observeWork(root);
+  }
+  /** Durable terminal authority, independent of workspace root and optional planning. */
+  hasExternalCompletion(sessionId) {
+    return Object.values(this.store.getState().operationReceipts).some((op) => op.kind === "external-work-completion" && op.sessionId === sessionId);
+  }
+  /** Offline maintenance only: close the exact native session without inventing a result. */
+  async recordExternalCompletion(receipt, expectedSequence) {
+    parseExternalDeliverySettlementReceipt(receipt);
+    const sessionId = decisionSessionId({ provider: "github", key: `${receipt.context.repo}#${receipt.context.issueNumber}` });
+    const operationKey = `external-settlement:${receipt.operationId}`;
+    const replay = (op, state) => {
+      if (op.kind !== "external-work-completion" || op.sessionId !== sessionId || !canonicalJsonEqual(op.externalCompletion, receipt) || !canonicalJsonEqual(state.sessions[sessionId], op.resultingSession) || Object.values(state.tasks).some((t) => t.sessionId === sessionId && ["pending", "claimed", "running"].includes(t.status))) {
+        throw new DecisionConflictError("External completion no longer matches native authority");
+      }
+      return structuredClone(op);
+    };
+    const existing = this.store.getOperationReceipt(operationKey);
+    if (existing) return replay(existing, this.store.getState());
+    return this.store.transaction((draft) => {
+      const prior = draft.operationReceipts[operationKey];
+      if (prior) return replay(prior, draft);
+      if (draft.transactionSequence !== expectedSequence) throw new DecisionConflictError("Stale external completion snapshot");
+      const session = draft.sessions[sessionId];
+      if (!session || session.root.provider !== "github" || session.root.key !== `${receipt.context.repo}#${receipt.context.issueNumber}`) {
+        throw new DecisionConflictError("Missing or foreign external completion session");
+      }
+      const now = this.clock();
+      for (const task of Object.values(draft.tasks).filter((t) => t.sessionId === sessionId)) {
+        if (!["pending", "claimed", "running"].includes(task.status)) continue;
+        draft.tasks[task.id] = cancelDecisionTask(task, now);
+        const plan = draft.plans[task.id];
+        if (plan) draft.plans[task.id] = { ...plan, status: "superseded", updatedAtMs: now };
+      }
+      const closed = session.status === "completed" ? session : completeDecisionSession(session, Object.values(draft.tasks).filter((t) => t.sessionId === sessionId), now);
+      draft.sessions[sessionId] = closed;
+      const op = {
+        schemaVersion: 1,
+        operationKey,
+        kind: "external-work-completion",
+        sessionId,
+        entityId: sessionId,
+        externalCompletion: receipt,
+        resultingSession: closed,
+        createdAtMs: now
+      };
+      draft.operationReceipts[operationKey] = op;
+      return op;
+    });
   }
   /** Read current tasks from the already-open authoritative store; never expose lease tokens. */
   continuityWork() {
@@ -1028,6 +1107,9 @@ class DecisionService {
   }
   async reopenSession(sessionId) {
     return await this.store.transaction((draft) => {
+      if (Object.values(draft.operationReceipts).some((op) => op.kind === "external-work-completion" && op.sessionId === sessionId)) {
+        throw new DecisionConflictError("Externally completed work requires a separately authorized new round");
+      }
       const session = draft.sessions[sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
       const now = this.clock();
@@ -1365,7 +1447,7 @@ class DecisionService {
     const tasks = this.getTasksForSession(sessionId).filter((t) => t.kind === "review").sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
     return tasks[0] ?? null;
   }
-  verifyReviewApproval(sessionId, target, requirements) {
+  verifyReviewApproval(sessionId, target2, requirements) {
     const latestPlan = this.store.getLatestPlanForSession(sessionId);
     if (latestPlan !== null) {
       if (latestPlan.status !== "completed") {
@@ -1373,7 +1455,7 @@ class DecisionService {
           approved: false,
           reason: `Session plan is not completed (status: ${latestPlan.status}, task: ${latestPlan.taskId})`,
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
       if (latestPlan.result?.verdict !== "ready") {
@@ -1381,7 +1463,7 @@ class DecisionService {
           approved: false,
           reason: `Session plan verdict is not ready (verdict: ${latestPlan.result?.verdict ?? "unknown"})`,
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
       if (latestPlan.publishedCommentId === null) {
@@ -1389,7 +1471,7 @@ class DecisionService {
           approved: false,
           reason: `Session plan is not published to GitHub`,
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
       if (!requirements) {
@@ -1397,7 +1479,7 @@ class DecisionService {
           approved: false,
           reason: "Current requirements not provided; cannot verify approval against the session plan",
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
       const curFp = computeRequirementFingerprint(
@@ -1412,19 +1494,19 @@ class DecisionService {
           approved: false,
           reason: `Requirements changed since plan was created`,
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
     }
     const tasks = this.getTasksForSession(sessionId).filter(
-      (t) => t.kind === "review" && t.target.repository === target.repository && t.target.prNumber === target.prNumber && t.target.headSha === target.headSha
+      (t) => t.kind === "review" && t.target.repository === target2.repository && t.target.prNumber === target2.prNumber && t.target.headSha === target2.headSha
     ).sort((a, b) => b.createdAtMs - a.createdAtMs || b.revision - a.revision);
     const task = tasks[0];
     if (!task) {
       return {
         approved: false,
-        reason: `No review task found for target PR #${target.prNumber} @ ${target.headSha}`,
-        headSha: target.headSha,
+        reason: `No review task found for target PR #${target2.prNumber} @ ${target2.headSha}`,
+        headSha: target2.headSha,
         sessionId
       };
     }
@@ -1436,7 +1518,7 @@ class DecisionService {
           reason: `Review was evaluated against plan revision ${reviewCtx && reviewCtx.strategy === "materialized" ? reviewCtx.plan?.revision ?? "none" : "none"}, but latest plan is revision ${latestPlan.revision} (${latestPlan.taskId})`,
           taskId: task.id,
           sessionId,
-          headSha: target.headSha
+          headSha: target2.headSha
         };
       }
     }
@@ -1446,7 +1528,7 @@ class DecisionService {
         reason: `Review task ${task.id} is not completed (status: ${task.status})`,
         taskId: task.id,
         sessionId,
-        headSha: target.headSha
+        headSha: target2.headSha
       };
     }
     const result = this.store.getResult(task.id);
@@ -1456,14 +1538,14 @@ class DecisionService {
         reason: `No result found for completed review task ${task.id}`,
         taskId: task.id,
         sessionId,
-        headSha: target.headSha
+        headSha: target2.headSha
       };
     }
     const approved = isDecisionReviewApproved(task, result, {
       sessionId,
-      repository: target.repository,
-      prNumber: target.prNumber,
-      headSha: target.headSha
+      repository: target2.repository,
+      prNumber: target2.prNumber,
+      headSha: target2.headSha
     });
     if (approved) {
       return {
@@ -1471,7 +1553,7 @@ class DecisionService {
         reason: "Review approved",
         taskId: task.id,
         sessionId,
-        headSha: target.headSha,
+        headSha: target2.headSha,
         verdict: "approve"
       };
     }
@@ -1481,7 +1563,7 @@ class DecisionService {
       reason: `Review is not approved (task status: ${task.status}, verdict: ${reviewResult?.verdict ?? "unknown"})`,
       taskId: task.id,
       sessionId,
-      headSha: target.headSha,
+      headSha: target2.headSha,
       verdict: reviewResult?.verdict
     };
   }
@@ -1497,8 +1579,8 @@ class DecisionService {
   getAllTasks() {
     return this.store.getAllTasks();
   }
-  async putTaskContext(taskId, context) {
-    const parsed = parseDecisionContextBundle(context);
+  async putTaskContext(taskId, context2) {
+    const parsed = parseDecisionContextBundle(context2);
     return await this.store.transaction((draft) => {
       const task = draft.tasks[taskId];
       if (!task) throw new DecisionNotFoundError(`Task "${taskId}" not found`);
@@ -1895,6 +1977,7 @@ class DecisionService {
     });
   }
   verifyPlanEligibility(sessionId, requirements) {
+    if (this.hasExternalCompletion(sessionId)) return { eligible: false, sessionId, reason: "external_completion" };
     const planRecord = this.store.getLatestPlanForSession(sessionId);
     if (!planRecord) {
       return {
@@ -2666,6 +2749,15 @@ function validateStoreRecord(record2) {
           `Operation receipt ${op.operationKey} target does not match task ${t.id} target`
         );
       }
+    } else if (op.kind === "external-work-completion") {
+      const receipt = parseExternalDeliverySettlementReceipt(op.externalCompletion);
+      if (op.operationKey !== `external-settlement:${receipt.operationId}` || op.entityId !== op.sessionId || op.sessionId !== decisionSessionId({
+        provider: "github",
+        key: `${receipt.context.repo}#${receipt.context.issueNumber}`
+      }) || !op.resultingSession || op.resultingSession.id !== op.sessionId || op.resultingSession.status !== "completed" || !canonicalJsonEqual(record2.sessions[op.sessionId], op.resultingSession) || Object.values(record2.tasks).some((t) => t.sessionId === op.sessionId && ["pending", "claimed", "running"].includes(t.status))) {
+        throw new CorruptedStoreError("Invalid external work completion receipt");
+      }
+      parseDecisionSession(op.resultingSession);
     } else if (op.kind === "rebind-session") {
       if (op.entityId !== op.sessionId) {
         throw new CorruptedStoreError(`Operation receipt entityId does not match sessionId`);
