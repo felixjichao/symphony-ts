@@ -1,0 +1,19 @@
+{
+  "head": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+  "trackedChanges": "",
+  "harness": "92bd8da5968d638c440634ac45ccedb7856128afe48d593ff7474297dc94f2a7",
+  "assets": {
+    "index-BijFHgMo.js": "e26c48537d0ee461c055e1d175faca7ee5179e1e5e4b6748a4f2a47197bc18dc",
+    "index-Cs1G-csv.css": "4a03c803f75c8189e7fd5db7ffa13abd87d8e2c0187cde37ddbff0ac4a6795e7"
+  },
+  "browser": "151.0.7922.34",
+  "screenshots": {
+    "executors-desktop.png": "55b160ca090fa4119940429af9a16270749a4719ab0c9753397cab3b3b479f1c",
+    "system-desktop.png": "84b84e33746a1e758bb3310f5444d3050a79b55b104a7006e79a3cfb457b429c",
+    "executors-narrow.png": "3d98d937f88a768036cc5234f0f939d227a2ddd1828b3653282a53d5c55fc068",
+    "system-narrow.png": "5ccf82ad1f73ef6f0755dc851e7b372df8796a6071297d6442f61483b43ca87b",
+    "interruption.png": "7e6a99c0c6e620eac97f6d48d366a8e15cf9be4e792da3df00f9f70aa6054728"
+  },
+  "status": "passed",
+  "error": null
+}

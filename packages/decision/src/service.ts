@@ -2,6 +2,8 @@ import type { DecisionContinuityWork, ReclaimDecisionClaim, UnblockDecisionExecu
 import crypto from "node:crypto";
 import {
   DECISION_PROGRESS_TIMEOUT_MS,
+  parseExternalDeliverySettlementReceipt,
+  type ExternalDeliverySettlementReceipt,
   DECISION_EXECUTION_PHASES,
   DECISION_MAX_RECOVERY_ATTEMPTS,
   DECISION_MAX_TRANSPORT_RECOVERIES,
@@ -78,6 +80,53 @@ export class DecisionService {
   /** Read-only operational view from the already-open store. */
   observeWork(root: DecisionWorkItemRef) {
     return this.store.observeWork(root);
+  }
+
+  /** Durable terminal authority, independent of workspace root and optional planning. */
+  hasExternalCompletion(sessionId: string): boolean {
+    return Object.values(this.store.getState().operationReceipts)
+      .some(op => op.kind === "external-work-completion" && op.sessionId === sessionId);
+  }
+
+  /** Offline maintenance only: close the exact native session without inventing a result. */
+  async recordExternalCompletion(receipt: ExternalDeliverySettlementReceipt, expectedSequence: number): Promise<OperationReceipt> {
+    parseExternalDeliverySettlementReceipt(receipt);
+    const sessionId = decisionSessionId({ provider: "github", key: `${receipt.context.repo}#${receipt.context.issueNumber}` });
+    const operationKey = `external-settlement:${receipt.operationId}`;
+    const replay = (op: OperationReceipt, state: DecisionStoreRecord): OperationReceipt => {
+      if (op.kind !== "external-work-completion" || op.sessionId !== sessionId
+        || !canonicalJsonEqual(op.externalCompletion, receipt)
+        || !canonicalJsonEqual(state.sessions[sessionId], op.resultingSession)
+        || Object.values(state.tasks).some(t => t.sessionId === sessionId && ["pending", "claimed", "running"].includes(t.status))) {
+        throw new DecisionConflictError("External completion no longer matches native authority");
+      }
+      return structuredClone(op);
+    };
+    const existing = this.store.getOperationReceipt(operationKey);
+    if (existing) return replay(existing, this.store.getState());
+    return this.store.transaction(draft => {
+      const prior = draft.operationReceipts[operationKey];
+      if (prior) return replay(prior, draft);
+      if (draft.transactionSequence !== expectedSequence) throw new DecisionConflictError("Stale external completion snapshot");
+      const session = draft.sessions[sessionId];
+      if (!session || session.root.provider !== "github" || session.root.key !== `${receipt.context.repo}#${receipt.context.issueNumber}`) {
+        throw new DecisionConflictError("Missing or foreign external completion session");
+      }
+      const now = this.clock();
+      for (const task of Object.values(draft.tasks).filter(t => t.sessionId === sessionId)) {
+        if (!["pending", "claimed", "running"].includes(task.status)) continue;
+        draft.tasks[task.id] = cancelDecisionTask(task, now);
+        const plan = draft.plans[task.id];
+        if (plan) draft.plans[task.id] = { ...plan, status: "superseded", updatedAtMs: now };
+      }
+      const closed = session.status === "completed" ? session
+        : completeDecisionSession(session, Object.values(draft.tasks).filter(t => t.sessionId === sessionId), now);
+      draft.sessions[sessionId] = closed;
+      const op: OperationReceipt = { schemaVersion: 1, operationKey, kind: "external-work-completion",
+        sessionId, entityId: sessionId, externalCompletion: receipt, resultingSession: closed, createdAtMs: now };
+      draft.operationReceipts[operationKey] = op;
+      return op;
+    });
   }
 
   /** Read current tasks from the already-open authoritative store; never expose lease tokens. */
@@ -546,6 +595,9 @@ export class DecisionService {
 
   async reopenSession(sessionId: string): Promise<DecisionSession> {
     return await this.store.transaction((draft) => {
+      if (Object.values(draft.operationReceipts).some(op => op.kind === "external-work-completion" && op.sessionId === sessionId)) {
+        throw new DecisionConflictError("Externally completed work requires a separately authorized new round");
+      }
       const session = draft.sessions[sessionId];
       if (!session) throw new DecisionNotFoundError(`Session "${sessionId}" not found`);
       const now = this.clock();
@@ -1682,6 +1734,7 @@ export class DecisionService {
     sessionId: string,
     requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined
   ): PlanningEligibilityResult {
+    if (this.hasExternalCompletion(sessionId)) return { eligible: false, sessionId, reason: "external_completion" };
     const planRecord = this.store.getLatestPlanForSession(sessionId);
     if (!planRecord) {
       return {

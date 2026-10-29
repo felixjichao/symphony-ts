@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "scope": "offline-external-delivery-settlement",
+  "baselineCommit": "247dc823404b3fc223318e79ba09d7bd47419c46",
+  "newTargetedTests": 37,
+  "productionStateChanged": false,
+  "sourceSha256": {
+    "apps/cli/src/delivery-cleanup.ts": "1a4b5ceafa275c3638deabcd21c6cfe33cb56719d0bd1bed6778f26df819a47f",
+    "apps/cli/src/delivery-skill-cli.ts": "4975ab1490e4bc89da233785c111d0848e12c0bcf921fcbdf7bc39bd84884d51",
+    "apps/cli/src/effective-runtime.ts": "63baeda34635dd7fb663b1aabea397104da8f325c4818a3729fbc4db471a87fe",
+    "apps/cli/src/external-settlement-journal.ts": "ec94c366a1b8966dc8487e6a3e4b40d977eac11577d1471c225132132beefd50",
+    "apps/cli/src/external-settlement.test.ts": "b0cbba4a56da50d61b6a75e65459afc66ea31d1f5e0d065b9edb93c695ed09d7",
+    "apps/cli/src/external-settlement.ts": "d3b4222950fe62fd0e3ea4fbb6b6a012b67f6ab71977bf7112f96599910cc5a7",
+    "apps/cli/src/file-authority.ts": "47a8200c395d5e6be3d9792952b234f308688226fff515459f03feba6dd312ca",
+    "apps/cli/src/host.ts": "aa23185214b94f525299ac663fd2cc6e3748b9aa1603704d9e2344ff7c341855",
+    "apps/cli/src/lifecycle.ts": "efcbf50695c1d93d5c294a7fb84c5440dfee714311f3ac9ae2227134868b3299",
+    "apps/cli/src/recovery-storage.ts": "9c815401b7dd6e8537996de8cfb44f9ce1502a084ce7db97b51b79df0d684e53",
+    "apps/cli/src/work-continuity.ts": "1ab24d23e208f8ccf36e7be268e5264d0e56933af78cc828e6325ac1427b1746",
+    "packages/agent/src/delivery/delivery-skill-runner.ts": "d30db6b86945440275d83b62a2885a65ba1e706379cf6f81576919c87b32fd3d",
+    "packages/agent/src/delivery/recover-handoff.ts": "6d27d75bed68caf271d17b550af2c36b6c545b634e5e380fdfff16db6e54833e",
+    "packages/agent/src/delivery/settle-external.test.ts": "0cf688610c8dfd09a2738e96d05245011db07ed0bea4a89bfd8075ac698c66c1",
+    "packages/agent/src/delivery/settle-external.ts": "12c61f0a22d83400bb391685c3a3c8b2598c556b82caed73f1690b9df7a553af",
+    "packages/agent/src/index.ts": "7a6ba581711260fd28823e948b3533b51fa7bd837f36ad14eb450cd39adc5fbb",
+    "packages/decision/src/external-completion.test.ts": "ede5dc5def10fb870f43ecf58fd4b6920cb01b6e78be0a951253c117d0a5caf4",
+    "packages/decision/src/service.ts": "80166f52c56c40b2ef1c47d87fb9226526ec2ec6dbcf33230387fccb9af092c3",
+    "packages/decision/src/store.ts": "f34e84acafe0607f61da67878abb27177d7e49b2b4c783a777738257a5f3d0a9",
+    "packages/decision/src/types.ts": "150d0eb3f05428a4a2a600a9c3e657094512a9f4bb0172e6d6ecdebdb8915433",
+    "packages/domain/src/delivery.ts": "ff2ca8dc7780272efaa3849c9cbea0699784d52eda9737285db276a191dd1279",
+    "packages/domain/src/external-delivery.test.ts": "c73b2f2986618ae13980d4ee8276c841a07583f8507722f6ea1714c74201bebe",
+    "packages/domain/src/external-delivery.ts": "2ec8df021c738db770288378cdc2106e1adaa32f76300a221dc15f005ae55a1e",
+    "packages/domain/src/index.ts": "2f6b463822f25675a4e5af35cb33ef94a70173cbd016ab86e0aab779ee8bca4d",
+    "packages/tracker/src/github/delivery/external-observation.test.ts": "d50a1d8da6219488e0a00d9e02fcec6020d3237c73acc0b99e633d6a3a524325",
+    "packages/tracker/src/github/delivery/external-observation.ts": "67b82cdf37d8a593d45fb162181f6af69436e18fa818493d91a1b1f4cf2562a1",
+    "packages/tracker/src/index.ts": "35d54002101b40e3a3721011172a33b538b15b4218307be938324b0832e47c32"
+  },
+  "firstGate": {
+    "exitCode": 1,
+    "cause": "GitHub-only admission fence incorrectly parsed custom tracker providers; fixed and covered by regression",
+    "logSha256": "fc5b7f659a63803873c776757ae7c0013859b3db4b29760d7769f764803be23c"
+  },
+  "finalGate": {
+    "status": "passed",
+    "exitCode": 0,
+    "command": "TMPDIR=/private/tmp npm run gate",
+    "completedAtUtc": "2026-10-29T16:08:30.799732+00:00",
+    "testsPassed": 2646,
+    "testsSkipped": 1,
+    "logSha256": "a8041f15d784bbd1a00019ced08275e05114391f1e43e9acbdb278d0d65404fb",
+    "typecheck": "passed",
+    "lint": "passed",
+    "docsCheck": "passed"
+  }
+}

@@ -1,0 +1,64 @@
+[
+  {
+    "issue": 169,
+    "pr": 178,
+    "state": "closed",
+    "merged": true,
+    "head": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+    "headBranch": "symphony/GH-169",
+    "baseBranch": "main",
+    "merge": "cb671b740b84802fc231bed88e8d67277ac9f48c",
+    "deliveryMarker": {
+      "schemaVersion": 1,
+      "repo": "felixjichao/symphony-ts",
+      "issueNumber": 169,
+      "workspaceKey": "GH-169",
+      "headBranch": "symphony/GH-169",
+      "baseBranch": "main"
+    },
+    "markerPresent": true
+  },
+  {
+    "issue": 173,
+    "pr": 191,
+    "state": "closed",
+    "merged": true,
+    "head": "caa16c9cafc79e182dfd4623fb1985e5e40963ff",
+    "headBranch": "symphony/GH-173",
+    "baseBranch": "main",
+    "merge": "3b5eb8ff0b33c5a8c0fb81301017c10fbf638bb5",
+    "deliveryMarker": null,
+    "markerPresent": false
+  },
+  {
+    "issue": 175,
+    "pr": 195,
+    "state": "closed",
+    "merged": true,
+    "head": "be7dc2f5beec530f7ef770ce72522ed20be668b2",
+    "headBranch": "symphony/GH-175",
+    "baseBranch": "main",
+    "merge": "53d6d1b01fe3c9e742af2cd26b90338545d9cea1",
+    "deliveryMarker": {
+      "schemaVersion": 1,
+      "repo": "felixjichao/symphony-ts",
+      "issueNumber": 175,
+      "workspaceKey": "GH-175",
+      "headBranch": "symphony/GH-175",
+      "baseBranch": "main"
+    },
+    "markerPresent": true
+  },
+  {
+    "issue": 176,
+    "pr": 196,
+    "state": "closed",
+    "merged": true,
+    "head": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+    "headBranch": "symphony/GH-176",
+    "baseBranch": "main",
+    "merge": "9fd0f6d4834c9ca0e96f445d4a29c9de87d57775",
+    "deliveryMarker": null,
+    "markerPresent": false
+  }
+]

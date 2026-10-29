@@ -1,0 +1,218 @@
+[
+  {
+    "issue": 169,
+    "pr": 178,
+    "issueState": "closed",
+    "closedAt": "2026-10-26T06:26:06Z",
+    "merged": true,
+    "head": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+    "merge": "cb671b740b84802fc231bed88e8d67277ac9f48c",
+    "mergedAt": "2026-10-26T06:26:05Z",
+    "commits": [
+      {
+        "sha": "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+        "parents": [
+          "4289d218d6c6ca653b7afdb4e5c066d9326d3d70"
+        ],
+        "committedAt": "2026-10-25T15:21:02Z"
+      },
+      {
+        "sha": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+        "parents": [
+          "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0"
+        ],
+        "committedAt": "2026-10-26T06:01:08Z"
+      }
+    ]
+  },
+  {
+    "issue": 170,
+    "pr": 181,
+    "issueState": "closed",
+    "closedAt": "2026-10-26T13:06:33Z",
+    "merged": true,
+    "head": "8620dfca6b615210ec8b8ae680aaf97a49382ec8",
+    "merge": "e1b109fe4dcc336c267360e5d2a803108e09f8c7",
+    "mergedAt": "2026-10-26T13:06:31Z",
+    "commits": [
+      {
+        "sha": "d77d946632fd763e868a37aaa12af257d663c073",
+        "parents": [
+          "efeed4d3f7c595a1bceddee2425037a4f8cf91cb"
+        ],
+        "committedAt": "2026-10-26T10:12:22Z"
+      },
+      {
+        "sha": "8620dfca6b615210ec8b8ae680aaf97a49382ec8",
+        "parents": [
+          "d77d946632fd763e868a37aaa12af257d663c073"
+        ],
+        "committedAt": "2026-10-26T10:27:43Z"
+      }
+    ]
+  },
+  {
+    "issue": 171,
+    "pr": 183,
+    "issueState": "closed",
+    "closedAt": "2026-10-27T14:16:04Z",
+    "merged": true,
+    "head": "fc628b794b5b9f60a5666e60375c28a07a757525",
+    "merge": "c7581629c4bec7191e144efd415781971c4cef58",
+    "mergedAt": "2026-10-27T14:16:02Z",
+    "commits": [
+      {
+        "sha": "9d8c5c808cbbfeaadff18efebab49a2c48317a54",
+        "parents": [
+          "e1b109fe4dcc336c267360e5d2a803108e09f8c7"
+        ],
+        "committedAt": "2026-10-26T13:37:59Z"
+      },
+      {
+        "sha": "fc628b794b5b9f60a5666e60375c28a07a757525",
+        "parents": [
+          "9d8c5c808cbbfeaadff18efebab49a2c48317a54",
+          "764524ef11da05ed3d44212203834dbf3fdb4794"
+        ],
+        "committedAt": "2026-10-27T14:01:45Z"
+      }
+    ]
+  },
+  {
+    "issue": 172,
+    "pr": 190,
+    "issueState": "closed",
+    "closedAt": "2026-10-28T03:00:52Z",
+    "merged": true,
+    "head": "abd6c65d280fc9649ca27809aad6a0663f4340a2",
+    "merge": "6a870be2183100af2df3f75c536f55dc91156d98",
+    "mergedAt": "2026-10-28T03:00:50Z",
+    "commits": [
+      {
+        "sha": "af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39",
+        "parents": [
+          "c7581629c4bec7191e144efd415781971c4cef58"
+        ],
+        "committedAt": "2026-10-28T02:43:36Z"
+      },
+      {
+        "sha": "abd6c65d280fc9649ca27809aad6a0663f4340a2",
+        "parents": [
+          "af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39"
+        ],
+        "committedAt": "2026-10-28T02:55:12Z"
+      }
+    ]
+  },
+  {
+    "issue": 173,
+    "pr": 191,
+    "issueState": "closed",
+    "closedAt": "2026-10-28T06:25:42Z",
+    "merged": true,
+    "head": "caa16c9cafc79e182dfd4623fb1985e5e40963ff",
+    "merge": "3b5eb8ff0b33c5a8c0fb81301017c10fbf638bb5",
+    "mergedAt": "2026-10-28T06:25:41Z",
+    "commits": [
+      {
+        "sha": "bb0aec62855a02540a319cef3cfa8ebac70bfaa8",
+        "parents": [
+          "6a870be2183100af2df3f75c536f55dc91156d98"
+        ],
+        "committedAt": "2026-10-28T05:59:11Z"
+      },
+      {
+        "sha": "caa16c9cafc79e182dfd4623fb1985e5e40963ff",
+        "parents": [
+          "bb0aec62855a02540a319cef3cfa8ebac70bfaa8"
+        ],
+        "committedAt": "2026-10-28T06:13:48Z"
+      }
+    ]
+  },
+  {
+    "issue": 174,
+    "pr": 194,
+    "issueState": "closed",
+    "closedAt": "2026-10-28T15:59:00Z",
+    "merged": true,
+    "head": "a296d907bea1fcd7e3dc272a922b6d03c9b68237",
+    "merge": "2f7300bc201db3164121e07f7fe5f2c08d5a4162",
+    "mergedAt": "2026-10-28T15:58:59Z",
+    "commits": [
+      {
+        "sha": "3f69e85b0220ac3fb2648d162133a597b3d88bd1",
+        "parents": [
+          "f15ae9f9c92afa9f09553b12ae5a1161e7d7aded"
+        ],
+        "committedAt": "2026-10-28T14:48:24Z"
+      },
+      {
+        "sha": "a296d907bea1fcd7e3dc272a922b6d03c9b68237",
+        "parents": [
+          "3f69e85b0220ac3fb2648d162133a597b3d88bd1"
+        ],
+        "committedAt": "2026-10-28T15:12:30Z"
+      }
+    ]
+  },
+  {
+    "issue": 175,
+    "pr": 195,
+    "issueState": "closed",
+    "closedAt": "2026-10-29T03:44:58Z",
+    "merged": true,
+    "head": "be7dc2f5beec530f7ef770ce72522ed20be668b2",
+    "merge": "53d6d1b01fe3c9e742af2cd26b90338545d9cea1",
+    "mergedAt": "2026-10-29T03:44:57Z",
+    "commits": [
+      {
+        "sha": "95a8c2e93b2549a18b9024fdc005a4e26319222c",
+        "parents": [
+          "2f7300bc201db3164121e07f7fe5f2c08d5a4162"
+        ],
+        "committedAt": "2026-10-29T01:40:14Z"
+      },
+      {
+        "sha": "be7dc2f5beec530f7ef770ce72522ed20be668b2",
+        "parents": [
+          "95a8c2e93b2549a18b9024fdc005a4e26319222c"
+        ],
+        "committedAt": "2026-10-29T03:16:29Z"
+      }
+    ]
+  },
+  {
+    "issue": 176,
+    "pr": 196,
+    "issueState": "closed",
+    "closedAt": "2026-10-29T13:37:33Z",
+    "merged": true,
+    "head": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+    "merge": "9fd0f6d4834c9ca0e96f445d4a29c9de87d57775",
+    "mergedAt": "2026-10-29T13:36:39Z",
+    "commits": [
+      {
+        "sha": "6eb2fedbd05d0c827edea31ee521b8c906261a9d",
+        "parents": [
+          "53d6d1b01fe3c9e742af2cd26b90338545d9cea1"
+        ],
+        "committedAt": "2026-10-29T11:27:31Z"
+      },
+      {
+        "sha": "d62f07132e2ff31f70710358da326c2d4ecc1bb4",
+        "parents": [
+          "6eb2fedbd05d0c827edea31ee521b8c906261a9d"
+        ],
+        "committedAt": "2026-10-29T11:44:26Z"
+      },
+      {
+        "sha": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+        "parents": [
+          "d62f07132e2ff31f70710358da326c2d4ecc1bb4"
+        ],
+        "committedAt": "2026-10-29T13:22:13Z"
+      }
+    ]
+  }
+]

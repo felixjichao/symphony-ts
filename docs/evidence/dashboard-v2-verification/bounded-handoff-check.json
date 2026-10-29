@@ -1,0 +1,37 @@
+{
+  "baseCommit": "9fd0f6d4834c9ca0e96f445d4a29c9de87d57775",
+  "formatterSourceSha256": "add7b7b873db1cef5cfaddfc8562fd0674f7b65d89932b4a9222db210a4ba591",
+  "networkWrites": false,
+  "results": [
+    {
+      "issue": 173,
+      "nativeStateSha256": "45c0ddcf817b3c7b4d837bed8fcd8b875352f1a6ff73805e2f76121e926d966f",
+      "originalUtf16Length": 278863,
+      "publishedUtf16Length": 60000,
+      "withinLimit": true,
+      "markerPreserved": true,
+      "originalDigestPresent": true,
+      "nativeStateUnchanged": true
+    },
+    {
+      "issue": 175,
+      "nativeStateSha256": "9d2c40e609466ca1b17b8ecc817effb60acb4785b4bce0aa658daeb7047d0778",
+      "originalUtf16Length": 278069,
+      "publishedUtf16Length": 60000,
+      "withinLimit": true,
+      "markerPreserved": true,
+      "originalDigestPresent": true,
+      "nativeStateUnchanged": true
+    },
+    {
+      "issue": 176,
+      "nativeStateSha256": "1f6958cb7086f259290462c3411dffa1705d134c3ac467daca342a13c2703cab",
+      "originalUtf16Length": 279804,
+      "publishedUtf16Length": 60000,
+      "withinLimit": true,
+      "markerPreserved": true,
+      "originalDigestPresent": true,
+      "nativeStateUnchanged": true
+    }
+  ]
+}

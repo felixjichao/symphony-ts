@@ -162,3 +162,7 @@ Dashboard V2 presentation (#170, §13 adjacent) uses DOM-native constructors in 
 Work Detail Why (#174) presents supplied evidence provenance before its raw disclosure; the read model remains the authority for conclusions and diagnostics. Work-scoped evidence is filtered by the complete key and global anomalies remain in System. See the [decision](../notes/accepted/architecture/2026-10-28-work-detail-why.md).
 
 Dashboard V2 consumes the read-only production status surface through Overview, Work Explorer, Work Detail, Executors and System. Authoritative sources flow through operations and HTTP to the browser; the browser owns presentation and navigation, not operational projection or workflow authority. See the [closeout evidence index](evidence/dashboard-v2-closeout/README.md).
+
+## 外部交付离线结算
+
+[离线结算协议](external-delivery-settlement.md)由 CLI 装配原生 root/Delivery/Decision authority；domain 定义请求和外部完成回执，tracker 只读验证远端，agent/Decision 各自提交所属状态。workspace 外 journal 为跨文件恢复及 admission/cleanup fence；既有诊断、预算和 Review 证据保持原义。见 [决策记录](../notes/accepted/architecture/2026-10-29-offline-external-delivery-settlement.md)。

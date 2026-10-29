@@ -1,0 +1,914 @@
+{
+  "method": "Static extraction only; logged shell/Python was not executed. Exact content matches are file-level evidence, not proof of all final changes or autonomous Delivery.",
+  "children": [
+    {
+      "issue": 169,
+      "pr": 178,
+      "initialPrCommit": "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0",
+      "initialParent": "4289d218d6c6ca653b7afdb4e5c066d9326d3d70",
+      "finalPrHead": "c0d38f54f4ecb820e23e1ec71b87f9b5d7cebaa2",
+      "matchingBaselineSessionIds": [
+        "01a1735a-28b8-7cd1-8d79-adb2f04ad5f3"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/src/routing.ts",
+        "notes/accepted/architecture/2026-10-25-operator-console-shell.md"
+      ],
+      "deliveryPushedCommits": [
+        "47b3c3f15db4f563ec65140d9ef5cf8d9de630c0"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 170,
+      "pr": 181,
+      "initialPrCommit": "d77d946632fd763e868a37aaa12af257d663c073",
+      "initialParent": "efeed4d3f7c595a1bceddee2425037a4f8cf91cb",
+      "finalPrHead": "8620dfca6b615210ec8b8ae680aaf97a49382ec8",
+      "matchingBaselineSessionIds": [
+        "01a177a9-c7a1-72b3-9205-4c1b3563364d"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/src/primitives.ts",
+        "apps/dashboard/tests/primitives.test.ts",
+        "docs/evidence/dashboard-v2-primitives/README.md",
+        "notes/accepted/architecture/2026-10-26-dashboard-presentation-primitives.md"
+      ],
+      "deliveryPushedCommits": [
+        "d77d946632fd763e868a37aaa12af257d663c073"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 171,
+      "pr": 183,
+      "initialPrCommit": "9d8c5c808cbbfeaadff18efebab49a2c48317a54",
+      "initialParent": "e1b109fe4dcc336c267360e5d2a803108e09f8c7",
+      "finalPrHead": "fc628b794b5b9f60a5666e60375c28a07a757525",
+      "matchingBaselineSessionIds": [
+        "01a17866-b1f6-7743-9733-d0e62778b438"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/tests/overview.test.ts",
+        "docs/evidence/dashboard-v2-overview/README.md",
+        "notes/accepted/architecture/2026-10-26-attention-first-overview.md"
+      ],
+      "deliveryPushedCommits": [
+        "9d8c5c808cbbfeaadff18efebab49a2c48317a54",
+        "fc628b794b5b9f60a5666e60375c28a07a757525"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 172,
+      "pr": 190,
+      "initialPrCommit": "af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39",
+      "initialParent": "c7581629c4bec7191e144efd415781971c4cef58",
+      "finalPrHead": "abd6c65d280fc9649ca27809aad6a0663f4340a2",
+      "matchingBaselineSessionIds": [
+        "01a1805e-cd15-7ee3-bbdf-73c8aac3dd9f"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/tests/explorer.test.ts",
+        "notes/accepted/architecture/2026-10-28-work-explorer.md"
+      ],
+      "deliveryPushedCommits": [
+        "af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 173,
+      "pr": 191,
+      "initialPrCommit": "bb0aec62855a02540a319cef3cfa8ebac70bfaa8",
+      "initialParent": "6a870be2183100af2df3f75c536f55dc91156d98",
+      "finalPrHead": "caa16c9cafc79e182dfd4623fb1985e5e40963ff",
+      "matchingBaselineSessionIds": [
+        "01a1807e-20d8-7583-b1ea-45ac04a2fbe2"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/src/detail.ts",
+        "notes/accepted/architecture/2026-10-28-work-detail-current-state.md"
+      ],
+      "deliveryPushedCommits": [],
+      "pushMatchesPrCommit": false
+    },
+    {
+      "issue": 174,
+      "pr": 194,
+      "initialPrCommit": "3f69e85b0220ac3fb2648d162133a597b3d88bd1",
+      "initialParent": "f15ae9f9c92afa9f09553b12ae5a1161e7d7aded",
+      "finalPrHead": "a296d907bea1fcd7e3dc272a922b6d03c9b68237",
+      "matchingBaselineSessionIds": [
+        "01a182f0-c7e4-7751-8a63-f494ef1f02a2",
+        "01a182ee-00af-7c63-ab22-2ea5776be425",
+        "01a182f2-e116-7c81-8c06-6d2d4f5a70da"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/src/anomaly.ts",
+        "apps/dashboard/src/detail.ts",
+        "apps/dashboard/src/evidence.ts",
+        "docs/evidence/work-detail-why/README.md",
+        "notes/accepted/architecture/2026-10-28-work-detail-why.md"
+      ],
+      "deliveryPushedCommits": [
+        "3f69e85b0220ac3fb2648d162133a597b3d88bd1"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 175,
+      "pr": 195,
+      "initialPrCommit": "95a8c2e93b2549a18b9024fdc005a4e26319222c",
+      "initialParent": "2f7300bc201db3164121e07f7fe5f2c08d5a4162",
+      "finalPrHead": "be7dc2f5beec530f7ef770ce72522ed20be668b2",
+      "matchingBaselineSessionIds": [
+        "01a1854b-23d6-7c92-ba11-5e11dfa768e9",
+        "01a18548-3f46-7013-906a-dc58bbf5990b"
+      ],
+      "exactFileMatches": [
+        "apps/dashboard/src/executors.ts",
+        "notes/accepted/architecture/2026-10-29-dashboard-operational-views.md"
+      ],
+      "deliveryPushedCommits": [
+        "95a8c2e93b2549a18b9024fdc005a4e26319222c"
+      ],
+      "pushMatchesPrCommit": true
+    },
+    {
+      "issue": 176,
+      "pr": 196,
+      "initialPrCommit": "6eb2fedbd05d0c827edea31ee521b8c906261a9d",
+      "initialParent": "53d6d1b01fe3c9e742af2cd26b90338545d9cea1",
+      "finalPrHead": "0f2affa8de1a37667c37294e4a1ad12a0ec82d94",
+      "matchingBaselineSessionIds": [
+        "01a18627-2101-7dc1-a994-a17b7cbe1b7c",
+        "01a18642-0f34-7601-a741-34a7805e86bd",
+        "01a185d3-c8c6-7531-9c54-1a2a966bb080",
+        "01a18619-43bf-72b1-b4aa-175268d92ab4",
+        "01a18625-103c-7151-976f-a0b014d87ba3",
+        "01a185ea-6e34-76f1-b43c-1b0e6d0e8e9e",
+        "01a18612-e9a6-71b2-96b2-6007a3c57e99",
+        "01a185f0-1f0c-72b1-98d1-9c3ced53237b",
+        "01a18660-48c3-7072-81d6-bd047f5eec90",
+        "01a185de-0eb2-76a1-9c8f-ee47a3178bd3",
+        "01a185fc-5572-7e32-ae52-71cbfa386160",
+        "01a185f8-4dc7-77d0-baff-2a6179b218bf",
+        "01a1861b-0e5b-75c0-a3b3-036d6c25a8aa",
+        "01a18627-e932-7132-8b9b-2242f61dcf7a",
+        "01a185e4-098e-7281-a0a5-fe6519db48c3",
+        "01a1862b-d922-7b93-b2e0-c035f92e788d",
+        "01a18612-29e5-7ca2-8e99-cbc506307316",
+        "01a18619-e75f-7f20-bd99-7ab9d2ee5151",
+        "01a1865a-cecb-79a1-949d-ecc2affb128b",
+        "01a18658-8d76-75b0-aac7-92eda24fa8a3",
+        "01a18661-b954-7ca3-bb4b-b4f16ecd98ce",
+        "01a18649-fd4f-7693-a73b-fc448b5a16b8",
+        "01a185ed-455b-76e0-930f-7c2b2d9a1205",
+        "01a185fd-0bf2-7603-8a0c-c8479e91a9ff",
+        "01a185e5-71d8-7150-a8c2-ce0aa88b5c10",
+        "01a185f1-ac64-7a10-9f62-3daf87e6d455",
+        "01a1861d-36ba-7240-984f-0b7ac3582dfd",
+        "01a185ee-a50e-7d50-b08b-f8055d7aed48",
+        "01a185e2-f263-71c0-98e9-b21d24d18fa7",
+        "01a18641-05d4-7190-9edf-8282365bcd68",
+        "01a1865d-f54e-7281-b634-1a68fe0a2a1c",
+        "01a1864d-4f62-7d61-a27e-9a0974128d25",
+        "01a18609-d8dd-7051-b5d4-0ca13dd52b42",
+        "01a18620-c4b3-7900-b85a-ffc79005def1",
+        "01a18633-d82c-73b2-87d1-8d43f156b38b",
+        "01a1862b-2804-76f1-897e-fa4ba58a2f8e",
+        "01a18663-dcc7-7d22-ab04-40734af9e50f",
+        "01a18664-ac30-71b1-8fe4-a91eaa40e5d6",
+        "01a18617-424d-7451-b393-8c3c13a88591",
+        "01a18639-eca8-7d40-ba6c-20961033052d",
+        "01a1864e-cc4b-7d30-b5f5-514b3a9c1977",
+        "01a185e8-6349-7461-a2da-2686211b2f38",
+        "01a1865b-dbb0-7622-ab24-3982d6a8969e",
+        "01a18622-236b-7321-9e18-935144c41ace",
+        "01a18651-d213-7c92-adf2-8381ffd7d308",
+        "01a1860d-4402-7ff0-be6b-83a618c2fcf9",
+        "01a185f7-8ea1-7421-b6cf-bab11688eabc",
+        "01a1865f-7cc9-7402-9992-db4c8b4823c7",
+        "01a18614-55a9-7e30-89ac-59495fed963a",
+        "01a18662-eae3-7a00-aeb5-70948d294ccc",
+        "01a185e9-0fe6-7e61-837c-4a1eeadf7b1e",
+        "01a18608-3439-7093-a51e-4fbba11954f1",
+        "01a185f3-4b40-76c1-8de4-4105e90a4953",
+        "01a185f2-78b7-7f92-a24c-751550862f61",
+        "01a185ef-5790-75e0-add1-7eab2c2abe25",
+        "01a1861c-9707-7592-bdd1-86ead29af93c",
+        "01a1862c-8540-7481-bba8-6ce159f3135e",
+        "01a18657-d667-77e1-9024-bb1dd5678043",
+        "01a18613-aace-76c0-9f06-f5c94679ce5c",
+        "01a18622-eaeb-7972-9ad5-598a8e31a12c",
+        "01a18645-62e0-70d1-9b78-f1a9c0144f9b",
+        "01a18618-6e8c-7422-8d28-b01274fe05ba",
+        "01a185df-bd39-72b2-b759-a7d2aa575b05",
+        "01a18639-3350-7770-b89d-257046afbb47",
+        "01a185fa-00b6-75e1-96c5-4ccf8056a192",
+        "01a185f6-b93c-70a1-a85d-537a9e620d85",
+        "01a18628-b7d6-7a93-8bcf-deec6ab249a8",
+        "01a18615-0a98-72b2-b3a4-714516f986db",
+        "01a18651-2ae7-7a80-8dbb-5636083e7e7b",
+        "01a18636-2139-72a0-a849-07d954f3664a",
+        "01a1862a-4a03-7042-ad34-63aaecb58e12",
+        "01a18615-be36-7a41-b9f6-5d5558cfff95",
+        "01a1862d-6f56-77a2-afe4-e21f033db5e1",
+        "01a18637-b4a4-75a0-856a-f529664a9eff",
+        "01a18635-6664-7b11-a87b-60c68d44f117",
+        "01a185e0-e8ef-74a2-80ad-639efb0109aa",
+        "01a185f4-2c6b-7bc0-9ab5-8df2e646e870",
+        "01a18661-1442-7bd0-9e78-8f40ec81560f",
+        "01a1864f-7f18-7f31-aef0-7aa152b856c7",
+        "01a185e9-c1ca-7991-9654-3a3c4cf91bd6",
+        "01a1871f-8ba0-7180-9c37-10695260cfc1",
+        "01a1860b-3476-7a52-b63a-ddc51bcfaa8d",
+        "01a18621-7504-7653-9549-3eb39a3ee0d4",
+        "01a18720-7be2-7600-a4e3-25a274b705e7",
+        "01a185d9-0bda-7353-958a-9c6cf74a875e",
+        "01a1861b-d638-75b1-b07f-04a61337c055",
+        "01a1865e-c6b4-70d3-9cec-614b5570a7c9",
+        "01a18656-68a5-7263-a836-150fb2de8324",
+        "01a185dc-ff93-7f91-b78a-15138130fb40",
+        "01a1864c-3e59-78e1-94cd-e87fd0c8b2e1",
+        "01a185fd-9f79-75d2-9fb8-4f8f0e4bec03",
+        "01a185fe-76b0-7ff0-9df5-cc60da50f0f1",
+        "01a18624-3e6d-7941-b574-41e68e8060eb",
+        "01a1862e-df90-7d93-8e38-a8a650c0bc7d",
+        "01a18631-beba-7283-8b39-971319fa59dc",
+        "01a185ed-ee20-77c0-b746-13cbf56a3bec",
+        "01a185e1-a688-7f73-9ad7-d603d8a896b5",
+        "01a1865d-4426-7403-aca6-bac3e4ed8f9b",
+        "01a18654-e5eb-7cf0-8358-b562591d1634",
+        "01a1865a-27fb-72f3-a2eb-9a1345edbe8a",
+        "01a185e6-dca6-70f1-be26-f66ec7fb264d",
+        "01a1862f-8e5d-7ea1-8fd1-7bb8ff8173aa",
+        "01a185d7-3d71-7fe0-a526-1928e820831f",
+        "01a1863c-fff9-7b42-b632-4fb86dc1491a",
+        "01a185f5-acd6-7ed3-a875-0582be1e2cb9",
+        "01a18646-c55e-70f0-87bb-db69aec3b75f",
+        "01a185fa-d8cf-7f12-b4e4-88054bbf732a",
+        "01a18640-2ebc-7510-b8f4-76229bbfb0a5",
+        "01a1862e-173c-7cb0-b5a1-8a1fbd0ea70d",
+        "01a18650-5207-7422-99a5-c95a31875f4c",
+        "01a18629-9691-7af1-b25e-46c724a83a17",
+        "01a18602-8874-7703-af73-4605d0c04611",
+        "01a185f9-4c65-7880-ad1b-c767a4d08439",
+        "01a18633-2cbb-7372-bb5e-95495cf95ecf",
+        "01a18620-00b5-70e0-aa1e-24679b545041",
+        "01a1863d-cb2f-7a91-adb2-16d48a0fdb17",
+        "01a1863b-5f7c-7502-b147-8890de5fad78",
+        "01a1860e-0c0d-70a1-96d5-a636b39e1321",
+        "01a185d5-e60b-7e43-9dd2-5eeacf75a81c",
+        "01a18616-7c6f-7521-955b-6f8be2d3bb08",
+        "01a1863e-802d-7c01-8e7e-fb58dd9ccba7",
+        "01a18626-7f43-7512-a8c1-25bab9dfc5a6",
+        "01a18611-57b3-7570-b132-59f2e688a94a",
+        "01a18653-609b-7e23-b16f-31eef4b83084",
+        "01a18630-e52c-7381-bc6f-1d56186de3c4",
+        "01a1864b-8a3f-7511-acfd-5036321b0a2f",
+        "01a18636-f4b1-7ac0-a81d-b3ad7df26954",
+        "01a18630-4531-7453-808c-168a67170c41",
+        "01a18632-9413-76d1-bf38-c7199fe4dcc1",
+        "01a185fb-8522-7081-a097-90aee9208080",
+        "01a185f0-e96a-71e0-a7e4-4dc7c48dc061",
+        "01a18647-63ff-7172-9d9a-0b3cd5e6187a",
+        "01a18638-5c83-79f0-ae33-3c96e0354275",
+        "01a185d7-f96b-75b2-a4d9-ea771aff7be1",
+        "01a18609-1388-7bf0-9a30-0c51c744a5f4",
+        "01a18634-a6b2-7132-83eb-ff99896bf203",
+        "01a1863a-a331-7ea3-baf4-981236d8e44d",
+        "01a1865c-9664-7cf1-bf60-603e41e8d304",
+        "01a185ff-dbde-7443-a352-5814b87273d5",
+        "01a18654-2cbe-7f63-89fc-746ff89bc64e",
+        "01a185eb-beeb-7890-ba95-62bdad94c3da",
+        "01a18625-c9f7-71c1-bae3-719c452add6f",
+        "01a18642-de0a-7370-895e-531968eaacf7",
+        "01a1863f-584d-7ce1-bddd-ae25c28f65d9",
+        "01a185db-a068-7110-9581-11376148d94a",
+        "01a1860a-934e-7690-8877-8fe1110a442e",
+        "01a18646-1b1d-7082-9d99-83708aed36c5",
+        "01a18617-f726-7261-9cc6-db7345e0c8d6",
+        "01a1861d-ed19-7e61-bcec-84a20988eee0",
+        "01a185dc-53c7-7f10-a9d6-53780a7df928",
+        "01a1860e-b72f-7ac1-bc24-adfb0574a10d",
+        "01a18644-9b69-7ed0-9de0-500f69846776",
+        "01a18659-4d51-72f0-9401-0d99f81df5ae",
+        "01a18657-28a7-74f3-a690-de260a70448e",
+        "01a1863c-3d9c-7b81-aa78-fd45888b85fa",
+        "01a1860c-a9f0-7b53-8247-8082b5e16862",
+        "01a18607-65ab-7762-8309-fb4813c873c3",
+        "01a185ec-71c3-7861-8ccc-46eb9aa01e18",
+        "01a18652-b5e0-7790-af39-0c293a711c3c",
+        "01a185e7-97a6-71a1-8a0a-5c96e2acccb5",
+        "01a185da-58ad-76a1-ba12-9edfd5d8eb11",
+        "01a18643-b9ad-7fe1-beb7-c7494d13cf85",
+        "01a18648-13b8-79d0-b1cc-69becbf2e345",
+        "01a185f4-f1d3-76d2-a8d4-39a4e6046b67",
+        "01a1861f-5319-7db2-b931-1af910b9aeac",
+        "01a18649-1418-7443-a34a-62692a9f342b",
+        "01a1860b-e924-7a53-8b72-0be47c7ef6f3",
+        "01a18623-9fa7-7153-8fdf-ae6ae86bb1d5",
+        "01a1860f-b5b0-7b03-a02e-18863f5e9cf3",
+        "01a1861e-a169-71d3-9178-c5745e959a46",
+        "01a1864e-0423-7153-b7ef-abe5f189b8f4",
+        "01a18610-89b3-7ca0-8b0f-231e47846d79"
+      ],
+      "exactFileMatches": [],
+      "deliveryPushedCommits": [],
+      "pushMatchesPrCommit": false
+    }
+  ],
+  "matchedWrites": [
+    {
+      "issue": 169,
+      "sessionId": "01a1735a-28b8-7cd1-8d79-adb2f04ad5f3",
+      "callId": "call_f15c1dbef79a4accac68fa9e26f854c9",
+      "timestamp": "2026-10-25T13:58:28.266Z",
+      "file": "apps/dashboard/src/routing.ts",
+      "gitBlobSha": "e553a68c914a2296b1953441390054da5a8ed2ec",
+      "bytes": 447,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 169,
+      "sessionId": "01a1735a-28b8-7cd1-8d79-adb2f04ad5f3",
+      "callId": "call_5448b4d2d3654892b0d948281bd760af",
+      "timestamp": "2026-10-25T14:01:13.185Z",
+      "file": "notes/accepted/architecture/2026-10-25-operator-console-shell.md",
+      "gitBlobSha": "950aecb89e9b66f4a3bcb9f8f83b8baf1c386d6a",
+      "bytes": 1903,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_ad6f8a2a36754d00bdaecd49ec2c8184",
+      "timestamp": "2026-10-26T10:04:02.326Z",
+      "file": "apps/dashboard/src/primitives.ts",
+      "gitBlobSha": "8a538f723fc161cc579873251bab26ea5d857066",
+      "bytes": 3434,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_b4d076f864f84c75a6c955e03ccb85ad",
+      "timestamp": "2026-10-26T10:07:02.961Z",
+      "file": "notes/accepted/architecture/2026-10-26-dashboard-presentation-primitives.md",
+      "gitBlobSha": "2150716eba28bb6a3dc94d59cd3e4f9bdfdbcf65",
+      "bytes": 2130,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_2edbc18b393b468685dd83577cf76afb",
+      "timestamp": "2026-10-26T10:07:39.093Z",
+      "file": "docs/evidence/dashboard-v2-primitives/README.md",
+      "gitBlobSha": "b8015f6cd5433a0814f7e571cd0b64fe762f781d",
+      "bytes": 1808,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": false,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 171,
+      "sessionId": "01a17866-b1f6-7743-9733-d0e62778b438",
+      "callId": "call_278a8e161e5d4ca88a0559fa2b5e3a63",
+      "timestamp": "2026-10-26T13:34:11.850Z",
+      "file": "notes/accepted/architecture/2026-10-26-attention-first-overview.md",
+      "gitBlobSha": "61a78e8050ce64e9afc7620a790b52b080eae82e",
+      "bytes": 2006,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 171,
+      "sessionId": "01a17866-b1f6-7743-9733-d0e62778b438",
+      "callId": "call_278a8e161e5d4ca88a0559fa2b5e3a63",
+      "timestamp": "2026-10-26T13:34:11.850Z",
+      "file": "docs/evidence/dashboard-v2-overview/README.md",
+      "gitBlobSha": "156c34145329b58ea42032908ce01704a63723bf",
+      "bytes": 1541,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 172,
+      "sessionId": "01a1805e-cd15-7ee3-bbdf-73c8aac3dd9f",
+      "callId": "call_f9836ebf273d4b3bbbf76dd403b4d575",
+      "timestamp": "2026-10-28T02:39:00.472Z",
+      "file": "notes/accepted/architecture/2026-10-28-work-explorer.md",
+      "gitBlobSha": "cbdcb6068b37161086f8724c114d8712e40394d5",
+      "bytes": 1369,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": false,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 173,
+      "sessionId": "01a1807e-20d8-7583-b1ea-45ac04a2fbe2",
+      "callId": "call_cebbe5233002404f9bf98ff18f2e58a4",
+      "timestamp": "2026-10-28T03:13:33.858Z",
+      "file": "notes/accepted/architecture/2026-10-28-work-detail-current-state.md",
+      "gitBlobSha": "591b0b3b772eddd52435bb97fc74a2271e35bafd",
+      "bytes": 1043,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f2-e116-7c81-8c06-6d2d4f5a70da",
+      "callId": "call_53fc94d56ba64c5686bc4f48cbd90bd9",
+      "timestamp": "2026-10-28T14:41:47.876Z",
+      "file": "notes/accepted/architecture/2026-10-28-work-detail-why.md",
+      "gitBlobSha": "a60babb8b9fdfe508e57abd610cd95de0580d466",
+      "bytes": 1159,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 175,
+      "sessionId": "01a18548-3f46-7013-906a-dc58bbf5990b",
+      "callId": "call_a53f75f33c6d43c8b676bdde6781cf27",
+      "timestamp": "2026-10-29T01:33:30.699Z",
+      "file": "notes/accepted/architecture/2026-10-29-dashboard-operational-views.md",
+      "gitBlobSha": "7d824ba856c46f0a9d7ddb47efd5302a7e80312d",
+      "bytes": 908,
+      "method": "literal quoted heredoc",
+      "outputRecorded": true,
+      "toolErrorIndicated": false,
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true
+    },
+    {
+      "issue": 169,
+      "sessionId": "01a1735a-28b8-7cd1-8d79-adb2f04ad5f3",
+      "callId": "call_5448b4d2d3654892b0d948281bd760af",
+      "timestamp": "2026-10-25T14:01:13.185Z",
+      "outputRecorded": true,
+      "file": "notes/accepted/architecture/2026-10-25-operator-console-shell.md",
+      "gitBlobSha": "950aecb89e9b66f4a3bcb9f8f83b8baf1c386d6a",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_ad6f8a2a36754d00bdaecd49ec2c8184",
+      "timestamp": "2026-10-26T10:04:02.326Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/primitives.ts",
+      "gitBlobSha": "8a538f723fc161cc579873251bab26ea5d857066",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_b4d076f864f84c75a6c955e03ccb85ad",
+      "timestamp": "2026-10-26T10:07:02.961Z",
+      "outputRecorded": true,
+      "file": "notes/accepted/architecture/2026-10-26-dashboard-presentation-primitives.md",
+      "gitBlobSha": "2150716eba28bb6a3dc94d59cd3e4f9bdfdbcf65",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_2edbc18b393b468685dd83577cf76afb",
+      "timestamp": "2026-10-26T10:07:39.093Z",
+      "outputRecorded": true,
+      "file": "docs/evidence/dashboard-v2-primitives/README.md",
+      "gitBlobSha": "b8015f6cd5433a0814f7e571cd0b64fe762f781d",
+      "matchesFinalPrBlob": false,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 170,
+      "sessionId": "01a177a9-c7a1-72b3-9205-4c1b3563364d",
+      "callId": "call_955a6deb5a7b42a9834db250074a29ee",
+      "timestamp": "2026-10-26T10:09:00.080Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/tests/primitives.test.ts",
+      "gitBlobSha": "3faa2b9de066b13c7e2301474eba12b127f6f84e",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 171,
+      "sessionId": "01a17866-b1f6-7743-9733-d0e62778b438",
+      "callId": "call_952a21ec4fce409ba3bcdcb718ef7f01",
+      "timestamp": "2026-10-26T13:32:46.356Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/tests/overview.test.ts",
+      "gitBlobSha": "89f8d445b19e9bd45489e8049a6d0c95265cd92d",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 172,
+      "sessionId": "01a1805e-cd15-7ee3-bbdf-73c8aac3dd9f",
+      "callId": "call_6794783270f84e6b9f1156b953ba7c27",
+      "timestamp": "2026-10-28T02:39:19.830Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/tests/explorer.test.ts",
+      "gitBlobSha": "47980240b39b2419c5bdf888a20aa66948bc717f",
+      "matchesFinalPrBlob": false,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 172,
+      "sessionId": "01a1806a-05a8-7123-bfa9-ef0a2d01c5c8",
+      "callId": "call_d9bf36cc03974560b5a4bb22614b0a7f",
+      "timestamp": "2026-10-28T02:50:12.577Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/tests/explorer.test.ts",
+      "gitBlobSha": "87b2ff530f38994a2e0355236fc7159ab73c06d1",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": false,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 173,
+      "sessionId": "01a1807e-20d8-7583-b1ea-45ac04a2fbe2",
+      "callId": "call_62ddb856f9424914a364d1bf0213ced5",
+      "timestamp": "2026-10-28T03:12:59.689Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/detail.ts",
+      "gitBlobSha": "5cc356c73475e1d9a08c64bccd8f4cefb2f701cf",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f0-c7e4-7751-8a63-f494ef1f02a2",
+      "callId": "call_8b9bf8a182ef4efdb701fc03bb2aae8e",
+      "timestamp": "2026-10-28T14:37:58.988Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/anomaly.ts",
+      "gitBlobSha": "fe4fe4d333e95beacf8aceed9c7f50f69d6c1b9a",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f0-c7e4-7751-8a63-f494ef1f02a2",
+      "callId": "call_9840577c19e7496a9d3a69001aacbea7",
+      "timestamp": "2026-10-28T14:38:20.293Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/detail.ts",
+      "gitBlobSha": "10eb5baaefea59c08f5c4e3fced63e948bd2fc2e",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f2-e116-7c81-8c06-6d2d4f5a70da",
+      "callId": "call_afb011bf9e404a4cbde16972d2b1e9d3",
+      "timestamp": "2026-10-28T14:41:32.782Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/anomaly.ts",
+      "gitBlobSha": "fe4fe4d333e95beacf8aceed9c7f50f69d6c1b9a",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f2-e116-7c81-8c06-6d2d4f5a70da",
+      "callId": "call_afb011bf9e404a4cbde16972d2b1e9d3",
+      "timestamp": "2026-10-28T14:41:32.782Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/detail.ts",
+      "gitBlobSha": "10eb5baaefea59c08f5c4e3fced63e948bd2fc2e",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a182f2-e116-7c81-8c06-6d2d4f5a70da",
+      "callId": "call_1e72c72320754ada99f79ca078556a0d",
+      "timestamp": "2026-10-28T14:42:24.877Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/evidence.ts",
+      "gitBlobSha": "b5db1a1c7de76feae3c19d2a9783794c1a0cf640",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 174,
+      "sessionId": "01a18304-2d41-7002-87dc-e310b391ffb5",
+      "callId": "call_5a7efe79081e45cba03687aaf8abcc44",
+      "timestamp": "2026-10-28T15:05:50.872Z",
+      "outputRecorded": true,
+      "file": "docs/evidence/work-detail-why/README.md",
+      "gitBlobSha": "e87142235d0a6971f0175c672155ecf565948b70",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": false,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 175,
+      "sessionId": "01a18548-3f46-7013-906a-dc58bbf5990b",
+      "callId": "call_152b10ead78f4d76aecab9cab137db33",
+      "timestamp": "2026-10-29T01:32:16.490Z",
+      "outputRecorded": true,
+      "file": "apps/dashboard/src/executors.ts",
+      "gitBlobSha": "280b8188dd58e4d3f72f98b5c8e44fb3e8c5aeaf",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    },
+    {
+      "issue": 175,
+      "sessionId": "01a18548-3f46-7013-906a-dc58bbf5990b",
+      "callId": "call_a53f75f33c6d43c8b676bdde6781cf27",
+      "timestamp": "2026-10-29T01:33:30.699Z",
+      "outputRecorded": true,
+      "file": "notes/accepted/architecture/2026-10-29-dashboard-operational-views.md",
+      "gitBlobSha": "7d824ba856c46f0a9d7ddb47efd5302a7e80312d",
+      "matchesFinalPrBlob": true,
+      "matchesInitialPrBlob": true,
+      "method": "static literal/heredoc and allowlisted string operations"
+    }
+  ],
+  "deliveryLogs": [
+    {
+      "issue": 169,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-169-round2.log",
+      "sha256": "f65493a03039f73aa647395ddcec03803d773fbe665bf460fdc122ec9fafe40d",
+      "events": [
+        {
+          "line": 4,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 5,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Pushed HEAD commit: 47b3c3f15db4f563ec65140d9ef5cf8d9de630c0"
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Created PR #178 (https://github.com/felixjichao/symphony-ts/pull/178)"
+        }
+      ]
+    },
+    {
+      "issue": 169,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-169.log",
+      "sha256": "fab8c49f3e86cbecdcdf989940840286ca08f932cc864d3b0314f3f0163af685",
+      "events": []
+    },
+    {
+      "issue": 170,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-170.log",
+      "sha256": "50adbbdd873593b62e8e20cf04f861fe0bacb875436bffe6e374fea97a1c583c",
+      "events": [
+        {
+          "line": 6,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Pushed HEAD commit: d77d946632fd763e868a37aaa12af257d663c073"
+        },
+        {
+          "line": 11,
+          "message": "[delivery-skill] Created PR #181 (https://github.com/felixjichao/symphony-ts/pull/181)"
+        }
+      ]
+    },
+    {
+      "issue": 171,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-171-2d13415.log",
+      "sha256": "f8627bbbc1a7dac701b103e7aa2f971c99b628a87999d84dc667e664959d5252",
+      "events": [
+        {
+          "line": 5,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 6,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 8,
+          "message": "[delivery-skill] Pushed HEAD commit: 9d8c5c808cbbfeaadff18efebab49a2c48317a54"
+        }
+      ]
+    },
+    {
+      "issue": 171,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-171-764524e.log",
+      "sha256": "91bf8699020a9943afc4f3a728b4060793cdb683479e8c973323844ed89e126d",
+      "events": []
+    },
+    {
+      "issue": 171,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-171-final.log",
+      "sha256": "f1e5e33963322d2863027fac2417d2e32aa804fc75d9fc2d65a1ceddda1eb610",
+      "events": [
+        {
+          "line": 37,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 38,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 40,
+          "message": "[delivery-skill] Pushed HEAD commit: fc628b794b5b9f60a5666e60375c28a07a757525"
+        }
+      ]
+    },
+    {
+      "issue": 171,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-171-recovery-61720bb.log",
+      "sha256": "5ac7f20f56860df52a9d67e084dba1852013a4064a9dadeaead4f1e50af4e236",
+      "events": [
+        {
+          "line": 5,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 6,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 8,
+          "message": "[delivery-skill] Pushed HEAD commit: 9d8c5c808cbbfeaadff18efebab49a2c48317a54"
+        }
+      ]
+    },
+    {
+      "issue": 171,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-171.log",
+      "sha256": "0cbbac1d5bc5f2036d1cd097c08b274474d7f51a01b5578e91f38d91fc8885e1",
+      "events": [
+        {
+          "line": 6,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Pushed HEAD commit: 9d8c5c808cbbfeaadff18efebab49a2c48317a54"
+        },
+        {
+          "line": 11,
+          "message": "[delivery-skill] Created PR #183 (https://github.com/felixjichao/symphony-ts/pull/183)"
+        }
+      ]
+    },
+    {
+      "issue": 172,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-172.log",
+      "sha256": "03f72959d5b9efb9c9396d33e4a0aeaf4712bd28998417eb948eb010b564db9b",
+      "events": [
+        {
+          "line": 6,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Pushed HEAD commit: af7fbece0f4afdc2c1ef58c2436f90ee56ab1e39"
+        },
+        {
+          "line": 11,
+          "message": "[delivery-skill] Created PR #190 (https://github.com/felixjichao/symphony-ts/pull/190)"
+        }
+      ]
+    },
+    {
+      "issue": 173,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-173.log",
+      "sha256": "73dd1a6dd77ec9fc26ca7629577fa33e1157ab78760fbc721a77e6c07ecac221",
+      "events": [
+        {
+          "line": 1033,
+          "message": "[delivery-skill] Warning: Failed to post handoff comment (exit 1): GraphQL: Body is too long (maximum is 65536 characters) (addComment)"
+        }
+      ]
+    },
+    {
+      "issue": 174,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-174.log",
+      "sha256": "c3d28ae1d5518800256406378ea0ee073627cccaf0360b2d116f7df0311e56dd",
+      "events": [
+        {
+          "line": 6,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Pushed HEAD commit: 3f69e85b0220ac3fb2648d162133a597b3d88bd1"
+        },
+        {
+          "line": 11,
+          "message": "[delivery-skill] Created PR #194 (https://github.com/felixjichao/symphony-ts/pull/194)"
+        }
+      ]
+    },
+    {
+      "issue": 175,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-175.log",
+      "sha256": "357dfe3fa86868e77ad5a0f25c26a2592aaa425d99c107715bcbe350c464acd6",
+      "events": [
+        {
+          "line": 6,
+          "message": "[delivery-skill] Project validation succeeded."
+        },
+        {
+          "line": 7,
+          "message": "[delivery-skill] Phase 3: Committing changes..."
+        },
+        {
+          "line": 9,
+          "message": "[delivery-skill] Pushed HEAD commit: 95a8c2e93b2549a18b9024fdc005a4e26319222c"
+        },
+        {
+          "line": 11,
+          "message": "[delivery-skill] Created PR #195 (https://github.com/felixjichao/symphony-ts/pull/195)"
+        }
+      ]
+    },
+    {
+      "issue": 176,
+      "path": "/Volumes/Data/symphony-runtime/state/logs/delivery-GH-176.log",
+      "sha256": "7bb05604653833bc69cd225c7d97c55e4df2b27f4c8e4e9c38c2e7451c5ad3a0",
+      "events": [
+        {
+          "line": 8,
+          "message": "[delivery-skill] Warning: Failed to post handoff comment (exit 1): GraphQL: Body is too long (maximum is 65536 characters) (addComment)"
+        }
+      ]
+    }
+  ]
+}

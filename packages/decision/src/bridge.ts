@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import {
   parseWorkKey,
+  parseDecisionSessionRootFromId,
   parseDecisionReviewTarget,
   parseDecisionContextBundle,
   type DecisionContextBundle,
@@ -623,6 +624,15 @@ export class DecisionBridge {
         return;
       }
       throw new DecisionValidationError("kind must be plan or review");
+    }
+
+    // GET /v1/sessions/:id/external-completion (control admission; no native receipts exposed).
+    const externalCompletionMatch = /^\/v1\/sessions\/([^/]+)\/external-completion$/.exec(pathname);
+    if (method === "GET" && externalCompletionMatch) {
+      const id = decodeURIComponent(externalCompletionMatch[1]!);
+      parseDecisionSessionRootFromId(id);
+      this.sendJson(res, 200, { settled: this.service.hasExternalCompletion(id) });
+      return;
     }
 
     // GET /v1/sessions/:id/tasks

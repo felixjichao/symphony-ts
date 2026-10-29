@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   evaluateChecksAutoMergePolicy,
@@ -261,6 +262,36 @@ describe("delivery domain contracts", () => {
   });
 
   describe("formatDeliveryHandoffMarkdown", () => {
+    it.each(["failure\n".repeat(40_000), ...[0, 1, 2, 3].map(padding => "x".repeat(padding) + "失败🙂".repeat(80_000))])("bounds long diagnostics without losing receipt identity (%#)", details => {
+      const handoff: DeliveryHandoff = {
+        reason: "manual_intervention_required", details,
+        repo: "felixjichao/symphony-ts", issueNumber: 176,
+        headBranch: "symphony/GH-176", prNumber: null, prUrl: null, headSha: null,
+        spentRepairs: 2, maxRepairs: 3, spentWaitSeconds: 321, maxWaitSeconds: 1800,
+        readyLabel: "symphony-ready", handoffId: "handoff-176-fixed",
+      };
+      const markdown = formatDeliveryHandoffMarkdown(handoff);
+      expect(markdown.length).toBeLessThanOrEqual(65_536);
+      expect(markdown).toContain("<!-- symphony:handoff-id: handoff-176-fixed -->");
+      expect(markdown).toContain("2 / 3");
+      expect(markdown).toContain("321s / 1800s");
+      expect(markdown).toContain("详情已截断");
+      expect(markdown).toContain(createHash("sha256").update(details).digest("hex"));
+      expect(markdown).toContain(String(details.length));
+      expect(Buffer.from(markdown).toString("utf8")).toBe(markdown);
+      expect(handoff.details).toBe(details);
+    });
+
+    it("refuses oversized receipt metadata instead of dropping its identity", () => {
+      expect(() => formatDeliveryHandoffMarkdown({
+        reason: "manual_intervention_required", details: "failure",
+        repo: "owner/repo", issueNumber: 176, headBranch: "symphony/GH-176",
+        prNumber: null, prUrl: null, headSha: null,
+        spentRepairs: 0, maxRepairs: 3, spentWaitSeconds: 0,
+        readyLabel: "symphony-ready", handoffId: "x".repeat(60_000),
+      })).toThrow("metadata exceeds comment size budget");
+    });
+
     it("formats operator-visible handoff report with label removal notice", () => {
       const handoff: DeliveryHandoff = {
         reason: "ci_failed_max_repairs",

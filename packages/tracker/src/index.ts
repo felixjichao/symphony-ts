@@ -103,3 +103,4 @@ export {
   type RequiredCheckSpec,
   type VerifyMergedResult,
 } from "./github/delivery";
+export { verifyExternalDelivery } from "./github/delivery/external-observation";

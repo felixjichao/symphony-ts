@@ -1,5 +1,6 @@
 import {
   formatDeliveryHandoffMarkdown,
+  validateExternalDeliveryState,
   validatePrOwnership,
   type DeliveryHandoff,
   type PersistedDeliveryState,
@@ -112,6 +113,13 @@ async function recoverDeliveryHandoffLocked(
     };
   }
 
+  if (currentState.externalSettlement) {
+    validateExternalDeliveryState(currentState);
+    return { success: false, error: "Externally completed work cannot replay handoff compensation",
+      readyLabelRemoved: currentState.readyLabelRemoved ?? false, commentPosted: currentState.commentPosted ?? false,
+      commentVerifyStatus: currentState.commentVerifyStatus ?? "unverified",
+      pendingCompensation: currentState.pendingCompensation ?? false };
+  }
   const repo = currentState.repo || options.repo;
   const issueNumber = currentState.issueNumber || options.issueNumber;
   const effectiveReadyLabel =

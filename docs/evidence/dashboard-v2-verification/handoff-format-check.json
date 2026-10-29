@@ -1,0 +1,29 @@
+[
+  {
+    "issue": 173,
+    "utf16Length": 279642,
+    "unicodeCodePoints": 279641,
+    "utf8Bytes": 280244,
+    "exceeds65536CodePoints": true,
+    "formatterMatchesFinalHead": true,
+    "bodySha256": "d9b61011c6e7ee26cda020bcd664e0291b14a23f70008a9a231615926a92a14e"
+  },
+  {
+    "issue": 175,
+    "utf16Length": 278918,
+    "unicodeCodePoints": 278917,
+    "utf8Bytes": 279506,
+    "exceeds65536CodePoints": true,
+    "formatterMatchesFinalHead": true,
+    "bodySha256": "414311b843815fcdb9ccc1cc41a703eac730dfcf51f7231d1d6249d17c4a0d2c"
+  },
+  {
+    "issue": 176,
+    "utf16Length": 280583,
+    "unicodeCodePoints": 280582,
+    "utf8Bytes": 281185,
+    "exceeds65536CodePoints": true,
+    "formatterMatchesFinalHead": true,
+    "bodySha256": "a499f1db2f4b0496227aa3ade5f193a21a5ce659ea13b8deaace0989739f0ea6"
+  }
+]
