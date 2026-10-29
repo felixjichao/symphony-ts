@@ -1,0 +1,31 @@
+{
+  "runId": 40913738062,
+  "headSha": "ae4fb1132f789b97e172d32315694adee5b31f9e",
+  "url": "https://github.com/felixjichao/symphony-ts/actions/runs/40913738062",
+  "jobs": [
+    {
+      "id": 123588309344,
+      "name": "gate",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 123591087965,
+      "name": "production-status-browser",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 123591088044,
+      "name": "detail-browser",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 123591088286,
+      "name": "operational-browser",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ]
+}

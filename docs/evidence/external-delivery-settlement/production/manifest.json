@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "scope": "production external settlement 2026-10-30",
+  "files": {
+    "README.md": "a66ad2f3c12e34543342eff65595c3453d8307a0097485162f3e13ab174069d1",
+    "ci-jobs.json": "6cf4478120aaa9b1ef9a9c7741234a57f598f357f1b6b00b25036e185259cead",
+    "driver-restored.png": "65e6094b3fbfcf751a867e3f35ab63095a606785c84d6f80b9b4856a635aec37",
+    "driver-stopped.png": "6f00031a3b55f716e5b8bc873fc19c28c30dac744de8c08d5dd3241afc9773ce",
+    "release-status-smoke.json": "992743d2c6a1ae8631eaeb7ce69614c8e2a17a891f4379ef46286eed9d3cf16f",
+    "second-driver-restored.png": "65e6094b3fbfcf751a867e3f35ab63095a606785c84d6f80b9b4856a635aec37",
+    "second-driver-stopped.png": "6f00031a3b55f716e5b8bc873fc19c28c30dac744de8c08d5dd3241afc9773ce",
+    "settlement.json": "f0621cef2dad674cc5b64c51bd66d163eeb182fd414c8ab44d8c2d6111c83d8d"
+  }
+}

@@ -9,9 +9,9 @@
 
 ## 当前 posture
 
-- #168 外部交付离线结算已实现本地协议：严格授权与 snapshot CAS、root/Delivery/Decision 互斥、外部完成独立回执、原始预算/诊断保留、精确 recovery/retry 退役及崩溃重入。新增定向 37 用例通过，完整宿主 gate 2,646 passed / 1 既有 opt-in skipped；[验证证据](evidence/external-delivery-settlement/README.md) 已归档。尚未部署或结算生产任务，历史最终 HEAD Review 缺失仍保留。独立审查补齐跨 root reload/终态重启的结算 admission、显式 store 优先级与公共出口测试；复验 gate 2,648 passed / 1 既有 opt-in skipped，见 [审查记录](evidence/external-delivery-settlement/review-2026-10-30.md)。真实 release 预检发现并修复结算入口的动态分块/顶层 await 循环，新增 executable preview 回归；最新 gate 2,649 passed / 1 既有 opt-in skipped，生成 bundle 同步以保留生产 CI clean-tree 门禁。生产 host/Bridge 尚未停机。见 [操作说明](external-delivery-settlement.md)。
+- #168 外部交付结算已完成真实生产验收：PR #198 合入 `f1fb14f`，固定稳定 release `ae4fb11` 通过完整 host gate（2,649 passed / 1 既有 opt-in skipped）及 exact-HEAD 四项 CI。#169/#173/#175/#176 已获得独立 external completion receipt，精确退役旧 request/retry；Decision 648 → 652，历史结果/回执、诊断、预算和 ledger 保留。四个 workspace 经原生 API 清理，重复 apply 不写状态、不重建目录；Bridge/host 与两个 Web Driver 已恢复。[生产证据](evidence/external-delivery-settlement/production/README.md)。#173/#175/#176 历史最终 HEAD 原生 Review 缺失仍保留，#168 尚未关闭。
 
-- #168 审计后续：GitHub Delivery 交接正文统一限制为 60,000 UTF-16 单元；保留完整原生 details、handoff marker 和预算，截断提示提供原长度与 SHA-256。新增首次发布、补偿重发和 ACK 丢失去重回归；完整宿主 gate 通过（2,609 passed，1 个既有 opt-in skipped），[验证指纹](evidence/dashboard-v2-verification/bounded-handoff-validation.json) 已归档。此为本地修复，未部署到运行 host；生产外部交付结算及历史 Decision 回执例外仍待处置。
+- #168 交接正文限制已随 PR #198 部署：统一上限 60,000 UTF-16 单元，保留原始 details、handoff marker 和预算，截断提示含长度与 SHA-256。首次/补偿/ACK 丢失去重的原始 [验证指纹](evidence/dashboard-v2-verification/bounded-handoff-validation.json) 保留；外部结算没有补发历史交接评论，也没有将旧 compensation flags 改写为成功。
 
 - #192：源码暂存与有界暂时读取恢复已实现；审查补齐 terminal retry 持久化 ownership 结清顺序及 CLI 未暂存冲突回归。真实 dogfood #31 / PR #32 完成四类故障注入后的自动修复、新 SHA CI/独立 Review、合入关闭及同一 host 自动 workspace 清理；全量 gate 2590 passed / 1 既有 opt-in skip。[完整验收证据](evidence/delivery-transient-recovery/issue192-20261028122627/README.md)。
 
@@ -295,4 +295,4 @@ The read-only operational status surface is complete and accepted: independent r
 
 ## Dashboard V2 Operator Console — GitHub #168–#176
 
-Children #169–#175 are merged and closed. They deliver the read-only Overview, Work Explorer, Work Detail, Executors and System over the production status surface. The [closeout ledger](evidence/dashboard-v2-closeout/README.md) links the merged PRs, visual evidence and known gaps; a merge alone does not establish each self-hosting stage. #176 controlled production browser acceptance is recorded; full host validation and delivery remain pending. Parent #168 remains open. History, analytics, telemetry expansion, streaming, operator actions and framework migration remain deferred.
+Children #169–#175 are merged and closed. They deliver the read-only Overview, Work Explorer, Work Detail, Executors and System over the production status surface. The [closeout ledger](evidence/dashboard-v2-closeout/README.md) links the merged PRs, visual evidence and known gaps; a merge alone does not establish each self-hosting stage. #176 controlled production browser acceptance is recorded. The native leftovers for #169/#173/#175/#176 have explicit external completion receipts and native cleanup after the controlled PR #198 rollout; [production settlement evidence](evidence/external-delivery-settlement/production/README.md) preserves missing historical final-HEAD approvals and other self-hosting/browser coverage exceptions. Parent #168 remains open. History, analytics, telemetry expansion, streaming, operator actions and framework migration remain deferred.
