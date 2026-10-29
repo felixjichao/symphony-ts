@@ -50,6 +50,7 @@ export {
   DurableDecisionStore,
   createEmptyStoreRecord,
   validateStoreRecord,
+  readExternalCompletionFence,
   validateDecisionTaskFailure,
   validateSubmissionReceipt,
 } from "./store.js";

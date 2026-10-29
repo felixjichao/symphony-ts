@@ -7,3 +7,5 @@ The 37 new cases span domain (2), tracker (3), agent (2), Decision (1), and CLI 
 The first full gate exposed a custom-tracker regression: external admission checks passed `github_mock` / `profile_a` to the stricter Decision root parser. The fence now applies only to GitHub; a new regression plus the existing three secret-boundary tests passed before rerunning the full gate. The failed run is retained as a log digest in [validation.json](validation.json), alongside final result and source hashes.
 
 This evidence does not claim production deployment, production-state settlement, real GitHub mutation or missing historical final-HEAD Review approval. The parallel edit to `scripts/cleanup-polluted-tasks.mjs` is outside the feature source fingerprint scope.
+
+Independent [Standards/Spec review and resolved findings](review-2026-10-30.md) and [review-fix validation](review-validation.json) extend the initial 37 cases to 39, including root migration admission and uncached authenticated terminal-authority reads. The original validation remains historical; prepared operations must complete at their original paths before root migration.

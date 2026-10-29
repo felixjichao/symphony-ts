@@ -76,6 +76,15 @@ export class DecisionBridgeClient {
       { signal: AbortSignal.timeout(3000) });
   }
 
+  /** Do not cache a maintenance fence; transport/schema failures reject dispatch. */
+  hasExternalCompletionSync(sessionId: string): boolean {
+    const response = this.syncRequest("GET", `/v1/sessions/${encodeURIComponent(sessionId)}/external-completion`, undefined);
+    if (!response || typeof response !== "object" || !("settled" in response) || typeof response.settled !== "boolean") {
+      throw new DecisionStoreError("Invalid external completion fence response");
+    }
+    return response.settled;
+  }
+
   async continuityWork(): Promise<readonly DecisionContinuityWork[]> {
     return (await this.request<{ work: DecisionContinuityWork[] }>("GET", "/v1/continuity")).work;
   }

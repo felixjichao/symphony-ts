@@ -47,8 +47,8 @@ symphony delivery-skill settle-external --request authorized.json --apply
 
 跨文件结算先写 workspace 外的 `.symphony-host/external-settlements/` journal，再原子完成 Decision session、取消待执行/claimed/running task、写 Delivery 外部回执，最后按原记录精确退役该 WorkKey 的 recovery/retry。其他 work 和已有 result/submission receipt 不变。Delivery 原始 flags、details、预算、deadline 以及 recovery ledger incidents 全部保留；旧 Review HEAD 不会成为最终 HEAD 的 approval。
 
-中断后仅重试**同一份** `authorized.json --apply`。保留字段顺序和内容；空白格式变化不影响解析。新的 operation ID、预算/租约/预约变化或新 owner 均拒绝。不要手工删锁或 journal。`prepared` journal 阻止普通 dispatch、交付重放与 workspace cleanup，必须先完成原操作；`complete` journal 允许原生 cleanup，且删除 workspace 后仍保留 dispatch fence 和原始证据。同一 WorkKey 的重新开工需要另行设计的明确授权协议，普通 reopen/resume 不可绕过。
+中断后仅重试**同一份** `authorized.json --apply`。保留字段顺序和内容；空白格式变化不影响解析。新的 operation ID、预算/租约/预约变化或新 owner 均拒绝。不要手工删锁或 journal。`prepared` journal 阻止普通 dispatch、交付重放与 workspace cleanup，必须先完成原操作；`complete` journal 允许原生 cleanup，且删除 workspace 后仍保留 dispatch fence 和原始证据。同一 WorkKey 的重新开工需要另行设计的明确授权协议，普通 reopen/resume 不可绕过。活跃 host 检查所有已提交 root。root 迁移是 operator 维护操作：迁移前必须盘点原 root 的 journal；存在 `prepared` 或状态不明记录时，禁止迁移及在新 root 启动 host。必须先用原授权文件和原路径恢复到 `complete`，不得复制、改写、删除 journal 或重新生成授权。完成后迁移 root 必须保留原 Decision store/Bridge 配置，终态回执独立于 planning 开关阻止 admission。prepared 尚未提交 Decision 时的 fence 只对所属 root 及保留它的活跃 host 生效；不支持该阶段的透明跨 root 重启。完全独立的新部署不能自动发现其他目录或其他 Decision 后端。
 
-Decision snapshot 新增 `external-work-completion` receipt kind；旧版 reader 会拒绝此记录。应用后不要降级旧 host/Bridge 读取该 store。当前入口不提供 Dashboard 投影或 HTTP mutation。
+Decision snapshot 新增 `external-work-completion` receipt kind；旧版 reader 会拒绝此记录。应用后不要降级旧 host/Bridge 读取该 store。Bridge 新增认证只读 `GET /v1/sessions/:id/external-completion` 控制 admission 查询；旧 Bridge 不支持该查询时，新 host 拒绝派发。因此受控升级先更新 Bridge，再启动 host。当前入口不提供 Dashboard 投影或 HTTP mutation。
 
 设计见 [Agent Note](../notes/accepted/architecture/2026-10-29-offline-external-delivery-settlement.md)；验证入口见 [testing](testing.md#外部交付离线结算)。

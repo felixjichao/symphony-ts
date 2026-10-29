@@ -39,6 +39,12 @@ export class DecisionPlanningGate {
     }
   }
 
+  hasExternalCompletionSync(sessionId: string): boolean {
+    if (this.service) return this.service.hasExternalCompletion(sessionId);
+    if (this.client) return this.client.hasExternalCompletionSync(sessionId);
+    throw new Error("Decision backend unavailable");
+  }
+
   async continuityWork() {
     if (this.service) return this.service.continuityWork();
     if (this.client) return this.client.continuityWork();

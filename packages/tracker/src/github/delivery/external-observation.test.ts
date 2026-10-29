@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { formatPrBody, type ExternalDeliverySettlementRequest } from "@symphony/domain";
-import { verifyExternalDelivery } from "./external-observation";
+import { verifyExternalDelivery } from "../../index";
 const request: ExternalDeliverySettlementRequest = { schemaVersion: 1, operationId: "external-42", workspace: "/work/42", decisionStore: "/decision",
   context: { repo: "owner/repo", issueNumber: 42, workspaceKey: "GH-42", headBranch: "work", baseBranch: "main" },
   target: { prNumber: 7, headSha: "b".repeat(40), mergeCommitSha: "c".repeat(40) },

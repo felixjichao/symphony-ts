@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import {
@@ -855,4 +856,11 @@ export class DurableDecisionStore {
       throw err;
     }
   }
+}
+
+/** Read a committed snapshot without acquiring a second writer (including planning-disabled hosts). */
+export function readExternalCompletionFence(storeDir: string, sessionId: string): boolean {
+  const snapshot = JSON.parse(readFileSync(path.join(storeDir, "store.json"), "utf8")) as DecisionStoreRecord;
+  validateStoreRecord(snapshot);
+  return Object.values(snapshot.operationReceipts).some(op => op.kind === "external-work-completion" && op.sessionId === sessionId);
 }

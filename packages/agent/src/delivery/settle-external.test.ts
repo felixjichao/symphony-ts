@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { externalDeliveryStateFingerprint, type PersistedDeliveryState, type ExternalDeliverySettlementReceipt } from "@symphony/domain";
-import { settleExternalDelivery } from "./settle-external";
-import { runDeliverySkill } from "./delivery-skill-runner";
-import { recoverDeliveryHandoff } from "./recover-handoff";
+import { settleExternalDelivery, runDeliverySkill, recoverDeliveryHandoff } from "../index";
 const context = { repo: "owner/repo", issueNumber: 42, workspaceKey: "GH-42", headBranch: "work", baseBranch: "main" };
 const original: PersistedDeliveryState = { repo: context.repo, issueNumber: 42, workspaceKey: "GH-42", isPaused: true,
   spentRepairs: 2, spentWaitSeconds: 321, deadlineTimestampMs: 1234, lastUpdated: "before", pendingCompensation: true, commentPosted: false };

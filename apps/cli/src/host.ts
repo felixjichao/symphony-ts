@@ -30,6 +30,7 @@ import {
   DecisionReviewGate,
   DecisionService,
   DurableDecisionStore,
+  readExternalCompletionFence,
 } from "@symphony/decision";
 
 function resolveIssueSessionId(issue: Issue, fallbackRepo?: string | null): string | null {
@@ -146,6 +147,7 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     : new TrackerAdapterRegistry([createGitHubAdapterProfile({ onMalformedRecord: observers.onMalformedRecord })]);
 
   const rootAuthorities = new Map<string, ReturnType<typeof acquireFileAuthority>>();
+  const knownWorkspaceRoots = new Set<string>();
   let hostActive = false;
   const holdRoot = (root: string) => {
     const file = hostMaintenanceAuthorityPath(root);
@@ -157,7 +159,10 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
     env: options.env,
     logger,
     observers,
-    beforeCommit: runtime => { if (hostActive) holdRoot(runtime.serviceConfig.workspace.root); },
+    beforeCommit: runtime => {
+      if (hostActive) holdRoot(runtime.serviceConfig.workspace.root);
+      knownWorkspaceRoots.add(runtime.serviceConfig.workspace.root);
+    },
   });
 
   let reportFailure!: (error: unknown) => void;
@@ -350,11 +355,29 @@ export async function createHost(options: CreateHostOptions = {}): Promise<Symph
       return null;
     };
 
+    // Terminal settlement authority survives root migration, even with planning disabled.
+    const externalCompletionBridgeUrl = explicitStoreDir === undefined ? explicitBridgeUrl ?? envBridgeUrl : undefined;
+    const externalCompletionClient = externalCompletionBridgeUrl ? new DecisionBridgeClient(externalCompletionBridgeUrl, {
+      authToken: options.decisionBridgeToken ?? envBridgeToken,
+    }) : null;
+    const externalCompletionStore = explicitStoreDir ?? envStoreDir ?? (fs.existsSync(defaultStoreDir) ? defaultStoreDir : null);
+    const externallyCompleted = (sessionId: string): boolean => {
+      if (explicitStoreDir !== undefined) return readExternalCompletionFence(explicitStoreDir, sessionId);
+      if (externalCompletionClient) return externalCompletionClient.hasExternalCompletionSync(sessionId);
+      if (planningGate) return planningGate.hasExternalCompletionSync(sessionId);
+      if (externalCompletionStore) return readExternalCompletionFence(externalCompletionStore, sessionId);
+      return false;
+    };
+
     let continuity: ReturnType<typeof createHostWorkContinuity> | null = null;
     const canDispatch = (issue: Issue, context: { readonly isRetry: boolean }): boolean => {
       const recoverySession = resolveIssueSessionId(issue, getEffectiveRepo());
       const recoveryKey = recoverySession ? parseDecisionSessionRootFromId(recoverySession) : { provider: controller.current.serviceConfig.tracker.kind, key: issue.id };
-      if (hasExternalSettlementFence(controller.current.serviceConfig.workspace.root, recoveryKey)) return false;
+      if ([...knownWorkspaceRoots].some(root => hasExternalSettlementFence(root, recoveryKey))) return false;
+      if (recoverySession) {
+        try { if (externallyCompleted(recoverySession)) return false; }
+        catch { return false; }
+      }
       if (recovery.blocked(recoveryKey)) return false;
       if (options.canDispatch && !options.canDispatch(issue, context)) {
         return false;

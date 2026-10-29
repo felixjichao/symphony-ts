@@ -330,3 +330,47 @@ it("does not interpret custom tracker providers as Decision work roots", async (
   expect(hasExternalSettlementFence(f.root, { provider: "github_mock", key: "id-SEC-01" })).toBe(false);
   expect(hasExternalSettlementFence(f.root, { provider: "profile_a", key: "TASK-A" })).toBe(false);
 });
+
+it("retains settlement authority across root reload and restart with planning disabled", async () => {
+  const f = await fixture();
+  await applyExternalSettlement(f.request, f.runner);
+  const workflowPath = path.join(f.dir, "WORKFLOW.md"), nextRoot = path.join(f.dir, "next-root");
+  const writeWorkflow = (root: string) => fs.writeFileSync(workflowPath, `---\ntracker:\n  kind: fixture\nworkspace:\n  root: ${root}\ncodex:\n  command: echo unused\n---\nPrompt\n`);
+  writeWorkflow(f.root);
+  const profile: TrackerAdapterProfile = { kind: "fixture", documentation: "test", secretProviderKeys: [], secretEnvVars: [],
+    defaultActiveStates: ["open"], defaultTerminalStates: ["closed"],
+    createAdapter: () => ({ kind: "fixture", fetchIssuesByStates: async () => [], fetchIssuesByIds: async () => [] }) };
+  const issue = { id: "42", identifier: "GH-42", title: "Reopened", description: null,
+    nativeRef: { repo: "owner/repo", number: 42 }, url: "https://github.com/owner/repo/issues/42", state: "open",
+    priority: 1, branchName: null, assigneeId: null, labels: [], blockedBy: [], dispatchable: true, createdAt: 1000, updatedAt: null };
+  let tick: (() => void) | undefined, hooks = 0;
+  const options = { workflowPath, cwd: f.dir, enablePlanning: false, trackerProfiles: [profile],
+    logger: createStructuredLogger({ sinks: [] }), canDispatch: () => { hooks++; return false; },
+    scheduler: { schedule: () => 1, cancel() {} },
+    watcherScheduler: { schedule: (callback: () => void) => { tick = callback; return 1; }, cancel() {} } };
+  const host = await createHost(options);
+  try {
+    await host.start();
+    expect(host.authority.dispatchIssue(issue).kind).toBe("not_eligible");
+    writeWorkflow(nextRoot); tick?.();
+    expect(host.effective.serviceConfig.workspace.root).toBe(nextRoot);
+    expect(host.authority.dispatchIssue(issue).kind).toBe("not_eligible");
+    expect(hooks).toBe(0);
+  } finally { await host.stop(); }
+  const restarted = await createHost({ ...options, decisionStoreDir: f.storeDir,
+    env: { DECISION_BRIDGE_URL: "http://127.0.0.1:1" } });
+  const writer = new DurableDecisionStore({ storeDir: f.storeDir }); await writer.open();
+  try {
+    // Read terminal Decision authority without attempting a second writer lease.
+    expect(restarted.authority.dispatchIssue(issue).kind).toBe("not_eligible");
+    expect(hooks).toBe(0);
+    // A distinct WorkKey remains eligible for the caller's admission hook.
+    restarted.authority.dispatchIssue({ ...issue, id: "43", identifier: "GH-43", nativeRef: { repo: "owner/repo", number: 43 },
+      url: "https://github.com/owner/repo/issues/43" });
+    expect(hooks).toBe(1);
+    fs.writeFileSync(path.join(f.storeDir, "store.json"), "corrupt");
+    restarted.authority.dispatchIssue({ ...issue, id: "44", identifier: "GH-44", nativeRef: { repo: "owner/repo", number: 44 },
+      url: "https://github.com/owner/repo/issues/44" });
+    expect(hooks).toBe(1);
+  } finally { await writer.close(); await restarted.stop(); }
+});

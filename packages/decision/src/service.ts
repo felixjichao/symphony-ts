@@ -82,6 +82,12 @@ export class DecisionService {
     return this.store.observeWork(root);
   }
 
+  /** Durable terminal authority, independent of workspace root and optional planning. */
+  hasExternalCompletion(sessionId: string): boolean {
+    return Object.values(this.store.getState().operationReceipts)
+      .some(op => op.kind === "external-work-completion" && op.sessionId === sessionId);
+  }
+
   /** Offline maintenance only: close the exact native session without inventing a result. */
   async recordExternalCompletion(receipt: ExternalDeliverySettlementReceipt, expectedSequence: number): Promise<OperationReceipt> {
     parseExternalDeliverySettlementReceipt(receipt);
@@ -1728,6 +1734,7 @@ export class DecisionService {
     sessionId: string,
     requirements?: { readonly title: string; readonly body: string; readonly clarifications?: readonly string[] | undefined } | undefined
   ): PlanningEligibilityResult {
+    if (this.hasExternalCompletion(sessionId)) return { eligible: false, sessionId, reason: "external_completion" };
     const planRecord = this.store.getLatestPlanForSession(sessionId);
     if (!planRecord) {
       return {
