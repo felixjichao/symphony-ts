@@ -183,6 +183,8 @@ does not extend an already-persisted CI deadline.
 
 ### Recovering from a handoff
 
+Long handoff comments retain a bounded diagnostic prefix with an explicit truncation notice, original length and SHA-256. The full Markdown stays within 60,000 UTF-16 units, including the handoff marker and budget sections. Native `handoff.details` remains complete when state storage is configured. Initial publication and compensation use the same formatter; truncation does not grant recovery authorization or change the original budget/HEAD.
+
 A handoff is explicit, not a dead end:
 
 1. Fix the root cause the handoff describes.

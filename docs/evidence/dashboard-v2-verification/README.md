@@ -96,3 +96,13 @@
 对真实持久化 handoff 仅调用纯 formatter，确认其函数文本与最终 HEAD 一致，没有发出网络写请求。#173/#175/#176 的完整评论分别为 279,641 / 278,917 / 280,582 个 Unicode code points，均远超日志中 GitHub 返回的 65,536 字符上限，见 [格式化复验](handoff-format-check.json)。原实现没有对 details 做长度限制；因此普通重试不能修复此问题。
 
 第二轮没有改变第一轮结论：已有产品证据通过，历史全链路自动交付与原生状态结算尚未通过。具体后续工作、精确目标与验证门禁见 [对账方案](reconciliation-plan.md)。历史稳定 host/修复全过程仍未完全核实；当前 sandbox 也不允许进程查询，因此未验证正在运行的执行器身份，不作安全退役操作。
+
+## 第三轮：交接正文长度本地修复
+
+修复基于最新主线 `9fd0f6d…`，在 `codex/bounded-handoff-reports` 分支实施。唯一生产行为改动位于 domain 的统一 formatter；首次发布与 recover 沿用既有调用，不改原生状态协议。短报告输出不变，长详情保留前缀并附原长度、SHA-256 和截断提示；完整报告不超过 60,000 UTF-16 单元，不切断 surrogate pair，不丢 handoff marker。无法容纳身份元数据时明确失败，不静默删减回执身份。设计取舍见 [Agent Note](../../../notes/accepted/architecture/2026-10-29-bounded-delivery-handoff-comments.md)。
+
+domain 回归首先复现原正文 320,663 单元超限，修复后覆盖 ASCII、四种 Unicode 截断边界和极端元数据。agent 回归覆盖首次发布失败后补偿、已接受评论 ACK 丢失、重复恢复不重发、原始诊断/预算不变且不 commit/push。
+
+使用三个实际遗留 handoff 做只读格式化，[复验结果](bounded-handoff-check.json) 均为 60,000 单元、marker 与原诊断 digest 完整；逐文件比对确认原生 state 未改变。该复验只说明本地 formatter 修复，不是已发布评论或生产恢复。步骤 2 的外部结算和缺失 Decision 历史回执依旧未闭合。
+
+完整 `TMPDIR=/private/tmp npm run gate` 已在宿主权限下通过：12 个 workspace 共 2,609 passed、1 个既有 opt-in skipped，typecheck、lint 和文档检查通过。第一次 sandbox 执行在进程组清理检查受限时失败，停止后按原 gate 重跑；没有改超时或跳过测试。同步主线后先按锁文件执行 `npm ci` 补齐缺失的 Playwright 包，未下载浏览器、未修改 lockfile。[验证记录](bounded-handoff-validation.json) 绑定基线、三个源码/测试文件 hash 和完整 gate 日志 hash。后续仅更新本段证据文档，再运行 docs:check 与 diff-check。

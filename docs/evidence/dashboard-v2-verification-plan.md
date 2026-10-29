@@ -55,3 +55,5 @@
 2026-10-29 已完成步骤 2 的产物核验、步骤 3/4 的只读原生状态核验，以及步骤 5 的 GitHub/CI/Plan/Review/现存 Delivery 第一轮盘点；历史 coding/host 全链路仍待核验。步骤 6 已形成独立[验证结果](dashboard-v2-verification/README.md)，canonical 文档收口待缺口处置。已定位最终 HEAD Decision 回执缺失和遗留 handoff 补偿未完成，未执行任何恢复或状态变更。
 
 第二轮补充八个 PR 的提交链/基线关联、部分 session 文件的精确 blob 对应，以及六个 child 的 Delivery push 回执关联；复验超长报告并确认普通恢复路径不足。已形成[对账方案](dashboard-v2-verification/reconciliation-plan.md)，待实施修复/接受历史例外后再收口，未将证据缺失改为通过。
+
+第三轮已落地对账方案第 1 项：统一限制交接正文、保留原始诊断和 receipt marker，新增 Unicode/补偿/ACK 丢失回归；三个实际遗留输入复验通过。完整宿主 gate 为 2,609 passed、1 个既有 opt-in skipped；[源码与验证指纹](dashboard-v2-verification/bounded-handoff-validation.json) 已归档。尚未部署；第 2 项外部交付结算路径与第 3 项验收/历史例外继续待办。

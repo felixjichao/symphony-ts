@@ -1,0 +1,22 @@
+{
+  "observedAtUtc": "2026-10-29T15:20:39.704174+00:00",
+  "baseCommit": "9fd0f6d4834c9ca0e96f445d4a29c9de87d57775",
+  "branch": "codex/bounded-handoff-reports",
+  "workingTree": "local uncommitted fix; source fingerprints below",
+  "command": "TMPDIR=/private/tmp npm run gate",
+  "exitCode": 0,
+  "environment": "operator host permissions; sandbox process-group inspection was insufficient",
+  "testsPassed": 2609,
+  "testsSkipped": 1,
+  "workspaceSuites": 12,
+  "gateLog": "/private/tmp/bounded-handoff-host-gate.log",
+  "gateLogSha256": "60624a5346b098e9e46248f41bcd70426a682948ab5a17a15cc88518fc9b6b82",
+  "sourceFiles": {
+    "packages/domain/src/delivery.ts": "add7b7b873db1cef5cfaddfc8562fd0674f7b65d89932b4a9222db210a4ba591",
+    "packages/domain/src/delivery.test.ts": "2b5d107cbff92728580d0da1713175ef9dfd8b35682dedbd0a28d7a503740ca8",
+    "packages/agent/src/delivery/delivery-skill-runner.test.ts": "282594965d4d31fa92fafe343d7af5c8aa5d8da82d8e3271b80abc98ad22e5b8"
+  },
+  "packageLockSha256": "6a387a20f52128884981b332db93f238df4571ef2a4063b57894d5811d2401df",
+  "productionDeployment": false,
+  "nativeRecoveryExecuted": false
+}

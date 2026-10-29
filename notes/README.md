@@ -47,6 +47,8 @@ M0.5 暂不引入机器校验（validator 归后续 doc gate 批次）；review 
 
 ## 现有 Notes
 
+- [Bounded Delivery handoff comments](accepted/architecture/2026-10-29-bounded-delivery-handoff-comments.md) — #168 audit follow-up: bounded visible diagnostics, preserved native details and stable compensation identity.
+
 - [Bounded Delivery observations and staging](accepted/architecture/2026-10-28-delivery-transient-observations.md) — #192: checked literal staging, retained Review observation budget and single-push confirmation.
 
 - [Work Explorer selection boundary](accepted/architecture/2026-10-28-work-explorer.md) — #172 presentation-only discovery and persistent controls.

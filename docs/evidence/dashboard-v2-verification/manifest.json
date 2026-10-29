@@ -1,7 +1,9 @@
 {
-  "README.md": "9285271301c735f18497c05e5a8f8d4e659366e048d0e1dff399c70845494d1b",
+  "README.md": "74ff5a231fb182cfc0a487ab8b6baa1bfb5c8823214c10f4118abc30bdf85379",
   "artifact-linkage.json": "1b98db6d27a9f68ace7849fc4be9a32d69989f4e9e7b359defb9860e643d3e8d",
   "backup-search.json": "60b2590afb506358b7807a31dbaf969e4180ee44e7379062eb2c5f004d8ace2b",
+  "bounded-handoff-check.json": "cf792495358b4ca1e7a759890a44d8a17a7d2cd5484892cc1c8b06a2b53a74af",
+  "bounded-handoff-validation.json": "4a9f4f84c8626cd7d600a81cff4650f68ff9efa2ab7e4938cc3fb2b2bbceb420",
   "coding-sessions.json": "c2a550a19404af22c8f5fe5eec9fee8801c78161bc08207af019a7a45244171d",
   "github-facts.json": "07420737a6a8858591daa6d90a11a024091fef12c94926d090cf56193c7e89e7",
   "handoff-format-check.json": "b0c9b0232740b5a590c275abc82ee4b8c1b6720ed71e8ce4070cab8c481441fa",
@@ -25,5 +27,5 @@
   "production/system-narrow.png": "e6051cd08ad7bff9073a198133488e8f79b34fc3bfa0e8482e9569cf804e2a15",
   "production/work-desktop.png": "5a10efb701af1ee5ce7b5eedceb65fea61774bdde26dea9153bcab979c94ebea",
   "production/work-narrow.png": "ac5879d129b41801619f7bdc2e22ff45de962a8b8043b57711e31f011d014288",
-  "reconciliation-plan.md": "d8944e16e3dcc2063c59429f54b021336619f826b7165007a3ecc8375921c9eb"
+  "reconciliation-plan.md": "6d5c5da1653faf386ec5aadccaeb11ce27f96682cdbcbfd6a199658fc6199efc"
 }

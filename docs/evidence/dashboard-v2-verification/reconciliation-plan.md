@@ -4,7 +4,7 @@
 
 ## 1. 先修交接报告长度
 
-当前状态：待实施；先完成代码修复和回归，再单独处理运行态结算。
+当前状态：已在 `codex/bounded-handoff-reports` 本地分支实现，尚未部署或作用于原生运行态。验证详情见 [本地格式化复验](bounded-handoff-check.json)。步骤 2/3 仍待实施与收口。
 
 Owner：`packages/domain` 的统一格式化契约，以及 `packages/agent` 的首次交接/补偿调用；CLI 只负责装配。
 

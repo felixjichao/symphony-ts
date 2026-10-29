@@ -1,6 +1,7 @@
 /**
  * @symphony/domain — GitHub delivery and auto-merge policy types and pure functions (SPEC §11.5 / MVP.3).
  */
+import { createHash } from "node:crypto";
 import type { DecisionReviewTarget, DecisionTask, DecisionResult } from "./decision";
 import type { DecisionContextBundle, DecisionMaterializedPlan } from "./decision-context";
 
@@ -556,10 +557,10 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
       ? `\n- **评论状态**: ⚠️ 交接评论发表失败，请通过命令行日志核对原因。`
       : "";
 
-  return `## 🚨 Symphony Delivery Handoff Report
+  const render = (details: string) => `## 🚨 Symphony Delivery Handoff Report
 
 **触发原因**：\`${handoff.reason}\`
-**详细信息**：${handoff.details}
+**详细信息**：${details}
 
 ---
 
@@ -581,6 +582,20 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
   1. 人工排查上述详情或 CI 日志中的 blocker / 失败项；
   2. 修复问题后，在 GitHub Issue #${handoff.issueNumber} 上重新添加 \`${handoff.readyLabel}\` 标签以恢复 Symphony 自动调度。
 `;
+
+  // SPEC §4/§11.5 adjacent: GitHub rejects comments above 65,536 characters.
+  // Count UTF-16 units conservatively and reserve space for identity/receipt data.
+  const limit = 60_000;
+  const full = render(handoff.details);
+  if (full.length <= limit) return full;
+  const digest = createHash("sha256").update(handoff.details).digest("hex");
+  const notice = `\n\n> 详情已截断；原始长度 ${handoff.details.length} UTF-16 code units，SHA-256: \`${digest}\`。请核对原始交付记录中的完整详情。`;
+  const available = limit - render(notice).length;
+  if (available < 0) throw new Error("Delivery handoff metadata exceeds comment size budget");
+  let prefix = handoff.details.slice(0, available);
+  // Do not cut an astral character between its two UTF-16 code units.
+  if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+  return render(prefix + notice);
 }
 
 export interface DeliverySkillConfig {

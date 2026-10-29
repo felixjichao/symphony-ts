@@ -952,6 +952,66 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(gitPush).toBeUndefined();
   });
 
+  it.each([false, true])("keeps long handoff comments bounded across recovery and lost ACK (accepted=%s)", async accepted => {
+    const cwd = createTempCwd();
+    const runner = new MockDeliveryRunner();
+    setupPreMutationSuccess(runner);
+    runner.ghResponses.push({ stdout: "[]", stderr: "", exitCode: 0 });
+    const diagnostics = "gate failure 🙂\n".repeat(20_000);
+    runner.execResponses.push({ stdout: "", stderr: diagnostics, exitCode: 1 });
+    runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
+    runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
+    const comments: Array<{ body: string }> = [];
+    const posted: string[] = [];
+    runner.ghResponses.push(args => {
+      const body = args[args.indexOf("--body") + 1]!;
+      posted.push(body);
+      if (accepted) comments.push({ body });
+      return { stdout: "", stderr: "connection lost", exitCode: 1 };
+    });
+    const storage = {
+      value: null as PersistedDeliveryState | null,
+      readState() { return this.value; },
+      writeState(state: PersistedDeliveryState) { this.value = state; },
+    };
+    await runDeliverySkill({ ...getBaseOptions(cwd), runner, stateStorage: storage });
+    const before = storage.value;
+    if (!before?.handoff) throw new Error("Expected durable handoff");
+    expect(before.handoff.details.includes(diagnostics)).toBe(true);
+    expect(before.pendingCompensation).toBe(true);
+    expect(posted[0]!.length).toBeLessThanOrEqual(65_536);
+    const original = JSON.stringify(before.handoff);
+
+    runner.ghResponses.push({ stdout: JSON.stringify({ comments }), stderr: "", exitCode: 0 });
+    if (!accepted) runner.ghResponses.push(args => {
+      const body = args[args.indexOf("--body") + 1]!;
+      posted.push(body);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const recovered = await recoverDeliveryHandoff({ cwd, repo: before.repo,
+      issueNumber: before.issueNumber, stateStorage: storage, runner });
+    expect(recovered.success).toBe(true);
+    expect(posted).toHaveLength(accepted ? 1 : 2);
+    const digest = /SHA-256: `([a-f0-9]{64})`/.exec(posted[0]!)?.[1];
+    expect(digest).toBeDefined();
+    expect(posted.every(body => body.includes(digest!))).toBe(true);
+    for (const body of posted) {
+      expect(body.length).toBeLessThanOrEqual(65_536);
+      expect(body).toContain(`<!-- symphony:handoff-id: ${before.handoff.handoffId} -->`);
+    }
+    expect(storage.value?.handoff?.details).toBe(before.handoff.details);
+    expect(JSON.stringify(before.handoff)).toBe(original);
+    expect(storage.value?.isPaused).toBe(true);
+    expect(storage.value?.spentWaitSeconds).toBe(before.spentWaitSeconds);
+    expect(storage.value?.spentRepairs).toBe(before.spentRepairs);
+    expect(storage.value?.deadlineTimestampMs).toBe(before.deadlineTimestampMs);
+    expect(storage.value?.pendingCompensation).toBe(false);
+    await recoverDeliveryHandoff({ cwd, repo: before.repo,
+      issueNumber: before.issueNumber, stateStorage: storage, runner });
+    expect(posted).toHaveLength(accepted ? 1 : 2);
+    expect(runner.gitCalls.some(call => ["commit", "push"].includes(call.args[0] ?? ""))).toBe(false);
+  });
+
   it("Blocker 9 回归: 未显式 optInLand 时只停在 ready_to_land，不执行 merge", async () => {
     const cwd = createTempCwd();
     const runner = new MockDeliveryRunner();
