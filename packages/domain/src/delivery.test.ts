@@ -261,6 +261,23 @@ describe("delivery domain contracts", () => {
   });
 
   describe("formatDeliveryHandoffMarkdown", () => {
+    it("bounds multilingual logs and retains a representative middle failure and the receipt marker", () => {
+      const handoff: DeliveryHandoff = {
+        reason: "manual_intervention_required",
+        details: `start\n${"🧪".repeat(20_000)}\nFAIL: middle regression\n${"日志".repeat(20_000)}\nend`,
+        repo: "owner/repo", issueNumber: 175, headBranch: "symphony/GH-175", prNumber: 195,
+        prUrl: "https://github.com/owner/repo/pull/195", headSha: "abcdef123456", spentRepairs: 1,
+        maxRepairs: 3, spentWaitSeconds: 1, maxWaitSeconds: 1800, readyLabel: "symphony-ready",
+        handoffId: "handoff-175",
+      };
+      const markdown = formatDeliveryHandoffMarkdown(handoff);
+      expect(Buffer.byteLength(markdown, "utf8")).toBeLessThan(65_536);
+      expect(markdown).toContain("FAIL: middle regression");
+      expect(markdown).toContain("详细日志已截断");
+      expect(markdown).toContain("<!-- symphony:handoff-id: handoff-175 -->");
+      expect(markdown).toContain("#195");
+      expect(handoff.details).toContain("🧪".repeat(20_000));
+    });
     it("formats operator-visible handoff report with label removal notice", () => {
       const handoff: DeliveryHandoff = {
         reason: "ci_failed_max_repairs",

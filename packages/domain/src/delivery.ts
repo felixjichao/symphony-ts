@@ -538,6 +538,23 @@ export interface PersistedDeliveryState {
  * - 明确列出已消耗预算与恢复指南，由 Operator 处理后重新加回标签。
  */
 export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string {
+  // Bound by Unicode code points: even four-byte characters stay below GitHub's
+  // comment limit, with space left for the handoff metadata and marker.
+  const characters = Array.from(handoff.details);
+  let details = handoff.details;
+  if (characters.length > 8_000) {
+    const failures = handoff.details.split(/\r?\n/)
+      .filter(line => /\b(?:error|fail(?:ed|ure)?|exception|timeout|timed out)\b/i.test(line))
+      .slice(0, 16)
+      .map(line => Array.from(line).slice(0, 200).join(""));
+    details = [
+      characters.slice(0, 2_000).join(""),
+      "[详细日志已截断；完整诊断保存在本地 delivery state 或日志中。以下为匹配到的部分错误行。]",
+      ...failures,
+      "[日志末尾]",
+      characters.slice(-2_000).join(""),
+    ].join("\n");
+  }
   const prDisplay = handoff.prUrl
     ? `[#${handoff.prNumber}](${handoff.prUrl})`
     : handoff.prNumber
@@ -559,7 +576,7 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
   return `## 🚨 Symphony Delivery Handoff Report
 
 **触发原因**：\`${handoff.reason}\`
-**详细信息**：${handoff.details}
+**详细信息**：${details}
 
 ---
 

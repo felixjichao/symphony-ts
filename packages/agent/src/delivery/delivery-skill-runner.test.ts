@@ -1544,7 +1544,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       lastUpdated: new Date().toISOString(),
       handoff: {
         reason: "ci_failed_max_repairs",
-        details: "CI failed and reached max repair attempts",
+        details: `start\n${"日志".repeat(40_000)}\nFAIL: regression\n${"🧪".repeat(20_000)}\nend`,
         repo: "felixjichao/symphony-ts",
         issueNumber: 80,
         headBranch: "symphony/GH-80",
@@ -1563,12 +1563,32 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     };
     realDiskStorage.writeState(interruptedState);
 
+    const failedRunner = new MockDeliveryRunner();
+    const emptyComments = { stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 };
+    failedRunner.ghResponses.push(emptyComments, emptyComments, emptyComments,
+      { stdout: "", stderr: "comment rejected", exitCode: 1 });
+    const failed = await recoverDeliveryHandoff({
+      cwd, repo: "felixjichao/symphony-ts", issueNumber: 80,
+      stateStorage: realDiskStorage, runner: failedRunner,
+    });
+    expect(failed.pendingCompensation).toBe(true);
+    expect(failed.commentVerifyStatus).toBe("unverified");
+    expect(realDiskStorage.readState()?.handoff?.details).toBe(interruptedState.handoff?.details);
+    const attemptedComment = failedRunner.ghCalls.find(c => c.args[0] === "pr" && c.args[1] === "comment");
+    expect(attemptedComment).toBeDefined();
+    expect(Buffer.byteLength(attemptedComment!.args[attemptedComment!.args.indexOf("--body") + 1]!, "utf8")).toBeLessThan(65_536);
+    realDiskStorage.writeState(interruptedState);
+
     // Legacy destination is absent: re-observe PR and Issue separately, then
     // verify the selected PR receipt again before acknowledging it.
     const runner = new MockDeliveryRunner();
     const receipt = { stdout: JSON.stringify({ comments: [
       { body: formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true }) },
     ] }), stderr: "", exitCode: 0 };
+    const receiptBody = formatDeliveryHandoffMarkdown({ ...interruptedState.handoff!, commentPosted: true });
+    expect(Buffer.byteLength(receiptBody, "utf8")).toBeLessThan(65_536);
+    expect(receiptBody).toContain("FAIL: regression");
+    expect(receiptBody).toContain(handoffId);
     runner.ghResponses.push(receipt,
       { stdout: JSON.stringify({ comments: [] }), stderr: "", exitCode: 0 }, receipt);
 
