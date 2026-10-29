@@ -1,6 +1,6 @@
 # @symphony/dashboard
 
-Read-only operator shell, Overview, Work list and Work Detail for §13 adjacent / GitHub #138–#139 (NEST-125–126). TypeScript DOM components + Vite; no framework or domain projector runs in the browser.
+Read-only Operator Console: Overview, Work Explorer, Work Detail, Executors and System for §13 adjacent / GitHub #138–#139 and #169–#175. TypeScript DOM components + Vite; no framework or domain projector runs in the browser.
 
 ## Run
 
@@ -87,3 +87,5 @@ npm run browser:detail -w @symphony/dashboard
 The package command builds the Dashboard and runs `examples/detail-visual.ts` against the built same-origin demo. It uses the pinned Playwright dev dependency; an installed browser can be selected with `SYMPHONY_CHROMIUM`. Output defaults to `.symphony/evidence/work-detail-why` (override with `SYMPHONY_BROWSER_EVIDENCE`). Assertions cover desktop/390px supplied diagnostics, independent review targets, source failures, evidence roles, full-WorkKey isolation, global diagnostics, keyboard disclosure and real polling focus/open retention. Screenshots, supplied fixtures and `browser.json` retain HEAD, tracked changes, browser version and SHA-256 hashes. A failed assertion fails the command and records a failed report.
 
 CI runs this acceptance after the canonical gate and uploads evidence as `work-detail-why-<checkout SHA>` for 30 days, including partial evidence when browser assertions fail. Retained local evidence and its exact baseline are indexed in the [Why acceptance ledger](../../docs/evidence/work-detail-why/README.md). Controlled browser acceptance does not establish live provider or delivery acceptance.
+
+Production V2 closeout evidence and its current limitations are indexed in the [closeout ledger](../../docs/evidence/dashboard-v2-closeout/README.md).

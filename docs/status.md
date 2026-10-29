@@ -289,29 +289,6 @@ not a universal wall-clock SLA. See the [closeout assessment](evidence/execution
 
 The read-only operational status surface is complete and accepted: independent review approved PR #165, which merged to `main` as `8f7675ed09f59919f438a3b6e657471eb6b883ba` on 2026-10-24 with main CI run #344 green. It includes opt-in production CLI composition, explicit WorkKey scope, shared local/Bridge Decision observation, bounded source reads, built static hosting and observational shutdown. Automated production-path acceptance covers the representative states and fault boundaries; the [ledger](evidence/status-surface/README.md) distinguishes controlled Chromium scenarios from actual executable packaging and authenticated external live checks (unrun). Operations remains the sole presentation semantic source. Parent #136's exit condition is satisfied; closing it remains the owner's action. History/timeline, analytics, event journaling, persistent operational cache, streaming and operator actions remain deferred. NEST-135/#159 acceptance is tracked independently by its continuity closeout.
 
-## Dashboard V2 Operator Console — GitHub #169
-Implementation adds the framework-free four-destination shell (Overview / Work / Executors / System), with Work Detail owned by Work and legacy WorkKey hash links retained. V1 content and supplied semantics remain unchanged; executor inventory and global diagnostics have dedicated destinations. Keyboard heading focus, refresh restoration and narrow navigation/table layout are covered by Dashboard tests and the extended Chromium smoke harness. Initial host gate and CI passed; independent Review requested browser evidence. Host browser acceptance on 2026-10-26 passed all 23 scenarios after two smoke-only asynchronous waits were corrected. [Retained evidence](evidence/dashboard-v2-shell/README.md) includes desktop/390px screenshots, JSON and asset hashes. The evidence follow-up still requires its current-HEAD CI and independent re-review before landing; no downstream V2 child is marked ready.
+## Dashboard V2 Operator Console — GitHub #168–#176
 
-### #170 — Dashboard V2 presentation primitives
-
-Implemented horizontal DOM-native primitives, console tokens, Work-table reuse, explicit four-state freshness and display states, independently accessible full SHA identities, native controls and a generated static showcase. No page redesign or new read-model fields. Sandbox validation covers Dashboard tests/build and root typecheck; full gate, CI, exact-HEAD independent review and delivery evidence remain operator-host steps after this coding session. Rendered browser acceptance is tracked in [the primitive evidence ledger](evidence/dashboard-v2-primitives/README.md).
-
-### Dashboard V2 Overview — #171
-
-Attention-first presentation implemented on #169/#170: supplied needs-human/failed → degraded/anomaly association → waiting → remaining current work; compact supplied counts, system health, source posture, executor ownership and global/work anomaly visibility. Stable WorkKey navigation and last-successful snapshot retention remain intact. No Read Model extension or frontend projector added. Sandbox validation and controlled artifacts are recorded in [Overview evidence](evidence/dashboard-v2-overview/README.md). Full host gate, CI, exact-HEAD review and Delivery remain pending operator after_run; no production acceptance is claimed here.
-
-### Dashboard V2 Work Explorer — #172
-
-Implemented presentation-only search and filters over current Work projections, source-specific freshness, attention-first ordering and WorkKey navigation. Dashboard tests and root typecheck are sandbox checks; browser smoke, full gate, CI, exact-HEAD review and Delivery are host validation steps. No workflow mutation or historical search is added.
-
-### Dashboard V2 Work Detail current state — #173
-
-Implemented scan-first supplied conclusion, execution, PR/CI/review identities, source freshness and WorkKey-scoped executors; the existing Why area remains below. Sandbox checks cover Dashboard tests and root typecheck. Browser screenshots, full gate, CI, exact-HEAD review and production Delivery remain host validation and are not claimed here.
-
-### Dashboard V2 Work Detail Why — #174
-
-The Why surface presents supplied source/role evidence and provenance alongside separately labelled conclusion, freshness and Work-scoped anomalies; exact review targets remain independently visible. Global anomalies remain in System. Raw evidence uses keyboard-accessible disclosures with refresh state retention. Dashboard tests and root typecheck passed. [Browser evidence](evidence/work-detail-why/README.md) retains the reviewed `3f69e85` captures plus expanded diagnostic acceptance; CI now has an exact-PR-HEAD browser job with retained artifacts. Host gate, CI, exact-HEAD Review and Delivery for the repair remain runner-owned.
-
-### Dashboard V2 Executors and System — #175
-
-The Dashboard renders supplied executor ownership, individual source freshness, system health, anomaly scope and independent polling posture. Work links use full WorkKey identity. An independent exact-PR-HEAD CI job now runs `browser:operational` after the canonical gate and retains SHA-labelled browser reports and screenshots for 30 days, including partial evidence on failure. Local Dashboard tests, root typecheck and Chromium acceptance passed. Host CI, exact-HEAD review and delivery validation remain pending; no production acceptance is claimed.
+Children #169–#175 are merged and closed. They deliver the read-only Overview, Work Explorer, Work Detail, Executors and System over the production status surface. The [closeout ledger](evidence/dashboard-v2-closeout/README.md) links the merged PRs, visual evidence and known gaps; a merge alone does not establish each self-hosting stage. #176 controlled production browser acceptance is recorded; full host validation and delivery remain pending. Parent #168 remains open. History, analytics, telemetry expansion, streaming, operator actions and framework migration remain deferred.

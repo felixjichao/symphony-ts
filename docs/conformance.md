@@ -724,3 +724,7 @@ The Work panel filters current supplied projections by stable display text, prov
 ## §13 adjacent: Executors and System (#175)
 
 Dashboard-only presentation of supplied executor inventory, source freshness, system health and anomalies; polling failures retain the last successful snapshot. `apps/dashboard/tests/operational-views.test.ts` covers WorkKey collisions, partial failure, empty inventory and transport posture. The deterministic `browser:operational` harness covers desktop/390px Executors and System layouts, keyboard and WorkKey navigation, anomaly separation and transport interruption. The independent CI `operational-browser` job runs it against the exact PR HEAD after the canonical gate and retains SHA-labelled reports and screenshots for 30 days, including partial evidence on failure. Host CI, exact-HEAD review and delivery validation remain runner-owned. See [Agent Note](../notes/accepted/architecture/2026-10-29-dashboard-operational-views.md).
+
+## §13 adjacent: Dashboard V2 closeout (#176)
+
+Production status composition and read-only boundary tests remain in `apps/cli/src/status.test.ts` and `apps/cli/src/status-boundaries.test.ts`; the [closeout ledger](evidence/dashboard-v2-closeout/README.md) indexes child evidence and controlled production browser results and outstanding self-hosting verification. #176 acceptance and host validation are pending.

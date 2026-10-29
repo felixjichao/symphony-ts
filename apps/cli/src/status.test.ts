@@ -24,12 +24,19 @@ describe("production status composition (SPEC §13 adjacent / #140)", () => {
       if (scenario === "healthy") { expect(a.phase).toBe("coding"); expect(wire.health).toBe("healthy"); }
       if (scenario === "ci") expect(a.waiting?.reason).toBe("waiting_for_ci");
       if (scenario === "review") expect(a.waiting?.reason).toBe("waiting_for_review");
+      if (scenario === "executor-wait") expect(a.waiting?.reason).toBe("waiting_for_executor");
       if (scenario === "needs_human" || scenario === "needs_clarification") { expect(a.attention).toBe("needs_human"); expect(a.waiting?.reason).toBe(scenario); }
       if (scenario === "stale") expect(a.freshness.runtime.status).toBe("stale");
       if (scenario === "partial") { expect(a.freshness.github.status).toBe("unavailable"); expect(wire.work[1]!.freshness.github.status).toBe("fresh"); expect(JSON.stringify(wire)).not.toContain("private credential"); }
-      if (scenario === "empty-inventory" || scenario === "unknown-inventory") {
+      if (scenario === "active-inventory") {
+        expect(wire.executors.map(({ id, status, currentWork }) => ({ id, status, currentWork }))).toEqual([
+          { id: "active", status: "busy", currentWork: statusKeys[0] },
+          { id: "idle", status: "online", currentWork: null },
+        ]);
+      }
+      if (scenario === "empty-inventory" || scenario === "unknown-inventory" || scenario === "unavailable-inventory") {
         expect(wire.executors).toEqual([]);
-        expect(wire.sources.find((source: { source: string }) => source.source === "executor")?.freshness.status).toBe(scenario === "empty-inventory" ? "fresh" : "unknown");
+        expect(wire.sources.find((source: { source: string }) => source.source === "executor")?.freshness.status).toBe(scenario === "empty-inventory" ? "fresh" : scenario === "unknown-inventory" ? "unknown" : "unavailable");
       }
       if (scenario === "completed" || scenario === "terminal") expect(a.phase).toBe("completed");
       const code = { conflict: "conflicting_active_review_tasks", "target-mismatch": "review_target_head_mismatch", "approval-mismatch": "review_approval_head_mismatch", "result-mismatch": "review_result_target_mismatch", terminal: "execution_on_terminal_work" }[scenario as "conflict"];
