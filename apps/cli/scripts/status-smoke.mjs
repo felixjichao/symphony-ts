@@ -1,4 +1,4 @@
-/* global process, console, fetch, document, innerWidth */
+/* global process, console, fetch, document, innerWidth, innerHeight, scrollTo */
 /** Explicit foreground Chromium acceptance. Run with node --import tsx. No browser downloads. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
