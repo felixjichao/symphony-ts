@@ -1,0 +1,25 @@
+{
+  "sourceCommit": "7f62ee3977c46a64fdc91d33919501b3e67ed746",
+  "sourceTree": "b91186ba71580bdb43fc63f447dcbcd5bcc80afb",
+  "browser": {
+    "scenariosPassed": 22,
+    "screenshots": 45,
+    "apiGetRequests": 49,
+    "pageErrors": 0,
+    "workingTree": "",
+    "reportSha256": "1761f819034720a1b58efce71677d33fdab58bf4390596e8b062912273019a26"
+  },
+  "gate": {
+    "status": "passed",
+    "command": "TMPDIR=/private/tmp npm run gate",
+    "sourceCommit": "7f62ee3977c46a64fdc91d33919501b3e67ed746",
+    "passed": 2651,
+    "existingOptInSkipped": 1,
+    "typecheck": "passed",
+    "lint": "passed",
+    "docsCheck": "passed",
+    "logSha256": "26626e9cd69a48e262de3557115be3a1a11dec0174e0300b7fd54f9f8bd50e35",
+    "scope": "final source plus uncommitted evidence/status documentation; native production runtime untouched"
+  },
+  "recordedAt": "2026-10-30T00:30:55.384062+00:00"
+}

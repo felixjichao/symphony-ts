@@ -201,3 +201,9 @@ The `production-status-browser` CI job runs `node --import tsx apps/cli/scripts/
 ## 外部交付离线结算
 
 定向入口：`npm test -w @symphony/cli -- --run src/external-settlement.test.ts`。配套 domain、tracker、agent、Decision 测试分别覆盖严格授权、GET 目标绑定、原生回执保留与事务取消。使用真实临时原生存储及被 SIGKILL 的维护子进程，验证中断重入、活跃 owner 拒绝、热重载 root 互斥、预算/历史回执保留与 cleanup 后 fence；不使用生产状态，也不计为真实 GitHub 验收。提交前仍运行 `npm run gate`。
+
+## #168 production browser matrix
+
+`npm test -w @symphony/cli -- --run src/status.test.ts` validates controlled source facts through the real HTTP composition. The existing `node --import tsx apps/cli/scripts/status-smoke.mjs` browser entry additionally checks failed attention from a failed Decision task, source/executor fields, all freshness states, nullable metadata and full WorkKey associations/navigation. Build first; set `SYMPHONY_BROWSER_MODULE` to the installed Playwright module and `SYMPHONY_BROWSER_EVIDENCE` outside the checkout for clean-HEAD acceptance. `SYMPHONY_CHROMIUM` may select an already-installed browser. Reports bind fixture/harness/tree/assets and each screenshot hash, preserve GET-only assertions, and label controlled sources separately from live external acceptance.
+
+Native viewport screenshots include top/bottom samples for long pages, with viewport/scroll position and document height recorded; they are representative samples rather than full-page composites. [Current clean-source matrix evidence](evidence/dashboard-v2-production-matrix/README.md).

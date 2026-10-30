@@ -9,6 +9,8 @@
 
 ## 当前 posture
 
+- #168 生产浏览器矩阵补验完成：fresh failed ReviewTask 派生 failed attention，正常同号跨仓库 Work 隔离；source/executor 字段、四态 freshness、元数据空值及完整 WorkKey 链接在 production composition 上逐项断言。干净源码 `7f62ee3` 的 22 个浏览器场景通过，45 张原始视口截图及指纹已[归档](evidence/dashboard-v2-production-matrix/README.md)；完整 gate 2,651 passed / 1 既有 opt-in skipped。受控 source facts，不代表 external-live 或历史 Review 例外已接受。
+
 - #168 外部交付结算已完成真实生产验收：PR #198 合入 `f1fb14f`，固定稳定 release `ae4fb11` 通过完整 host gate（2,649 passed / 1 既有 opt-in skipped）及 exact-HEAD 四项 CI。#169/#173/#175/#176 已获得独立 external completion receipt，精确退役旧 request/retry；Decision 648 → 652，历史结果/回执、诊断、预算和 ledger 保留。四个 workspace 经原生 API 清理，重复 apply 不写状态、不重建目录；Bridge/host 与两个 Web Driver 已恢复。[生产证据](evidence/external-delivery-settlement/production/README.md)。#173/#175/#176 历史最终 HEAD 原生 Review 缺失仍保留，#168 尚未关闭。
 
 - #168 交接正文限制已随 PR #198 部署：统一上限 60,000 UTF-16 单元，保留原始 details、handoff marker 和预算，截断提示含长度与 SHA-256。首次/补偿/ACK 丢失去重的原始 [验证指纹](evidence/dashboard-v2-verification/bounded-handoff-validation.json) 保留；外部结算没有补发历史交接评论，也没有将旧 compensation flags 改写为成功。

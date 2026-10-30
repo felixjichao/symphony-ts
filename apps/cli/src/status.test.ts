@@ -22,17 +22,27 @@ describe("production status composition (SPEC §13 adjacent / #140)", () => {
       expect(wire.work.map((work: { key: unknown }) => work.key)).toEqual(statusKeys);
       const a = wire.work[0]!;
       if (scenario === "healthy") { expect(a.phase).toBe("coding"); expect(wire.health).toBe("healthy"); }
+      if (scenario === "failed") {
+        expect(a.attention).toBe("failed"); expect(a.review?.task?.status).toBe("failed");
+        expect(a.review?.result).toBeNull(); expect(a.freshness.decision.status).toBe("fresh");
+        expect(a.evidence).toContainEqual(expect.objectContaining({ source: "decision", code: "review_task_failed", role: "supporting", freshnessStatus: "fresh", value: "failed" }));
+        expect(wire.work[1]!.attention).toBe("normal"); expect(wire.work[1]!.phase).toBe("coding");
+        expect(wire.health).toBe("degraded");
+      }
       if (scenario === "ci") expect(a.waiting?.reason).toBe("waiting_for_ci");
       if (scenario === "review") expect(a.waiting?.reason).toBe("waiting_for_review");
       if (scenario === "executor-wait") expect(a.waiting?.reason).toBe("waiting_for_executor");
       if (scenario === "needs_human" || scenario === "needs_clarification") { expect(a.attention).toBe("needs_human"); expect(a.waiting?.reason).toBe(scenario); }
       if (scenario === "stale") expect(a.freshness.runtime.status).toBe("stale");
       if (scenario === "partial") { expect(a.freshness.github.status).toBe("unavailable"); expect(wire.work[1]!.freshness.github.status).toBe("fresh"); expect(JSON.stringify(wire)).not.toContain("private credential"); }
-      if (scenario === "active-inventory") {
-        expect(wire.executors.map(({ id, status, currentWork }) => ({ id, status, currentWork }))).toEqual([
-          { id: "active", status: "busy", currentWork: statusKeys[0] },
-          { id: "idle", status: "online", currentWork: null },
+      if (scenario === "active-inventory" || scenario === "stale-inventory") {
+        expect(wire.executors).toEqual([
+          { id: "active", role: "implementer", adapter: "controlled", host: "host-a", status: "busy", currentWork: statusKeys[0], lastHeartbeatAt: statusTime - (scenario === "stale-inventory" ? 120_000 : 2000) },
+          { id: "idle", role: "reviewer", adapter: "controlled", host: "host-b", status: "online", currentWork: null, lastHeartbeatAt: null },
+          { id: "other-work", role: null, adapter: "controlled-other", host: null, status: "unknown", currentWork: statusKeys[1], lastHeartbeatAt: null },
         ]);
+        expect(wire.sources.find(source => source.source === "executor")?.freshness.status).toBe(scenario === "stale-inventory" ? "stale" : "fresh");
+        if (scenario === "stale-inventory") expect(wire.health).toBe("degraded");
       }
       if (scenario === "empty-inventory" || scenario === "unknown-inventory" || scenario === "unavailable-inventory") {
         expect(wire.executors).toEqual([]);

@@ -1,0 +1,2401 @@
+{
+  "fixtureSha256": "5d34de57d1bcef56c5f9082ebd450ff9dcafd67088370918d054350809e3be7c",
+  "sourceTree": "b91186ba71580bdb43fc63f447dcbcd5bcc80afb",
+  "harnessSha256": "a4a3c23501975f8a9c6888325c0d89282d9f2aaf96ab778bd8d74c83293ed3f4",
+  "evidenceDir": "/private/tmp/dashboard-production-matrix-viewport",
+  "sourceCommit": "7f62ee3977c46a64fdc91d33919501b3e67ed746",
+  "workingTree": "",
+  "browser": "156.0.4314.50",
+  "mode": "controlled production composition + actual executable empty scope",
+  "externalLive": "not run",
+  "coverage": {
+    "sourceFields": [
+      "source",
+      "instance",
+      "WorkKey",
+      "freshness.status",
+      "observedAt",
+      "lastAttemptAt",
+      "reason"
+    ],
+    "executorFields": [
+      "id",
+      "role",
+      "adapter",
+      "status",
+      "host",
+      "lastHeartbeatAt",
+      "currentWork"
+    ],
+    "surfaces": [
+      "Overview",
+      "System",
+      "Executors",
+      "Work Detail association",
+      "Work failed attention"
+    ],
+    "failedFact": "fresh failed ReviewTask without result",
+    "screenshotCount": 45
+  },
+  "screenshots": [
+    {
+      "file": "empty-inventory-executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 900,
+      "sha256": "200ffd533136511332bbc305a05b3b52e5e411faf01eaeaabe86fdf77a2fa3db"
+    },
+    {
+      "file": "unknown-inventory-executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 900,
+      "sha256": "e569670bb78f6a31ba2ef9e981675ddec5796cea8b4239520029ae871df97b3f"
+    },
+    {
+      "file": "unavailable-inventory-executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 900,
+      "sha256": "7a731480e096c4be2475ffa7f429b94932f583bcdcdf91fbe9dd322ff3baa1d3"
+    },
+    {
+      "file": "overview-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 2179,
+      "sha256": "93bea20153674c052c28fa7ca8bd32beb8d02e92a1498d53b07effc66f4fb676"
+    },
+    {
+      "file": "overview-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 1279,
+      "documentHeight": 2179,
+      "sha256": "fcde924b9053c9c23b352e30b77c77226a4754b5d3c0d171d2e3df1d99b632a5"
+    },
+    {
+      "file": "work-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1114,
+      "sha256": "72f8cfcb9093e21038c7106727ce22d39ebcd76daa21ba4960a3273cc025d28c"
+    },
+    {
+      "file": "work-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 214,
+      "documentHeight": 1114,
+      "sha256": "e0f1ef312a76f2ec456ae730735248de787c7f7816b40a629a54d68f57580e4f"
+    },
+    {
+      "file": "executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 900,
+      "sha256": "c765aed6330ff0837c8629ddba42bb703702254d1c974316c3e2e7348a77528c"
+    },
+    {
+      "file": "system-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1925,
+      "sha256": "fcec012a715f1dc08535ae0ca85d2905bdc19b29da953d524692e45c625ea4e7"
+    },
+    {
+      "file": "system-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 1025,
+      "documentHeight": 1925,
+      "sha256": "95689ec75449a7c10f9e2089aa70d6ea881eaa5be337a49df0660abfcdc2a0a0"
+    },
+    {
+      "file": "detail-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 5131,
+      "sha256": "1e20575ab6fdb07e53154cddd8ca1e4376751e046a0ba6fc772c9b4b09807053"
+    },
+    {
+      "file": "detail-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 4231,
+      "documentHeight": 5131,
+      "sha256": "4c0651a827ee386a146cd9fb92d03b5b67ec7a871e1d11445f7fc29f25313589"
+    },
+    {
+      "file": "overview-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 2830,
+      "sha256": "05b6639d15bee4e988b088e0e0d24d322ecc504d3600c8b6e3e08e04096a3d1a"
+    },
+    {
+      "file": "overview-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 1986,
+      "documentHeight": 2830,
+      "sha256": "3ee25c010c063d7ffc2231dd5e8c88ecf473df16f4593f54d78190055ccf0d97"
+    },
+    {
+      "file": "work-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 1507,
+      "sha256": "35c6f864a8da897396f3b68be5d66d6981303bb0330b6b6667b706fd3fd9750c"
+    },
+    {
+      "file": "work-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 663,
+      "documentHeight": 1507,
+      "sha256": "40d110a33dba758913881cbceaac42110b558873a2aa06a6a19615751bccb721"
+    },
+    {
+      "file": "executors-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 844,
+      "sha256": "93b3843ab3e3e7371525e3b669351f3172e8dfe2bfe596fed00586c3893bf2ab"
+    },
+    {
+      "file": "system-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 2363,
+      "sha256": "0b6cb895e5791e79491c2edc2bbf2e9afac01c36fbf96575b7774216c4300824"
+    },
+    {
+      "file": "system-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 1519,
+      "documentHeight": 2363,
+      "sha256": "b19e9a5c35b595e2fdf2e4856567bf82afdba00cdf3526fc2f5a262557757ff2"
+    },
+    {
+      "file": "detail-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 7004,
+      "sha256": "1513601bc62264af6b59e5180d1ccf3415ff672a87f642b206b5859e10e82d7a"
+    },
+    {
+      "file": "detail-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 6160,
+      "documentHeight": 7004,
+      "sha256": "a59088746c90fff5ac08ee52b97c46667e28ac3c6d53ce7bdbb00b12d582875f"
+    },
+    {
+      "file": "failed-overview-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1824,
+      "sha256": "5dda0ce3890f8e5ec4863f8de58816a03d976b4bf476661da836e3adc1e9a2a8"
+    },
+    {
+      "file": "failed-overview-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 924,
+      "documentHeight": 1824,
+      "sha256": "6a27156bb457e35fa064f01b95eae56de6fe93ab4a14366869eb527241d42d5c"
+    },
+    {
+      "file": "failed-detail-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 3103,
+      "sha256": "0594195e7daa66915fd1ee47a9e623be040f5276fd527430d0c5bd59180eef95"
+    },
+    {
+      "file": "failed-detail-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 2203,
+      "documentHeight": 3103,
+      "sha256": "1697cc11feae9dc068ab1d5def7e28e8b720abdd56a0aca55796b3d44c6d2114"
+    },
+    {
+      "file": "failed-overview-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 2203,
+      "sha256": "c39dd7f2da31c40def47951bcd2594db07f9a18d221d6dd29944e805f424d486"
+    },
+    {
+      "file": "failed-overview-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 1359,
+      "documentHeight": 2203,
+      "sha256": "560d42665d673cd420fde4289fd75d371303731eed92fed53348afe47391928f"
+    },
+    {
+      "file": "failed-detail-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 4498,
+      "sha256": "f5089f7ab09b57bd37e05c729cb226f2a5b9b30089b385d7c144a4a5c74e36b5"
+    },
+    {
+      "file": "failed-detail-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 3654,
+      "documentHeight": 4498,
+      "sha256": "689ea24e03345a40f077de5d0c4420913498d13243c75232d14150184e3fc829"
+    },
+    {
+      "file": "active-inventory-executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1122,
+      "sha256": "c726927bb9052847a7d7f81bfec6d1da0e6488190e96ae931ed51805eb3fd9c3"
+    },
+    {
+      "file": "active-inventory-executors-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 222,
+      "documentHeight": 1122,
+      "sha256": "2513638d830de0e2ae4c8008ca90f9d2950c869602df1a728f6292df469b30b3"
+    },
+    {
+      "file": "active-inventory-system-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1594,
+      "sha256": "1359f83cce987c5891be72ffea59fd1d38ff64716b1f2ece7d06c3130007e02c"
+    },
+    {
+      "file": "active-inventory-system-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 694,
+      "documentHeight": 1594,
+      "sha256": "683a18926c32634bf0484c610bb4b5de021c7023928b0424d9db97cda8e038bf"
+    },
+    {
+      "file": "active-inventory-executors-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 1272,
+      "sha256": "d83139969262bfeee1cf91a23afd2b3aa0f4f3fda0c2c0350ad032b4dd9ccf39"
+    },
+    {
+      "file": "active-inventory-executors-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 428,
+      "documentHeight": 1272,
+      "sha256": "33ce9112cf02676c49a905c93896e3d1297a89cff235ab8532f248a0046c1720"
+    },
+    {
+      "file": "active-inventory-system-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 1794,
+      "sha256": "65dc6572620c7ac0dd86d7a176689f8e5e5d08eac024f00394d2abd9de62b8f6"
+    },
+    {
+      "file": "active-inventory-system-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 950,
+      "documentHeight": 1794,
+      "sha256": "d00d6ec318b2160c2a070698b933cc1191587e62f99e8a47d0b6fef13bc6f0f8"
+    },
+    {
+      "file": "stale-inventory-executors-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1122,
+      "sha256": "ccd5a73f649b96ddb2626fac9ad4bb4bde5d1dd5b2cdea911b953e6c144960f4"
+    },
+    {
+      "file": "stale-inventory-executors-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 222,
+      "documentHeight": 1122,
+      "sha256": "027f8043e68da1b8724e8c5d0b629803baf8a38969ea6624fe426ff8878efee3"
+    },
+    {
+      "file": "stale-inventory-system-desktop.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 0,
+      "documentHeight": 1594,
+      "sha256": "4a87101da1268cbcd2889411a3dcc37e0ff9b2637cd499efcdaa8f627bfe4767"
+    },
+    {
+      "file": "stale-inventory-system-desktop-bottom.png",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "scrollY": 694,
+      "documentHeight": 1594,
+      "sha256": "315aa008513948ab11d4154e499cb536a5a237fb71716d423358a021d774bec5"
+    },
+    {
+      "file": "stale-inventory-executors-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 1272,
+      "sha256": "b16190e7c5c6799f4ad37e257d1cf8b4f9766819f4d1f8353f8a03ea982da8de"
+    },
+    {
+      "file": "stale-inventory-executors-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 428,
+      "documentHeight": 1272,
+      "sha256": "c57bd06bfc5d3fa52943ea00de634db733d0494e45eed3d15f549d2ebb4ca0b9"
+    },
+    {
+      "file": "stale-inventory-system-narrow.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 0,
+      "documentHeight": 1792,
+      "sha256": "45b7c06bf357f16dc1a33d752a3fed45754b51141c8745402e884192678a4d46"
+    },
+    {
+      "file": "stale-inventory-system-narrow-bottom.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollY": 948,
+      "documentHeight": 1792,
+      "sha256": "b614408f956d8a3cca54bcbb2680c9862466a72a8a50bd485a6cb5167a3e1852"
+    }
+  ],
+  "results": [
+    {
+      "scenario": "healthy",
+      "phase": "coding",
+      "attention": "normal",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "failed",
+      "phase": "review",
+      "attention": "failed",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "failureEvidence": [
+        {
+          "source": "decision",
+          "code": "review_task_failed",
+          "detail": "rev 1",
+          "observedAt": 1800000000000,
+          "entityTimestampMs": 1800000000000,
+          "instance": "github:acceptance/alpha#1",
+          "freshnessStatus": "fresh",
+          "ruleId": "phase_review",
+          "role": "supporting",
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          },
+          "taskId": "shared-task",
+          "revision": 1,
+          "target": {
+            "repository": "acceptance/alpha",
+            "prNumber": 2,
+            "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "field": "task.status",
+          "value": "failed"
+        }
+      ],
+      "isolatedOtherAttention": "normal",
+      "result": "passed"
+    },
+    {
+      "scenario": "ci",
+      "phase": "ci",
+      "attention": "waiting",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "review",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "executor-wait",
+      "phase": "review",
+      "attention": "waiting",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_human",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "needs_clarification",
+      "phase": "review",
+      "attention": "needs_human",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "conflict",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "stale",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "stale",
+            "observedAt": 1799999880000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "partial",
+      "phase": "unknown",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "unavailable",
+            "observedAt": null,
+            "lastAttemptAt": 1800000000000,
+            "reason": "source_read_failed"
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "target-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "approval-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "result-mismatch",
+      "phase": "review",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "terminal",
+      "phase": "completed",
+      "attention": "degraded",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "completed",
+      "phase": "completed",
+      "attention": "normal",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "active-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 3,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [
+        {
+          "id": "active",
+          "role": "implementer",
+          "adapter": "controlled",
+          "host": "host-a",
+          "status": "busy",
+          "lastHeartbeatAt": 1799999998000,
+          "currentWork": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "id": "idle",
+          "role": "reviewer",
+          "adapter": "controlled",
+          "host": "host-b",
+          "status": "online",
+          "lastHeartbeatAt": null,
+          "currentWork": null
+        },
+        {
+          "id": "other-work",
+          "role": null,
+          "adapter": "controlled-other",
+          "host": null,
+          "status": "unknown",
+          "lastHeartbeatAt": null,
+          "currentWork": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        }
+      ],
+      "result": "passed"
+    },
+    {
+      "scenario": "stale-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "stale",
+            "observedAt": 1799999880000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 3,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [
+        {
+          "id": "active",
+          "role": "implementer",
+          "adapter": "controlled",
+          "host": "host-a",
+          "status": "busy",
+          "lastHeartbeatAt": 1799999880000,
+          "currentWork": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "id": "idle",
+          "role": "reviewer",
+          "adapter": "controlled",
+          "host": "host-b",
+          "status": "online",
+          "lastHeartbeatAt": null,
+          "currentWork": null
+        },
+        {
+          "id": "other-work",
+          "role": null,
+          "adapter": "controlled-other",
+          "host": null,
+          "status": "unknown",
+          "lastHeartbeatAt": null,
+          "currentWork": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        }
+      ],
+      "result": "passed"
+    },
+    {
+      "scenario": "empty-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "unknown-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "healthy",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "unknown",
+            "lastAttemptAt": null,
+            "reason": "source_not_configured"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "unavailable-inventory",
+      "phase": "review",
+      "attention": "normal",
+      "health": "degraded",
+      "sourceChecks": {
+        "overview": 6,
+        "system": 6,
+        "executor": 1
+      },
+      "sourceStates": [
+        {
+          "source": "decision",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "decision",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "executor",
+          "instance": "inventory",
+          "freshness": {
+            "status": "unavailable",
+            "observedAt": null,
+            "lastAttemptAt": 1800000000000,
+            "reason": "source_read_failed"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/alpha#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/alpha#1"
+          }
+        },
+        {
+          "source": "github",
+          "instance": "github:acceptance/beta#1",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          },
+          "workKey": {
+            "provider": "github",
+            "key": "acceptance/beta#1"
+          }
+        },
+        {
+          "source": "runtime",
+          "instance": "host",
+          "freshness": {
+            "status": "fresh",
+            "observedAt": 1800000000000,
+            "lastAttemptAt": 1800000000000
+          }
+        }
+      ],
+      "executorChecks": {
+        "inventory": 0,
+        "detailWorkKeys": 2
+      },
+      "executorInventory": [],
+      "result": "passed"
+    },
+    {
+      "scenario": "transport-interruption-recovery",
+      "result": "passed"
+    },
+    {
+      "scenario": "built-executable-different-cwd-empty-scope",
+      "result": "passed"
+    }
+  ],
+  "assets": [
+    {
+      "file": "index-B0jXy-Kv.css",
+      "sha256": "1d5607e51479f2e25aa3c547fe3c395dd21d6be640c3d183babb622a21bad271"
+    },
+    {
+      "file": "index-BijFHgMo.js",
+      "sha256": "e26c48537d0ee461c055e1d175faca7ee5179e1e5e4b6748a4f2a47197bc18dc"
+    },
+    {
+      "file": "index-Cs1G-csv.css",
+      "sha256": "4a03c803f75c8189e7fd5db7ffa13abd87d8e2c0187cde37ddbff0ac4a6795e7"
+    },
+    {
+      "file": "index-DkwyosPw.js",
+      "sha256": "f1405dcdc5c0d7041b8810e5e1d4c91df50a3dd7167f94c220a4aa5505251c17"
+    }
+  ],
+  "networkRequests": 49,
+  "getOnly": true,
+  "pageErrors": []
+}
