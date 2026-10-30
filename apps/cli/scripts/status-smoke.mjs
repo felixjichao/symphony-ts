@@ -1,4 +1,4 @@
-/* global process, console, fetch, document, innerWidth, innerHeight, scrollTo */
+/* global process, console, fetch, document, innerWidth, scrollTo, scrollY */
 /** Explicit foreground Chromium acceptance. Run with node --import tsx. No browser downloads. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -25,18 +25,19 @@ page.on("pageerror", error => errors.push(error.message));
 const route = `#${encodeURIComponent(JSON.stringify([statusKeys[0].provider, statusKeys[0].key]))}`;
 async function capture(file) {
   const output = path.join(evidenceDir, file);
-  // Some local Chromium builds repeat viewport tiles with captureBeyondViewport.
-  // Render the whole document in one viewport before capture instead.
+  // Keep native viewport captures: some Chromium builds repeat full-page tiles.
   const viewport = page.viewportSize();
-  const height = await page.evaluate(() => Math.max(innerHeight, document.documentElement.scrollHeight));
-  try {
-    await page.setViewportSize({ width: viewport.width, height });
+  const documentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({ path: output, fullPage: false });
+  screenshots.push({ file, viewport, scrollY: 0, documentHeight, sha256: createHash("sha256").update(await readFile(output)).digest("hex") });
+  if (documentHeight > viewport.height) {
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    const bottomFile = file.replace(/\.png$/, "-bottom.png");
+    await page.screenshot({ path: path.join(evidenceDir, bottomFile), fullPage: false });
+    screenshots.push({ file: bottomFile, viewport, scrollY: await page.evaluate(() => scrollY), documentHeight, sha256: createHash("sha256").update(await readFile(path.join(evidenceDir, bottomFile))).digest("hex") });
     await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({ path: output, fullPage: false });
-  } finally {
-    await page.setViewportSize(viewport);
   }
-  screenshots.push({ file, viewport, captureHeight: height, sha256: createHash("sha256").update(await readFile(output)).digest("hex") });
 }
 const iso = value => value == null ? "未报告" : new Date(value).toISOString();
 const workHref = key => `#${encodeURIComponent(JSON.stringify([key.provider, key.key]))}`;
