@@ -57,3 +57,7 @@ The `production-status-browser` CI job checks out the PR HEAD, verifies a clean 
 [Production maintenance evidence](../external-delivery-settlement/production/README.md) records PR #198, fixed stable release `ae4fb11`, exact-HEAD CI, four explicit external completions (#169/#173/#175/#176), precise request/retry retirement, native workspace cleanup, duplicate replay and restored host/Bridge/Drivers. Decision sequence 648 → 652; historical results/receipts, diagnostics, budgets and recovery ledger were preserved. The old #176 claimed Review was cancelled, not completed with an invented verdict.
 
 This closes the observed native-state mismatch through operator-authorized external settlement. #173/#175/#176 still have no historical final-HEAD native approval, the historical autonomous execution chain remains scoped to existing evidence, and remaining parent browser-matrix/exception acceptance is separate. #168 remains open.
+
+## 2026-10-30 production browser matrix follow-up
+
+[Clean-source acceptance](../dashboard-v2-production-matrix/README.md) adds failed source facts and source/executor field assertions through the production composition: 22 passed scenarios, 45 native viewport samples, full WorkKey navigation and four freshness states. It closes the previously identified controlled-source browser coverage gap; external-live validation and historical Review exception acceptance remain separate. Earlier reports and historical outcomes above are preserved. #168 remains open.
