@@ -763,6 +763,123 @@ describe("DecisionTabDriver", () => {
     expect(mockAdapter.waitForExistingResponse).toHaveBeenCalled();
   });
 
+  it.each([true, false])("fences Stop during active waiting-response submission (stop=%s)", async stop => {
+    let running = true;
+    let admission = true;
+    let release!: () => void;
+    let notify!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { notify = resolve; });
+    const cpStore = new MemoryCheckpointStore({ tabId: "driver-tab" });
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 0,
+      step: "waiting_response",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      baselineCount: 1,
+    });
+
+    const mockAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"] as const,
+      supportedContextStrategies: ["connector", "materialized"] as const,
+      inspectBinding: vi.fn(),
+      createSession: vi.fn(),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn(), // MUST NOT be called!
+      waitForExistingResponse: vi.fn().mockResolvedValue({ result: expectedResult }),
+      setStepListener: vi.fn(),
+    };
+
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/heartbeat")) {
+          return { expiresAtMs: Date.now() + 100_000, ttlMs: 120_000 } as unknown as T;
+        }
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "running" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/result")) {
+          notify();
+          await gate;
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+            result: expectedResult,
+            superseded: false,
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter as unknown as DecisionExecutorAdapter,
+      ownerId: "driver-1",
+      shouldRun: () => running,
+      canClaimNewTask: () => admission,
+    });
+
+    const pending = driver.resumeCheckpointIfAvailable().then(value => value, error => error as Error);
+    await started;
+    const checkpoint = cpStore.get();
+    expect(checkpoint?.step).toBe("result_extracted");
+    expect(checkpoint?.candidateResult).toEqual(expectedResult);
+    if (stop) { running = false; driver.stop(); } else { admission = false; }
+    const count = vi.mocked(mockTransport.request).mock.calls.length;
+    release();
+    const outcome = await pending;
+    expect(mockTransport.request).toHaveBeenCalledTimes(count);
+    if (stop) {
+      expect(outcome).toBeInstanceOf(Error);
+      expect(cpStore.get()).toEqual(checkpoint);
+    } else {
+      expect(outcome).toMatchObject({ status: "completed" });
+      expect(cpStore.get()).toBeNull();
+    }
+    expect(mockAdapter.executeTask).not.toHaveBeenCalled();
+    expect(mockAdapter.waitForExistingResponse).toHaveBeenCalledOnce();
+  });
+
   it("handles prompt_submitting checkpoint: resumes waiting if confirmed sent (S2)", async () => {
     const cpStore = new MemoryCheckpointStore();
     const expectedResult: DecisionResult = {
@@ -1714,6 +1831,78 @@ describe("DecisionTabDriver", () => {
     // Stale checkpoint (and any candidate state) must be dropped, driver keeps polling
     expect(cpStore.get()).toBeNull();
     expect(failureSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("fences Stop before execution conflict reconciliation", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const supersededTask: DecisionTask = { ...sampleTask, status: "superseded", lease: null };
+    let running = true;
+    let release!: () => void;
+    let notify!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { notify = resolve; });
+    const failureSubmission = vi.fn(async () => {
+      notify();
+      await gate;
+      throw new BridgeHttpError("Cannot fail superseded task", "conflict", 409);
+    });
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/binding")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/start")) {
+          return {} as unknown as T;
+        }
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
+          return await failureSubmission();
+        }
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: supersededTask } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const mockAdapter: DecisionExecutorAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"],
+      supportedContextStrategies: ["connector", "materialized"],
+      inspectBinding: vi.fn().mockResolvedValue({ status: "none" }),
+      createSession: vi.fn().mockResolvedValue({
+        binding: {
+          schemaVersion: 1,
+          adapter: "chatgpt-web",
+          externalSessionRef: "conv-1",
+          resumeUri: "https://chatgpt.com/c/conv-1",
+          generation: 1,
+        },
+      }),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn().mockRejectedValue(new Error("model exploded mid-review")),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter,
+      ownerId: "driver-1",
+      shouldRun: () => running,
+    });
+
+    const pending = driver.executeClaimedTask(sampleTask, sampleSession, sampleLease, sampleContext)
+      .then(value => value, error => error as Error);
+    await started;
+    const checkpoint = cpStore.get();
+    running = false;
+    driver.stop();
+    const count = vi.mocked(mockTransport.request).mock.calls.length;
+    release();
+    expect(await pending).toBeInstanceOf(BridgeHttpError);
+    expect(mockTransport.request).toHaveBeenCalledTimes(count);
+    expect(cpStore.get()).toEqual(checkpoint);
   });
 
   it("rethrows 409 conflict when the task is not superseded during execution", async () => {

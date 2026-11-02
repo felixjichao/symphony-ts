@@ -1920,12 +1920,14 @@ export class DecisionTabDriver implements DecisionTaskController {
         session,
       };
     } catch (submitErr) {
+      if (signal.aborted || this.shouldRun?.() === false) throw submitErr;
       // Transport error during submission! DO NOT mark failed! DO NOT delete checkpoint!
       // Check if bridge already accepted it (authoritative receipt):
       const receiptRes = await this.transport
         .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(task.id)}/receipt`)
         .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
+      if (signal.aborted || this.shouldRun?.() === false) throw submitErr;
       if (receiptRes?.receipt) {
         const receipt = receiptRes.receipt;
         const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -2011,6 +2013,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       this.checkpointStore.delete();
       return outcome;
     } catch (err: unknown) {
+      // Stop dominates reconciliation; retain the checkpoint for explicit restart.
+      if (signal.aborted || this.shouldRun?.() === false) throw err;
       if (err instanceof ExecutionBlocked) return { status: "blocked", session: err.session, reason: err.reason };
       // Expected supersede/cancel race: the bridge rejected the result or failure
       // submission because the task became non-actionable while executing (e.g. a
@@ -2020,10 +2024,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       const supersededOutcome = await this.resolveSupersededOutcome(task.id, session, err);
       if (supersededOutcome) {
         return supersededOutcome;
-      }
-      // If error is an abort (e.g. from page navigation or timeout), preserve checkpoint for reload recovery
-      if (signal.aborted) {
-        throw err;
       }
       // If candidate result exists, currently navigating, or submitting rebind, DO NOT delete checkpoint so it can be recovered
       const currentCp = this.checkpointStore.get();
