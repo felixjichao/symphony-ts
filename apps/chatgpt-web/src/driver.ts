@@ -202,6 +202,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         superseded: boolean;
       }>("POST", `/v1/tasks/${encodeURIComponent(taskId)}/result`, params);
 
+      if (this.shouldRun?.() === false) throw new Error("Execution stopped");
       // Upon confirmed valid result receipt from bridge, checkpoint can safely be cleared
       if (res.receipt?.type === "result" && !res.superseded) {
         this.diagnose({ stage: "result_accepted", taskId, kind: params.result.kind, revision: params.result.revision });
@@ -210,12 +211,14 @@ export class DecisionTabDriver implements DecisionTaskController {
       return res;
     } catch (err: unknown) {
       this.diagnose({ stage: "result_submit_error", taskId, kind: params.result.kind, revision: params.result.revision });
+      if (this.shouldRun?.() === false) throw err;
       // In case of network packet loss on return, query authoritative receipt before failing
       try {
         const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
           "GET",
           `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
         );
+        if (this.shouldRun?.() === false) throw err;
         if (receiptRes?.receipt) {
           const receipt = receiptRes.receipt;
           const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -810,6 +813,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         // cycle: only an authoritative receipt or an explicit operator resolution may retire it.
         // Repeated polls and page rebuilds keep re-checking the receipt and keep the evidence.
         const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (this.shouldRun?.() === false) return null;
         if (verified.state === "confirmed") {
           this.checkpointStore.delete();
           return verified.outcome;
@@ -989,6 +993,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     if (cp.candidateResult && (cp.step === "result_extracted" || cp.step === "waiting_response")) {
       if ((cp.recoveryFailures ?? 0) >= DECISION_MAX_TRANSPORT_RECOVERIES) {
         const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (this.shouldRun?.() === false) return null;
         if (verified.state === "confirmed") {
           this.checkpointStore.delete();
           return verified.outcome;
@@ -1018,6 +1023,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           generation: cp.leaseGeneration,
           result: cp.candidateResult as DecisionResult,
         });
+        if (this.shouldRun?.() === false) return null;
         this.checkpointStore.delete();
         return {
           status: "completed",
@@ -1027,6 +1033,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           session: sessionRes?.session ?? ({} as DecisionSession),
         };
       } catch (submitErr: unknown) {
+        if (this.shouldRun?.() === false) return null;
         if (submitErr instanceof BridgeHttpError && submitErr.status === 409) {
           // Task may have been superseded/cancelled between the status check above and
           // submission; resolve the expected terminal race instead of surfacing a fatal error
@@ -1035,6 +1042,7 @@ export class DecisionTabDriver implements DecisionTaskController {
             sessionRes?.session ?? ({} as DecisionSession),
             submitErr
           );
+          if (this.shouldRun?.() === false) return null;
           if (supersededOutcome) {
             return supersededOutcome;
           }
@@ -1044,10 +1052,12 @@ export class DecisionTabDriver implements DecisionTaskController {
         const freshTask = await this.transport
           .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
           .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
+        if (this.shouldRun?.() === false) return null;
         const receiptRes = await this.transport
           .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
           .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
+        if (this.shouldRun?.() === false) return null;
         if (receiptRes?.receipt) {
           const receipt = receiptRes.receipt;
           const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -2066,6 +2076,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Authoritative status unverifiable; treat the conflict as unexpected
       return null;
     }
+    if (this.shouldRun?.() === false) return null;
     if (fresh?.status !== "superseded" && fresh?.status !== "cancelled") {
       return null;
     }

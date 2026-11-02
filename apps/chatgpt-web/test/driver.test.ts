@@ -6,6 +6,7 @@ import { MockDocument, MockWindow } from "./mock-dom";
 import { BridgeHttpError, type BridgeTransport } from "../src/transport";
 import { ChatGptWebAdapter } from "../src/adapter";
 import type { DecisionExecutorAdapter } from "@symphony/decision/adapter";
+import { DECISION_MAX_TRANSPORT_RECOVERIES } from "@symphony/domain/decision";
 import type {
   DecisionTask,
   DecisionSession,
@@ -266,6 +267,73 @@ describe("DecisionTabDriver", () => {
       expect(execute).toHaveBeenCalledWith(sampleTask, session, sampleLease, sampleContext);
     }
   });
+
+  it.each(["receipt", "result", "task reconciliation", "receipt reconciliation", "outer receipt reconciliation", "conflict reconciliation"] as const)(
+    "fences Stop during candidate %s while admission-off continues recovery",
+    async boundary => {
+      for (const stop of [true, false]) {
+        let running = true;
+        let admission = true;
+        let release!: () => void;
+        let notify!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const started = new Promise<void>(resolve => { notify = resolve; });
+        const taskPath = `/v1/tasks/${encodeURIComponent(sampleTask.id)}`;
+        let taskReads = 0;
+        let receiptReads = 0;
+        const request = vi.fn(async <T>(method: string, path: string): Promise<T> => {
+          const isTask = path === taskPath;
+          if (isTask) taskReads++;
+          if (path.endsWith("/receipt")) receiptReads++;
+          const paused = boundary === "receipt" ? path.endsWith("/receipt")
+            : boundary === "result" ? path.endsWith("/result")
+            : boundary === "receipt reconciliation" ? path.endsWith("/receipt")
+            : boundary === "outer receipt reconciliation" ? path.endsWith("/receipt") && receiptReads === 2
+            : isTask && taskReads === 2;
+          if (paused) { notify(); await gate; }
+          if (isTask) return { task: sampleTask } as T;
+          if (path.startsWith("/v1/sessions/")) return { session: sampleSession } as T;
+          if (path.endsWith("/result")) {
+            if (boundary === "conflict reconciliation") throw new BridgeHttpError("conflict", "conflict", 409);
+            throw new Error("ambiguous result submission");
+          }
+          if (path.endsWith("/receipt")) return {} as T;
+          if (method === "POST" && path.endsWith("/block")) throw new Error("block requested");
+          throw new Error(`Unexpected candidate recovery request: ${path}`);
+        });
+        const checkpointStore = new MemoryCheckpointStore();
+        checkpointStore.set({
+          schemaVersion: 1, tabId: checkpointStore.tabId, taskId: sampleTask.id,
+          sessionId: sampleSession.id, leaseOwner: sampleLease.owner, leaseToken: sampleLease.token,
+          leaseGeneration: sampleLease.generation, leaseExpiresAtMs: sampleLease.expiresAtMs,
+          bindingGeneration: 0, step: "result_extracted", savedAtMs: Date.now(),
+          recoveryFailures: boundary === "receipt" ? DECISION_MAX_TRANSPORT_RECOVERIES : 0,
+          candidateResult: { kind: "plan", summary: "candidate" },
+        });
+        const driver = new DecisionTabDriver({
+          transport: { baseUrl: "http://localhost", request }, checkpointStore,
+          shouldRun: () => running, canClaimNewTask: () => admission,
+        });
+        const pending = driver.runOnce().then(value => value, error => error as Error);
+        await started;
+        const checkpoint = checkpointStore.get();
+        if (stop) { running = false; driver.stop(); } else { admission = false; }
+        const count = request.mock.calls.length;
+        release();
+        const outcome = await pending;
+        if (stop) {
+          expect(outcome).toBeNull();
+          expect(request).toHaveBeenCalledTimes(count);
+          expect(checkpointStore.get()).toEqual(checkpoint);
+        } else {
+          expect(outcome).toBeInstanceOf(Error);
+          if (boundary === "receipt") expect(request.mock.calls.some(([, path]) => path.endsWith("/block"))).toBe(true);
+          else if (boundary === "conflict reconciliation") expect(taskReads).toBe(2);
+          else expect(request.mock.calls.some(([, path]) => path.endsWith("/receipt"))).toBe(true);
+        }
+      }
+    }
+  );
 
   it("claims next task and fetches context via transport", async () => {
     const mockTransport: BridgeTransport = {
