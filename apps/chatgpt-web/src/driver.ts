@@ -724,6 +724,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   private async resumeObservedCheckpoint(): Promise<TaskExecutionOutcome | null> {
+    if (this.shouldRun?.() === false) return null;
     const cp = this.checkpointStore.get();
     if (!cp) return null;
 
@@ -752,6 +753,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       throw err;
     }
 
+    if (this.shouldRun?.() === false) return null;
+
     let sessionRes: { session: DecisionSession } | null = null;
     try {
       sessionRes = await this.transport.request<{ session: DecisionSession }>(
@@ -770,6 +773,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Transient network or server error: preserve checkpoint and throw to allow retry
       throw err;
     }
+
+    if (this.shouldRun?.() === false) return null;
 
     const currentTask = taskRes?.task;
     const currentSession = sessionRes?.session;
@@ -847,6 +852,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           };
           this.saveCheckpoint("claimed", currentTask, currentSession, lease);
           const context = await this.fetchContext(currentTask.id);
+          if (this.shouldRun?.() === false) return null;
           return await this.executeClaimedTask(currentTask, currentSession, lease, context);
         }
         try {
@@ -869,8 +875,10 @@ export class DecisionTabDriver implements DecisionTaskController {
               generation: cp.leaseGeneration,
               expiresAtMs: cp.leaseExpiresAtMs,
             };
+            if (this.shouldRun?.() === false) return null;
             this.saveCheckpoint("claimed", currentTask, updatedSession, lease);
             const context = await this.fetchContext(currentTask.id);
+            if (this.shouldRun?.() === false) return null;
             return await this.executeClaimedTask(currentTask, updatedSession, lease, context);
           } else {
             await this.rebindSession(cp.sessionId, {
@@ -1128,6 +1136,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           progress: this.executionProgress(),
         }
       );
+      if (this.shouldRun?.() === false) return null;
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
         renewedExpiry = hbRes.expiresAtMs;
         const currentStored = this.checkpointStore.get() ?? cp;
@@ -1443,6 +1452,7 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 5. Normal claimed / started execution
     const context = await this.fetchContext(taskRes.task.id);
+    if (this.shouldRun?.() === false) return null;
     return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
   }
 
@@ -1453,7 +1463,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     baselineCount: number,
     signal: AbortSignal,
     cp: DriverCheckpoint
-  ): Promise<TaskExecutionOutcome> {
+  ): Promise<TaskExecutionOutcome | null> {
     const adapterWithBootstrap = this.adapter as unknown as {
       waitForBootstrapResponse?: (opts: {
         baselineCount: number;
@@ -1648,8 +1658,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         token: lease.token,
         generation: lease.generation,
       });
+      if (this.shouldRun?.() === false) return null;
       this.saveCheckpoint("claimed", task, updatedSession, lease);
       const context = await this.fetchContext(task.id);
+      if (this.shouldRun?.() === false) return null;
       return await this.executeClaimedTask(task, updatedSession, lease, context);
     } else {
       const updatedSession = await this.rebindSession(session.id, {

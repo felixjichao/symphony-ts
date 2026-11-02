@@ -201,6 +201,72 @@ describe("DecisionTabDriver", () => {
     }
   });
 
+  it.each([
+    ["claimed", "task"], ["claimed", "heartbeat"], ["claimed", "context"],
+    ["started", "context"], ["rebind_submitting", "context"],
+  ] as const)("fences Stop during existing %s checkpoint recovery at %s, but permits admission-off", async (step, boundary) => {
+    for (const change of ["global Stop", "claim admission off"]) {
+      let shouldRun = true;
+      let canClaim = true;
+      let release!: () => void;
+      let notify!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { notify = resolve; });
+      const session = step === "rebind_submitting" ? { ...sampleSession, bindingGeneration: 1 } : sampleSession;
+      const taskPath = `/v1/tasks/${encodeURIComponent(sampleTask.id)}`;
+      const request = vi.fn(async <T>(_method: string, path: string): Promise<T> => {
+        if (path === (boundary === "task" ? taskPath : `${taskPath}/${boundary}`)) {
+          notify();
+          await gate;
+        }
+        if (path === taskPath) return { task: sampleTask } as T;
+        if (path.startsWith("/v1/sessions/")) return { session } as T;
+        if (path.endsWith("/heartbeat")) return { expiresAtMs: sampleLease.expiresAtMs } as T;
+        if (path.endsWith("/context")) return { context: sampleContext } as T;
+        throw new Error(`Unexpected recovery request: ${path}`);
+      });
+      const checkpointStore = new MemoryCheckpointStore();
+      checkpointStore.set({
+        schemaVersion: 1, tabId: checkpointStore.tabId, taskId: sampleTask.id,
+        sessionId: sampleSession.id, leaseOwner: sampleLease.owner, leaseToken: sampleLease.token,
+        leaseGeneration: sampleLease.generation, leaseExpiresAtMs: sampleLease.expiresAtMs,
+        bindingGeneration: 0, step, attemptId: "existing-attempt", savedAtMs: Date.now(),
+        ...(step === "rebind_submitting" ? { rebindState: {
+          expectedGeneration: 0, newExternalSessionRef: "conversation", newResumeUri: null,
+        } } : {}),
+      });
+      const driver = new DecisionTabDriver({
+        transport: { baseUrl: "http://localhost", request }, checkpointStore,
+        shouldRun: () => shouldRun, canClaimNewTask: () => canClaim,
+      });
+      const execute = vi.spyOn(driver, "executeClaimedTask").mockResolvedValue(null);
+      const pending = driver.runOnce();
+      await started;
+      const checkpoint = checkpointStore.get();
+      if (change === "global Stop") {
+        shouldRun = false;
+        driver.stop();
+      } else {
+        canClaim = false;
+      }
+      const requestsBeforeRelease = request.mock.calls.length;
+      release();
+      expect(await pending).toBeNull();
+      if (change === "global Stop") {
+        expect(execute).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledTimes(requestsBeforeRelease);
+        expect(checkpointStore.get()).toEqual(checkpoint);
+        // The retained checkpoint is still executable after explicit restart,
+        // even with new-task admission disabled.
+        shouldRun = true;
+        canClaim = false;
+        await driver.runOnce();
+      }
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledWith(sampleTask, session, sampleLease, sampleContext);
+    }
+  });
+
   it("claims next task and fetches context via transport", async () => {
     const mockTransport: BridgeTransport = {
       baseUrl: "http://127.0.0.1:4545",
