@@ -1,5 +1,5 @@
 import { DriverDiagnostics } from "./diagnostics";
-import { getOrCreateTabId } from "./checkpoint";
+import { claimPreferenceKey, resolveTabId } from "./tab-identity";
 /**
  * Tampermonkey userscript entrypoint.
  * Injects a floating control HUD into ChatGPT Web and orchestrates DecisionTabDriver.
@@ -222,10 +222,19 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
     flex: "1",
   });
 
+  const claimLabel = document.createElement("label");
+  const claimToggle = document.createElement("input");
+  claimToggle.id = "symphony-allow-new-tasks";
+  claimToggle.type = "checkbox";
+  claimToggle.disabled = true;
+  const claimText = document.createElement("span");
+  claimLabel.appendChild(claimToggle);
+  claimLabel.appendChild(claimText);
   btnRow.appendChild(toggleBtn);
   hud.appendChild(titleRow);
   hud.appendChild(statusText);
   hud.appendChild(settingsContainer);
+  hud.appendChild(claimLabel);
   hud.appendChild(btnRow);
   document.body.appendChild(hud);
 
@@ -238,14 +247,34 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   diagnosticPanel.appendChild(diagnosticTitle);
   diagnosticPanel.appendChild(diagnosticText);
   hud.appendChild(diagnosticPanel);
-  const diagnostics = new DriverDiagnostics(`symphony_driver_diagnostics_${getOrCreateTabId(typeof window !== "undefined" ? window : null)}`,
-    text => { diagnosticText.textContent = text; });
+  const identity = options?.checkpointStore ? Promise.resolve(options.checkpointStore.tabId) : resolveTabId(typeof window === "undefined" ? null : window);
+  let tabId = "";
+  let allowNewTasks = false;
+  const preferenceUrl = () => urlInput.value.trim() || "http://127.0.0.1:4040";
+  const updateClaimUI = () => { claimText.textContent = allowNewTasks ? "Allow new tasks" : "Do not claim new tasks (current task continues)"; claimToggle.checked = allowNewTasks; };
+  const readPreference = () => {
+    const key = claimPreferenceKey(preferenceUrl(), tabId);
+    try { allowNewTasks = typeof GM_getValue === "function" ? GM_getValue<boolean>(key, false) === true : window.localStorage.getItem(key) === "true"; }
+    catch { allowNewTasks = false; }
+    updateClaimUI();
+  };
+  const identityReady = identity.then(id => { tabId = id; readPreference(); claimToggle.disabled = false; return id; });
+  updateClaimUI();
+  claimToggle.addEventListener("change", () => {
+    allowNewTasks = claimToggle.checked;
+    const key = claimPreferenceKey(preferenceUrl(), tabId);
+    try { if (typeof GM_setValue === "function") GM_setValue(key, allowNewTasks); else window.localStorage.setItem(key, String(allowNewTasks)); } catch { /* Keep the choice for this document. */ }
+    updateClaimUI();
+  });
+  urlInput.addEventListener("change", () => { if (tabId) readPreference(); });
+  let diagnostics: DriverDiagnostics;
 
   let currentDriver: DecisionTabDriver | null = null;
   let isRunning = false;
 
   const updateUI = (running: boolean, message?: string, isError = false, phase: "Running" | "Waiting" | "Blocked" = "Running") => {
     isRunning = running;
+    urlInput.disabled = running;
     if (running) {
       statusIndicator.textContent = `● ${phase}`;
       statusIndicator.style.color = phase === "Blocked" ? "#f38ba8" : phase === "Waiting" ? "#f9e2af" : "#a6e3a1";
@@ -294,6 +323,9 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   const start = async () => {
     try {
       const generation = ++enableGeneration;
+      const resolvedTabId = await identityReady;
+      if (generation !== enableGeneration) return;
+      diagnostics = new DriverDiagnostics(`symphony_driver_diagnostics_${resolvedTabId}`, text => { diagnosticText.textContent = text; });
       if (authProbeTimer) clearTimeout(authProbeTimer);
       const responseMinutes = Number(timeoutInput.value);
       if (!Number.isInteger(responseMinutes) || responseMinutes < 1 || responseMinutes > 60) {
@@ -308,6 +340,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
       }
 
       bridgeUrl = urlInput.value.trim() || "http://127.0.0.1:4040";
+      readPreference();
       setDriverEnabledInTab(true);
 
       if (typeof GM_setValue === "function") {
@@ -315,7 +348,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
       }
 
       const transport = options?.transport ?? createTransport(bridgeUrl, token);
-      const checkpointStore = options?.checkpointStore ?? new GmCheckpointStore();
+      const checkpointStore = options?.checkpointStore ?? new GmCheckpointStore({ tabId: resolvedTabId });
       const adapter = options?.adapter ?? new ChatGptWebAdapter({ responseTimeoutMs: responseMinutes * 60_000,
         onResponseWaitState: ({ taskId, kind, revision, ...wait }) => diagnostics.record({ stage: "response_wait", taskId, kind, revision, wait }),
       });
@@ -325,6 +358,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
         checkpointStore,
         adapter,
         shouldRun: isDriverEnabledInTab,
+        canClaimNewTask: () => allowNewTasks,
         ...(typeof options?.pollIntervalMs === "number" ? { pollIntervalMs: options.pollIntervalMs } : {}),
         onDiagnostic: entry => {
           diagnostics.record(entry);
@@ -342,7 +376,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
           } else if (owned) {
             updateUI(true, `Waiting ${owned.id}: no local checkpoint. Await the current owner or host reconciliation; do not resend the task.`, false, "Waiting");
           } else {
-            updateUI(true, "Polling for Decision tasks");
+            updateUI(true, allowNewTasks ? "Polling for Decision tasks" : "Idle: not claiming new tasks");
           }
         },
         onError: (err: Error) => {

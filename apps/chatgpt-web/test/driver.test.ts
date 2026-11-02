@@ -6,6 +6,7 @@ import { MockDocument, MockWindow } from "./mock-dom";
 import { BridgeHttpError, type BridgeTransport } from "../src/transport";
 import { ChatGptWebAdapter } from "../src/adapter";
 import type { DecisionExecutorAdapter } from "@symphony/decision/adapter";
+import { DECISION_MAX_TRANSPORT_RECOVERIES } from "@symphony/domain/decision";
 import type {
   DecisionTask,
   DecisionSession,
@@ -59,6 +60,280 @@ describe("DecisionTabDriver", () => {
     prNumber: null,
     headSha: null,
   };
+
+  it("fences admission before next and after a delayed next, but keeps an in-flight claim", async () => {
+    let enabled = false;
+    let releaseNext!: () => void;
+    let releaseClaim!: () => void;
+    const nextGate = new Promise<void>(resolve => { releaseNext = resolve; });
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const request = vi.fn(async <T>(method: string): Promise<T> => {
+      if (method === "GET") { await nextGate; return { task: sampleTask, session: sampleSession } as T; }
+      await claimGate;
+      return { task: sampleTask, session: sampleSession, lease: sampleLease } as T;
+    });
+    const checkpointStore = new MemoryCheckpointStore();
+    const driver = new DecisionTabDriver({ transport: { baseUrl: "http://localhost", request }, checkpointStore, canClaimNewTask: () => enabled });
+    expect(await driver.claimNextTask()).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    enabled = true;
+    const delayedNext = driver.claimNextTask();
+    enabled = false;
+    releaseNext();
+    expect(await delayedNext).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+    enabled = true;
+    const delayedClaim = driver.claimNextTask();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(3);
+    enabled = false;
+    releaseClaim();
+    expect(await delayedClaim).not.toBeNull();
+    expect(checkpointStore.get()).toMatchObject({ step: "claimed", taskId: sampleTask.id, leaseToken: sampleLease.token });
+  });
+
+  it.each(["global Stop", "claim admission off"])("handles %s while claim is pending", async (change) => {
+    let shouldRun = true;
+    let canClaim = true;
+    let releaseClaim!: () => void;
+    let claimStarted!: () => void;
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const started = new Promise<void>(resolve => { claimStarted = resolve; });
+    const request = vi.fn(async <T>(_method: string, path: string): Promise<T> => {
+      if (path === "/v1/tasks/next") return { task: sampleTask, session: sampleSession } as T;
+      if (path.endsWith("/claim")) {
+        claimStarted();
+        await claimGate;
+        return { task: sampleTask, session: sampleSession, lease: sampleLease } as T;
+      }
+      if (path.endsWith("/context")) return { context: sampleContext } as T;
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const checkpointStore = new MemoryCheckpointStore();
+    const driver = new DecisionTabDriver({
+      transport: { baseUrl: "http://localhost", request }, checkpointStore,
+      shouldRun: () => shouldRun, canClaimNewTask: () => canClaim,
+    });
+    const execute = vi.spyOn(driver, "executeClaimedTask").mockResolvedValue(null);
+    const pending = driver.runOnce();
+    await started;
+    if (change === "global Stop") {
+      shouldRun = false;
+      driver.stop();
+    } else {
+      canClaim = false;
+    }
+    releaseClaim();
+    expect(await pending).toBeNull();
+    expect(checkpointStore.get()).toMatchObject({
+      step: "claimed", taskId: sampleTask.id, sessionId: sampleSession.id,
+      leaseOwner: sampleLease.owner, leaseToken: sampleLease.token, leaseGeneration: sampleLease.generation,
+    });
+    if (change === "global Stop") {
+      expect(request.mock.calls.map(([, path]) => path)).toEqual([
+        "/v1/tasks/next", `/v1/tasks/${encodeURIComponent(sampleTask.id)}/claim`,
+      ]);
+      expect(execute).not.toHaveBeenCalled();
+    } else {
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(execute).toHaveBeenCalledWith(sampleTask, sampleSession, sampleLease, sampleContext);
+    }
+  });
+
+  it.each([
+    ["initial", "global Stop"],
+    ["initial", "claim admission off"],
+    ["superseded", "global Stop"],
+    ["superseded", "claim admission off"],
+  ])("handles %s context pending during %s", async (phase, change) => {
+    let shouldRun = true;
+    let canClaim = true;
+    let releaseContext!: () => void;
+    let contextStarted!: () => void;
+    const contextGate = new Promise<void>(resolve => { releaseContext = resolve; });
+    const started = new Promise<void>(resolve => { contextStarted = resolve; });
+    const reclaimedTask = { ...sampleTask, id: `${sampleTask.id}:reclaimed` };
+    let claims = 0;
+    const request = vi.fn(async <T>(_method: string, path: string): Promise<T> => {
+      if (path === "/v1/tasks/next") {
+        return { task: claims === 0 ? sampleTask : reclaimedTask, session: sampleSession } as T;
+      }
+      if (path.endsWith("/claim")) {
+        claims += 1;
+        return { task: claims === 1 ? sampleTask : reclaimedTask, session: sampleSession, lease: sampleLease } as T;
+      }
+      if (path.endsWith("/context")) {
+        if (phase === "initial" || claims === 2) {
+          contextStarted();
+          await contextGate;
+        }
+        return { context: sampleContext } as T;
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const checkpointStore = new MemoryCheckpointStore();
+    const driver = new DecisionTabDriver({
+      transport: { baseUrl: "http://localhost", request }, checkpointStore,
+      shouldRun: () => shouldRun, canClaimNewTask: () => canClaim,
+    });
+    const execute = vi.spyOn(driver, "executeClaimedTask").mockResolvedValue(null);
+    if (phase === "superseded") {
+      execute.mockResolvedValueOnce({ status: "superseded", session: sampleSession, error: new Error("superseded") });
+    }
+    const pending = driver.runOnce();
+    await started;
+    const claimedCheckpoint = checkpointStore.get();
+    if (change === "global Stop") {
+      shouldRun = false;
+      driver.stop();
+    } else {
+      canClaim = false;
+    }
+    releaseContext();
+    expect(await pending).toBeNull();
+    expect(checkpointStore.get()).toEqual(claimedCheckpoint);
+    const expectedTask = phase === "initial" ? sampleTask : reclaimedTask;
+    expect(checkpointStore.get()).toMatchObject({ step: "claimed", taskId: expectedTask.id, leaseToken: sampleLease.token });
+    const priorExecutions = phase === "initial" ? 0 : 1;
+    expect(execute).toHaveBeenCalledTimes(priorExecutions + (change === "global Stop" ? 0 : 1));
+    if (change === "claim admission off") {
+      expect(execute).toHaveBeenLastCalledWith(expectedTask, sampleSession, sampleLease, sampleContext);
+    }
+  });
+
+  it.each([
+    ["claimed", "task"], ["claimed", "heartbeat"], ["claimed", "context"],
+    ["started", "context"], ["rebind_submitting", "context"],
+  ] as const)("fences Stop during existing %s checkpoint recovery at %s, but permits admission-off", async (step, boundary) => {
+    for (const change of ["global Stop", "claim admission off"]) {
+      let shouldRun = true;
+      let canClaim = true;
+      let release!: () => void;
+      let notify!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { notify = resolve; });
+      const session = step === "rebind_submitting" ? { ...sampleSession, bindingGeneration: 1 } : sampleSession;
+      const taskPath = `/v1/tasks/${encodeURIComponent(sampleTask.id)}`;
+      const request = vi.fn(async <T>(_method: string, path: string): Promise<T> => {
+        if (path === (boundary === "task" ? taskPath : `${taskPath}/${boundary}`)) {
+          notify();
+          await gate;
+        }
+        if (path === taskPath) return { task: sampleTask } as T;
+        if (path.startsWith("/v1/sessions/")) return { session } as T;
+        if (path.endsWith("/heartbeat")) return { expiresAtMs: sampleLease.expiresAtMs } as T;
+        if (path.endsWith("/context")) return { context: sampleContext } as T;
+        throw new Error(`Unexpected recovery request: ${path}`);
+      });
+      const checkpointStore = new MemoryCheckpointStore();
+      checkpointStore.set({
+        schemaVersion: 1, tabId: checkpointStore.tabId, taskId: sampleTask.id,
+        sessionId: sampleSession.id, leaseOwner: sampleLease.owner, leaseToken: sampleLease.token,
+        leaseGeneration: sampleLease.generation, leaseExpiresAtMs: sampleLease.expiresAtMs,
+        bindingGeneration: 0, step, attemptId: "existing-attempt", savedAtMs: Date.now(),
+        ...(step === "rebind_submitting" ? { rebindState: {
+          expectedGeneration: 0, newExternalSessionRef: "conversation", newResumeUri: null,
+        } } : {}),
+      });
+      const driver = new DecisionTabDriver({
+        transport: { baseUrl: "http://localhost", request }, checkpointStore,
+        shouldRun: () => shouldRun, canClaimNewTask: () => canClaim,
+      });
+      const execute = vi.spyOn(driver, "executeClaimedTask").mockResolvedValue(null);
+      const pending = driver.runOnce();
+      await started;
+      const checkpoint = checkpointStore.get();
+      if (change === "global Stop") {
+        shouldRun = false;
+        driver.stop();
+      } else {
+        canClaim = false;
+      }
+      const requestsBeforeRelease = request.mock.calls.length;
+      release();
+      expect(await pending).toBeNull();
+      if (change === "global Stop") {
+        expect(execute).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledTimes(requestsBeforeRelease);
+        expect(checkpointStore.get()).toEqual(checkpoint);
+        // The retained checkpoint is still executable after explicit restart,
+        // even with new-task admission disabled.
+        shouldRun = true;
+        canClaim = false;
+        await driver.runOnce();
+      }
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledWith(sampleTask, session, sampleLease, sampleContext);
+    }
+  });
+
+  it.each(["receipt", "result", "task reconciliation", "receipt reconciliation", "outer receipt reconciliation", "conflict reconciliation"] as const)(
+    "fences Stop during candidate %s while admission-off continues recovery",
+    async boundary => {
+      for (const stop of [true, false]) {
+        let running = true;
+        let admission = true;
+        let release!: () => void;
+        let notify!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const started = new Promise<void>(resolve => { notify = resolve; });
+        const taskPath = `/v1/tasks/${encodeURIComponent(sampleTask.id)}`;
+        let taskReads = 0;
+        let receiptReads = 0;
+        const request = vi.fn(async <T>(method: string, path: string): Promise<T> => {
+          const isTask = path === taskPath;
+          if (isTask) taskReads++;
+          if (path.endsWith("/receipt")) receiptReads++;
+          const paused = boundary === "receipt" ? path.endsWith("/receipt")
+            : boundary === "result" ? path.endsWith("/result")
+            : boundary === "receipt reconciliation" ? path.endsWith("/receipt")
+            : boundary === "outer receipt reconciliation" ? path.endsWith("/receipt") && receiptReads === 2
+            : isTask && taskReads === 2;
+          if (paused) { notify(); await gate; }
+          if (isTask) return { task: sampleTask } as T;
+          if (path.startsWith("/v1/sessions/")) return { session: sampleSession } as T;
+          if (path.endsWith("/result")) {
+            if (boundary === "conflict reconciliation") throw new BridgeHttpError("conflict", "conflict", 409);
+            throw new Error("ambiguous result submission");
+          }
+          if (path.endsWith("/receipt")) return {} as T;
+          if (method === "POST" && path.endsWith("/block")) throw new Error("block requested");
+          throw new Error(`Unexpected candidate recovery request: ${path}`);
+        });
+        const checkpointStore = new MemoryCheckpointStore();
+        checkpointStore.set({
+          schemaVersion: 1, tabId: checkpointStore.tabId, taskId: sampleTask.id,
+          sessionId: sampleSession.id, leaseOwner: sampleLease.owner, leaseToken: sampleLease.token,
+          leaseGeneration: sampleLease.generation, leaseExpiresAtMs: sampleLease.expiresAtMs,
+          bindingGeneration: 0, step: "result_extracted", savedAtMs: Date.now(),
+          recoveryFailures: boundary === "receipt" ? DECISION_MAX_TRANSPORT_RECOVERIES : 0,
+          candidateResult: { kind: "plan", summary: "candidate" },
+        });
+        const driver = new DecisionTabDriver({
+          transport: { baseUrl: "http://localhost", request }, checkpointStore,
+          shouldRun: () => running, canClaimNewTask: () => admission,
+        });
+        const pending = driver.runOnce().then(value => value, error => error as Error);
+        await started;
+        const checkpoint = checkpointStore.get();
+        if (stop) { running = false; driver.stop(); } else { admission = false; }
+        const count = request.mock.calls.length;
+        release();
+        const outcome = await pending;
+        if (stop) {
+          expect(outcome).toBeNull();
+          expect(request).toHaveBeenCalledTimes(count);
+          expect(checkpointStore.get()).toEqual(checkpoint);
+        } else {
+          expect(outcome).toBeInstanceOf(Error);
+          if (boundary === "receipt") expect(request.mock.calls.some(([, path]) => path.endsWith("/block"))).toBe(true);
+          else if (boundary === "conflict reconciliation") expect(taskReads).toBe(2);
+          else expect(request.mock.calls.some(([, path]) => path.endsWith("/receipt"))).toBe(true);
+        }
+      }
+    }
+  );
 
   it("claims next task and fetches context via transport", async () => {
     const mockTransport: BridgeTransport = {
@@ -486,6 +761,123 @@ describe("DecisionTabDriver", () => {
     expect(outcome?.status).toBe("completed");
     expect(mockAdapter.executeTask).not.toHaveBeenCalled();
     expect(mockAdapter.waitForExistingResponse).toHaveBeenCalled();
+  });
+
+  it.each([true, false])("fences Stop during active waiting-response submission (stop=%s)", async stop => {
+    let running = true;
+    let admission = true;
+    let release!: () => void;
+    let notify!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { notify = resolve; });
+    const cpStore = new MemoryCheckpointStore({ tabId: "driver-tab" });
+    const expectedResult: DecisionResult = {
+      schemaVersion: 1,
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      kind: "plan",
+      revision: 1,
+      verdict: "ready",
+      content: {
+        plan: "Plan",
+        acceptanceCriteria: [],
+        risks: [],
+        clarifications: [],
+      },
+      createdAtMs: Date.now(),
+    };
+
+    cpStore.set({
+      schemaVersion: 1,
+      tabId: "driver-tab",
+      taskId: sampleTask.id,
+      sessionId: sampleTask.sessionId,
+      leaseOwner: "driver-1",
+      leaseToken: "tok-1",
+      leaseGeneration: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      bindingGeneration: 0,
+      step: "waiting_response",
+      attemptId: "att-1",
+      savedAtMs: Date.now(),
+      baselineCount: 1,
+    });
+
+    const mockAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"] as const,
+      supportedContextStrategies: ["connector", "materialized"] as const,
+      inspectBinding: vi.fn(),
+      createSession: vi.fn(),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn(), // MUST NOT be called!
+      waitForExistingResponse: vi.fn().mockResolvedValue({ result: expectedResult }),
+      setStepListener: vi.fn(),
+    };
+
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/heartbeat")) {
+          return { expiresAtMs: Date.now() + 100_000, ttlMs: 120_000 } as unknown as T;
+        }
+        if (method === "GET" && path === `/v1/tasks/${encodeURIComponent(sampleTask.id)}`) {
+          return { task: { ...sampleTask, status: "running" } } as unknown as T;
+        }
+        if (method === "GET" && path.includes("/sessions/")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/result")) {
+          notify();
+          await gate;
+          return {
+            receipt: {
+              schemaVersion: 1,
+              taskId: sampleTask.id,
+              type: "result",
+              claimGeneration: 1,
+              claimOwner: "driver-1",
+              claimToken: "tok-1",
+              acceptedAtMs: Date.now(),
+              payload: expectedResult,
+            },
+            result: expectedResult,
+            superseded: false,
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter as unknown as DecisionExecutorAdapter,
+      ownerId: "driver-1",
+      shouldRun: () => running,
+      canClaimNewTask: () => admission,
+    });
+
+    const pending = driver.resumeCheckpointIfAvailable().then(value => value, error => error as Error);
+    await started;
+    const checkpoint = cpStore.get();
+    expect(checkpoint?.step).toBe("result_extracted");
+    expect(checkpoint?.candidateResult).toEqual(expectedResult);
+    if (stop) { running = false; driver.stop(); } else { admission = false; }
+    const count = vi.mocked(mockTransport.request).mock.calls.length;
+    release();
+    const outcome = await pending;
+    expect(mockTransport.request).toHaveBeenCalledTimes(count);
+    if (stop) {
+      expect(outcome).toBeInstanceOf(Error);
+      expect(cpStore.get()).toEqual(checkpoint);
+    } else {
+      expect(outcome).toMatchObject({ status: "completed" });
+      expect(cpStore.get()).toBeNull();
+    }
+    expect(mockAdapter.executeTask).not.toHaveBeenCalled();
+    expect(mockAdapter.waitForExistingResponse).toHaveBeenCalledOnce();
   });
 
   it("handles prompt_submitting checkpoint: resumes waiting if confirmed sent (S2)", async () => {
@@ -1439,6 +1831,78 @@ describe("DecisionTabDriver", () => {
     // Stale checkpoint (and any candidate state) must be dropped, driver keeps polling
     expect(cpStore.get()).toBeNull();
     expect(failureSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("fences Stop before execution conflict reconciliation", async () => {
+    const cpStore = new MemoryCheckpointStore();
+    const supersededTask: DecisionTask = { ...sampleTask, status: "superseded", lease: null };
+    let running = true;
+    let release!: () => void;
+    let notify!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { notify = resolve; });
+    const failureSubmission = vi.fn(async () => {
+      notify();
+      await gate;
+      throw new BridgeHttpError("Cannot fail superseded task", "conflict", 409);
+    });
+    const mockTransport: BridgeTransport = {
+      baseUrl: "http://127.0.0.1:4545",
+      authToken: "test",
+      request: vi.fn(async <T>(method: string, path: string): Promise<T> => {
+        if (method === "POST" && path.includes("/binding")) {
+          return { session: sampleSession } as unknown as T;
+        }
+        if (method === "POST" && path.includes("/start")) {
+          return {} as unknown as T;
+        }
+        if (method === "POST" && (path.includes("/fail") || path.includes("/block"))) {
+          return await failureSubmission();
+        }
+        if (method === "GET" && /^\/v1\/tasks\/[^/]+$/.test(path)) {
+          return { task: supersededTask } as unknown as T;
+        }
+        return {} as unknown as T;
+      }),
+    };
+
+    const mockAdapter: DecisionExecutorAdapter = {
+      name: "chatgpt-web",
+      supportedTaskKinds: ["plan", "review"],
+      supportedContextStrategies: ["connector", "materialized"],
+      inspectBinding: vi.fn().mockResolvedValue({ status: "none" }),
+      createSession: vi.fn().mockResolvedValue({
+        binding: {
+          schemaVersion: 1,
+          adapter: "chatgpt-web",
+          externalSessionRef: "conv-1",
+          resumeUri: "https://chatgpt.com/c/conv-1",
+          generation: 1,
+        },
+      }),
+      resumeSession: vi.fn(),
+      executeTask: vi.fn().mockRejectedValue(new Error("model exploded mid-review")),
+    };
+
+    const driver = new DecisionTabDriver({
+      transport: mockTransport,
+      checkpointStore: cpStore,
+      adapter: mockAdapter,
+      ownerId: "driver-1",
+      shouldRun: () => running,
+    });
+
+    const pending = driver.executeClaimedTask(sampleTask, sampleSession, sampleLease, sampleContext)
+      .then(value => value, error => error as Error);
+    await started;
+    const checkpoint = cpStore.get();
+    running = false;
+    driver.stop();
+    const count = vi.mocked(mockTransport.request).mock.calls.length;
+    release();
+    expect(await pending).toBeInstanceOf(BridgeHttpError);
+    expect(mockTransport.request).toHaveBeenCalledTimes(count);
+    expect(cpStore.get()).toEqual(checkpoint);
   });
 
   it("rethrows 409 conflict when the task is not superseded during execution", async () => {

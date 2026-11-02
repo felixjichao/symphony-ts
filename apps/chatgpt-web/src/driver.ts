@@ -83,6 +83,7 @@ export interface DecisionTabDriverOptions {
   readonly navigationTimeoutMs?: number | undefined;
   readonly maxNavigationAttempts?: number | undefined;
   readonly shouldRun?: (() => boolean) | undefined;
+  readonly canClaimNewTask?: (() => boolean) | undefined;
   readonly onDiagnostic?: ((entry: DriverDiagnostic) => void) | undefined;
   /** Read-only idle facts; transport supplies Bridge authentication.
    * No task lease credentials are exposed or adopted; this never authorizes recovery. */
@@ -101,6 +102,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   readonly navigationTimeoutMs: number;
   readonly maxNavigationAttempts: number;
   readonly shouldRun?: (() => boolean) | undefined;
+  readonly canClaimNewTask?: (() => boolean) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 
   private readonly onDiagnostic: DecisionTabDriverOptions["onDiagnostic"];
@@ -125,6 +127,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.maxNavigationAttempts = options.maxNavigationAttempts ?? 3;
     this.onError = options.onError;
     this.shouldRun = options.shouldRun;
+    this.canClaimNewTask = options.canClaimNewTask;
     this.onDiagnostic = options.onDiagnostic;
     this.onContinuity = options.onContinuity;
 
@@ -199,6 +202,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         superseded: boolean;
       }>("POST", `/v1/tasks/${encodeURIComponent(taskId)}/result`, params);
 
+      if (this.shouldRun?.() === false) throw new Error("Execution stopped");
       // Upon confirmed valid result receipt from bridge, checkpoint can safely be cleared
       if (res.receipt?.type === "result" && !res.superseded) {
         this.diagnose({ stage: "result_accepted", taskId, kind: params.result.kind, revision: params.result.revision });
@@ -207,12 +211,14 @@ export class DecisionTabDriver implements DecisionTaskController {
       return res;
     } catch (err: unknown) {
       this.diagnose({ stage: "result_submit_error", taskId, kind: params.result.kind, revision: params.result.revision });
+      if (this.shouldRun?.() === false) throw err;
       // In case of network packet loss on return, query authoritative receipt before failing
       try {
         const receiptRes = await this.transport.request<{ receipt: SubmissionReceipt }>(
           "GET",
           `/v1/tasks/${encodeURIComponent(taskId)}/receipt`
         );
+        if (this.shouldRun?.() === false) throw err;
         if (receiptRes?.receipt) {
           const receipt = receiptRes.receipt;
           const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -687,13 +693,14 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   async claimNextTask(): Promise<{ task: DecisionTask; session: DecisionSession; lease: DecisionLease } | null> {
+    if (this.shouldRun?.() === false || this.canClaimNewTask?.() === false) return null;
     const next = await this.transport.request<{ task: DecisionTask; session: DecisionSession } | null>(
       "GET",
       "/v1/tasks/next",
       undefined,
       { allow204: true }
     );
-    if (!next) return null;
+    if (!next || this.shouldRun?.() === false || this.canClaimNewTask?.() === false) return null;
 
     const claimRes = await this.transport.request<{
       task: DecisionTask;
@@ -704,6 +711,10 @@ export class DecisionTabDriver implements DecisionTaskController {
       ttlMs: this.defaultClaimTtlMs,
     });
 
+    this.saveCheckpoint("claimed", claimRes.task, claimRes.session, claimRes.lease);
+    // Global Stop still fences execution after an in-flight claim succeeds; retain
+    // the lease checkpoint for Start to recover. Admission changes alone do not stop it.
+    if (this.shouldRun?.() === false) return null;
     return claimRes;
   }
 
@@ -716,6 +727,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   private async resumeObservedCheckpoint(): Promise<TaskExecutionOutcome | null> {
+    if (this.shouldRun?.() === false) return null;
     const cp = this.checkpointStore.get();
     if (!cp) return null;
 
@@ -744,6 +756,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       throw err;
     }
 
+    if (this.shouldRun?.() === false) return null;
+
     let sessionRes: { session: DecisionSession } | null = null;
     try {
       sessionRes = await this.transport.request<{ session: DecisionSession }>(
@@ -762,6 +776,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Transient network or server error: preserve checkpoint and throw to allow retry
       throw err;
     }
+
+    if (this.shouldRun?.() === false) return null;
 
     const currentTask = taskRes?.task;
     const currentSession = sessionRes?.session;
@@ -797,6 +813,7 @@ export class DecisionTabDriver implements DecisionTaskController {
         // cycle: only an authoritative receipt or an explicit operator resolution may retire it.
         // Repeated polls and page rebuilds keep re-checking the receipt and keep the evidence.
         const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (this.shouldRun?.() === false) return null;
         if (verified.state === "confirmed") {
           this.checkpointStore.delete();
           return verified.outcome;
@@ -839,6 +856,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           };
           this.saveCheckpoint("claimed", currentTask, currentSession, lease);
           const context = await this.fetchContext(currentTask.id);
+          if (this.shouldRun?.() === false) return null;
           return await this.executeClaimedTask(currentTask, currentSession, lease, context);
         }
         try {
@@ -861,8 +879,10 @@ export class DecisionTabDriver implements DecisionTaskController {
               generation: cp.leaseGeneration,
               expiresAtMs: cp.leaseExpiresAtMs,
             };
+            if (this.shouldRun?.() === false) return null;
             this.saveCheckpoint("claimed", currentTask, updatedSession, lease);
             const context = await this.fetchContext(currentTask.id);
+            if (this.shouldRun?.() === false) return null;
             return await this.executeClaimedTask(currentTask, updatedSession, lease, context);
           } else {
             await this.rebindSession(cp.sessionId, {
@@ -973,6 +993,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     if (cp.candidateResult && (cp.step === "result_extracted" || cp.step === "waiting_response")) {
       if ((cp.recoveryFailures ?? 0) >= DECISION_MAX_TRANSPORT_RECOVERIES) {
         const verified = await this.verifyCandidateReceipt(cp, sessionRes?.session ?? null, currentTask);
+        if (this.shouldRun?.() === false) return null;
         if (verified.state === "confirmed") {
           this.checkpointStore.delete();
           return verified.outcome;
@@ -1002,6 +1023,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           generation: cp.leaseGeneration,
           result: cp.candidateResult as DecisionResult,
         });
+        if (this.shouldRun?.() === false) return null;
         this.checkpointStore.delete();
         return {
           status: "completed",
@@ -1011,6 +1033,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           session: sessionRes?.session ?? ({} as DecisionSession),
         };
       } catch (submitErr: unknown) {
+        if (this.shouldRun?.() === false) return null;
         if (submitErr instanceof BridgeHttpError && submitErr.status === 409) {
           // Task may have been superseded/cancelled between the status check above and
           // submission; resolve the expected terminal race instead of surfacing a fatal error
@@ -1019,6 +1042,7 @@ export class DecisionTabDriver implements DecisionTaskController {
             sessionRes?.session ?? ({} as DecisionSession),
             submitErr
           );
+          if (this.shouldRun?.() === false) return null;
           if (supersededOutcome) {
             return supersededOutcome;
           }
@@ -1028,10 +1052,12 @@ export class DecisionTabDriver implements DecisionTaskController {
         const freshTask = await this.transport
           .request<{ task: DecisionTask }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}`)
           .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
+        if (this.shouldRun?.() === false) return null;
         const receiptRes = await this.transport
           .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(cp.taskId)}/receipt`)
           .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
+        if (this.shouldRun?.() === false) return null;
         if (receiptRes?.receipt) {
           const receipt = receiptRes.receipt;
           const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -1120,6 +1146,7 @@ export class DecisionTabDriver implements DecisionTaskController {
           progress: this.executionProgress(),
         }
       );
+      if (this.shouldRun?.() === false) return null;
       if (hbRes && typeof hbRes.expiresAtMs === "number") {
         renewedExpiry = hbRes.expiresAtMs;
         const currentStored = this.checkpointStore.get() ?? cp;
@@ -1435,6 +1462,7 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 5. Normal claimed / started execution
     const context = await this.fetchContext(taskRes.task.id);
+    if (this.shouldRun?.() === false) return null;
     return await this.executeClaimedTask(taskRes.task, sessionRes.session, lease, context);
   }
 
@@ -1445,7 +1473,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     baselineCount: number,
     signal: AbortSignal,
     cp: DriverCheckpoint
-  ): Promise<TaskExecutionOutcome> {
+  ): Promise<TaskExecutionOutcome | null> {
     const adapterWithBootstrap = this.adapter as unknown as {
       waitForBootstrapResponse?: (opts: {
         baselineCount: number;
@@ -1640,8 +1668,10 @@ export class DecisionTabDriver implements DecisionTaskController {
         token: lease.token,
         generation: lease.generation,
       });
+      if (this.shouldRun?.() === false) return null;
       this.saveCheckpoint("claimed", task, updatedSession, lease);
       const context = await this.fetchContext(task.id);
+      if (this.shouldRun?.() === false) return null;
       return await this.executeClaimedTask(task, updatedSession, lease, context);
     } else {
       const updatedSession = await this.rebindSession(session.id, {
@@ -1890,12 +1920,14 @@ export class DecisionTabDriver implements DecisionTaskController {
         session,
       };
     } catch (submitErr) {
+      if (signal.aborted || this.shouldRun?.() === false) throw submitErr;
       // Transport error during submission! DO NOT mark failed! DO NOT delete checkpoint!
       // Check if bridge already accepted it (authoritative receipt):
       const receiptRes = await this.transport
         .request<{ receipt: SubmissionReceipt }>("GET", `/v1/tasks/${encodeURIComponent(task.id)}/receipt`)
         .catch((error: unknown) => { if (error instanceof ExecutionBlocked) throw error; return null; });
 
+      if (signal.aborted || this.shouldRun?.() === false) throw submitErr;
       if (receiptRes?.receipt) {
         const receipt = receiptRes.receipt;
         const isSuperseded = typeof receipt.supersededAtMs === "number" && receipt.supersededAtMs > 0;
@@ -1981,6 +2013,8 @@ export class DecisionTabDriver implements DecisionTaskController {
       this.checkpointStore.delete();
       return outcome;
     } catch (err: unknown) {
+      // Stop dominates reconciliation; retain the checkpoint for explicit restart.
+      if (signal.aborted || this.shouldRun?.() === false) throw err;
       if (err instanceof ExecutionBlocked) return { status: "blocked", session: err.session, reason: err.reason };
       // Expected supersede/cancel race: the bridge rejected the result or failure
       // submission because the task became non-actionable while executing (e.g. a
@@ -1990,10 +2024,6 @@ export class DecisionTabDriver implements DecisionTaskController {
       const supersededOutcome = await this.resolveSupersededOutcome(task.id, session, err);
       if (supersededOutcome) {
         return supersededOutcome;
-      }
-      // If error is an abort (e.g. from page navigation or timeout), preserve checkpoint for reload recovery
-      if (signal.aborted) {
-        throw err;
       }
       // If candidate result exists, currently navigating, or submitting rebind, DO NOT delete checkpoint so it can be recovered
       const currentCp = this.checkpointStore.get();
@@ -2046,6 +2076,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       // Authoritative status unverifiable; treat the conflict as unexpected
       return null;
     }
+    if (this.shouldRun?.() === false) return null;
     if (fresh?.status !== "superseded" && fresh?.status !== "cancelled") {
       return null;
     }
@@ -2088,6 +2119,8 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 3. Fetch context
     const context = await this.fetchContext(claimed.task.id);
+    // SPEC §4 Decision extension #180: Stop fences execution while retaining the claim.
+    if (this.shouldRun?.() === false) return null;
 
     // 4. Execute
     const outcome = await this.executeClaimedTask(claimed.task, claimed.session, claimed.lease, context);
@@ -2098,6 +2131,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const nextClaimed = await this.claimNextTask();
       if (nextClaimed) {
         const nextContext = await this.fetchContext(nextClaimed.task.id);
+        if (this.shouldRun?.() === false) return null;
         return await this.executeClaimedTask(nextClaimed.task, nextClaimed.session, nextClaimed.lease, nextContext);
       }
     }
