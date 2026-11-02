@@ -2096,6 +2096,8 @@ export class DecisionTabDriver implements DecisionTaskController {
 
     // 3. Fetch context
     const context = await this.fetchContext(claimed.task.id);
+    // SPEC §4 Decision extension #180: Stop fences execution while retaining the claim.
+    if (this.shouldRun?.() === false) return null;
 
     // 4. Execute
     const outcome = await this.executeClaimedTask(claimed.task, claimed.session, claimed.lease, context);
@@ -2106,6 +2108,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       const nextClaimed = await this.claimNextTask();
       if (nextClaimed) {
         const nextContext = await this.fetchContext(nextClaimed.task.id);
+        if (this.shouldRun?.() === false) return null;
         return await this.executeClaimedTask(nextClaimed.task, nextClaimed.session, nextClaimed.lease, nextContext);
       }
     }
