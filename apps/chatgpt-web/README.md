@@ -162,3 +162,7 @@ Expand **Driver diagnostics (last 50 events)** in the HUD to distinguish respons
 Heartbeat progress and response waiting share a task-scoped observer. After DOM windowing, a new eligible assistant node must show append growth while generating; static count changes, pre-send messages and route drift do not advance progress. A restored sent checkpoint similarly observes growth on its current response. Strict exact-task results also confirm Send during prompt-submission recovery, without another click. Response snapshots remain in memory; no response text is added to diagnostics or checkpoints.
 
 The metadata declaration is emitted only when bundling. Running Vitest does not modify the built userscript; repeated builds retain a single declaration.
+
+### Tab admission (#180, SPEC §4 Decision extension)
+
+Start/Stop remains shared by Bridge address. Each tab starts with **Do not claim new tasks**; check **Allow new tasks** to opt that tab in. Multiple opted-in tabs may compete through the Bridge lease. Unchecking only prevents new claims: an existing task and checkpoint continue, including after navigation or reload. Stop still stops execution. The choice is isolated by tab and Bridge URL; duplicating a live tab creates a new identity with admission disabled. Browser Web Locks are required to preserve identity safely across reloads; without them the script fails closed with a fresh identity on each page load.

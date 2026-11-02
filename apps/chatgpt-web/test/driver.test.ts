@@ -60,6 +60,38 @@ describe("DecisionTabDriver", () => {
     headSha: null,
   };
 
+  it("fences admission before next and after a delayed next, but keeps an in-flight claim", async () => {
+    let enabled = false;
+    let releaseNext!: () => void;
+    let releaseClaim!: () => void;
+    const nextGate = new Promise<void>(resolve => { releaseNext = resolve; });
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const request = vi.fn(async <T>(method: string): Promise<T> => {
+      if (method === "GET") { await nextGate; return { task: sampleTask, session: sampleSession } as T; }
+      await claimGate;
+      return { task: sampleTask, session: sampleSession, lease: sampleLease } as T;
+    });
+    const checkpointStore = new MemoryCheckpointStore();
+    const driver = new DecisionTabDriver({ transport: { baseUrl: "http://localhost", request }, checkpointStore, canClaimNewTask: () => enabled });
+    expect(await driver.claimNextTask()).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    enabled = true;
+    const delayedNext = driver.claimNextTask();
+    enabled = false;
+    releaseNext();
+    expect(await delayedNext).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+    enabled = true;
+    const delayedClaim = driver.claimNextTask();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(3);
+    enabled = false;
+    releaseClaim();
+    expect(await delayedClaim).not.toBeNull();
+    expect(checkpointStore.get()).toMatchObject({ step: "claimed", taskId: sampleTask.id, leaseToken: sampleLease.token });
+  });
+
   it("claims next task and fetches context via transport", async () => {
     const mockTransport: BridgeTransport = {
       baseUrl: "http://127.0.0.1:4545",

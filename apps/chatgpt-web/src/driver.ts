@@ -83,6 +83,7 @@ export interface DecisionTabDriverOptions {
   readonly navigationTimeoutMs?: number | undefined;
   readonly maxNavigationAttempts?: number | undefined;
   readonly shouldRun?: (() => boolean) | undefined;
+  readonly canClaimNewTask?: (() => boolean) | undefined;
   readonly onDiagnostic?: ((entry: DriverDiagnostic) => void) | undefined;
   /** Read-only idle facts; transport supplies Bridge authentication.
    * No task lease credentials are exposed or adopted; this never authorizes recovery. */
@@ -101,6 +102,7 @@ export class DecisionTabDriver implements DecisionTaskController {
   readonly navigationTimeoutMs: number;
   readonly maxNavigationAttempts: number;
   readonly shouldRun?: (() => boolean) | undefined;
+  readonly canClaimNewTask?: (() => boolean) | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
 
   private readonly onDiagnostic: DecisionTabDriverOptions["onDiagnostic"];
@@ -125,6 +127,7 @@ export class DecisionTabDriver implements DecisionTaskController {
     this.maxNavigationAttempts = options.maxNavigationAttempts ?? 3;
     this.onError = options.onError;
     this.shouldRun = options.shouldRun;
+    this.canClaimNewTask = options.canClaimNewTask;
     this.onDiagnostic = options.onDiagnostic;
     this.onContinuity = options.onContinuity;
 
@@ -687,13 +690,14 @@ export class DecisionTabDriver implements DecisionTaskController {
   }
 
   async claimNextTask(): Promise<{ task: DecisionTask; session: DecisionSession; lease: DecisionLease } | null> {
+    if (this.shouldRun?.() === false || this.canClaimNewTask?.() === false) return null;
     const next = await this.transport.request<{ task: DecisionTask; session: DecisionSession } | null>(
       "GET",
       "/v1/tasks/next",
       undefined,
       { allow204: true }
     );
-    if (!next) return null;
+    if (!next || this.shouldRun?.() === false || this.canClaimNewTask?.() === false) return null;
 
     const claimRes = await this.transport.request<{
       task: DecisionTask;
@@ -704,6 +708,7 @@ export class DecisionTabDriver implements DecisionTaskController {
       ttlMs: this.defaultClaimTtlMs,
     });
 
+    this.saveCheckpoint("claimed", claimRes.task, claimRes.session, claimRes.lease);
     return claimRes;
   }
 
