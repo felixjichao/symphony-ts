@@ -709,6 +709,9 @@ export class DecisionTabDriver implements DecisionTaskController {
     });
 
     this.saveCheckpoint("claimed", claimRes.task, claimRes.session, claimRes.lease);
+    // Global Stop still fences execution after an in-flight claim succeeds; retain
+    // the lease checkpoint for Start to recover. Admission changes alone do not stop it.
+    if (this.shouldRun?.() === false) return null;
     return claimRes;
   }
 

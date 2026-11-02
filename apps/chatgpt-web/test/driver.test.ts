@@ -92,6 +92,54 @@ describe("DecisionTabDriver", () => {
     expect(checkpointStore.get()).toMatchObject({ step: "claimed", taskId: sampleTask.id, leaseToken: sampleLease.token });
   });
 
+  it.each(["global Stop", "claim admission off"])("handles %s while claim is pending", async (change) => {
+    let shouldRun = true;
+    let canClaim = true;
+    let releaseClaim!: () => void;
+    let claimStarted!: () => void;
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const started = new Promise<void>(resolve => { claimStarted = resolve; });
+    const request = vi.fn(async <T>(_method: string, path: string): Promise<T> => {
+      if (path === "/v1/tasks/next") return { task: sampleTask, session: sampleSession } as T;
+      if (path.endsWith("/claim")) {
+        claimStarted();
+        await claimGate;
+        return { task: sampleTask, session: sampleSession, lease: sampleLease } as T;
+      }
+      if (path.endsWith("/context")) return { context: sampleContext } as T;
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const checkpointStore = new MemoryCheckpointStore();
+    const driver = new DecisionTabDriver({
+      transport: { baseUrl: "http://localhost", request }, checkpointStore,
+      shouldRun: () => shouldRun, canClaimNewTask: () => canClaim,
+    });
+    const execute = vi.spyOn(driver, "executeClaimedTask").mockResolvedValue(null);
+    const pending = driver.runOnce();
+    await started;
+    if (change === "global Stop") {
+      shouldRun = false;
+      driver.stop();
+    } else {
+      canClaim = false;
+    }
+    releaseClaim();
+    expect(await pending).toBeNull();
+    expect(checkpointStore.get()).toMatchObject({
+      step: "claimed", taskId: sampleTask.id, sessionId: sampleSession.id,
+      leaseOwner: sampleLease.owner, leaseToken: sampleLease.token, leaseGeneration: sampleLease.generation,
+    });
+    if (change === "global Stop") {
+      expect(request.mock.calls.map(([, path]) => path)).toEqual([
+        "/v1/tasks/next", `/v1/tasks/${encodeURIComponent(sampleTask.id)}/claim`,
+      ]);
+      expect(execute).not.toHaveBeenCalled();
+    } else {
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(execute).toHaveBeenCalledWith(sampleTask, sampleSession, sampleLease, sampleContext);
+    }
+  });
+
   it("claims next task and fetches context via transport", async () => {
     const mockTransport: BridgeTransport = {
       baseUrl: "http://127.0.0.1:4545",
