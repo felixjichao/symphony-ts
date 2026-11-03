@@ -16,6 +16,13 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Fetch PR base for userscript release check
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+      - name: Check userscript release
+        env:
+          DRIVER_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: npm run release:check -w @symphony/chatgpt-web
       - name: Gate (typecheck + test + lint + docs:check)
         run: npm run gate
 

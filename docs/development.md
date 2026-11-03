@@ -96,3 +96,7 @@ Open the `http://127.0.0.1:<port>` URL in the `status_surface` log. Default is o
 Existing local `--decision-store` and authenticated `--decision-bridge-url` modes reuse their configured backend. Unconfigured Decision/inventory is unknown; configured failures are unavailable, retaining other sources. Only canonical GitHub WorkKeys are accepted. Production GitHub observation requires the GitHub tracker profile with the public `https://api.github.com` API base; GHES and other providers safely report unavailable without forwarding their credentials or falling back to another GitHub login. GitHub association supports the verified default `GH-N` / `symphony/GH-N` convention and repository default branch; custom identities are not guessed. The status surface cannot create work, claim tasks, merge PRs or repair sources. A status startup failure logs `status_start_failed` while orchestration continues. Loopback snapshots can contain work identifiers and paths; do not publish the port. History, analytics, streaming and operator actions remain deferred.
 
 Validation and foreground Chromium commands are in the [status acceptance ledger](evidence/status-surface/README.md).
+
+## Web Driver releases
+
+Follow the [userscript release procedure](../apps/chatgpt-web/README.md#version-and-release-checks). `npm run release:check -w @symphony/chatgpt-web` rebuilds and verifies metadata, changelog and bundle fingerprint; CI also compares the PR base to require a version increase for changed output.

@@ -34,6 +34,12 @@ apps/chatgpt-web/dist/symphony-decision-driver.user.js
 
 The bundle includes the complete Tampermonkey metadata block (`// ==UserScript==`) specifying matching rules for `https://chatgpt.com/*` and granting `GM_xmlhttpRequest`, `GM_setValue`, and `GM_getValue`.
 
+## Version and release checks
+
+The current userscript version is **0.1.7**. After installation, compare the version in the HUD or Tampermonkey dashboard with the `@version` in the built file and the [changelog](CHANGELOG.md). Rebuild and reinstall when they differ; a version label alone does not prove the installed bytes match a build.
+
+For every change to the emitted userscript, increment `DRIVER_VERSION` in `vite.config.ts` (patch for fixes, minor for backward-compatible features, major for breaking changes), prepend a changelog entry with issue/PR references, and update `release.json` with the normalized SHA-256 reported by `npm run release:check -w @symphony/chatgpt-web`. Run that command again to verify. CI compares the bundle fingerprint and version against the PR base. Changes that do not alter the emitted bundle, including tests and documentation, do not require a release. Shared dependencies and build configuration are covered whenever they change the emitted bundle. The fingerprint normalizes the version itself, so a version-only change does not trigger a release requirement.
+
 ## Installation & Setup
 
 1. **Install Tampermonkey**:
