@@ -64,6 +64,23 @@ describe("Userscript Entry & SessionStorage Page Reconstruction", () => {
     (globalThis as unknown as { document: unknown }).document = originalDocument;
   });
 
+  it("renders an accessible admission state during identity initialization and after changes", async () => {
+    activeController = initSymphonyUserscript({ checkpointStore: new MemoryCheckpointStore({ tabId: "tab-ui" }), transport: idleTransport });
+    const toggle = mockDoc.getElementById("symphony-allow-new-tasks") as unknown as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-label")).toBe("Allow new tasks");
+    expect(toggle.getAttribute("aria-describedby")).toBe("symphony-claim-hint");
+    expect(mockDoc.getElementById("symphony-claim-hint")?.textContent).toContain("current task continues");
+    await Promise.resolve();
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change"));
+    expect(toggle.checked).toBe(true);
+    activeController.stop();
+    expect(toggle.checked).toBe(true);
+  });
+
   it("keeps admission independent across tabs and Bridge addresses", async () => {
     const first = new MemoryCheckpointStore({ tabId: "tab-a" });
     activeController = initSymphonyUserscript({ checkpointStore: first, transport: idleTransport });

@@ -166,3 +166,7 @@ The metadata declaration is emitted only when bundling. Running Vitest does not 
 ### Tab admission (#180, SPEC §4 Decision extension)
 
 Start/Stop remains shared by Bridge address. Each tab starts with **Do not claim new tasks**; check **Allow new tasks** to opt that tab in. Multiple opted-in tabs may compete through the Bridge lease. Unchecking only prevents new claims: an existing task and checkpoint continue, including after navigation or reload. Stop still stops execution. The choice is isolated by tab and Bridge URL; duplicating a live tab creates a new identity with admission disabled. Browser Web Locks are required to preserve identity safely across reloads; without them the script fails closed with a fresh identity on each page load.
+
+The HUD checkbox **Allow new tasks** displays its current On/Off state; it can be focused and toggled with Space. It remains visible while tab identity initializes, but is temporarily disabled. Turning it Off leaves the current task running.
+
+For a live smoke check, install the built userscript in Tampermonkey, open ChatGPT, and verify the checkbox is visible and initially Off in a new tab. Click it On, use Space to turn it Off, and confirm a running task continues. Open another tab to check its independent default, and verify Start/Stop remains independent. This requires a configured Bridge and real ChatGPT session; the automated fixture does not use credentials.

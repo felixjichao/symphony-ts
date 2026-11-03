@@ -9,7 +9,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "browser:hud": "npm run build && node scripts/hud-browser.mjs"
   },
   "dependencies": {
     "@symphony/decision": "*",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
+    "playwright": "1.62.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.21",
     "vitest": "^2.1.1"

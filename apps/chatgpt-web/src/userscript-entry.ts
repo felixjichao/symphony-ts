@@ -222,19 +222,42 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
     flex: "1",
   });
 
+  const claimStyle = document.createElement("style");
+  claimStyle.textContent = `
+    #symphony-driver-hud #symphony-allow-new-tasks {
+      appearance: auto !important; display: inline-block !important; position: static !important;
+      opacity: 1 !important; visibility: visible !important; pointer-events: auto !important;
+      width: 20px !important; height: 20px !important; min-width: 20px !important;
+      margin: 0 !important; clip: auto !important; clip-path: none !important;
+      accent-color: #89b4fa !important; cursor: pointer !important;
+    }
+    #symphony-driver-hud #symphony-allow-new-tasks:focus-visible {
+      outline: 3px solid #f9e2af !important; outline-offset: 3px !important;
+    }
+  `;
+  hud.appendChild(claimStyle);
   const claimLabel = document.createElement("label");
+  Object.assign(claimLabel.style, { display: "flex", alignItems: "center", gap: "8px", padding: "8px", cursor: "pointer", color: "#cdd6f4" });
   const claimToggle = document.createElement("input");
   claimToggle.id = "symphony-allow-new-tasks";
   claimToggle.type = "checkbox";
   claimToggle.disabled = true;
+  claimToggle.setAttribute("aria-label", "Allow new tasks");
+  claimToggle.setAttribute("aria-describedby", "symphony-claim-hint");
+  Object.assign(claimToggle.style, { appearance: "auto", display: "inline-block", position: "static", opacity: "1", visibility: "visible", width: "18px", height: "18px", minWidth: "18px", margin: "0", accentColor: "#89b4fa", cursor: "pointer" });
   const claimText = document.createElement("span");
   claimLabel.appendChild(claimToggle);
   claimLabel.appendChild(claimText);
+  const claimHint = document.createElement("div");
+  claimHint.id = "symphony-claim-hint";
+  claimHint.textContent = "Turning off prevents new claims; the current task continues.";
+  Object.assign(claimHint.style, { fontSize: "11px", color: "#bac2de", padding: "0 8px 8px" });
   btnRow.appendChild(toggleBtn);
   hud.appendChild(titleRow);
   hud.appendChild(statusText);
   hud.appendChild(settingsContainer);
   hud.appendChild(claimLabel);
+  hud.appendChild(claimHint);
   hud.appendChild(btnRow);
   document.body.appendChild(hud);
 
@@ -251,7 +274,7 @@ export function initSymphonyUserscript(options?: UserscriptInitOptions): Userscr
   let tabId = "";
   let allowNewTasks = false;
   const preferenceUrl = () => urlInput.value.trim() || "http://127.0.0.1:4040";
-  const updateClaimUI = () => { claimText.textContent = allowNewTasks ? "Allow new tasks" : "Do not claim new tasks (current task continues)"; claimToggle.checked = allowNewTasks; };
+  const updateClaimUI = () => { claimText.textContent = `Allow new tasks: ${allowNewTasks ? "On" : "Off"}`; claimToggle.checked = allowNewTasks; };
   const readPreference = () => {
     const key = claimPreferenceKey(preferenceUrl(), tabId);
     try { allowNewTasks = typeof GM_getValue === "function" ? GM_getValue<boolean>(key, false) === true : window.localStorage.getItem(key) === "true"; }
