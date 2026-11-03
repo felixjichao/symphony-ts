@@ -115,3 +115,30 @@ jobs:
           path: ${{ runner.temp }}/production-status-closeout/
           if-no-files-found: error
           retention-days: 30
+
+  hud-browser:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm exec -w @symphony/chatgpt-web -- playwright install --with-deps chromium
+      - name: HUD browser acceptance
+        id: hud-browser
+        env:
+          SYMPHONY_BROWSER_EVIDENCE: ${{ runner.temp }}/hud-browser
+        run: npm run browser:hud -w @symphony/chatgpt-web
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.hud-browser.outcome != 'skipped' }}
+        with:
+          name: hud-browser-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/hud-browser/
+          if-no-files-found: error
+          retention-days: 30
