@@ -129,7 +129,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm exec -w @symphony/dashboard -- playwright install --with-deps chromium
+      - run: npm exec -w @symphony/chatgpt-web -- playwright install --with-deps chromium
       - name: HUD browser acceptance
         id: hud-browser
         env:
