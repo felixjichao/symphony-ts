@@ -762,3 +762,7 @@ Decision extension #180 (SPEC §4; verification §17/§18): ChatGPT Web tab admi
 #180 active submission follow-up (SPEC §4 Decision extension; §17/§18): deterministic `driver.test.ts` tests pause active waiting-response result submission and execution failure submission. Global Stop prevents subsequent receipt/task reconciliation and preserves checkpoints (including the extracted candidate); admission-off alone permits the waiting-response result to complete.
 
 Decision extension (§4; validation §17/§18): the ChatGPT Web per-tab admission control exposes its On/Off state and current-task continuation separately. The credential-free `browser:hud` Chromium fixture exercises the built userscript against host form CSS; live ChatGPT remains a separate smoke check.
+
+### Web Driver release identity (#205)
+
+Decision extension §4; validation §17/§18: `npm run release:check -w @symphony/chatgpt-web` checks the built userscript metadata, release fingerprint and changelog; CI compares changed output with the PR base or previous main commit and requires an increased version.

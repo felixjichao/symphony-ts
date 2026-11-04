@@ -16,6 +16,18 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Prepare userscript release baseline
+        env:
+          DRIVER_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DRIVER_PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          base="$(node apps/chatgpt-web/scripts/release-base.mjs)"
+          if [ -n "$base" ]; then
+            git fetch --no-tags origin "$base"
+          fi
+          echo "DRIVER_BASE_REF=$base" >> "$GITHUB_ENV"
+      - name: Check userscript release
+        run: npm run release:check -w @symphony/chatgpt-web
       - name: Gate (typecheck + test + lint + docs:check)
         run: npm run gate
 

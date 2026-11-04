@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const DRIVER_VERSION = "0.1.6";
+const DRIVER_VERSION = "0.1.7";
 
 const USERSCRIPT_BANNER = `// ==UserScript==
 // @name         Symphony Decision Driver (ChatGPT Web)
