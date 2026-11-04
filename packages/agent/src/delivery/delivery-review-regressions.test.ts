@@ -40,6 +40,23 @@ function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", c
 const options = { ...context, cwd: "/fixture", optInLand: false, maxWaitSeconds: 5, pollIntervalSeconds: 1 };
 
 describe("third-review delivery regressions", () => {
+  it("stops after an initial push finishes beyond the total deadline", async () => {
+    let clock = 100_000;
+    let state: PersistedDeliveryState | null = null;
+    const f = fixture();
+    const runner: DeliveryGitGhRunner = { ...f.runner, async git(args, cwd, timeout) {
+      if (args[0] === "push") {
+        expect(timeout).toBe(5_000);
+        clock += 5_001;
+        return fail("uncertain push outcome");
+      }
+      return f.runner.git(args, cwd, timeout);
+    } };
+    const result = await runDeliverySkill({ ...options, runner, nowFn: () => clock,
+      stateStorage: { readState: () => state, writeState: value => { state = value; } } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(f.calls.some(args => args[0] === "pr" && args[1] === "create")).toBe(false);
+  });
   it("rejects an unbounded in-process repair before reading state or starting effects", async () => {
     const f = fixture();
     let invoked = false;

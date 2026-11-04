@@ -1183,12 +1183,11 @@ async function runDeliverySkillLocked(
   const pushTimeout = await totalTimeout("push");
   if (pushTimeout) return pushTimeout;
   log("[delivery-skill] Phase 4: Pushing branch to remote...");
-  const pushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+  const pushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+  const pushCompletedTimeout = await totalTimeout("push completion");
+  if (pushCompletedTimeout) return pushCompletedTimeout;
   if (pushRes.exitCode !== 0) {
-    const pushUpstream = await runner.git(["push", "-u", "origin", context.headBranch], options.cwd);
-    if (pushUpstream.exitCode !== 0) {
-      return haltDispatch("manual_intervention_required", `Git push failed: ${pushUpstream.stderr}`);
-    }
+    return haltDispatch("manual_intervention_required", `Git push outcome requires reconciliation: ${pushRes.stderr}`);
   }
 
   const revParse = await runner.git(["rev-parse", "HEAD"], options.cwd);
@@ -1648,7 +1647,9 @@ async function runDeliverySkillLocked(
 
         const repairPushTimeout = await totalTimeout("repair push");
         if (repairPushTimeout) return repairPushTimeout;
-        const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+        const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+        const repairPushCompletedTimeout = await totalTimeout("repair push completion");
+        if (repairPushCompletedTimeout) return repairPushCompletedTimeout;
         if (fixPushRes.exitCode !== 0) {
           return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
         }
@@ -2189,7 +2190,9 @@ async function runDeliverySkillLocked(
 
           const repairPushTimeout = await totalTimeout("review repair push");
           if (repairPushTimeout) return repairPushTimeout;
-          const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+          const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+          const repairPushCompletedTimeout = await totalTimeout("review repair push completion");
+          if (repairPushCompletedTimeout) return repairPushCompletedTimeout;
           if (fixPushRes.exitCode !== 0) {
             return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
           }
@@ -2463,7 +2466,9 @@ async function runDeliverySkillLocked(
   }
 
   // A timeout may follow a successful merge: always observe before deciding.
-  try { await runner.gh(mergeArgs, options.cwd); } catch { /* preserve intent; read below */ }
+  try { await runner.gh(mergeArgs, options.cwd, Math.max(1, deadlineTimestampMs - now())); } catch { /* preserve intent; read below */ }
+  const mergeCompletedTimeout = await totalTimeout("merge completion");
+  if (mergeCompletedTimeout) return mergeCompletedTimeout;
 
   // 严格验证 PR 终态是否确实为 MERGED
   const verifyRes = await runner.gh(
