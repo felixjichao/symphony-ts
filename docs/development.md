@@ -99,4 +99,4 @@ Validation and foreground Chromium commands are in the [status acceptance ledger
 
 ## Web Driver releases
 
-Follow the [userscript release procedure](../apps/chatgpt-web/README.md#version-and-release-checks). `npm run release:check -w @symphony/chatgpt-web` rebuilds and verifies metadata, changelog and bundle fingerprint; CI also compares the PR base to require a version increase for changed output.
+Follow the [userscript release procedure](../apps/chatgpt-web/README.md#version-and-release-checks). `npm run release:check -w @symphony/chatgpt-web` rebuilds and verifies metadata, changelog and bundle fingerprint; CI also compares the PR base or previous main commit to require a version increase for changed output.

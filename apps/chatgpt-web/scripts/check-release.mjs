@@ -30,7 +30,7 @@ if (base) {
     const previous = JSON.parse(previousText);
     const compare = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] - y[i]; } return 0; };
     const order = compare(version, previous.version);
-    if (order < 0 || (hash !== previous.sha256 && order <= 0)) fail("changed bundle requires a version greater than the PR base");
+    if (order < 0 || (hash !== previous.sha256 && order <= 0)) fail("changed bundle requires a version greater than the baseline");
     if (order > 0) {
       const oldLog = execFileSync("git", ["show", `${base}:apps/chatgpt-web/CHANGELOG.md`], { cwd: root, encoding: "utf8" });
       if (!changelog.includes(oldLog.trim())) fail("preserve the previous changelog when adding a release");

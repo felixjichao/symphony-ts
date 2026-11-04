@@ -765,4 +765,4 @@ Decision extension (§4; validation §17/§18): the ChatGPT Web per-tab admissio
 
 ### Web Driver release identity (#205)
 
-Decision extension §4; validation §17/§18: `npm run release:check -w @symphony/chatgpt-web` checks the built userscript metadata, release fingerprint and changelog; CI compares changed output with the PR base and requires an increased version.
+Decision extension §4; validation §17/§18: `npm run release:check -w @symphony/chatgpt-web` checks the built userscript metadata, release fingerprint and changelog; CI compares changed output with the PR base or previous main commit and requires an increased version.
