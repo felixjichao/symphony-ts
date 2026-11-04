@@ -19,6 +19,7 @@ const json = (value: unknown) => ok(JSON.stringify(value));
 // restart recovery and the delivery entry path use their production implementations.
 class FixtureRunner implements DeliveryGitGhRunner {
   calls: string[][] = [];
+  feedback: string[] = [];
   diffAttempts = 0;
   constructor(readonly recovery: "fetch" | "compare" | "unavailable" = "fetch") {}
   async git(args: readonly string[]) {
@@ -52,11 +53,17 @@ class FixtureRunner implements DeliveryGitGhRunner {
     if (args[0] === "pr" && args[1] === "view") return json(pr);
     return ok();
   }
-  async exec() { return ok(); }
+  async exec(command: string, _cwd: string, _timeout?: number, env?: Record<string, string>) {
+    if (command === "fixture repair") {
+      this.feedback.push(env?.["SYMPHONY_REVIEW_FINDINGS"] ?? "");
+      return { stdout: "", stderr: "repair failed", exitCode: 1 };
+    }
+    return ok();
+  }
 }
 
-async function deliver(cwd: string, runner: FixtureRunner, reviewGate: DecisionReviewGate, repairFn?: (feedback: string) => Promise<boolean>) {
-  return runDeliverySkill({ cwd, runner, reviewGate, repo, issueNumber: 80, workspaceKey: "GH-80", headBranch: "symphony/GH-80", baseBranch: "main", validationCommand: "fixture validation", readyLabel: "symphony-ready", optInLand: true, requiredChecks: ["gate"], maxRepairAttempts: 2, maxWaitSeconds: 15, ...(repairFn ? { repairFn } : {}) });
+async function deliver(cwd: string, runner: FixtureRunner, reviewGate: DecisionReviewGate, repair = false) {
+  return runDeliverySkill({ cwd, runner, reviewGate, repo, issueNumber: 80, workspaceKey: "GH-80", headBranch: "symphony/GH-80", baseBranch: "main", validationCommand: "fixture validation", readyLabel: "symphony-ready", optInLand: true, requiredChecks: ["gate"], maxRepairAttempts: 2, maxWaitSeconds: 15, ...(repair ? { repairCommand: "fixture repair" } : {}) });
 }
 
 describe("delivery review durable recovery", () => {
@@ -77,15 +84,14 @@ describe("delivery review durable recovery", () => {
       address = await bridge.start();
       const reopenedGate = new DecisionReviewGate(new DecisionBridgeClient(`http://127.0.0.1:${address.port}`));
       const runner = new FixtureRunner();
-      const feedback: string[] = [];
-      const result = await deliver(cwd, runner, reopenedGate, async value => { feedback.push(value); return false; });
+      const result = await deliver(cwd, runner, reopenedGate, true);
       expect(result.status).toBe("blocked");
       if (verdict === "needs_human") {
         expect(result.reason, result.handoffMarkdown).toBe("review_needs_human");
         expect(result.handoffMarkdown).toContain("Persisted finding");
-        expect(feedback).toEqual([]);
+        expect(runner.feedback).toEqual([]);
       } else {
-        expect(feedback).toEqual(["[BLOCKER] src/index.ts:1: Persisted finding"]);
+        expect(runner.feedback).toEqual(["[BLOCKER] src/index.ts:1: Persisted finding"]);
         expect(result.spentRepairs).toBe(1);
       }
       expect(bridge.getService().getTasksForSession(sessionId).map(t => t.id)).toEqual([task.id]);

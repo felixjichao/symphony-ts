@@ -161,13 +161,86 @@ execFileSync("git", ["add", "source.txt"]);
     readRemoteBranch: async (repository, branch) => ({ repository, branch, sha: branch === "main" ? base() : head() }),
     validationCommand: "validate", requiredChecks: ["gate"], reviewGate, optInLand: true,
     maxRepairAttempts: 3, maxWaitSeconds: 100, nowFn: () => clock, sleepFn: async () => { clock += 1000; } };
+  const authority = (spentRepairs: number) => ({ deadlineTimestampMs: clock + 100_000,
+    budget: { schemaVersion: 1 as const, deliveryRoundId: "fixture", totalStartedAtMs: clock,
+      totalDeadlineAtMs: clock + 100_000, phaseLimitsMs: { ci: 100_000, review: 100_000, repair: 100_000, validation: 100_000 },
+      activePhase: null, phaseHistory: [], spentRepairs, repairLimit: 3, authorizationGeneration: 0, authorizations: [] } });
   return { cwd, origin, context, native, git, originalHead, advanceBase, head, base, storage, states, calls, reviews, superseded, options,
+    authority,
     repairCount: () => repairCount, paused: () => paused,
     setOnApprove: (fn: typeof onApprove) => { onApprove = fn; }, setOnRepair: (fn: typeof onRepair) => { onRepair = fn; },
     setPr: (fn: typeof overridePr) => { overridePr = fn; }, failValidation: () => { failValidation = true; } };
 }
 
 describe("#192 transient delivery failures (real Git)", () => {
+  it("persists CI completion before review materialization and reobserves it after a crash", async () => {
+    const f = fixture();
+    const gate = f.options.reviewGate!;
+    let clock = 1_000_000;
+    let interrupted = false;
+    const runner: DeliveryGitGhRunner = { ...f.options.runner, async gh(args, cwd, timeout) {
+      if (!interrupted && args[0] === "issue" && args.includes("title,body")) {
+        interrupted = true;
+        throw new Error("simulated crash after CI checkpoint");
+      }
+      return f.options.runner.gh(args, cwd, timeout);
+    } };
+    const options = { ...f.options, runner, yieldOnWait: true, nowFn: () => clock,
+      budgetPhaseLimitsMs: { ci: 1_000, review: 10_000, repair: 10_000, validation: 10_000 },
+      reviewGate: { ...gate, async getReviewStatus(taskId: string) { return { taskId, status: "pending" as const }; } } };
+    await expect(runDeliverySkill(options)).rejects.toThrow("simulated crash after CI checkpoint");
+    expect(f.storage.readState()?.continuation?.phase).toBe("ci_passed");
+    const oldCi = f.storage.readState()?.budget?.activePhase;
+    clock += 2_000;
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    expect(f.storage.readState()?.budget?.activePhase).toMatchObject({ phase: "review", startedAtMs: clock });
+    expect(f.storage.readState()?.budget?.phaseHistory).toContainEqual(oldCi);
+  });
+
+  it("retains an independent Review phase across native yields", async () => {
+    const f = fixture();
+    const gate = f.options.reviewGate!;
+    let clock = 1_000_000;
+    const options = { ...f.options, yieldOnWait: true, nowFn: () => clock,
+      budgetPhaseLimitsMs: { ci: 10_000, review: 2_000, repair: 10_000, validation: 10_000 },
+      reviewGate: { ...gate, async getReviewStatus(taskId: string) { return { taskId, status: "pending" as const }; } } };
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    const phase = f.storage.readState()?.budget?.activePhase;
+    expect(phase).toMatchObject({ phase: "review", startedAtMs: 1_000_000, deadlineAtMs: 1_002_000 });
+    clock += 1_000;
+    expect((await runDeliverySkill({ ...options, resumeStageOnly: false })).status).toBe("waiting");
+    expect(f.storage.readState()?.budget?.activePhase).toEqual(phase);
+    clock += 1_000;
+    const result = await runDeliverySkill(options);
+    expect(result.reason).toBe("review_wait_timeout");
+    expect(f.storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "phase", phase: "review", deadlineAtMs: 1_002_000 });
+  });
+
+  it("resumes a recorded Review without replaying initial validation or push after their deadline", async () => {
+    const f = fixture();
+    let clock = 1_000_000;
+    const gate = f.options.reviewGate!;
+    const options = { ...f.options, resumeStageOnly: false, yieldOnWait: true, nowFn: () => clock,
+      budgetPhaseLimitsMs: { ci: 10_000, review: 10_000, repair: 10_000, validation: 1_000 },
+      reviewGate: { ...gate, async getReviewStatus(taskId: string) { return { taskId, status: "pending" as const }; } } };
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    const review = f.storage.readState()?.budget?.activePhase;
+    const priorValidation = f.storage.readState()?.budget?.phaseHistory.find(phase => phase.phase === "validation");
+    expect(priorValidation?.completedAtMs).toBe(clock);
+    const validations = f.calls.filter(call => call[0] === "exec" && call[1] === "validate").length;
+    const pushes = f.calls.filter(call => call[0] === "push").length;
+    clock += 2_000;
+    expect((await runDeliverySkill(options)).status).toBe("waiting");
+    expect(f.storage.readState()?.budget?.activePhase).toEqual(review);
+    expect(f.calls.filter(call => call[0] === "exec" && call[1] === "validate")).toHaveLength(validations);
+    expect(f.calls.filter(call => call[0] === "push")).toHaveLength(pushes);
+    fs.writeFileSync(path.join(f.cwd, "feature.txt"), "uncommitted changes\n");
+    const dirty = await runDeliverySkill(options);
+    expect(dirty.reason).toBe("manual_intervention_required");
+    expect(dirty.handoffMarkdown).toContain("clean source workspace");
+    expect(f.calls.filter(call => call[0] === "push")).toHaveLength(pushes);
+  });
+
   it("T1 retries the same Review task after a timeout and lands without pausing", async () => {
     const f = fixture();
     const gate = f.options.reviewGate!;
@@ -313,13 +386,14 @@ describe("#192 transient delivery failures (real Git)", () => {
 
   it("#192 host stages resolved work when the workspace-write executor cannot write Git metadata", async () => {
     const f = fixture(); f.advanceBase(); let executorCalls = 0;
-    const result = await runDeliverySkill({ ...f.options, repairFn: () => {
+    const result = await runDeliverySkill({ ...f.options, runner: { ...f.options.runner, async exec(command, cwd, timeout, env, excluded) {
+      if (command === "validate") return f.options.runner.exec(command, cwd, timeout, env, excluded);
       executorCalls++;
       fs.writeFileSync(path.join(f.cwd, "source.txt"), "PR implementation\nmain changes\n");
       // Actual Codex workspace-write protects .git; leave the resolved file unstaged.
       expect(f.git(["diff", "--name-only", "--diff-filter=U"])).toContain("source.txt");
-      return true;
-    } });
+      return text("");
+    } } });
     expect(result.status, result.handoffMarkdown).toBe("completed");
     expect(executorCalls).toBe(1); expect(result.spentRepairs).toBe(1);
     expect(f.git(["rev-parse", "HEAD^2"])).toBe(f.base());
@@ -370,7 +444,8 @@ describe("#192 transient delivery failures (real Git)", () => {
       } },
     });
     expect(result.status).toBe("blocked");
-    expect(result.handoffMarkdown).toContain("deadline_exhausted");
+    expect(result.reason).toBe("budget_exhausted");
+    expect(f.storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "total" });
     expect(result.spentRepairs).toBe(1);
     expect(new Set(f.states.map(s => s.deadlineTimestampMs)).size).toBe(1);
     expect(f.calls.filter(a => a[0] === "push")).toHaveLength(1);
@@ -543,7 +618,7 @@ describe("#188 authoritative branch and no-op regression (isolated real Git)", (
     const operation: DeliveryMergeConflictRepair = { cause: "merge_conflict", operationId: "historical-171", attempt: 1,
       prNumber: 172, expectedHeadSha: f.head(), baseSha: oldBase, phase: "merging" };
     f.storage.writeState({ ...f.context, mergeConflictRepair: operation, spentRepairs: 1, spentWaitSeconds: 7,
-      deadlineTimestampMs: Date.now() + 100_000, isPaused: false, lastUpdated: "now" });
+      ...f.authority(1), isPaused: false, lastUpdated: "now" });
     const result = await runDeliverySkill({ ...f.options, conflictRecoveryAuthorization: authorized ? {
       operationId: operation.operationId, attempt: 1, expectedHeadSha: f.head(), executorStopped: true,
     } : undefined });
@@ -566,7 +641,7 @@ describe("#188 authoritative branch and no-op regression (isolated real Git)", (
   it("restart after authorized retirement before checkpoint does not replay or refund the historical attempt", async () => {
     const f = fixture(); const expectedHeadSha = f.head();
     f.storage.writeState({ ...f.context, spentRepairs: 1, spentWaitSeconds: 0,
-      isPaused: false, deadlineTimestampMs: Date.now() + 100_000, lastUpdated: "now",
+      isPaused: false, deadlineTimestampMs: f.options.nowFn!() + 100_000, lastUpdated: "now",
       mergeConflictRepair: { cause: "merge_conflict", operationId: "retired", attempt: 1, prNumber: 187,
         expectedHeadSha, baseSha: f.base(), phase: "reconciled", outcome: "authorized_no_local_or_remote_effect" },
       continuation: { intentId: "prior", headBranch: f.context.headBranch, baseBranch: "main", headSha: expectedHeadSha,
@@ -585,7 +660,7 @@ describe("#188 authoritative branch and no-op regression (isolated real Git)", (
     if (kind === "dirty") fs.writeFileSync(path.join(f.cwd, "source.txt"), "operator changes\n");
     if (kind === "merge") { f.git(["fetch", "origin", "main"]); f.native(["merge", "--no-commit", f.base()]); }
     if (kind === "remote") f.setPr((_args, pr) => { pr.headRefOid = "e".repeat(40); });
-    f.storage.writeState({ ...f.context, spentRepairs: 1, spentWaitSeconds: 0, isPaused: false, lastUpdated: "now",
+    f.storage.writeState({ ...f.context, spentRepairs: 1, spentWaitSeconds: 0, ...f.authority(1), isPaused: false, lastUpdated: "now",
       mergeConflictRepair: { cause: "merge_conflict", operationId: "old", attempt: 1, prNumber: 187,
         expectedHeadSha: f.originalHead, baseSha: oldBase, phase: "merging" } });
     const before = f.git(["status", "--porcelain"]);
@@ -682,19 +757,22 @@ describe("#186 bounded pinned-base conflict repair", () => {
     let options = f.options;
     if (kind === "budget") options = { ...options, maxRepairAttempts: 0 };
     if (kind === "validation") f.failValidation();
-    if (kind === "no_progress") options = { ...options, repairFn: () => true };
-    if (kind === "executor_failure") options = { ...options, repairFn: () => false };
+    if (kind === "no_progress" || kind === "executor_failure") options = { ...options, runner: { ...options.runner,
+      async exec(command, cwd, timeout, env, excluded) {
+        if (command === "validate") return f.options.runner.exec(command, cwd, timeout, env, excluded);
+        return { stdout: "", stderr: "", exitCode: kind === "no_progress" ? 0 : 1 };
+      } } };
     if (kind === "deadline") options = { ...options, maxWaitSeconds: 0 };
     const result = await runDeliverySkill(options);
     expect(result.status).toBe("blocked"); expect(f.paused()).toBe(true);
     expect(result.spentRepairs).toBe(["budget", "deadline"].includes(kind) ? 0 : 1);
     expect(f.calls.some(a => a[0] === "push" || a[1] === "merge")).toBe(false);
-    expect(result.handoffMarkdown).toContain(kind === "deadline" ? "ci_wait_timeout" : "merge_conflict");
+    expect(result.handoffMarkdown).toContain(kind === "deadline" ? "budget_exhausted" : "merge_conflict");
   });
 
   it("legacy landing intent is cleared only after owned OPEN/null merge receipt", async () => {
     const f = fixture(); f.advanceBase();
-    f.storage.writeState({ ...f.context, spentRepairs: 0, spentWaitSeconds: 0, isPaused: false, lastUpdated: "now",
+    f.storage.writeState({ ...f.context, spentRepairs: 0, spentWaitSeconds: 0, ...f.authority(0), isPaused: false, lastUpdated: "now",
       landing: { intentId: "legacy", context: f.context, prNumber: 187, headSha: f.head(), phase: "intent", optIn: true } });
     expect((await runDeliverySkill(f.options)).status).toBe("completed");
     expect(f.repairCount()).toBe(1);
@@ -716,7 +794,7 @@ describe("#186 bounded pinned-base conflict repair", () => {
     const operation: DeliveryMergeConflictRepair = { cause: "merge_conflict", operationId: "prior", attempt: 1,
       prNumber: 187, expectedHeadSha: f.head(), baseSha: f.base(), phase };
     f.storage.writeState({ ...f.context, mergeConflictRepair: operation, spentRepairs: 1, spentWaitSeconds: 50,
-      deadlineTimestampMs: Date.now() + 20_000, isPaused: false, lastUpdated: "now" });
+      ...f.authority(1), isPaused: false, lastUpdated: "now" });
     const result = await runDeliverySkill(f.options);
     expect(result.status).toBe("blocked"); expect(result.spentRepairs).toBe(1); expect(f.repairCount()).toBe(0);
     expect(result.handoffMarkdown).toContain("no replay");
@@ -786,7 +864,8 @@ describe("#186 bounded pinned-base conflict repair", () => {
     const saved = f.storage.readState()!;
     fs.writeFileSync(path.join(f.cwd, "followup.txt"), "CI fix\n");
     f.git(["add", "followup.txt"]); f.git(["commit", "-m", "later CI repair"]); f.git(["push", "origin", f.context.headBranch]);
-    f.storage.writeState({ ...saved, spentRepairs: 2, continuation: { ...saved.continuation!, headSha: f.head(), phase: "ci" } });
+    f.storage.writeState({ ...saved, spentRepairs: 2, budget: { ...saved.budget!, spentRepairs: 2 },
+      continuation: { ...saved.continuation!, headSha: f.head(), phase: "ci" } });
     f.calls.splice(0);
     const result = await runDeliverySkill(f.options);
     expect(result.status).toBe("completed"); expect(result.spentRepairs).toBe(2);

@@ -40,6 +40,16 @@ function fixture(checks: unknown[] = [{ name: "optional", status: "COMPLETED", c
 const options = { ...context, cwd: "/fixture", optInLand: false, maxWaitSeconds: 5, pollIntervalSeconds: 1 };
 
 describe("third-review delivery regressions", () => {
+  it("rejects an unbounded in-process repair before reading state or starting effects", async () => {
+    const f = fixture();
+    let invoked = false;
+    await expect(runDeliverySkill({ ...options, runner: f.runner,
+      repairFn: () => { invoked = true; return new Promise<boolean>(() => {}); },
+      stateStorage: { readState: () => { throw new Error("unexpected state read"); }, writeState: () => {} },
+    })).rejects.toThrow("repairFn is unsupported");
+    expect(invoked).toBe(false);
+    expect(f.calls).toEqual([]);
+  });
   it.each(
     [false, true].flatMap((tracked) => [false, true].flatMap((staged) => [false, true].flatMap((repair) => [false, true].map((ignored) => ({ tracked, staged, repair, ignored }))))),
   )("commits source without runtime state: %j", async ({ tracked, staged, repair, ignored }) => {
@@ -85,16 +95,18 @@ describe("third-review delivery regressions", () => {
           }
           return response;
         },
+        async exec(command, commandCwd, timeout, env, excluded) {
+          if (command !== "repair") return f.runner.exec(command, commandCwd, timeout, env, excluded);
+          repaired = true;
+          writeFileSync(join(cwd, "source.txt"), "repaired\n");
+          if (staged) {
+            stagedState = readFileSync(statePath, "utf8");
+            git(["add", "-f", ".symphony/delivery-state.json"]);
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
       };
-      const result = await runDeliverySkill({ ...options, cwd: nested, runner, repairFn: () => {
-        repaired = true;
-        writeFileSync(join(cwd, "source.txt"), "repaired\n");
-        if (staged) {
-          stagedState = readFileSync(statePath, "utf8");
-          git(["add", "-f", ".symphony/delivery-state.json"]);
-        }
-        return true;
-      }, stateStorage: {
+      const result = await runDeliverySkill({ ...options, cwd: nested, runner, repairCommand: "repair", stateStorage: {
         readState: () => null,
         writeState: (state) => writeFileSync(join(cwd, ".symphony/delivery-state.json"), JSON.stringify(state)),
       } });
@@ -125,10 +137,94 @@ describe("third-review delivery regressions", () => {
     clock += 24_000;
     const restart = fixture();
     const result = await runDeliverySkill({ ...options, runner: restart.runner, stateStorage: storage, nowFn: () => clock });
-    expect(result.reason).toBe("ci_wait_timeout");
+    expect(result.reason).toBe("budget_exhausted");
     expect(result.spentRepairs).toBe(0);
     expect(storage.readState()?.deadlineTimestampMs).toBe(105_000);
     expect(restart.calls.some((args) => args[0] === "pr" && args.includes("statusCheckRollup"))).toBe(false);
+  });
+
+  it("keeps the CI phase deadline across yields and restart, independently of the total deadline", async () => {
+    let state: PersistedDeliveryState | null = null;
+    let clock = 100_000;
+    const storage = { readState: () => state, writeState: (value: PersistedDeliveryState) => { state = value; } };
+    const limits = { ci: 3_000, review: 5_000, repair: 5_000, validation: 5_000 };
+    const run = () => runDeliverySkill({ ...options, maxWaitSeconds: 20, budgetPhaseLimitsMs: limits,
+      runner: fixture([{ name: "gate", status: "IN_PROGRESS" }]).runner,
+      stateStorage: storage, nowFn: () => clock, yieldOnWait: true, resumeStageOnly: state !== null });
+    expect((await run()).status).toBe("waiting");
+    expect(storage.readState()?.budget?.activePhase).toMatchObject({ phase: "ci", identity: "sha", startedAtMs: 100_000, deadlineAtMs: 103_000 });
+    clock += 2_000;
+    expect((await run()).status).toBe("waiting");
+    expect(storage.readState()?.budget?.activePhase?.deadlineAtMs).toBe(103_000);
+    clock += 1_000;
+    const result = await run();
+    expect(result.reason).toBe("ci_wait_timeout");
+    expect(storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "phase", phase: "ci", phaseIdentity: "sha", deadlineAtMs: 103_000 });
+    expect(storage.readState()?.deadlineTimestampMs).toBe(120_000);
+  });
+
+  it("migrates a legacy continuation without granting new time or repair attempts", async () => {
+    let state: PersistedDeliveryState | null = { ...context, spentRepairs: 2, spentWaitSeconds: 10,
+      deadlineTimestampMs: 120_000, isPaused: false, lastUpdated: "before",
+      continuation: { intentId: "old", headBranch: context.headBranch, baseBranch: context.baseBranch, headSha: "sha", prNumber: 86,
+        optInLand: false, readyLabel: "symphony-ready", maxRepairAttempts: 4, maxWaitSeconds: 20, phase: "ci" } };
+    const storage = { readState: () => state, writeState: (value: PersistedDeliveryState) => { state = value; } };
+    const result = await runDeliverySkill({ ...options, maxRepairAttempts: 99, maxWaitSeconds: 200,
+      runner: fixture([{ name: "gate", status: "IN_PROGRESS" }]).runner, stateStorage: storage,
+      nowFn: () => 110_000, yieldOnWait: true, resumeStageOnly: true });
+    expect(result.status).toBe("waiting");
+    expect(storage.readState()?.budget).toMatchObject({ totalStartedAtMs: 100_000, totalStartEstimated: true,
+      totalDeadlineAtMs: 120_000, spentRepairs: 2, repairLimit: 4,
+      activePhase: { phase: "ci", identity: "sha", startedAtMs: 100_000, deadlineAtMs: 120_000 } });
+    expect(storage.readState()?.deadlineTimestampMs).toBe(120_000);
+  });
+
+  it("bounds initial validation separately and records its exhaustion", async () => {
+    let state: PersistedDeliveryState | null = null;
+    let clock = 100_000;
+    const storage = { readState: () => state, writeState: (value: PersistedDeliveryState) => { state = value; } };
+    const f = fixture();
+    const runner: DeliveryGitGhRunner = { ...f.runner, async exec(_command, _cwd, timeoutMs) {
+      expect(timeoutMs).toBe(1_000);
+      clock += 1_000;
+      return fail("validation timed out");
+    } };
+    const result = await runDeliverySkill({ ...options, maxWaitSeconds: 20, validationCommand: "validate",
+      budgetPhaseLimitsMs: { ci: 5_000, review: 5_000, repair: 5_000, validation: 1_000 }, runner,
+      stateStorage: storage, nowFn: () => clock });
+    expect(result.reason).toBe("validation_timeout");
+    expect(storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "phase", phase: "validation", phaseIdentity: "initial" });
+    expect(f.calls.some(call => call[0] === "commit" || call[0] === "push")).toBe(false);
+  });
+
+  it("bounds repair execution and preserves its spent attempt on timeout", async () => {
+    let state: PersistedDeliveryState | null = null;
+    let clock = 100_000;
+    const storage = { readState: () => state, writeState: (value: PersistedDeliveryState) => { state = value; } };
+    const f = fixture([{ name: check.name, detailsUrl: check.detailsUrl, status: "COMPLETED", conclusion: "FAILURE" }]);
+    const runner: DeliveryGitGhRunner = { ...f.runner, async exec(_command, _cwd, timeoutMs) {
+      expect(timeoutMs).toBe(2_000);
+      clock += 2_000;
+      return fail("repair timed out");
+    } };
+    const result = await runDeliverySkill({ ...options, maxWaitSeconds: 20, repairCommand: "repair",
+      budgetPhaseLimitsMs: { ci: 5_000, review: 5_000, repair: 2_000, validation: 5_000 }, runner,
+      stateStorage: storage, nowFn: () => clock });
+    expect(result.reason).toBe("repair_timeout");
+    expect(storage.readState()?.spentRepairs).toBe(1);
+    expect(storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "phase", phase: "repair", phaseIdentity: "repair:1" });
+  });
+
+  it("reports total exhaustion when CI still has a longer configured phase limit", async () => {
+    let state: PersistedDeliveryState | null = null;
+    let clock = 100_000;
+    const storage = { readState: () => state, writeState: (value: PersistedDeliveryState) => { state = value; } };
+    const result = await runDeliverySkill({ ...options, maxWaitSeconds: 2, pollIntervalSeconds: 1,
+      budgetPhaseLimitsMs: { ci: 10_000, review: 10_000, repair: 10_000, validation: 10_000 },
+      runner: fixture([{ name: "gate", status: "IN_PROGRESS" }]).runner, stateStorage: storage,
+      nowFn: () => clock, sleepFn: async seconds => { clock += seconds * 1_000; } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(storage.readState()?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "total", phase: "ci", deadlineAtMs: 102_000 });
   });
 
   it.each(["Not Found (HTTP 404)", "Resource not accessible (HTTP 403)"])("unknown classic rules fail closed even with a ruleset: %s", async (error) => {
@@ -150,7 +246,7 @@ describe("third-review delivery regressions", () => {
     f.setApi((args) => args[1]?.includes("rules/branches") ? { stdout: "[]\n" + JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "gate" }] } }]), stderr: "", exitCode: 0 } : ok({ contexts: [], checks: [] }));
     let clock = 100_000;
     const result = await runDeliverySkill({ ...options, runner: f.runner, nowFn: () => clock, sleepFn: async () => { clock += 1000; } });
-    expect(result.reason).toBe("ci_wait_timeout");
+    expect(result.reason).toBe("budget_exhausted");
     const args = f.calls.find((args) => args[0] === "api" && args[1]?.includes("rules/branches"));
     expect(args).toContain("--paginate");
     expect(args).toContain("--jq");
@@ -179,11 +275,10 @@ describe("third-review delivery regressions", () => {
   it.each(["Resource not accessible by integration (HTTP 403)", "network unavailable"])("hands off log retrieval failure without consuming repair budget: %s", async (error) => {
     const f = fixture([{ name: check.name, detailsUrl: check.detailsUrl, status: "COMPLETED", conclusion: "FAILURE" }]);
     f.setDiagnostics((args) => args[1] === "list" ? ok([{ databaseId: 2, conclusion: "FAILURE" }]) : fail(error));
-    let repairs = 0;
-    const result = await runDeliverySkill({ ...options, runner: f.runner, repairFn: () => { repairs++; return true; } });
+    const result = await runDeliverySkill({ ...options, runner: f.runner, repairCommand: "repair" });
     expect(result.status).toBe("blocked");
     expect(result.spentRepairs).toBe(0);
-    expect(repairs).toBe(0);
+    expect(f.calls.some(call => call[0] === "exec" && call[1] === "repair")).toBe(false);
     expect(result.handoffMarkdown).toContain(error);
     expect(result.handoffMarkdown).toContain(check.detailsUrl);
   });

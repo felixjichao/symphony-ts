@@ -1164,6 +1164,9 @@ export function mapDeliveryHandoffReason(input: {
     case "ci_failed_max_repairs":
     case "review_changes_requested_max_repairs":
     case "ci_wait_timeout":
+    case "review_wait_timeout":
+    case "repair_timeout":
+    case "validation_timeout":
     case "unmergeable":
       return {
         mapped: true,

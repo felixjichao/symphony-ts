@@ -97,6 +97,7 @@ export class DecisionPlanningGate {
       readonly body: string;
       readonly clarifications?: readonly string[] | undefined;
     },
+    signal?: AbortSignal,
   ): Promise<PlanningEligibilityResult> {
     if (this.service) {
       return this.service.verifyPlanEligibility(sessionId, requirements);
@@ -104,7 +105,7 @@ export class DecisionPlanningGate {
 
     if (this.client) {
       try {
-        const res = await this.client.verifyPlanEligibility(sessionId, requirements);
+        const res = await this.client.verifyPlanEligibility(sessionId, requirements, signal);
         return res.eligibility;
       } catch (err) {
         return {

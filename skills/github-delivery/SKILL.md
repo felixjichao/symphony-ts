@@ -13,7 +13,7 @@ description: Reusable delivery and land workflow skill for Symphony agents on Gi
 - **交付策略在 Agent/Tooling 层**：Orchestrator Core 保持极简调度与生命周期管理，不理解 PR 与 CI 业务语义。
 - **Git/GitHub 事实为准**：基于工作区真实状态与远程 GitHub 事实决策，确保重入幂等。
 - **严格所有权与安全防卫**：严格验证 PR 机器标记（Marker），严禁外部或身份不明的 PR 冒充；执行前核对当前分支与 origin 远端。
-- **预算有界与交接暂停**：受到 `max_turns`、修复尝试上限与 CI 等待超时约束；预算耗尽或遭遇 Blocker 时通过移除 `symphony-ready` 标签主动暂停派发，并输出 Operator 可见交接报告。
+- **预算有界与交接暂停**：交付总期限、各阶段期限和修复次数均有界；预算耗尽或遭遇 Blocker 时通过移除 `symphony-ready` 标签主动暂停派发，并输出 Operator 可见交接报告。
 
 ---
 
@@ -91,7 +91,7 @@ inspect issue/context
    - 核对 `headRefOid` 与当前本地已推送的 HEAD SHA 一致（防止将旧提交的 CI 结果当作新提交判断）。
 2. **CI 状态判定**：
    - **Green (成功)**：所有 required checks 存在且成功，且所有 observed checks 均为 success，跳出循环进入 Land 阶段。
-   - **Pending (运行中)**：等待轮询周期（默认 5 秒），累计实际墙上时钟等待时间。若超过 `maxWaitSeconds`（默认 300 秒），触发超时 Blocker 退出。
+   - **Pending (运行中)**：按轮询周期等待；当前 HEAD 的 CI 阶段期限或交付总期限耗尽时交接。
    - **Failed (失败)**：进入修复循环：
      - 若 `spentRepairs >= maxRepairAttempts`（默认 3 次），**终止修复，进入预算耗尽交接**。
      - 若未配置修复函数或修复命令，**绝不空转重试**，直接输出诊断并停止派发。
@@ -119,13 +119,13 @@ inspect issue/context
 
 ---
 
-首次交付动作前即保存绝对等待 deadline；pending 中断、restart 和 `--resume` 均保留 deadline 与已耗修复次数。`--resume` 仅解除暂停，不授予新预算。新的预算轮次需 operator 明确批准并归档旧状态后初始化，不能通过重复 resume 延长等待。
+首次交付动作前持久化总期限；每个 HEAD 的 CI、每次 Review、修复与本地验证各有阶段期限，均受总期限约束。暂停期间总时钟继续运行；重启和 `--resume` 保留期限、阶段检查点及已耗修复次数。`--max-wait` 是总墙上时钟期限的废弃兼容别名。恢复前使用 `budget-inspect` 查看期限、剩余时间和状态 generation；需要新授权时使用 `budget-authorize` 显式记录新截止时间、原因和 generation，耗尽的阶段还需指定阶段及精确标识。不得删除状态或通过重复 resume 刷新预算。完整命令和恢复规则见 [交付工作流](../../docs/github-delivery-workflow.md)。
 
 ## 3. 预算耗尽与调度暂停机制 (Handoff & Halting Dispatch)
 
 当任务遇到以下情况时，**严禁猜测、严禁无限重试**：
 - CI 修复次数达到上限（`ci_failed_max_repairs`）；
-- CI 等待总时长超时（`ci_wait_timeout`）；
+- 总期限或阶段期限耗尽（`budget_exhausted`、`ci_wait_timeout`、`review_wait_timeout`、`repair_timeout`、`validation_timeout`）；
 - PR 存在合并冲突或不可自动合入（`unmergeable`）；
 - 涉及产品业务未决决策或破坏性变更。
 
@@ -159,7 +159,7 @@ symphony delivery-skill run \
   --validate "npm test" \
   --repair-cmd "npm run fix" \
   --max-repairs 3 \
-  --max-wait 300 \
+  --total-wait 300 \
   --opt-in
 ```
 

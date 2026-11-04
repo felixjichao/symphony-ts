@@ -305,6 +305,9 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
       spentRepairs: 2, // 已消耗 2 次修复预算，达到 maxRepairAttempts=2 上限
       spentWaitSeconds: 45,
       deadlineTimestampMs: fixedDeadline,
+      budget: { schemaVersion: 1, deliveryRoundId: "test-round", totalStartedAtMs: nowMs - 45_000,
+        totalDeadlineAtMs: fixedDeadline, phaseLimitsMs: { ci: 300_000, review: 300_000, repair: 300_000, validation: 300_000 },
+        activePhase: null, phaseHistory: [], spentRepairs: 2, repairLimit: 2, authorizationGeneration: 0, authorizations: [] },
       isPaused: false, // 尚未暂停
       lastUpdated: new Date(nowMs).toISOString(),
     });
@@ -420,6 +423,9 @@ describe("NEST-128: 真实 reconciliation 取消与 recover-handoff 恢复联合
       spentRepairs: 2,
       spentWaitSeconds: 45,
       deadlineTimestampMs: fixedDeadline,
+      budget: { schemaVersion: 1, deliveryRoundId: "test-round", totalStartedAtMs: nowMs - 45_000,
+        totalDeadlineAtMs: fixedDeadline, phaseLimitsMs: { ci: 300_000, review: 300_000, repair: 300_000, validation: 300_000 },
+        activePhase: null, phaseHistory: [], spentRepairs: 2, repairLimit: 2, authorizationGeneration: 0, authorizations: [] },
       isPaused: false,
       lastUpdated: new Date(nowMs).toISOString(),
     });

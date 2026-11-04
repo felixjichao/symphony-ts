@@ -150,12 +150,12 @@ The loop has exactly three outcomes:
    terminal state and cleans up the workspace. No human merge step.
 2. **Retryable failure** — a transient or technical failure (CI failure within
    budget, push error, temporary provider error). The delivery skill repairs
-   within a bounded budget (default `--max-repairs 3`, `--max-wait 300`); the
+   within a bounded budget (default `--max-repairs 3`, `--total-wait 300`); the
    existing Symphony retry policy handles worker-level failures. A resumed run
    continues from GitHub's current facts rather than a remembered session.
 3. **Product blocker / handoff** — the requirements are ambiguous, the change is
    destructive, the change cannot be merged safely, or a budget (repair attempts,
-   CI wait) is exhausted. The skill must not guess: it keeps the issue open,
+   total time or a phase limit) is exhausted. The skill must not guess: it keeps the issue open,
    removes `symphony-ready` to stop further dispatch, and posts an
    operator-visible handoff report.
 
@@ -176,46 +176,69 @@ repository that wants unattended repair must provide that command.
 `delivery-skill run --validation-timeout 600` gives each `--validate` invocation
 its own bounded timeout in seconds (default 600; positive integer, maximum
 2147483). The same timeout applies to initial validation and validation after CI
-or review repair. Timeout/failure still halts delivery before commit/push/land.
+or review repair. Each invocation is also bounded by the remaining delivery total
+deadline. Timeout/failure still halts delivery before commit/push/land.
 This does not change `--max-wait`, persisted deadlines, repair budgets, or the
 60-second defaults for ordinary git/gh subprocesses. A larger validation timeout
-does not extend an already-persisted CI deadline.
+does not extend an already-persisted total deadline.
+
+`--total-wait` defines the total wall-clock budget, including human pauses.
+The deadline is recorded before the CLI's current-Issue and planning eligibility
+checks; their GitHub and Bridge requests are bounded by the remaining total time.
+`--max-wait` is its deprecated compatibility alias with unchanged total-deadline
+semantics; specifying both is rejected. `--ci-wait`, `--review-wait`,
+`--repair-budget` and `--validation-budget` set separate per-phase limits in
+seconds. Unspecified phase limits default to the initial total limit; each effective
+deadline is bounded by the total. Existing recorded limits cannot be changed by
+resuming with different flags. A new verified HEAD or Review intent starts its own
+phase; repeated observation and process restart retain the stored deadline.
 
 ### Recovering from a handoff
 
 Long handoff comments retain a bounded diagnostic prefix with an explicit truncation notice, original length and SHA-256. The full Markdown stays within 60,000 UTF-16 units, including the handoff marker and budget sections. Native `handoff.details` remains complete when state storage is configured. Initial publication and compensation use the same formatter; truncation does not grant recovery authorization or change the original budget/HEAD.
 
-A handoff is explicit, not a dead end:
-
-1. Fix the root cause the handoff describes.
-2. Re-add the `symphony-ready` label so Symphony dispatches the issue again:
-
-   ```sh
-   gh issue edit <number> --repo <owner/repo> --add-label symphony-ready
-   ```
-
-3. The delivery command detects the persisted paused state
-   (`<workspace>/.symphony/delivery-state.json` with `"isPaused": true`) and passes
-   `--resume` automatically, so the same workspace continues rather than refusing
-   to run.
-
-`--resume` deliberately preserves the already-spent repair count and the absolute
-CI-wait deadline — it does not grant a new budget, so repeatedly resuming cannot
-extend an exhausted budget. Decide whether a new budget round is needed from the
-**persisted budget and deadline at recovery time, not only from the original
-handoff reason**: even a handoff caused by `unmergeable` or a
-permission/infrastructure blocker can outlast the deadline while a human resolves
-it, and because `--resume` keeps that deadline the next run would time out
-immediately. Whenever the persisted repair count is already at its maximum or the
-absolute deadline has passed, an operator must explicitly start a new budget round
-by clearing the persisted state before re-adding the label:
+Fix the root cause first. `--resume` preserves the spent repair count and absolute
+total wall-clock deadline, including human pause time. Inspect the current facts
+before restoring the label, which can trigger an automatic dispatch:
 
 ```sh
-rm <workspace>/.symphony/delivery-state.json
+symphony delivery-skill budget-inspect --repo <owner/repo> --issue <number> --workspace-key <key> --cwd <workspace>
 ```
 
-Treat that deletion as an operator action: it is the authorization for a fresh,
-bounded attempt, not something the agent should do on its own.
+The command displays UTC and local deadline, remaining time, known repair usage,
+state generation, and an inferred active phase for a migratable legacy state. A legacy state without enough
+evidence to establish its original deadline and repair limit blocks ordinary resume
+before compensation; a new CLI limit cannot supply the missing authority.
+Legacy records may not contain a separate phase deadline.
+An exhausted or ambiguous deadline blocks ordinary resume. To explicitly authorize
+additional total wall-clock time and a cumulative repair limit, use the inspected
+state generation and a unique authorization ID:
+
+```sh
+symphony delivery-skill budget-authorize --repo <owner/repo> --issue <number> --workspace-key <key> --cwd <workspace> \
+  --add-seconds 86400 --max-repairs 8 --expected-generation <generation> --authorization-id <unique-id> --reason "operator-approved extension"
+```
+
+`--add-seconds` extends the prior deadline, including any elapsed pause; use
+`--deadline <UTC-ISO-timestamp>` instead for an absolute deadline. The command
+preserves spent repairs and recovery evidence. Repeating the same authorization ID
+and arguments is idempotent; a stale generation or changed request is rejected.
+For an exhausted recorded phase, `--renew-phase <ci|review|repair|validation>` and
+`--phase-identity <exact-identity>` explicitly renew that checkpoint. A successful
+validation is recorded before subsequent work. On restart before the CI checkpoint,
+Delivery revalidates against the original phase deadline: the completion record is
+not proof that workspace contents or validation inputs have remained unchanged.
+Review Bridge requests receive the applicable cancellation deadline; an uncertain
+task creation is reconciled using its persisted operation key.
+
+After inspecting and, when needed, authorizing the budget, re-add the label:
+
+```sh
+gh issue edit <number> --repo <owner/repo> --add-label symphony-ready
+```
+
+The delivery command detects the persisted paused state and passes `--resume`
+automatically, so the same workspace continues through its existing safety gates.
 
 Graceful host shutdown uses `SIGINT` / `SIGTERM`; the host closes workers and
 resources before exiting.
@@ -279,7 +302,7 @@ MVP boundary as the final security model.
 | Turns per session | `20` | `agent.max_turns` |
 | Hook timeout | `120000` ms | `hooks.timeout_ms` |
 | CI repairs | `3` | `--max-repairs` |
-| CI wait | `300` s | `--max-wait` |
+| Delivery total wall clock | `300` s | `--total-wait` (`--max-wait` alias) |
 
 ## Configuration reference
 
@@ -348,7 +371,7 @@ halt report. Recovery queries that same comment collection before posting.
 
 修复前必须确认工作区分支/origin 身份，且无已有 dirty/index 改动、merge/rebase/cherry-pick 等进行态；不清理或丢弃现有工作。旧 landing intent 只有在同一 owned PR 的权威 OPEN、`mergeCommit=null` 事实下才能解除。新 landing intent 延迟至真正发起 merge 前写入。
 
-`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先独立读取 repository/base 的真实远端分支引用，精确 fetch 并检查祖先关系；可修复目标才扣除 `spentRepairs` 并 checkpoint，执行前再核验远端目标和本地 HEAD，正常 merge 同一 base SHA。内置 `codex exec --sandbox workspace-write -`（或注入的 `repairFn`）在原工作区解决冲突；CLI 与 continuity host 共用此默认路径，不依赖 profile 的 CI/review `--repair-cmd`，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。Codex prompt 由 stdin 传入；执行器接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）。执行器缺失或未配置本地验证时明确交接。
+`mergeConflictRepair` 持久记录 `merge_conflict` cause、operationId、attempt、PR、expectedHeadSha、baseSha、phase 与 commit/push 回执；先独立读取 repository/base 的真实远端分支引用，精确 fetch 并检查祖先关系；可修复目标才扣除 `spentRepairs` 并 checkpoint，执行前再核验远端目标和本地 HEAD，正常 merge 同一 base SHA。内置 `codex exec --sandbox workspace-write -` 在原工作区解决冲突；CLI 与 continuity host 共用此默认路径，不依赖 profile 的 CI/review `--repair-cmd`，必须保留 PR 实现与 base 变更，不得提交、推送、reset、abort 或 rebase。Codex prompt 由 stdin 传入；执行器接收 `SYMPHONY_REPAIR_CAUSE=merge_conflict` 和 JSON `SYMPHONY_REPAIR_CONTEXT`（含冲突文件与固定目标）。执行器缺失或未配置本地验证时明确交接。程序化调用的旧 `repairFn` 参数因无法安全终止而在任何交付动作前拒绝；CI/Review 修复应改用 `repairCommand` 和支持超时终止的 runner。
 
 本地验证与冲突检查通过后，Delivery 创建精确两父 merge commit；再次验证本地身份及远端所有权/HEAD，再普通 push，绝不 force push。base 在修复中前移不会改变已固定的 merge parents；重读最新 GitHub facts 后，新 HEAD 必须重新通过 CI、独立 exact-HEAD review 和原有 merge fence。若再次确认冲突，使用剩余预算再修复。
 

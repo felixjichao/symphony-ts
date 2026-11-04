@@ -37,6 +37,8 @@ symphony delivery-skill [run|halt|recover-handoff] --repo <owner/repo> --issue <
 ```
 - `run` 动作：执行 inspect → validate → commit → push → create/reuse PR → inspect CI → fix failures loop → land 闭环；
 - `halt` 动作：显式触发交接中断，自动移除 Issue 上的 `symphony-ready` 标签以停止派发，并在控制台与 Issue 上输出交接报告；
+- `budget-inspect` 动作：只读显示已有交付期限、剩余时间及已知修复次数；
+- `budget-authorize` 动作：以唯一授权 ID、预期代次和原因显式续期总期限，保留修复消耗与交接记录；
 - 常用选项：
   - `--repo <owner/repo>`：目标 GitHub 仓库；
   - `--issue <number>`：当前 Issue 编号；
@@ -45,7 +47,8 @@ symphony delivery-skill [run|halt|recover-handoff] --repo <owner/repo> --issue <
   - `--validate <command>`：本地验证命令（如 `"npm test"`）；
   - `--validation-timeout <seconds>`：每次本地验证的独立超时（默认 600 秒；正整数，最大 2147483），首次验证、CI/Review 修复后的验证均适用；
   - `--max-repairs <N>`：CI 失败最大修复尝试次数（默认 3）；
-  - `--max-wait <seconds>`：CI 等待超时秒数（默认 300）；
+  - `--total-wait <seconds>`：交付总墙上时钟期限（默认 300，包含暂停时间）；`--max-wait` 为兼容旧脚本的弃用别名；
+  - `--ci-wait`、`--review-wait`、`--repair-budget`、`--validation-budget <seconds>`：每轮对应阶段的预算，默认等于初始总期限，均受总期限约束；
   - `--ready-label <label>`：就绪调度标签（默认 `symphony-ready`）；
   - `--no-land`：通过 CI 后仅标记 ready，不自动执行 squash merge。
 

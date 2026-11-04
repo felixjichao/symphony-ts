@@ -118,7 +118,7 @@ export class DecisionBridgeClient {
     method: string,
     path: string,
     body?: unknown,
-    options: { allow204?: boolean; signal?: AbortSignal } = {}
+    options: { allow204?: boolean; signal?: AbortSignal | undefined } = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -212,17 +212,17 @@ export class DecisionBridgeClient {
     );
   }
 
-  async getTask(taskId: string): Promise<{ task: DecisionTask }> {
+  async getTask(taskId: string, signal?: AbortSignal): Promise<{ task: DecisionTask }> {
     return await this.request<{ task: DecisionTask }>(
       "GET",
-      `/v1/tasks/${encodeURIComponent(taskId)}`
+      `/v1/tasks/${encodeURIComponent(taskId)}`, undefined, { signal }
     );
   }
 
-  async getTaskResult(taskId: string): Promise<GetTaskResultResponse> {
+  async getTaskResult(taskId: string, signal?: AbortSignal): Promise<GetTaskResultResponse> {
     return await this.request<GetTaskResultResponse>(
       "GET",
-      `/v1/tasks/${encodeURIComponent(taskId)}/result`
+      `/v1/tasks/${encodeURIComponent(taskId)}/result`, undefined, { signal }
     );
   }
 
@@ -256,21 +256,21 @@ export class DecisionBridgeClient {
     );
   }
 
-  async supersedeTask(taskId: string): Promise<{ task: DecisionTask }> {
+  async supersedeTask(taskId: string, signal?: AbortSignal): Promise<{ task: DecisionTask }> {
     return await this.request<{ task: DecisionTask }>(
       "POST",
-      `/v1/tasks/${encodeURIComponent(taskId)}/supersede`
+      `/v1/tasks/${encodeURIComponent(taskId)}/supersede`, undefined, { signal }
     );
   }
 
-  async createTask(params: CreateTaskRequest): Promise<{ task: DecisionTask }> {
-    return await this.request<{ task: DecisionTask }>("POST", "/v1/tasks", params);
+  async createTask(params: CreateTaskRequest, signal?: AbortSignal): Promise<{ task: DecisionTask }> {
+    return await this.request<{ task: DecisionTask }>("POST", "/v1/tasks", params, { signal });
   }
 
-  async getSession(sessionId: string): Promise<{ session: DecisionSession }> {
+  async getSession(sessionId: string, signal?: AbortSignal): Promise<{ session: DecisionSession }> {
     return await this.request<{ session: DecisionSession }>(
       "GET",
-      `/v1/sessions/${encodeURIComponent(sessionId)}`
+      `/v1/sessions/${encodeURIComponent(sessionId)}`, undefined, { signal }
     );
   }
 
@@ -296,13 +296,14 @@ export class DecisionBridgeClient {
       readonly body: string;
       readonly clarifications?: readonly string[] | undefined;
     },
+    signal?: AbortSignal,
   ): Promise<VerifyReviewApprovalResponse> {
     const payload: VerifyReviewApprovalRequest = {
       sessionId,
       target,
       ...(requirements !== undefined ? { requirements } : {}),
     };
-    return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload);
+    return await this.request<VerifyReviewApprovalResponse>("POST", "/v1/reviews/verify", payload, { signal });
   }
 
   async verifyPlanEligibility(
@@ -312,9 +313,10 @@ export class DecisionBridgeClient {
       readonly body: string;
       readonly clarifications?: readonly string[] | undefined;
     },
+    signal?: AbortSignal,
   ): Promise<VerifyPlanEligibilityResponse> {
     const payload: VerifyPlanEligibilityRequest = { sessionId, requirements };
-    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload);
+    return await this.request<VerifyPlanEligibilityResponse>("POST", "/v1/plans/verify", payload, { signal });
   }
 
   // Synchronous lookups are used by the orchestrator's dispatch gate, which must
@@ -383,9 +385,9 @@ export class DecisionBridgeClient {
     return null;
   }
 
-  async createSession(root: DecisionWorkItemRef): Promise<{ session: DecisionSession }> {
+  async createSession(root: DecisionWorkItemRef, signal?: AbortSignal): Promise<{ session: DecisionSession }> {
     const payload: CreateSessionRequest = { root };
-    return await this.request<{ session: DecisionSession }>("POST", "/v1/sessions", payload);
+    return await this.request<{ session: DecisionSession }>("POST", "/v1/sessions", payload, { signal });
   }
 
   async putBinding(sessionId: string, params: PutBindingRequest): Promise<{ session: DecisionSession }> {
