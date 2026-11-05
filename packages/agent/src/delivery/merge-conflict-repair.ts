@@ -22,27 +22,26 @@ interface RepairOptions {
   readonly assertIdentity: () => Promise<void>;
   readonly validationCommand: string;
   readonly validationTimeoutMs: number;
-  readonly repairFn?: ((context: string) => Promise<boolean> | boolean) | undefined;
 }
 
 /** Fail before consuming budget or modifying a pre-existing worktree/index. */
-export async function assertRepairWorkspace(runner: DeliveryGitGhRunner, cwd: string, expectedHead: string): Promise<void> {
-  const head = await runner.git(["rev-parse", "HEAD"], cwd);
+export async function assertRepairWorkspace(runner: DeliveryGitGhRunner, cwd: string, expectedHead: string, timeout?: () => number): Promise<void> {
+  const head = await runner.git(["rev-parse", "HEAD"], cwd, timeout?.());
   if (head.exitCode !== 0 || head.stdout.trim() !== expectedHead) throw new Error("merge_conflict_local_head_mismatch");
-  const status = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], cwd);
+  const status = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], cwd, timeout?.());
   if (status.exitCode !== 0 || status.stdout.trim()) throw new Error("merge_conflict_dirty_workspace: existing changes preserved");
-  const stagedState = await runner.git(["diff", "--cached", "--name-only", "--", ".symphony"], cwd);
+  const stagedState = await runner.git(["diff", "--cached", "--name-only", "--", ".symphony"], cwd, timeout?.());
   if (stagedState.exitCode !== 0 || stagedState.stdout.trim()) throw new Error("merge_conflict_staged_delivery_state");
-  const metadata = await runner.git(["rev-parse", "--absolute-git-dir"], cwd);
+  const metadata = await runner.git(["rev-parse", "--absolute-git-dir"], cwd, timeout?.());
   if (metadata.exitCode !== 0) throw new Error("merge_conflict_workspace_state_unreadable");
   const operations = inspectGitOperationState(metadata.stdout.trim());
   if (operations.length) throw new Error(`merge_conflict_existing_${operations.join(",")}: preserved`);
 }
 
 /** Fresh identity, ownership, OPEN/no-merge facts, and exact expected HEAD. */
-export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext, prNumber: number, readRemoteBranch?: DeliveryRemoteBranchReader) {
+export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext, prNumber: number, readRemoteBranch?: DeliveryRemoteBranchReader, timeout?: () => number) {
   const result = await runner.gh(["pr", "view", String(prNumber), "--repo", context.repo, "--json",
-    "state,isDraft,body,headRefOid,baseRefOid,headRefName,baseRefName,mergeable,mergeCommit"], cwd);
+    "state,isDraft,body,headRefOid,baseRefOid,headRefName,baseRefName,mergeable,mergeCommit"], cwd, timeout?.());
   if (result.exitCode !== 0) throw new Error(`merge_conflict_remote_facts_unavailable: ${result.stderr || result.stdout}`);
   const pr: { state?: string; isDraft?: boolean; body?: string; headRefOid?: string; baseRefOid?: string;
     headRefName?: string; baseRefName?: string; mergeable?: string; mergeCommit?: unknown } = JSON.parse(result.stdout);
@@ -62,11 +61,11 @@ export async function readRepairTarget(runner: DeliveryGitGhRunner, cwd: string,
 export async function prepareRepairTarget(runner: DeliveryGitGhRunner, cwd: string, context: DeliveryContext,
   prNumber: number, expectedHead: string, readRemoteBranch: DeliveryRemoteBranchReader | undefined, timeout: () => number) {
   for (let observation = 0; observation < 2; observation++) {
-    const target = await readRepairTarget(runner, cwd, context, prNumber, readRemoteBranch);
+    const target = await readRepairTarget(runner, cwd, context, prNumber, readRemoteBranch, timeout);
     if (target.headRefOid !== expectedHead || target.mergeable !== "CONFLICTING") {
       throw new Error("merge_conflict_facts_changed_before_reservation");
     }
-    await assertRepairWorkspace(runner, cwd, expectedHead);
+    await assertRepairWorkspace(runner, cwd, expectedHead, timeout);
     const fetch = await runner.git(["fetch", "--no-tags", "origin", target.remoteBaseSha], cwd, timeout());
     const fetched = await runner.git(["rev-parse", "FETCH_HEAD"], cwd, timeout());
     if (fetch.exitCode !== 0 || fetched.exitCode !== 0 || fetched.stdout.trim() !== target.remoteBaseSha) {
@@ -74,7 +73,7 @@ export async function prepareRepairTarget(runner: DeliveryGitGhRunner, cwd: stri
     }
     const contained = await runner.git(["merge-base", "--is-ancestor", target.remoteBaseSha, expectedHead], cwd, timeout());
     if (contained.exitCode !== 0 && contained.exitCode !== 1) throw new Error("merge_conflict_ancestry_unavailable");
-    await assertRepairWorkspace(runner, cwd, expectedHead);
+    await assertRepairWorkspace(runner, cwd, expectedHead, timeout);
     if (contained.exitCode === 1) return target;
     // Re-observe PR + authoritative ref once. Never interpret no-op as repair
     // success, manufacture a merge commit, or spend attempts on stale facts.
@@ -83,11 +82,11 @@ export async function prepareRepairTarget(runner: DeliveryGitGhRunner, cwd: stri
 }
 
 async function assertParents(o: RepairOptions, sha: string): Promise<void> {
-  const result = await o.runner.git(["rev-list", "--parents", "-n", "1", sha], o.cwd);
+  const result = await o.runner.git(["rev-list", "--parents", "-n", "1", sha], o.cwd, o.timeout());
   if (result.exitCode !== 0 || result.stdout.trim() !== `${sha} ${o.operation.expectedHeadSha} ${o.operation.baseSha}`) {
     throw new Error("merge_conflict_invalid_merge_parents");
   }
-  await assertRepairWorkspace(o.runner, o.cwd, sha);
+  await assertRepairWorkspace(o.runner, o.cwd, sha, o.timeout);
 }
 
 /** Throws a concrete blocker; caller preserves the operation and hands off. */
@@ -99,6 +98,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   };
   const git = async (args: readonly string[]) => {
     const result = await o.runner.git(args, o.cwd, o.timeout());
+    o.timeout();
     if (result.exitCode !== 0) throw new Error(`merge_conflict_git_${args[0]}: ${result.stderr || result.stdout}`);
     return result.stdout.trim();
   };
@@ -106,8 +106,8 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   if (recovering && !["committed", "pushing", "pushed"].includes(operation.phase)) {
     // Read-only reconciliation. An unchanged HEAD, clean index/worktree and no
     // Git operation prove there is nothing to continue; never replay an executor.
-    const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
-    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+    const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch, o.timeout);
+    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha, o.timeout);
     if (pr.headRefOid !== operation.expectedHeadSha) throw new Error("merge_conflict_recovery_remote_outcome_unverified: no replay");
     const auth = o.recoveryAuthorization;
     if (!["reserved", "merging"].includes(operation.phase) || operation.commitSha
@@ -119,23 +119,24 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     return operation.expectedHeadSha;
   }
   if (!recovering) {
-    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
-    const target = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
+    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha, o.timeout);
+    const target = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch, o.timeout);
     if (target.headRefOid !== operation.expectedHeadSha || target.remoteBaseSha !== operation.baseSha) {
       throw new Error("merge_conflict_target_drift_before_merge");
     }
     await git(["fetch", "--no-tags", "origin", operation.baseSha]);
     if (await git(["rev-parse", "FETCH_HEAD"]) !== operation.baseSha) throw new Error("merge_conflict_fetch_base_mismatch");
-    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+    await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha, o.timeout);
     await o.assertIdentity();
     await phase("merging");
     const merge = await o.runner.git(["merge", "--no-commit", "--no-ff", operation.baseSha], o.cwd, o.timeout());
+    o.timeout();
     const unmerged = await git(["diff", "--name-only", "--diff-filter=U"]);
     if (merge.exitCode !== 0 && (merge.exitCode !== 1 || !unmerged)) throw new Error(`merge_conflict_merge_failed: ${merge.stderr}`);
     if (merge.exitCode === 0 && !unmerged) {
       const contained = await o.runner.git(["merge-base", "--is-ancestor", operation.baseSha, "HEAD"], o.cwd, o.timeout());
       if (contained.exitCode === 0) {
-        await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha);
+        await assertRepairWorkspace(o.runner, o.cwd, operation.expectedHeadSha, o.timeout);
         throw new Error("merge_conflict_noop_after_reservation: unchanged work preserved; remote conflict requires diagnosis");
       }
       if (contained.exitCode !== 1) throw new Error("merge_conflict_ancestry_unavailable");
@@ -149,8 +150,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
         expectedHeadSha: operation.expectedHeadSha, observedBaseSha: operation.baseSha, prNumber: operation.prNumber,
         conflicts: unmerged.split("\n"), instructions: "Resolve the existing merge in this workspace, preserving PR implementation and base changes. Do not commit, push, abort, reset or rebase. Do not stage files or modify Git metadata; the host stages resolved source after validation. Report product decisions as failure." });
       o.timeout();
-      const success = o.repairFn ? await o.repairFn(context)
-        : (await o.runner.exec(
+      const success = (await o.runner.exec(
           // Fixed command: conflict evidence is stdin data, never shell code.
           // The caller's runner retains authority and deadline fencing.
           "printf '%s\\n' \"$SYMPHONY_REPAIR_PROMPT\" | codex exec --sandbox workspace-write -",
@@ -178,7 +178,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     if (validation.exitCode !== 0) throw new Error(`merge_conflict_validation_failed: ${validation.stderr || validation.stdout}`);
     if (await git(["rev-parse", "HEAD"]) !== operation.expectedHeadSha
       || await git(["rev-parse", "MERGE_HEAD"]) !== operation.baseSha) throw new Error("merge_conflict_validation_changed_history");
-    const staged = await stageSourceChanges(o.runner, o.cwd, o.timeout());
+    const staged = await stageSourceChanges(o.runner, o.cwd, o.timeout);
     if (staged.exitCode !== 0) throw new Error(`merge_conflict_git_add: ${staged.stderr || staged.stdout}`);
     if (await git(["diff", "--name-only", "--diff-filter=U"])) throw new Error("merge_conflict_unresolved_paths");
     await git(["diff", "--cached", "--check"]);
@@ -207,7 +207,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   // Only a committed receipt with confirmed unchanged remote facts authorizes
   // the first push. A pushing/pushed receipt is always read-only, even on resume.
   if (operation.phase === "committed") {
-    const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
+    const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch, o.timeout);
     const remoteHead = await readHead();
     if (![commitSha, operation.expectedHeadSha].includes(pr.headRefOid)) throw new Error("merge_conflict_remote_head_changed");
     if (remoteHead === operation.expectedHeadSha && pr.headRefOid === operation.expectedHeadSha) {
@@ -227,7 +227,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     await o.assertIdentity();
     try {
       const remoteHead = await readHead();
-      const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch);
+      const pr = await readRepairTarget(o.runner, o.cwd, o.context, operation.prNumber, o.readRemoteBranch, o.timeout);
       if (![commitSha, operation.expectedHeadSha].includes(pr.headRefOid)) throw new Error("merge_conflict_remote_head_changed");
       lastObservation = `remote=${remoteHead}; pr=${pr.headRefOid}; expected=${commitSha}`;
       o.timeout();

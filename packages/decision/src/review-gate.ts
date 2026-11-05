@@ -7,6 +7,7 @@ import {
   type DeliveryReviewGate,
   type DeliveryReviewStatusResult,
 } from "@symphony/domain";
+import { DecisionStoreError } from "./errors.js";
 import { DecisionBridgeClient } from "./client.js";
 import { DecisionService } from "./service.js";
 
@@ -30,7 +31,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     sessionId: string,
     target: DecisionReviewTarget,
     context?: DecisionContextBundle,
-    options?: { operationKey?: string; forceNewRevision?: boolean; reuseCompleted?: boolean },
+    options?: { operationKey?: string; forceNewRevision?: boolean; reuseCompleted?: boolean; signal?: AbortSignal },
   ): Promise<DecisionTask> {
     if (this.service) {
       // In-service path
@@ -53,10 +54,11 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     if (this.client) {
       // HTTP client path
       try {
-        await this.client.getSession(sessionId);
-      } catch {
+        await this.client.getSession(sessionId, options?.signal);
+      } catch (error) {
+        if (!(error instanceof DecisionStoreError) || error.status !== 404) throw error;
         const root = parseDecisionSessionRootFromId(sessionId);
-        await this.client.createSession(root);
+        await this.client.createSession(root, options?.signal);
       }
 
       const res = await this.client.createTask({
@@ -68,14 +70,14 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         supersedeSessionReviews: true,
         ...(options?.reuseCompleted ? { reuseCompleted: true } : {}),
         ...(options?.forceNewRevision !== undefined ? { forceNewRevision: options.forceNewRevision } : {}),
-      });
+      }, options?.signal);
       return res.task;
     }
 
     throw new Error("Invalid review gate: neither client nor service configured");
   }
 
-  async getReviewStatus(taskId: string): Promise<DeliveryReviewStatusResult> {
+  async getReviewStatus(taskId: string, signal?: AbortSignal): Promise<DeliveryReviewStatusResult> {
     if (this.service) {
       const task = this.service.getTask(taskId);
       if (!task) {
@@ -93,9 +95,9 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     }
 
     if (this.client) {
-      const { task } = await this.client.getTask(taskId);
+      const { task } = await this.client.getTask(taskId, signal);
       if (task.status === "completed") {
-        const { result } = await this.client.getTaskResult(taskId);
+        const { result } = await this.client.getTaskResult(taskId, signal);
         return { taskId, status: task.status, result };
       }
       if (task.status === "failed") {
@@ -116,6 +118,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
         readonly clarifications?: readonly string[] | undefined;
       } | undefined;
     },
+    signal?: AbortSignal,
   ): Promise<DeliveryReviewApprovalResult> {
     if (!target.sessionId) {
       throw new Error(
@@ -135,7 +138,7 @@ export class DecisionReviewGate implements DeliveryReviewGate {
 
     if (this.client) {
       try {
-        const { approval } = await this.client.verifyReviewApproval(sessionId, reviewTarget, target.requirements);
+        const { approval } = await this.client.verifyReviewApproval(sessionId, reviewTarget, target.requirements, signal);
         return approval;
       } catch (err) {
         return {
@@ -150,13 +153,13 @@ export class DecisionReviewGate implements DeliveryReviewGate {
     throw new Error("Invalid review gate: neither client nor service configured");
   }
 
-  async supersedeReviewTask(taskId: string): Promise<void> {
+  async supersedeReviewTask(taskId: string, signal?: AbortSignal): Promise<void> {
     if (this.service) {
       await this.service.supersedeTask(taskId);
       return;
     }
     if (this.client) {
-      await this.client.supersedeTask(taskId);
+      await this.client.supersedeTask(taskId, signal);
       return;
     }
   }

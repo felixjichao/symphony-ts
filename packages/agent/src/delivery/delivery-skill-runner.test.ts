@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatDeliveryHandoffMarkdown,
   formatPrBody,
+  authorizePersistedDeliveryBudget,
   type DecisionContextBundle,
   type DecisionReviewTarget,
   type DecisionTask,
@@ -336,6 +337,104 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     expect(runner.ghCalls).toHaveLength(0);
   });
 
+  it("persists the total deadline before preflight and reports its exhaustion before inspection", async () => {
+    const runner = new MockDeliveryRunner();
+    let clock = 1_000_000;
+    let saved: PersistedDeliveryState | null = null;
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, nowFn: () => clock,
+      stateStorage: { readState: () => saved, writeState: state => { saved = structuredClone(state); } },
+      preflight: async remaining => {
+        expect((saved as PersistedDeliveryState | null)?.deadlineTimestampMs).toBe(1_015_000);
+        expect(remaining).toBe(15_000);
+        clock += 15_000;
+        throw new Error("preflight timed out");
+      },
+    });
+    expect(result.reason).toBe("budget_exhausted");
+    expect((saved as PersistedDeliveryState | null)?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "total", deadlineAtMs: 1_015_000 });
+    expect(runner.gitCalls).toHaveLength(0);
+  });
+
+  it("stops an expired persisted delivery before inspection or validation", async () => {
+    const runner = new MockDeliveryRunner();
+    const deadline = testClock;
+    let state: PersistedDeliveryState = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 1, spentWaitSeconds: 15, deadlineTimestampMs: deadline, isPaused: false, lastUpdated: "now",
+      budget: { schemaVersion: 1, deliveryRoundId: "round", totalStartedAtMs: deadline - 15_000, totalDeadlineAtMs: deadline,
+        phaseLimitsMs: { ci: 15_000, review: 15_000, repair: 15_000, validation: 15_000 }, activePhase: null,
+        phaseHistory: [], spentRepairs: 1, repairLimit: 3, authorizationGeneration: 0, authorizations: [] } };
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner,
+      stateStorage: { readState: () => state, writeState: next => { state = next; } } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(runner.gitCalls).toHaveLength(0);
+    expect(runner.execCalls).toHaveLength(0);
+    expect(state.deadlineTimestampMs).toBe(deadline);
+    expect(state.spentRepairs).toBe(1);
+  });
+
+  it("rejects an ambiguous legacy repair limit before attempting compensation", async () => {
+    const runner = new MockDeliveryRunner();
+    const state: PersistedDeliveryState = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 1, spentWaitSeconds: 15, deadlineTimestampMs: testClock + 10_000,
+      isPaused: true, pendingCompensation: true, lastUpdated: "now" };
+    let writes = 0;
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, resume: true, maxRepairAttempts: 99,
+      stateStorage: { readState: () => state, writeState: () => { writes++; } } });
+    expect(result.reason).toBe("manual_intervention_required");
+    expect(result.handoffMarkdown).toContain("Ambiguous legacy delivery budget");
+    expect(writes).toBe(0);
+    expect(runner.gitCalls).toHaveLength(0);
+    expect(runner.ghCalls).toHaveLength(0);
+  });
+
+  it("rejects a clock earlier than the persisted budget before compensation or inspection", async () => {
+    const runner = new MockDeliveryRunner();
+    const state: PersistedDeliveryState = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 1, spentWaitSeconds: 0, deadlineTimestampMs: testClock + 20_000,
+      isPaused: true, pendingCompensation: true, lastUpdated: "now",
+      budget: { schemaVersion: 1, deliveryRoundId: "round", totalStartedAtMs: testClock + 1_000,
+        totalDeadlineAtMs: testClock + 20_000, phaseLimitsMs: { ci: 10_000, review: 10_000, repair: 10_000, validation: 10_000 },
+        activePhase: null, phaseHistory: [], spentRepairs: 1, repairLimit: 2, authorizationGeneration: 0, authorizations: [] } };
+    let writes = 0;
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, resume: true,
+      stateStorage: { readState: () => state, writeState: () => { writes++; } } });
+    expect(result.reason).toBe("manual_intervention_required");
+    expect(result.handoffMarkdown).toContain("clock precedes");
+    expect(writes).toBe(0);
+    expect([...runner.gitCalls, ...runner.ghCalls, ...runner.execCalls]).toHaveLength(0);
+  });
+
+  it("does not invent a deadline for an ambiguous legacy state", async () => {
+    const runner = new MockDeliveryRunner();
+    const state: PersistedDeliveryState = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 1, spentWaitSeconds: 15, isPaused: true, lastUpdated: "now" };
+    let writes = 0;
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, resume: true,
+      stateStorage: { readState: () => state, writeState: () => { writes++; } } });
+    expect(result.reason).toBe("manual_intervention_required");
+    expect(result.handoffMarkdown).toContain("no valid absolute deadline");
+    expect(writes).toBe(0);
+    expect(runner.gitCalls).toHaveLength(0);
+    expect(runner.ghCalls).toHaveLength(0);
+    expect(runner.execCalls).toHaveLength(0);
+  });
+
+  it("preserves budget receipts and uses the persisted repair authority on resume", async () => {
+    const runner = new MockDeliveryRunner();
+    const deadline = testClock;
+    let state: PersistedDeliveryState = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 4, spentWaitSeconds: 15, deadlineTimestampMs: deadline, isPaused: true, lastUpdated: "before",
+      budget: { schemaVersion: 1, deliveryRoundId: "round", totalStartedAtMs: deadline - 15_000, totalDeadlineAtMs: deadline,
+        phaseLimitsMs: { ci: 15_000, review: 15_000, repair: 15_000, validation: 15_000 }, activePhase: null,
+        phaseHistory: [], spentRepairs: 4, repairLimit: 4, authorizationGeneration: 0, authorizations: [] } };
+    const budget = state.budget;
+    const result = await runDeliverySkill({ ...getBaseOptions(createTempCwd()), runner, resume: true, maxRepairAttempts: 99,
+      stateStorage: { readState: () => state, writeState: next => { state = next; } } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(state.budget).toEqual(budget);
+    expect(state.handoff?.maxRepairs).toBe(4);
+  });
+
   const setupPreMutationSuccess = (runner: MockDeliveryRunner, headBranch = "symphony/GH-80", repo = "felixjichao/symphony-ts") => {
     // 1. git branch --show-current
     runner.gitResponses.push({ stdout: `${headBranch}\n`, stderr: "", exitCode: 0 });
@@ -348,6 +447,45 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       exitCode: 0,
     });
   };
+
+  it("records initial validation before commit and revalidates after a crash without refreshing its deadline", async () => {
+    const cwd = createTempCwd();
+    let clock = 2_000_000;
+    let saved: PersistedDeliveryState | null = null;
+    let crash = true;
+    const storage: DeliveryStateStorage = { readState: () => saved, writeState: state => {
+      saved = structuredClone(state);
+      if (crash && state.budget?.activePhase?.completedAtMs !== undefined) {
+        crash = false;
+        throw new Error("crash after durable validation receipt");
+      }
+    } };
+    const first = new MockDeliveryRunner();
+    setupPreMutationSuccess(first);
+    first.ghResponses.push({ stdout: "[]", stderr: "", exitCode: 0 });
+    first.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 });
+    const options = { ...getBaseOptions(cwd), nowFn: () => clock, stateStorage: storage,
+      budgetPhaseLimitsMs: { ci: 10_000, review: 10_000, repair: 10_000, validation: 10_000 } };
+    await expect(runDeliverySkill({ ...options, runner: first })).rejects.toThrow("crash after durable validation receipt");
+    const receipt = (saved as PersistedDeliveryState | null)?.budget?.activePhase;
+    expect(receipt).toMatchObject({ phase: "validation", identity: "initial", startedAtMs: clock,
+      completedAtMs: clock, deadlineAtMs: clock + 10_000 });
+    expect(first.gitCalls.some(call => call.args[0] === "status")).toBe(false);
+
+    clock += 1_000;
+    const second = new MockDeliveryRunner();
+    setupPreMutationSuccess(second);
+    second.ghResponses.push({ stdout: "[]", stderr: "", exitCode: 0 });
+    second.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 });
+    const git = second.git.bind(second);
+    second.git = async (args, dir) => {
+      if (args[0] === "status") throw new Error("stop before commit");
+      return git(args, dir);
+    };
+    await expect(runDeliverySkill({ ...options, runner: second })).rejects.toThrow("stop before commit");
+    expect(second.execCalls).toHaveLength(1);
+    expect((saved as PersistedDeliveryState | null)?.budget?.activePhase).toEqual(receipt);
+  });
 
   it("验收 1: 能够进行前置检查、运行项目验证、提交 (commit) 并推送到远端 (push)", async () => {
     const cwd = createTempCwd();
@@ -431,7 +569,8 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     // 验证真实执行了 validationCommand
     expect(runner.execCalls).toHaveLength(1);
     expect(runner.execCalls[0]?.command).toBe("npm test");
-    expect(runner.execCalls[0]?.timeoutMs).toBe(600_000);
+    expect(runner.execCalls[0]?.timeoutMs).toBeGreaterThan(0);
+    expect(runner.execCalls[0]?.timeoutMs).toBeLessThanOrEqual(15_000);
 
     // 验证调用了 git commit 和 git push
     const gitCommitCall = runner.gitCalls.find((c) => c.args[0] === "commit");
@@ -654,15 +793,13 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     });
     runner.ghResponses.push({ stdout: JSON.stringify({ state: "CLOSED" }), stderr: "", exitCode: 0 });
 
+    const exec = runner.exec.bind(runner);
     let repairCalled = false;
-    const result = await runDeliverySkill({
-      ...getBaseOptions(cwd),
-      runner,
-      repairFn: async (_context) => {
-        repairCalled = true;
-        return true;
-      },
-    });
+    runner.exec = async (command, dir, timeout, env) => {
+      if (command === "repair") { repairCalled = true; return { stdout: "", stderr: "", exitCode: 0 }; }
+      return exec(command, dir, timeout, env);
+    };
+    const result = await runDeliverySkill({ ...getBaseOptions(cwd), runner, repairCommand: "repair" });
 
     expect(repairCalled).toBe(true);
     expect(result.status).toBe("completed");
@@ -810,6 +947,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     };
     runner.ghResponses.push(failChecks); // check 1 -> attempt 1
     // repair 1
+    runner.execResponses.push({ stdout: "repair", stderr: "", exitCode: 0 });
     runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 });
     runner.gitResponses.push({ stdout: " M fix1", stderr: "", exitCode: 0 });
     runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
@@ -827,6 +965,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     };
     runner.ghResponses.push(failChecks2); // check 2 -> attempt 2
     // repair 2
+    runner.execResponses.push({ stdout: "repair", stderr: "", exitCode: 0 });
     runner.execResponses.push({ stdout: "ok", stderr: "", exitCode: 0 });
     runner.gitResponses.push({ stdout: " M fix2", stderr: "", exitCode: 0 });
     runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 });
@@ -855,7 +994,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const result = await runDeliverySkill({
       ...getBaseOptions(cwd),
       maxRepairAttempts: 2,
-      repairFn: async () => true,
+      repairCommand: "repair",
       runner,
     });
 
@@ -1127,7 +1266,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
 
     // 缺少 headRefOid 必须被判定为 pending 并超时终止，绝不能直接调用 merge
     expect(result.status).toBe("blocked");
-    expect(result.reason).toBe("ci_wait_timeout");
+    expect(result.reason).toBe("budget_exhausted");
     expect(runner.ghCalls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
   });
 
@@ -1310,19 +1449,11 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       return next ?? { stdout: "", stderr: "", exitCode: 0 };
     };
 
-    let repairCalled = false;
-    const result = await runDeliverySkill({
-      ...getBaseOptions(cwd),
-      repairFn: async () => {
-        repairCalled = true;
-        return true;
-      },
-      runner,
-    });
+    const result = await runDeliverySkill({ ...getBaseOptions(cwd), repairCommand: "repair", runner });
 
     expect(result.status).toBe("blocked");
     expect(result.reason).toBe("manual_intervention_required");
-    expect(repairCalled).toBe(false); // Infra 错误绝不调用 repairFn 浪费预算
+    expect(runner.execCalls.some(call => call.command === "repair")).toBe(false);
     expect(result.handoffMarkdown).toContain("Resource not accessible by integration");
   });
 
@@ -1376,12 +1507,11 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       },
     };
 
+    runner.execResponses.push(() => { throw new Error("Disk full or unexpected crash during repair"); });
     const result = await runDeliverySkill({
       ...getBaseOptions(cwd),
       stateStorage: mockStorage,
-      repairFn: async () => {
-        throw new Error("Disk full or unexpected crash during repair");
-      },
+      repairCommand: "repair",
       runner,
     });
 
@@ -1430,6 +1560,9 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
         deadlineTimestampMs: fixedDeadline,
         isPaused: false,
         lastUpdated: new Date().toISOString(),
+        budget: { schemaVersion: 1, deliveryRoundId: "round", totalStartedAtMs: fixedDeadline - 300_000,
+          totalDeadlineAtMs: fixedDeadline, phaseLimitsMs: { ci: 300_000, review: 300_000, repair: 300_000, validation: 300_000 },
+          activePhase: null, phaseHistory: [], spentRepairs: 2, repairLimit: 2, authorizationGeneration: 0, authorizations: [] },
       }),
       "utf8",
     );
@@ -1664,6 +1797,36 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
     const shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    it("does not mark a delivery ready when approval verification exhausts Review time", async () => {
+      const cwd = createTempCwd();
+      const runner = new MockDeliveryRunner();
+      setupPreMutationSuccess(runner);
+      const context = { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80",
+        headBranch: "symphony/GH-80", baseBranch: "main" };
+      runner.ghResponses.push({ stdout: JSON.stringify([{ number: 85, url: "https://github.com/felixjichao/symphony-ts/pull/85",
+        state: "OPEN", headRefOid: shaA, body: formatPrBody({ context }) }]), stderr: "", exitCode: 0 });
+      runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }, { stdout: "", stderr: "", exitCode: 0 },
+        { stdout: `${shaA}\n`, stderr: "", exitCode: 0 });
+      runner.ghResponses.push({ stdout: JSON.stringify({ headRefOid: shaA, mergeable: "MERGEABLE", state: "OPEN",
+        statusCheckRollup: [{ __typename: "CheckRun", name: "gate", status: "COMPLETED", conclusion: "SUCCESS" }] }), stderr: "", exitCode: 0 });
+      let clock = 1_000_000;
+      let state: PersistedDeliveryState | null = null;
+      class SlowApproval extends MockReviewGate {
+        override async verifyReviewApproval(target: DecisionReviewTarget & { readonly sessionId?: string }): Promise<DeliveryReviewApprovalResult> {
+          clock += 1_000;
+          return super.verifyReviewApproval(target);
+        }
+      }
+      const result = await runDeliverySkill({ ...getBaseOptions(cwd), runner, reviewGate: new SlowApproval(),
+        optInLand: false, nowFn: () => clock, maxWaitSeconds: 20,
+        budgetPhaseLimitsMs: { ci: 5_000, review: 1_000, repair: 5_000, validation: 5_000 },
+        stateStorage: { readState: () => state, writeState: next => { state = next; } } });
+      expect(result.reason).toBe("review_wait_timeout");
+      expect(result.status).toBe("blocked");
+      expect((state as PersistedDeliveryState | null)?.handoff?.budgetExhaustion).toMatchObject({ budgetKind: "phase", phase: "review" });
+      expect(runner.ghCalls.some(call => call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    });
+
     it("验收 1: CI green + review approve at SHA-A -> 允许 land SHA-A", async () => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
@@ -1815,7 +1978,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(reviewGate.ensureReviewTaskCallCount).toBe(2);
     });
 
-    it.each(["function", "command", "resumed-command"] as const)("验收 3 & 4: review requests changes -> %s repair，新 SHA 和 supersession", async mode => {
+    it.each(["command", "resumed-command"] as const)("验收 3 & 4: review requests changes -> %s repair，新 SHA 和 supersession", async mode => {
       const cwd = createTempCwd();
       const runner = new MockDeliveryRunner();
       setupPreMutationSuccess(runner);
@@ -1837,7 +2000,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       });
 
       runner.execResponses.push(() => {
-        if (mode !== "function") testClock += 70_000; // Real coding/validation already spent part of the deadline.
+        testClock += 70_000; // Real coding/validation already spent part of the deadline.
         return { stdout: "ok", stderr: "", exitCode: 0 };
       }); // validation
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // status clean
@@ -1877,7 +2040,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       });
 
       // Repair operations for review feedback:
-      if (mode !== "function") runner.execResponses.push({ stdout: "Codex repair complete", stderr: "", exitCode: 0 });
+      runner.execResponses.push({ stdout: "Codex repair complete", stderr: "", exitCode: 0 });
       runner.execResponses.push({ stdout: "validation after review repair ok", stderr: "", exitCode: 0 }); // validation
       runner.gitResponses.push({ stdout: " M src/service.ts\n", stderr: "", exitCode: 0 }); // diff check
       runner.gitResponses.push({ stdout: "", stderr: "", exitCode: 0 }); // git add
@@ -1926,44 +2089,60 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       let receivedFeedback = "";
       const savedDeadline = testClock + 300_000;
       const writtenStates: PersistedDeliveryState[] = [];
+      let savedState: PersistedDeliveryState | null = mode === "resumed-command"
+        ? authorizePersistedDeliveryBudget({ repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80", spentRepairs: 4, spentWaitSeconds: 0, deadlineTimestampMs: testClock + 1_000, isPaused: true, lastUpdated: new Date(testClock).toISOString(),
+          budget: { schemaVersion: 1, deliveryRoundId: "round", totalStartedAtMs: testClock, totalDeadlineAtMs: testClock + 1_000,
+            phaseLimitsMs: { ci: 100_000, review: 200_000, repair: 200_000, validation: 420_000 }, activePhase: null,
+            phaseHistory: [], spentRepairs: 4, repairLimit: 4, authorizationGeneration: 0, authorizations: [] } },
+        { repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80" },
+        { id: "operator-extension", expectedGeneration: 0, deadlineAtMs: savedDeadline, repairLimit: 8, reason: "complete review" }, testClock)
+        : null;
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
         reviewGate,
         validationTimeoutMs: 420_000,
+        budgetPhaseLimitsMs: { ci: 100_000, review: 200_000, repair: 200_000, validation: 420_000 },
         maxWaitSeconds: mode === "resumed-command" ? 500 : 300,
-        ...(mode === "resumed-command" ? {
-          resume: true,
-          stateStorage: {
-            readState: async () => ({ repo: "felixjichao/symphony-ts", issueNumber: 80, workspaceKey: "GH-80", spentRepairs: 1, spentWaitSeconds: 0, deadlineTimestampMs: savedDeadline, isPaused: true, lastUpdated: new Date(testClock).toISOString() }),
-            writeState: async (state: PersistedDeliveryState) => { writtenStates.push(state); },
-          },
-        } : {}),
-        ...(mode === "function" ? { repairFn: async (feedback: string) => {
-          receivedFeedback = feedback;
-          return true;
-        } } : { repairCommand: "codex-review-repair" }),
+        ...(mode === "resumed-command" ? { resume: true } : {}),
+        stateStorage: { readState: () => savedState, writeState: (state: PersistedDeliveryState) => { savedState = state; writtenStates.push(state); } },
+        repairCommand: "codex-review-repair",
         runner,
       });
 
       expect(result.status).toBe("completed");
       expect(result.headSha).toBe(shaB);
+      if (mode === "resumed-command") {
+        const continuations = writtenStates.flatMap(state => state.continuation ? [state.continuation] : []);
+        expect(continuations.length).toBeGreaterThan(0);
+        expect(continuations.every(saved => saved.maxWaitSeconds === 300)).toBe(true);
+      }
+      if (mode !== "resumed-command") {
+        const ciPhases = writtenStates.flatMap(state => state.budget?.activePhase?.phase === "ci" ? [state.budget.activePhase] : []);
+        const firstCi = ciPhases.find(phase => phase.identity === shaA);
+        const secondCi = ciPhases.find(phase => phase.identity === shaB);
+        expect(firstCi).toBeDefined();
+        expect(secondCi).toBeDefined();
+        expect(secondCi!.deadlineAtMs - secondCi!.startedAtMs).toBe(100_000);
+        expect(secondCi!.deadlineAtMs).toBeLessThanOrEqual(savedDeadline);
+      }
       const validations = runner.execCalls.filter(c => c.command === "npm test");
       expect(validations).toHaveLength(2);
-      expect(validations.every(c => c.timeoutMs === 420_000)).toBe(true);
-      if (mode !== "function") {
+      expect(validations.map(c => c.timeoutMs)).toEqual([300_000, 230_000]);
+      {
         const call = runner.execCalls.find(c => c.command === "codex-review-repair");
         receivedFeedback = call?.env?.["SYMPHONY_REVIEW_FINDINGS"] ?? "";
         expect(call?.timeoutMs).toBeGreaterThan(60_000);
-        expect(call?.timeoutMs).toBe(230_000);
+        expect(call?.timeoutMs).toBe(200_000);
       }
       expect(receivedFeedback).toContain("Found null pointer exception risk");
       expect(reviewGate.supersedeReviewTaskCallCount).toBe(1);
       expect(reviewGate.supersededTaskIds).toContain(`task-review-test-${shaA}`);
       expect(reviewGate.ensureReviewTaskCallCount).toBe(2);
-      expect(result.spentRepairs).toBe(mode === "resumed-command" ? 2 : 1);
+      expect(result.spentRepairs).toBe(mode === "resumed-command" ? 5 : 1);
       if (mode === "resumed-command") {
         expect(writtenStates.length).toBeGreaterThan(0);
         expect(writtenStates.every(state => state.deadlineTimestampMs === savedDeadline)).toBe(true);
+        expect(writtenStates.every(state => state.budget?.repairLimit === 8 && state.budget.authorizations.length === 1)).toBe(true);
       }
     });
 
@@ -2092,10 +2271,9 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       runner.ghResponses.push({ stdout: JSON.stringify({ labels: [] }), stderr: "", exitCode: 0 });
       runner.ghResponses.push({ stdout: "", stderr: "", exitCode: 0 });
 
-      let repairs = 0;
       const result = await runDeliverySkill({
         ...getBaseOptions(cwd),
-        repairFn: async () => { repairs++; return true; },
+        repairCommand: "repair",
         reviewGate,
         runner,
       });
@@ -2103,7 +2281,7 @@ describe("Codex Delivery + Land Workflow Skill Runner", () => {
       expect(result.status).toBe("blocked");
       expect(result.reason).toBe("manual_intervention_required");
       expect(result.handoffMarkdown).toContain("evidence_unavailable");
-      expect(repairs).toBe(0);
+      expect(runner.execCalls.some(call => call.command === "repair")).toBe(false);
       expect(result.spentRepairs).toBe(0);
       expect(runner.gitCalls.some(c => c.args[0] === "commit")).toBe(false);
       expect(runner.ghCalls.some(c => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);

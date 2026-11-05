@@ -24,7 +24,7 @@ async function fixture() {
     landing: { intentId: "merge", context: { repo: "owner/repo", issueNumber: 42, workspaceKey: "GH-42", headBranch: "feature", baseBranch: "main" },
       prNumber: 7, headSha: "a".repeat(40), optIn: true, phase: "intent" } };
   storage.writeState(state);
-  return { dir, cwd, storage, state };
+  return { dir, cwd, storage, state: storage.readState()! };
 }
 async function sweep(dir: string, number = 42) {
   const issue: Issue = { id: String(number), identifier: `GH-${number}`, title: "closed by merge", description: "", state: "closed",

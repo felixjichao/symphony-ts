@@ -9,6 +9,8 @@
 
 ## 当前 posture
 
+- #203：CLI 支持总期限及分阶段配置、预算检查和带互斥/代次/回执的显式续期；新状态持久化阶段及验证完成检查点，Review Bridge 请求支持取消。不可安全终止的内嵌 `repairFn` 在交付动作前拒绝，修复通过有界子进程执行。重启时首次验证可能在原阶段期限内重新执行；完整 host gate 与交付验证待 after_run。不得清除状态来重置预算。
+
 - #180：ChatGPT Web 增加按 tab 和 Bridge 隔离的新任务领取开关；现有任务恢复与 Bridge 租约机制保持独立。完整 host gate 和交付验证待 after_run。
 
 - #168 生产浏览器矩阵补验完成：fresh failed ReviewTask 派生 failed attention，正常同号跨仓库 Work 隔离；source/executor 字段、四态 freshness、元数据空值及完整 WorkKey 链接在 production composition 上逐项断言。干净源码 `7f62ee3` 的 22 个浏览器场景通过，45 张原始视口截图及指纹已[归档](evidence/dashboard-v2-production-matrix/README.md)；完整 gate 2,651 passed / 1 既有 opt-in skipped。受控 source facts，不代表 external-live 或历史 Review 例外已接受。

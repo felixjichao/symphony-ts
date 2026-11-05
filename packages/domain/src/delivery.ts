@@ -388,7 +388,7 @@ export interface DeliveryReviewGate {
     sessionId: string,
     target: DecisionReviewTarget,
     context?: DecisionContextBundle,
-    options?: { operationKey?: string; reuseCompleted?: boolean },
+    options?: { operationKey?: string; reuseCompleted?: boolean; signal?: AbortSignal },
   ): Promise<DecisionTask>;
 
   /**
@@ -396,6 +396,7 @@ export interface DeliveryReviewGate {
    */
   getReviewStatus(
     taskId: string,
+    signal?: AbortSignal,
   ): Promise<DeliveryReviewStatusResult>;
 
   /**
@@ -411,12 +412,13 @@ export interface DeliveryReviewGate {
         readonly clarifications?: readonly string[] | undefined;
       } | undefined;
     },
+    signal?: AbortSignal,
   ): Promise<DeliveryReviewApprovalResult>;
 
   /**
    * Supersede prior reviews when a new HEAD is pushed or when replacing PR.
    */
-  supersedeReviewTask?(taskId: string): Promise<void>;
+  supersedeReviewTask?(taskId: string, signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -430,6 +432,9 @@ export type DeliveryHandoffReason =
   | "budget_exhausted"
   | "ci_failed_max_repairs"
   | "ci_wait_timeout"
+  | "review_wait_timeout"
+  | "repair_timeout"
+  | "validation_timeout"
   | "unmergeable"
   | "manual_intervention_required"
   | "foreign_pr_conflict"
@@ -457,6 +462,8 @@ export interface DeliveryHandoff {
   /** Receipt destination is independent of the PR business target. Legacy
    * handoffs with a PR and unique marker re-observe both comment collections. */
   readonly reportDestination?: "issue" | "pr" | undefined;
+  /** Structured exhaustion fact; absent on historical reports. */
+  readonly budgetExhaustion?: DeliveryBudgetExhaustion | undefined;
 }
 
 /** Small native Delivery step markers (§4 adjacent); current stage remains derived. */
@@ -475,7 +482,7 @@ export interface DeliveryContinuation {
   readonly validationCommand?: string | undefined;
   /** Persisted validation limit; legacy continuations use the default. */
   readonly validationTimeoutMs?: number | undefined;
-  readonly phase: "ci" | "review_intent" | "review_wait" | "result_observed" | "repair_pending" | "ready";
+  readonly phase: "ci" | "ci_passed" | "review_intent" | "review_wait" | "result_observed" | "repair_pending" | "ready";
   readonly reviewTaskId?: string | undefined;
   readonly reviewRevision?: number | undefined;
   readonly reviewOperationKey?: string | undefined;
@@ -511,7 +518,68 @@ export interface DeliveryMergeConflictRepair {
   readonly commitSha?: string | undefined;
   readonly outcome?: string | undefined;
 }
+
+/** Durable GitHub Delivery budgets (§10 / §13 / §17–18 adjacent). */
+export type DeliveryBudgetPhase = "ci" | "review" | "repair" | "validation";
+export interface DeliveryBudgetCheckpoint {
+  readonly phase: DeliveryBudgetPhase;
+  /** Stable HEAD/revision or operation identity; retries reuse the checkpoint. */
+  readonly identity: string;
+  readonly startedAtMs: number;
+  readonly deadlineAtMs: number;
+  readonly authorizationGeneration: number;
+  /** Successful observation; this alone does not authorize skipping validation. */
+  readonly completedAtMs?: number | undefined;
+}
+export interface DeliveryBudgetExhaustion {
+  readonly budgetKind: "total" | "phase";
+  readonly phase: DeliveryBudgetPhase | null;
+  readonly phaseIdentity: string | null;
+  readonly startedAtMs: number;
+  readonly deadlineAtMs: number;
+  readonly observedAtMs: number;
+  readonly elapsedMs: number;
+  readonly limitMs: number;
+  readonly remainingMs: number;
+  readonly headSha: string | null;
+  readonly recoveryInstructions: string;
+  readonly startedAtEstimated?: boolean | undefined;
+}
+export interface DeliveryBudgetAuthorizationReceipt {
+  readonly id: string;
+  readonly generation: number;
+  readonly expectedStateGeneration?: number | undefined;
+  readonly previousDeadlineAtMs: number;
+  readonly newDeadlineAtMs: number;
+  readonly previousRepairLimit: number;
+  readonly newRepairLimit: number;
+  readonly spentRepairs: number;
+  readonly authorizedAtMs: number;
+  readonly reason: string;
+  readonly operator?: string | undefined;
+  /** Explicitly renewed exhausted checkpoint, if any. */
+  readonly renewedPhase?: DeliveryBudgetCheckpoint | undefined;
+}
+export interface DeliveryBudgetState {
+  readonly schemaVersion: 1;
+  readonly deliveryRoundId: string;
+  readonly totalStartedAtMs: number;
+  /** Legacy records cannot prove the original start; never report it as exact. */
+  readonly totalStartEstimated?: boolean | undefined;
+  readonly totalDeadlineAtMs: number;
+  readonly phaseLimitsMs: Readonly<Record<DeliveryBudgetPhase, number>>;
+  readonly activePhase: DeliveryBudgetCheckpoint | null;
+  readonly phaseHistory: readonly DeliveryBudgetCheckpoint[];
+  readonly spentRepairs: number;
+  readonly repairLimit: number;
+  readonly authorizationGeneration: number;
+  readonly authorizations: readonly DeliveryBudgetAuthorizationReceipt[];
+}
 export interface PersistedDeliveryState {
+  /** Increments on each native file-state write; absent in legacy records. */
+  readonly stateGeneration?: number | undefined;
+  /** Optional on pre-budget legacy records; authoritative when present. */
+  readonly budget?: DeliveryBudgetState | undefined;
   /** Explicit operator-settled external completion; original step flags stay historical. */
   readonly externalSettlement?: ExternalDeliverySettlementReceipt | undefined;
   readonly mergeConflictRepair?: DeliveryMergeConflictRepair | undefined;
@@ -559,6 +627,13 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
     handoff.commentPosted === false
       ? `\n- **评论状态**: ⚠️ 交接评论发表失败，请通过命令行日志核对原因。`
       : "";
+  const exhaustion = handoff.budgetExhaustion;
+  const budgetDetails = exhaustion ? `
+- **耗尽预算**: ${exhaustion.budgetKind}; 阶段 ${exhaustion.phase ?? "未知"}; 标识 ${exhaustion.phaseIdentity ?? "未知"}
+- **开始 / 截止 / 观察时间（UTC）**: ${new Date(exhaustion.startedAtMs).toISOString()}${exhaustion.startedAtEstimated ? "（估计）" : ""} / ${new Date(exhaustion.deadlineAtMs).toISOString()} / ${new Date(exhaustion.observedAtMs).toISOString()}
+- **已用 / 限额 / 剩余**: ${exhaustion.elapsedMs}ms / ${exhaustion.limitMs}ms / ${exhaustion.remainingMs}ms
+- **预算 HEAD**: ${exhaustion.headSha ?? "未知"}
+- **预算恢复**: ${exhaustion.recoveryInstructions}` : "";
 
   const render = (details: string) => `## 🚨 Symphony Delivery Handoff Report
 
@@ -576,7 +651,8 @@ export function formatDeliveryHandoffMarkdown(handoff: DeliveryHandoff): string 
 
 ### 2. 预算消耗情况
 - **修复重试消耗**: ${handoff.spentRepairs} / ${handoff.maxRepairs} 次上限
-- **CI 等待时间消耗**: ${handoff.spentWaitSeconds}s / ${handoff.maxWaitSeconds}s 上限
+- **交付总墙上时钟消耗**: ${handoff.spentWaitSeconds}s / ${handoff.maxWaitSeconds}s 上限
+${budgetDetails}
 
 ### 3. 调度控制与交接说明
 - **Issue 状态保持**: Open（未完成，绝不误关闭）
@@ -613,6 +689,8 @@ export interface DeliverySkillConfig {
   readonly repairCommand?: string | undefined;
   readonly maxRepairAttempts?: number | undefined;
   readonly maxWaitSeconds?: number | undefined;
+  /** Per-phase limits in milliseconds; the total deadline always remains authoritative. */
+  readonly budgetPhaseLimitsMs?: Readonly<Record<DeliveryBudgetPhase, number>> | undefined;
   readonly pollIntervalSeconds?: number | undefined;
   readonly readyLabel?: string | undefined;
   readonly commitType?: string | undefined;
@@ -648,7 +726,7 @@ export interface DeliveryRemoteBranchFact {
   readonly branch: string;
   readonly sha: string;
 }
-export type DeliveryRemoteBranchReader = (repository: string, branch: string) => Promise<DeliveryRemoteBranchFact>;
+export type DeliveryRemoteBranchReader = (repository: string, branch: string, timeoutMs?: number) => Promise<DeliveryRemoteBranchFact>;
 /** Native operator authorization; never inferred from --resume or an old approval. */
 export interface DeliveryConflictRecoveryAuthorization {
   readonly operationId: string;

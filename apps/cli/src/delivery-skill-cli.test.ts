@@ -11,7 +11,7 @@ import {
   type DeliveryReviewGate,
 } from "@symphony/domain";
 
-import { FileDeliveryStateStorage, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
+import { createRemoteBranchReader, FileDeliveryStateStorage, formatDeliveryBudgetInspection, parseDeliverySkillArgs, runDeliverySkillCli } from "./delivery-skill-cli";
 
 class MockCliRunner implements DeliveryGitGhRunner {
   private remoteLabelRemoved: boolean | undefined;
@@ -137,7 +137,131 @@ class MockCliRunner implements DeliveryGitGhRunner {
 }
 
 describe("delivery-skill CLI", () => {
+  it("passes the remaining merge-conflict budget to the remote branch subprocess", async () => {
+    const observedTimeouts: Array<number | undefined> = [];
+    const runner: DeliveryGitGhRunner = { git: async () => { throw new Error("unexpected git"); },
+      exec: async () => { throw new Error("unexpected exec"); },
+      gh: async (_args, _cwd, timeoutMs) => {
+        observedTimeouts.push(timeoutMs);
+        return { exitCode: 0, stderr: "", stdout: JSON.stringify({ ref: "refs/heads/main",
+          object: { type: "commit", sha: "a".repeat(40) } }) };
+      } };
+    expect(await createRemoteBranchReader(runner, "/fixture")("owner/repo", "main", 1250))
+      .toMatchObject({ branch: "main", sha: "a".repeat(40) });
+    expect(observedTimeouts).toEqual([1250]);
+  });
+  it("shows budget help without accessing delivery state", async () => {
+    let output = "";
+    const io = { stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { output += value; } } };
+    expect(await runDeliverySkillCli(["--help"], io)).toBe(0);
+    expect(output).toContain("--max-wait is a deprecated alias");
+    expect(output).toContain("--expected-generation");
+    expect(output).toContain("--renew-phase");
+  });
   const createTempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "delivery-cli-test-"));
+
+  it("inspects the persisted budget without changing it or contacting GitHub", async () => {
+    const cwd = createTempDir();
+    const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 4, spentWaitSeconds: 50, deadlineTimestampMs: 10_000, isPaused: true, lastUpdated: "now" };
+    const file = path.join(cwd, ".symphony", "delivery-state.json");
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, JSON.stringify(state));
+    expect(formatDeliveryBudgetInspection(state, 9_000)).toContain("Remaining: 1000ms");
+    expect(formatDeliveryBudgetInspection(state, 9_000)).toContain("blocked by ambiguous legacy budget");
+    let output = "";
+    const runner = new MockCliRunner();
+    const io = { stdout: { write: (value: string) => { output += value; } }, stderr: { write: () => {} } };
+    expect(await runDeliverySkillCli(["budget-inspect", "--repo", "owner/repo", "--issue", "80", "--cwd", cwd], io, runner)).toBe(0);
+    expect(output).toContain("1970-01-01T00:00:10.000Z");
+    expect(output).toContain("Repairs: 4 / unknown");
+    expect(fs.readFileSync(file, "utf8")).toBe(JSON.stringify(state));
+    expect(runner.gitCalls).toHaveLength(0);
+    expect(runner.ghCalls).toHaveLength(0);
+    expect(await runDeliverySkillCli(["budget-inspect", "--repo", "owner/repo", "--issue", "81", "--cwd", cwd], io, runner)).toBe(1);
+  });
+
+  it("inspects a migratable legacy phase without changing its authority", () => {
+    const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 1, spentWaitSeconds: 2, deadlineTimestampMs: 10_000, isPaused: true, lastUpdated: "now",
+      continuation: { intentId: "old", headBranch: "work", baseBranch: "main", headSha: "head", prNumber: 42,
+        optInLand: false, readyLabel: "ready", maxRepairAttempts: 4, maxWaitSeconds: 5, phase: "ci" } };
+    const output = formatDeliveryBudgetInspection(state, 9_000);
+    expect(output).toContain("Stage: ci (head); stage deadline: 1970-01-01T00:00:10.000Z");
+    expect(output).toContain("Ordinary resume: budget available; other gates unverified");
+    expect(formatDeliveryBudgetInspection(state, 10_000)).toContain("blocked by total budget");
+    expect(state.budget).toBeUndefined();
+  });
+
+  it("authorizes additional time under the state lock without resetting repair usage", async () => {
+    const cwd = createTempDir();
+    const deadline = Date.now() + 20_000;
+    const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 4, spentWaitSeconds: 280, deadlineTimestampMs: deadline, isPaused: true, lastUpdated: "before",
+      pendingCompensation: true, readyLabelRemoved: false, commentPosted: false,
+      continuation: { intentId: "intent", headBranch: "work", baseBranch: "main", headSha: "head", prNumber: 42,
+        optInLand: true, readyLabel: "ready", maxRepairAttempts: 4, maxWaitSeconds: 300, phase: "ci" } };
+    const file = path.join(cwd, ".symphony", "delivery-state.json");
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, JSON.stringify(state));
+    let output = "";
+    const io = { stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { output += value; } } };
+    const args = ["budget-authorize", "--repo", "owner/repo", "--issue", "80", "--workspace-key", "GH-80", "--cwd", cwd,
+      "--add-seconds", "3600", "--authorization-id", "grant-1", "--expected-generation", "0", "--max-repairs", "8", "--reason", "complete review"];
+    expect(await runDeliverySkillCli(args, io)).toBe(0);
+    const first = fs.readFileSync(file, "utf8");
+    const saved = JSON.parse(first) as PersistedDeliveryState;
+    expect(saved.deadlineTimestampMs).toBe(deadline + 3_600_000);
+    expect(saved.spentRepairs).toBe(4);
+    expect(saved.isPaused).toBe(true);
+    expect(saved.pendingCompensation).toBe(true);
+    expect(saved.readyLabelRemoved).toBe(false);
+    expect(saved.commentPosted).toBe(false);
+    expect(saved.continuation).toEqual(state.continuation);
+    expect(saved.budget?.repairLimit).toBe(8);
+    expect(saved.budget?.authorizations).toHaveLength(1);
+    expect(await runDeliverySkillCli(args, io)).toBe(0);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+    const stale = args.map(x => x === "grant-1" ? "grant-2" : x);
+    expect(await runDeliverySkillCli(stale, io)).toBe(1);
+    expect(output).toContain("Stale delivery state generation");
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+    const concurrentBase = args.map(x => x === "0" ? "1" : x);
+    const concurrent = await Promise.all(["grant-2", "grant-3"].map(id =>
+      runDeliverySkillCli(concurrentBase.map(x => x === "grant-1" ? id : x), io)));
+    expect(concurrent.sort()).toEqual([0, 1]);
+    const after = JSON.parse(fs.readFileSync(file, "utf8")) as PersistedDeliveryState;
+    expect(after.budget?.authorizations).toHaveLength(2);
+    expect(after.spentRepairs).toBe(4);
+    new FileDeliveryStateStorage(file).writeState({ ...after, lastUpdated: "other-state-write" });
+    const staleState = args.map(x => x === "grant-1" ? "grant-4" : x === "0" ? "2" : x);
+    expect(await runDeliverySkillCli(staleState, io)).toBe(1);
+    expect(output).toContain("Stale delivery state generation");
+  });
+
+  it("renews an exhausted phase only for the explicitly named identity", async () => {
+    const cwd = createTempDir();
+    const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80",
+      spentRepairs: 4, spentWaitSeconds: 300, deadlineTimestampMs: Date.now() - 1_000, isPaused: true, lastUpdated: "before",
+      continuation: { intentId: "intent", headBranch: "work", baseBranch: "main", headSha: "head", prNumber: 42,
+        optInLand: true, readyLabel: "ready", maxRepairAttempts: 4, maxWaitSeconds: 300, phase: "ci" } };
+    const file = path.join(cwd, ".symphony", "delivery-state.json");
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, JSON.stringify(state));
+    const io = { stdout: { write: () => {} }, stderr: { write: () => {} } };
+    const args = ["budget-authorize", "--repo", "owner/repo", "--issue", "80", "--workspace-key", "GH-80", "--cwd", cwd,
+      "--add-seconds", "3600", "--authorization-id", "renew-1", "--expected-generation", "0", "--reason", "resume CI",
+      "--renew-phase", "ci", "--phase-identity", "head"];
+    expect(await runDeliverySkillCli(args.map(x => x === "head" ? "other-head" : x), io)).toBe(1);
+    expect(fs.readFileSync(file, "utf8")).toBe(JSON.stringify(state));
+    expect(await runDeliverySkillCli(args, io)).toBe(0);
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as PersistedDeliveryState;
+    expect(saved.budget?.activePhase).toMatchObject({ phase: "ci", identity: "head", authorizationGeneration: 1 });
+    expect(saved.budget?.phaseHistory[0]?.deadlineAtMs).toBe(state.deadlineTimestampMs);
+    expect(saved.budget?.authorizations[0]?.renewedPhase).toEqual(saved.budget?.activePhase);
+    expect(saved.spentRepairs).toBe(4);
+    expect(await runDeliverySkillCli(args, io)).toBe(0);
+  });
 
   it("parses CLI flags accurately", () => {
     const parsed = parseDeliverySkillArgs([
@@ -200,6 +324,15 @@ describe("delivery-skill CLI", () => {
     expect(() => parseDeliverySkillArgs(["run", "--repo", "o/r", "--issue", "80", "--max-wait", "-5"])).toThrow(
       "must be a non-negative integer",
     );
+  });
+
+  it("parses separate total and phase budgets and rejects duplicate authority", () => {
+    const parsed = parseDeliverySkillArgs(["run", "--total-wait", "600", "--ci-wait", "120", "--review-wait", "90", "--repair-budget", "80", "--validation-budget", "70"]);
+    expect(parsed).toMatchObject({ maxWait: 600, ciWait: 120, reviewWait: 90, repairBudget: 80, validationBudget: 70 });
+    expect(() => parseDeliverySkillArgs(["run", "--max-wait", "600", "--total-wait", "600"])).toThrow(/Duplicate/);
+    expect(() => parseDeliverySkillArgs(["run", "--max-repairs", "4", "--max-repairs", "8"])).toThrow(/Duplicate/);
+    expect(() => parseDeliverySkillArgs(["run", "--ci-wait", "0"])).toThrow(/positive/);
+    expect(() => parseDeliverySkillArgs(["run", "--review-wait"])).toThrow(/Missing/);
   });
 
   it("fails fast with non-zero exit code when required flags are missing", async () => {
@@ -1218,6 +1351,16 @@ describe("delivery-skill CLI", () => {
   });
 
   describe("FileDeliveryStateStorage", () => {
+    it.each([
+      { spentWaitSeconds: 0.5 }, { spentWaitSeconds: Number.MAX_SAFE_INTEGER + 1 },
+      { spentRepairs: 0.5 }, { issueNumber: 0 }, { repo: " " }, { workspaceKey: " " },
+      { deadlineTimestampMs: 8_640_000_000_000_001 },
+    ])("rejects corrupt persisted authority fields: %j", invalid => {
+      const file = path.join(createTempDir(), "state.json");
+      fs.writeFileSync(file, JSON.stringify({ repo: "owner/repo", issueNumber: 80, workspaceKey: "GH-80",
+        spentRepairs: 0, spentWaitSeconds: 0, deadlineTimestampMs: 10_000, isPaused: false, ...invalid }));
+      expect(() => new FileDeliveryStateStorage(file).readState()).toThrow("invalid state schema");
+    });
     it("writes atomically and reads state correctly", () => {
       const tempDir = createTempDir();
       const storageFile = path.join(tempDir, ".symphony", "delivery-state.json");
@@ -1239,22 +1382,23 @@ describe("delivery-skill CLI", () => {
 
       storage.writeState(state);
       const read = storage.readState();
-      expect(read).toEqual(state);
+      expect(read).toEqual({ ...state, stateGeneration: 1 });
     });
 
     it("round-trips conflict repair receipts and refuses uncharged or incomplete operations", () => {
-      const storage = new FileDeliveryStateStorage(path.join(createTempDir(), "repair.json"));
+      const file = path.join(createTempDir(), "repair.json");
+      const storage = new FileDeliveryStateStorage(file);
       const operation = { cause: "merge_conflict" as const, operationId: "repair-1", attempt: 1, prNumber: 187,
         expectedHeadSha: "a".repeat(40), baseSha: "b".repeat(40), phase: "committed" as const, commitSha: "c".repeat(40) };
       const state: PersistedDeliveryState = { repo: "owner/repo", issueNumber: 186, workspaceKey: "GH-186",
         spentRepairs: 1, spentWaitSeconds: 10, deadlineTimestampMs: 123_000, isPaused: false, lastUpdated: "now", mergeConflictRepair: operation };
       storage.writeState(state);
-      expect(storage.readState()).toEqual(state);
-      storage.writeState({ ...state, spentRepairs: 0 });
+      expect(storage.readState()).toEqual({ ...state, stateGeneration: 1 });
+      fs.writeFileSync(file, JSON.stringify({ ...state, spentRepairs: 0 }));
       expect(() => storage.readState()).toThrow("recovery step schema");
-      storage.writeState({ ...state, mergeConflictRepair: { ...operation, commitSha: undefined } });
+      fs.writeFileSync(file, JSON.stringify({ ...state, mergeConflictRepair: { ...operation, commitSha: undefined } }));
       expect(() => storage.readState()).toThrow("recovery step schema");
-      storage.writeState({ ...state, mergeConflictRepair: undefined });
+      fs.writeFileSync(file, JSON.stringify({ ...state, mergeConflictRepair: undefined }));
       expect(storage.readState()?.mergeConflictRepair).toBeUndefined();
     });
 
@@ -1313,7 +1457,7 @@ it("restores the pending deadline from a real state file after interrupted waiti
     expect(restartedStorage.readState()?.deadlineTimestampMs).toBe(105_000);
     clock += 24_000;
     const result = await runDeliverySkill({ ...options, stateStorage: restartedStorage });
-    expect(result.reason).toBe("ci_wait_timeout");
+    expect(result.reason).toBe("budget_exhausted");
     expect(result.spentRepairs).toBe(0);
     expect(restartedStorage.readState()?.deadlineTimestampMs).toBe(105_000);
     expect(restartedStorage.readState()?.isPaused).toBe(true);

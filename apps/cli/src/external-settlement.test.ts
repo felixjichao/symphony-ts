@@ -28,7 +28,7 @@ async function fixture() {
   const context = { repo: "owner/repo", issueNumber: 42, workspaceKey: "GH-42", headBranch: "symphony/GH-42", baseBranch: "main" };
   const target = { prNumber: 7, headSha: "b".repeat(40), mergeCommitSha: "c".repeat(40) };
   const storage = new FileDeliveryStateStorage(path.join(cwd, ".symphony", "delivery-state.json"));
-  const original: PersistedDeliveryState = { repo: context.repo, issueNumber: 42, workspaceKey: "GH-42",
+  const original: PersistedDeliveryState = { repo: context.repo, issueNumber: 42, workspaceKey: "GH-42", stateGeneration: 1,
     spentRepairs: 2, spentWaitSeconds: 321, deadlineTimestampMs: 1234, isPaused: true,
     pauseReason: "manual_intervention_required", pendingCompensation: true, commentPosted: false,
     commentVerifyStatus: "unverified", lastUpdated: "before",

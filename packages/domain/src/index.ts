@@ -75,6 +75,11 @@ export type {
   ChecksSummaryStatus,
   DeliveryContext,
   DeliveryContinuation,
+  DeliveryBudgetPhase,
+  DeliveryBudgetCheckpoint,
+  DeliveryBudgetExhaustion,
+  DeliveryBudgetAuthorizationReceipt,
+  DeliveryBudgetState,
   DeliveryMergeConflictRepair,
   DeliveryRemoteBranchFact,
   DeliveryRemoteBranchReader,
@@ -125,3 +130,6 @@ export * from "./decision-continuity";
 export { isDeliveryContinuation, isLandingIntent, isDeliveryMergeConflictRepair } from "./delivery-recovery";
 export * from "./recovery-policy";
 export * from "./external-delivery";
+
+export { isDeliveryBudgetState, isDeliveryBudgetExhaustion, enterDeliveryBudgetPhase, completeDeliveryBudgetPhase, evaluateDeliveryBudget, authorizeDeliveryBudget, authorizePersistedDeliveryBudget, migrateLegacyDeliveryBudget } from "./delivery-budget";
+export type { DeliveryBudgetAuthorization } from "./delivery-budget";

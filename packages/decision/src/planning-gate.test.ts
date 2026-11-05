@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   decisionSessionId,
@@ -41,6 +42,24 @@ describe("DecisionPlanningGate", () => {
   const sessionId = decisionSessionId({
     provider: "github",
     key: "felixjichao/symphony-ts#99",
+  });
+
+  it("cancels an in-flight Bridge planning verification and fails closed", async () => {
+    const controller = new AbortController();
+    const server = createServer(() => controller.abort());
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing test address");
+      const bridgeGate = new DecisionPlanningGate(new DecisionBridgeClient(`http://127.0.0.1:${address.port}`));
+      const result = await bridgeGate.verifyPlanEligibility(sessionId, { title: "test", body: "test" }, controller.signal);
+      expect(controller.signal.aborted).toBe(true);
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain("Bridge verification request failed");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
   });
 
   const sampleContext: DecisionMaterializedContext = {

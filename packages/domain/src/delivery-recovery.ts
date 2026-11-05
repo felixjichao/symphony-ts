@@ -8,7 +8,7 @@ export function isDeliveryContinuation(value: unknown): value is DeliveryContinu
   return !!r && ["intentId", "headBranch", "baseBranch", "headSha", "readyLabel"].every(k => text(r[k]))
     && integer(r["prNumber"]) && r["prNumber"] > 0 && integer(r["maxRepairAttempts"])
     && integer(r["maxWaitSeconds"]) && typeof r["optInLand"] === "boolean"
-    && ["ci", "review_intent", "review_wait", "result_observed", "repair_pending", "ready"].includes(String(r["phase"]))
+    && ["ci", "ci_passed", "review_intent", "review_wait", "result_observed", "repair_pending", "ready"].includes(String(r["phase"]))
     && ["repairCommand", "validationCommand", "reviewTaskId", "reviewOperationKey"].every(k => r[k] === undefined || text(r[k]))
     && (r["reviewReadFailures"] === undefined || integer(r["reviewReadFailures"]))
     && (r["reviewRevision"] === undefined || integer(r["reviewRevision"]))

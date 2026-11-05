@@ -9,11 +9,17 @@ import {
   formatDeliveryHandoffMarkdown,
   formatPrBody,
   githubDecisionRoot,
+  completeDeliveryBudgetPhase,
+  enterDeliveryBudgetPhase,
+  evaluateDeliveryBudget,
+  isDeliveryBudgetState,
+  migrateLegacyDeliveryBudget,
   validatePrOwnership,
   validateExternalDeliveryState,
   type CheckConclusion,
   type CheckState,
   type DecisionMaterializedContext,
+  type DecisionMaterializedPlan,
   type DecisionReviewFinding,
   type DecisionReviewResult,
   type DecisionReviewTarget,
@@ -21,6 +27,9 @@ import {
   type DeliveryContext,
   type DeliveryRemoteBranchReader,
   type DeliveryConflictRecoveryAuthorization,
+  type DeliveryBudgetPhase,
+  type DeliveryBudgetState,
+  type DeliveryBudgetExhaustion,
   type DeliveryContinuation,
   type DeliveryHandoff,
   type DeliveryReviewStatusResult,
@@ -47,11 +56,14 @@ export interface RunDeliverySkillOptions extends DeliverySkillConfig {
   readonly cwd: string;
   readonly runner: DeliveryGitGhRunner;
   readonly stateStorage?: DeliveryStateStorage | undefined;
+  /** @deprecated In-process repairs cannot be terminated safely; use repairCommand. */
   readonly repairFn?: (failureContext: string) => Promise<boolean> | boolean;
   readonly sleepFn?: (seconds: number) => Promise<void>;
   readonly nowFn?: (() => number) | undefined;
   readonly log?: (msg: string) => void;
   readonly signal?: AbortSignal | undefined;
+  /** Read-only eligibility check, run after the total deadline is durable. */
+  readonly preflight?: ((remainingMs: number, signal: AbortSignal) => Promise<DecisionMaterializedPlan | null | undefined>) | undefined;
 }
 
 const DEFAULT_READY_LABEL = "symphony-ready";
@@ -352,7 +364,7 @@ export function parsePrCheckRollup(
  * 6. CI Inspection & Repair Loop:
  *    - 通过 `gh pr view --json statusCheckRollup,headRefOid,mergeable,state` 兼容各版本 gh 并关联推送 SHA。
  *    - 严格检查所有 observed 与 required checks（均为 success）。
- *    - CI 失败时，读取诊断，调用 repairFn 或 repairCommand，重新运行验证，确认生成新 commit 与新 SHA 后再重新推测 CI。
+ *    - CI 失败时，读取诊断，执行 repairCommand，重新运行验证，确认生成新 commit 与新 SHA 后再重新推测 CI。
  *    - 维护跨尝试持久化预算与实际墙上时钟 deadline。
  * 7. Land when policy satisfied:
  *    - 仅在明确 optInLand 时执行 squash merge。
@@ -362,9 +374,17 @@ export function parsePrCheckRollup(
  *    - 持久化 paused 状态，阻止未显式 --resume 的重入。
  */
 export async function runDeliverySkill(options: RunDeliverySkillOptions): Promise<DeliverySkillResult> {
+  if (options.repairFn) throw new Error("repairFn is unsupported: in-process repairs cannot be terminated; use repairCommand");
   const validationTimeoutMs = options.validationTimeoutMs ?? 600_000;
   if (!Number.isSafeInteger(validationTimeoutMs) || validationTimeoutMs <= 0 || validationTimeoutMs > 2_147_483_647) {
     throw new Error("validationTimeoutMs must be a positive integer no greater than 2147483647");
+  }
+  if (options.maxWaitSeconds !== undefined && (!Number.isSafeInteger(options.maxWaitSeconds)
+    || options.maxWaitSeconds < 0 || !Number.isSafeInteger(options.maxWaitSeconds * 1_000))) {
+    throw new Error("maxWaitSeconds must be a non-negative integer within the safe millisecond range");
+  }
+  if (options.budgetPhaseLimitsMs && Object.values(options.budgetPhaseLimitsMs).some(limit => !Number.isSafeInteger(limit) || limit <= 0)) {
+    throw new Error("Delivery phase limits must be positive safe integer milliseconds");
   }
   const storage = options.stateStorage;
   if (storage?.withExclusive) return storage.withExclusive(locked => runDeliverySkillLocked({ ...options, stateStorage: locked }));
@@ -386,13 +406,21 @@ async function runDeliverySkillLocked(
     exec: (command, cwd, timeout, env, excludeEnvNames) => { guard(); return native.exec(command, cwd, timeout, env, excludeEnvNames); },
   };
   const readRemoteBranch: DeliveryRemoteBranchReader | undefined = options.readRemoteBranch
-    ? async (repository, branch) => { guard(); return options.readRemoteBranch!(repository, branch); }
+    ? async (repository, branch) => {
+      guard();
+      const observedAtMs = now();
+      const phase = budget?.activePhase;
+      const remaining = Math.min(deadlineTimestampMs! - observedAtMs,
+        phase && (phase.phase === "repair" || phase.phase === "validation") ? phase.deadlineAtMs - observedAtMs : Infinity);
+      if (remaining <= 0) throw new Error("merge_conflict_deadline_exhausted");
+      return options.readRemoteBranch!(repository, branch, Math.max(1, Math.min(remaining, 2_147_483_647)));
+    }
     : undefined;
   const sleep = options.sleepFn ?? ((s) => new Promise((resolve) => setTimeout(resolve, s * 1000)));
   const log = options.log ?? (() => {});
 
   const readyLabel = options.readyLabel ?? DEFAULT_READY_LABEL;
-  const maxRepairs = options.maxRepairAttempts ?? DEFAULT_MAX_REPAIRS;
+  let maxRepairs = options.maxRepairAttempts ?? DEFAULT_MAX_REPAIRS;
   const maxWaitSeconds = options.maxWaitSeconds ?? DEFAULT_MAX_WAIT_SECONDS;
   const pollInterval = options.pollIntervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS;
 
@@ -436,6 +464,43 @@ async function runDeliverySkillLocked(
       headSha: persisted.externalSettlement.target.headSha, spentRepairs: persisted.spentRepairs,
       spentWaitSeconds: persisted.spentWaitSeconds, reason: "manual_intervention_required",
       handoffMarkdown: "Work was explicitly settled as external completion; Delivery will not replay" };
+  }
+  if (persisted?.budget !== undefined) {
+    if (!isDeliveryBudgetState(persisted.budget) || persisted.budget.totalDeadlineAtMs !== persisted.deadlineTimestampMs
+      || persisted.budget.spentRepairs !== persisted.spentRepairs) {
+      return { status: "blocked", prNumber: null, prUrl: null, headSha: null,
+        spentRepairs: persisted.spentRepairs, spentWaitSeconds: persisted.spentWaitSeconds,
+        reason: "manual_intervention_required", handoffMarkdown: "Invalid persisted delivery budget authority" };
+    }
+    maxRepairs = persisted.budget.repairLimit;
+  }
+  if (persisted && (persisted.deadlineTimestampMs === undefined
+    || !Number.isSafeInteger(persisted.deadlineTimestampMs) || persisted.deadlineTimestampMs < 0
+    || persisted.deadlineTimestampMs > 8_640_000_000_000_000)) {
+    return { status: "blocked", prNumber: persisted.continuation?.prNumber ?? null, prUrl: null,
+      headSha: persisted.continuation?.headSha ?? null, spentRepairs: persisted.spentRepairs,
+      spentWaitSeconds: persisted.spentWaitSeconds, reason: "manual_intervention_required",
+      handoffMarkdown: "Persisted delivery has no valid absolute deadline; refusing to infer or renew its budget." };
+  }
+  // Establish legacy authority before compensation or any other side effect. An
+  // absolute deadline alone does not establish the original repair limit.
+  let migratedBudget: DeliveryBudgetState | undefined;
+  if (persisted && !persisted.budget) {
+    try { migratedBudget = migrateLegacyDeliveryBudget(persisted); }
+    catch (error) {
+      return { status: "blocked", prNumber: persisted.continuation?.prNumber ?? null, prUrl: null,
+        headSha: persisted.continuation?.headSha ?? null, spentRepairs: persisted.spentRepairs,
+        spentWaitSeconds: persisted.spentWaitSeconds, reason: "manual_intervention_required",
+        handoffMarkdown: `Cannot migrate persisted delivery budget: ${String(error)}` };
+    }
+    maxRepairs = migratedBudget.repairLimit;
+  }
+  const recordedBudget = persisted?.budget ?? migratedBudget;
+  if (recordedBudget && (options.nowFn ?? Date.now)() < recordedBudget.totalStartedAtMs) {
+    return { status: "blocked", prNumber: persisted?.continuation?.prNumber ?? null, prUrl: null,
+      headSha: persisted?.continuation?.headSha ?? null, spentRepairs: persisted?.spentRepairs ?? 0,
+      spentWaitSeconds: persisted?.spentWaitSeconds ?? 0, reason: "manual_intervention_required",
+      handoffMarkdown: "Delivery clock precedes the recorded budget start; refusing to run or compensate until the clock is corrected." };
   }
   if (options.conflictRecoveryAuthorization) {
     const auth = options.conflictRecoveryAuthorization;
@@ -485,13 +550,32 @@ async function runDeliverySkillLocked(
   let continuation = persisted?.continuation;
   let landing = persisted?.landing;
   let mergeConflictRepair = persisted?.mergeConflictRepair;
+  let budget = persisted?.budget ?? migratedBudget;
+  if (persisted && budget && options.budgetPhaseLimitsMs
+    && (["ci", "review", "repair", "validation"] as const).some(phase => options.budgetPhaseLimitsMs![phase] !== budget!.phaseLimitsMs[phase])) {
+    return { status: "blocked", prNumber: continuation?.prNumber ?? null, prUrl: null, headSha: continuation?.headSha ?? null,
+      spentRepairs, spentWaitSeconds: initialSpentWaitSeconds, reason: "manual_intervention_required",
+      handoffMarkdown: "Requested phase limits differ from persisted delivery budget authority." };
+  }
   const now = options.nowFn ?? Date.now;
   const startTimeMs = now();
   if (deadlineTimestampMs === undefined) {
     deadlineTimestampMs = startTimeMs + Math.max(0, maxWaitSeconds - initialSpentWaitSeconds) * 1000;
   }
+  if (!Number.isSafeInteger(startTimeMs) || startTimeMs < 0 || !Number.isSafeInteger(deadlineTimestampMs)
+    || deadlineTimestampMs > 8_640_000_000_000_000) throw new Error("Invalid or overflowing delivery deadline");
+  if (!persisted) {
+    const defaultLimit = Math.max(1, maxWaitSeconds * 1_000);
+    budget = { schemaVersion: 1, deliveryRoundId: randomUUID(), totalStartedAtMs: startTimeMs,
+      totalDeadlineAtMs: deadlineTimestampMs, phaseLimitsMs: options.budgetPhaseLimitsMs ?? {
+        ci: defaultLimit, review: defaultLimit, repair: defaultLimit, validation: defaultLimit,
+      }, activePhase: null, phaseHistory: [], spentRepairs: 0, repairLimit: maxRepairs,
+      authorizationGeneration: 0, authorizations: [] };
+    if (!isDeliveryBudgetState(budget)) throw new Error("Invalid initial delivery budget");
+  }
 
   const getElapsedWaitSeconds = (): number => {
+    if (budget) return Math.max(initialSpentWaitSeconds, Math.floor((now() - budget.totalStartedAtMs) / 1000));
     if (deadlineTimestampMs !== undefined) {
       const originalStartTimeMs = deadlineTimestampMs - maxWaitSeconds * 1000;
       const elapsed = Math.floor((now() - originalStartTimeMs) / 1000);
@@ -502,12 +586,18 @@ async function runDeliverySkillLocked(
 
   // Real Codex repair can exceed the subprocess runner's default 60 seconds.
   // Bound it by the existing persisted delivery deadline instead.
-  const getRepairTimeoutMs = (): number => Math.max(1, (deadlineTimestampMs ?? startTimeMs) - now());
+  const getRepairTimeoutMs = (): number => {
+    const active = budget?.activePhase;
+    return Math.max(1, Math.min(deadlineTimestampMs - now(), active?.phase === "repair" ? active.deadlineAtMs - now() : Number.POSITIVE_INFINITY));
+  };
 
   const persistCurrentState = async (overrides?: Partial<PersistedDeliveryState>): Promise<void> => {
     if (!stateStorage) return;
     try {
+      if (budget) budget = { ...budget, spentRepairs };
       await stateStorage.writeState({
+        ...persisted,
+        budget,
         continuation,
         landing,
         mergeConflictRepair,
@@ -533,7 +623,10 @@ async function runDeliverySkillLocked(
     continuation = { intentId: same ? continuation!.intentId : randomUUID(),
       headBranch: context.headBranch, baseBranch: context.baseBranch, headSha: currentHeadSha, prNumber,
       ...(same ? continuation : {}),
-      optInLand: options.optInLand === true, readyLabel, maxRepairAttempts: maxRepairs, maxWaitSeconds,
+      optInLand: options.optInLand === true, readyLabel, maxRepairAttempts: maxRepairs,
+      // Continuation metadata must describe persisted authority, not a new CLI
+      // value supplied on resume. The durable deadline remains authoritative.
+      maxWaitSeconds: budget ? Math.ceil((budget.totalDeadlineAtMs - budget.totalStartedAtMs) / 1_000) : maxWaitSeconds,
       requiredChecks: options.requiredChecks, repairCommand: options.repairCommand,
       validationCommand: options.validationCommand, validationTimeoutMs, phase, ...extra };
     await persistCurrentState();
@@ -545,6 +638,7 @@ async function runDeliverySkillLocked(
   const haltDispatch = async (
     reason: DeliveryHandoff["reason"],
     details: string,
+    budgetExhaustion?: DeliveryBudgetExhaustion,
   ): Promise<DeliverySkillResult> => {
     log(`[delivery-skill] Blocker/budget reached: ${reason}. Halting dispatch...`);
     const spentWaitSeconds = getElapsedWaitSeconds();
@@ -553,6 +647,9 @@ async function runDeliverySkillLocked(
     let readyLabelRemoved = false;
     let commentPosted = false;
     const handoffId = `handoff-${context.repo.replace("/", "-")}-${context.issueNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+    const inspectedExhaustion = budgetExhaustion ? { ...budgetExhaustion,
+      recoveryInstructions: `Run symphony delivery-skill budget-inspect --repo ${quote(context.repo)} --issue ${context.issueNumber} --workspace-key ${quote(context.workspaceKey)} --cwd ${quote(options.cwd)}; use the displayed state generation with budget-authorize, then resume after resolving safety gates.` } : undefined;
     const handoffForRemote: DeliveryHandoff = {
       reason,
       details,
@@ -565,12 +662,13 @@ async function runDeliverySkillLocked(
       spentRepairs,
       maxRepairs,
       spentWaitSeconds,
-      maxWaitSeconds,
+      maxWaitSeconds: budget ? Math.floor((budget.totalDeadlineAtMs - budget.totalStartedAtMs) / 1_000) : maxWaitSeconds,
       readyLabel,
       readyLabelRemoved: false,
       commentPosted: false,
       handoffId,
       reportDestination: prNumber !== null ? "pr" : "issue",
+      budgetExhaustion: inspectedExhaustion,
     };
 
     // 关键设计决策（先写持久化状态）：在发起任何远端操作之前，必须先将 paused、原因、实际预算/deadline 和待补偿 handoff 落盘。
@@ -708,8 +806,76 @@ async function runDeliverySkillLocked(
     };
   };
 
+  const enterBudgetPhase = async (phase: DeliveryBudgetPhase, identity: string): Promise<void> => {
+    if (!budget) return;
+    const observedAtMs = now();
+    if (observedAtMs >= deadlineTimestampMs) return;
+    budget = enterDeliveryBudgetPhase({ ...budget, spentRepairs }, phase, identity, observedAtMs);
+    await persistCurrentState();
+  };
+  const totalTimeout = async (stage: string): Promise<DeliverySkillResult | null> => {
+    if (now() < deadlineTimestampMs) return null;
+    const exhaustion = budget ? evaluateDeliveryBudget(budget, now(), currentHeadSha) ?? undefined : undefined;
+    return haltDispatch("budget_exhausted", `Delivery total wall-clock budget exhausted during ${stage} (deadline ${new Date(deadlineTimestampMs).toISOString()}).`, exhaustion);
+  };
+  const phaseTimeout = async (phase: DeliveryBudgetPhase, identity: string): Promise<DeliverySkillResult | null> => {
+    if (!budget || budget.activePhase?.phase !== phase || budget.activePhase.identity !== identity) return null;
+    const exhausted = evaluateDeliveryBudget(budget, now(), currentHeadSha);
+    if (!exhausted) return null;
+    const reasons: Record<DeliveryBudgetPhase, DeliveryHandoff["reason"]> = {
+      ci: "ci_wait_timeout", review: "review_wait_timeout", repair: "repair_timeout", validation: "validation_timeout",
+    };
+    return haltDispatch(exhausted.budgetKind === "total" ? "budget_exhausted" : reasons[phase],
+      `${exhausted.budgetKind} budget exhausted during ${phase}; start ${new Date(exhausted.startedAtMs).toISOString()}, deadline ${new Date(exhausted.deadlineAtMs).toISOString()}, observed ${new Date(exhausted.observedAtMs).toISOString()}. ${exhausted.recoveryInstructions}`,
+      exhausted);
+  };
+  const phaseRemainingMs = (phase: DeliveryBudgetPhase, identity: string): number => {
+    const active = budget?.activePhase;
+    return Math.max(0, Math.min(deadlineTimestampMs - now(), active?.phase === phase && active.identity === identity
+      ? active.deadlineAtMs - now() : Number.POSITIVE_INFINITY));
+  };
+  const completeBudgetPhase = async (phase: DeliveryBudgetPhase, identity: string): Promise<DeliverySkillResult | null> => {
+    if (!budget) return null;
+    const observedAtMs = now();
+    const exhausted = evaluateDeliveryBudget(budget, observedAtMs, currentHeadSha);
+    if (exhausted) {
+      const reasons: Record<DeliveryBudgetPhase, DeliveryHandoff["reason"]> = {
+        ci: "ci_wait_timeout", review: "review_wait_timeout", repair: "repair_timeout", validation: "validation_timeout",
+      };
+      return haltDispatch(exhausted.budgetKind === "total" ? "budget_exhausted" : reasons[phase],
+        `${exhausted.budgetKind} budget exhausted during ${phase}. ${exhausted.recoveryInstructions}`, exhausted);
+    }
+    budget = completeDeliveryBudgetPhase(budget, phase, identity, observedAtMs);
+    await persistCurrentState();
+    return null;
+  };
+
+  // The bridge transport must cancel its actual request; racing an uncancelled
+  // mutation would allow effects after Delivery has reported a timeout.
+  const reviewSignal = (deadline: number): AbortSignal => {
+    const remaining = Math.max(1, Math.min(4_294_967_295, Math.ceil(deadline - now())));
+    const timeout = AbortSignal.timeout(remaining);
+    return options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  };
+
   // 必须在开始任何 delivery 动作或前置检查前立即持久化初始状态与绝对 deadline
   await persistCurrentState();
+  const inspectionTimeout = await totalTimeout("inspection");
+  if (inspectionTimeout) return inspectionTimeout;
+  let plan = options.plan;
+  if (options.preflight) {
+    try {
+      plan = await options.preflight(Math.max(1, deadlineTimestampMs - now()), reviewSignal(deadlineTimestampMs));
+    } catch (error) {
+      const expired = await totalTimeout("planning eligibility");
+      if (expired) return expired;
+      return { status: "blocked", prNumber, prUrl, headSha: currentHeadSha, spentRepairs,
+        spentWaitSeconds: getElapsedWaitSeconds(), reason: "manual_intervention_required",
+        handoffMarkdown: `Planning eligibility check failed: ${String(error)}` };
+    }
+    const expired = await totalTimeout("planning eligibility");
+    if (expired) return expired;
+  }
 
   // ==========================================
   // Phase 1: Pre-mutation Inspection
@@ -884,28 +1050,34 @@ async function runDeliverySkillLocked(
     );
   }
 
+  const conflictTimeout = () => {
+    if (now() >= deadlineTimestampMs) throw new Error("merge_conflict_deadline_exhausted");
+    const remaining = budget?.activePhase && ["repair", "validation"].includes(budget.activePhase.phase)
+      ? Math.min(deadlineTimestampMs - now(), budget.activePhase.deadlineAtMs - now()) : deadlineTimestampMs - now();
+    if (remaining <= 0) throw new Error("merge_conflict_phase_deadline_exhausted");
+    return Math.min(remaining, 2_147_483_647);
+  };
   const conflictRepairOptions = () => ({ context, cwd: options.cwd, runner,
     readRemoteBranch, recoveryAuthorization: options.conflictRecoveryAuthorization,
     operation: mergeConflictRepair!,
-    sleep: () => sleep(Math.min(pollInterval, Math.max(0, (deadlineTimestampMs! - now()) / 1000))),
+    sleep: () => sleep(Math.min(pollInterval, Math.max(0, Math.min(deadlineTimestampMs! - now(),
+      budget?.activePhase && ["repair", "validation"].includes(budget.activePhase.phase) ? budget.activePhase.deadlineAtMs - now() : Number.POSITIVE_INFINITY) / 1000))),
     save: async (operation: NonNullable<PersistedDeliveryState["mergeConflictRepair"]>) => {
       mergeConflictRepair = operation;
+      if (operation.phase === "validating") await enterBudgetPhase("validation", `repair:${operation.attempt}`);
+      if (operation.phase === "committing") await enterBudgetPhase("repair", `repair:${operation.attempt}`);
       await persistCurrentState();
     },
-    timeout: () => {
-      if (now() >= deadlineTimestampMs!) throw new Error("merge_conflict_deadline_exhausted");
-      return getRepairTimeoutMs();
-    },
+    timeout: conflictTimeout,
     assertIdentity: async () => {
-      const branch = await runner.git(["branch", "--show-current"], options.cwd);
-      const origin = await runner.git(["remote", "get-url", "origin"], options.cwd);
+      const branch = await runner.git(["branch", "--show-current"], options.cwd, conflictTimeout());
+      const origin = await runner.git(["remote", "get-url", "origin"], options.cwd, conflictTimeout());
       if (branch.exitCode !== 0 || branch.stdout.trim() !== context.headBranch
         || origin.exitCode !== 0 || !repoOriginMatches(origin.stdout, context.repo)) {
         throw new Error("merge_conflict_workspace_identity_changed");
       }
     },
     validationCommand: options.validationCommand!, validationTimeoutMs,
-    repairFn: options.repairFn ? (failure: string) => { guard(); return options.repairFn!(failure); } : undefined,
   });
   if (mergeConflictRepair && mergeConflictRepair.phase !== "reconciled" && (mergeConflictRepair.phase !== "pushed"
     || !continuation || continuation.headSha === mergeConflictRepair.expectedHeadSha)) {
@@ -916,6 +1088,10 @@ async function runDeliverySkillLocked(
       currentHeadSha = await executeMergeConflictRepair(conflictRepairOptions(), true);
       await checkpoint("ci");
     } catch (error) {
+      const phase = budget?.activePhase;
+      if (phase && ["repair", "validation"].includes(phase.phase)) { const exhausted = await phaseTimeout(phase.phase, phase.identity); if (exhausted) return exhausted; }
+      const exhausted = await totalTimeout("merge-conflict recovery");
+      if (exhausted) return exhausted;
       return haltDispatch("manual_intervention_required", String(error));
     }
   }
@@ -924,7 +1100,7 @@ async function runDeliverySkillLocked(
     if (currentHeadSha !== mergeConflictRepair.expectedHeadSha) {
       return haltDispatch("manual_intervention_required", "merge_conflict_reconciled_remote_head_changed");
     }
-    try { await assertRepairWorkspace(runner, options.cwd, mergeConflictRepair.expectedHeadSha); }
+    try { await assertRepairWorkspace(runner, options.cwd, mergeConflictRepair.expectedHeadSha, conflictRepairOptions().timeout); }
     catch (error) { return haltDispatch("manual_intervention_required", String(error)); }
     currentHeadSha = mergeConflictRepair.expectedHeadSha;
     await checkpoint("ci");
@@ -935,36 +1111,71 @@ async function runDeliverySkillLocked(
   if (options.resumeStageOnly && (prNumber === null || !currentHeadSha)) {
     return haltDispatch("manual_intervention_required", "Stage continuation requires an existing owned PR and exact HEAD");
   }
-  if (!options.resumeStageOnly) {
+  // A durable stage checkpoint already includes the pushed HEAD and owned PR.
+  // Do not replay initial validation, commit or push when resuming it. Refuse
+  // local or remote drift rather than treating changed work as that checkpoint.
+  const resumeRecordedStage = continuation !== undefined && !options.resumeStageOnly;
+  if (resumeRecordedStage && continuation) {
+    if (prNumber !== continuation.prNumber || currentHeadSha !== continuation.headSha
+      || continuation.headBranch !== context.headBranch || continuation.baseBranch !== context.baseBranch) {
+      return haltDispatch("manual_intervention_required", "Recorded delivery stage no longer matches the owned PR and exact HEAD.");
+    }
+    const localHead = await runner.git(["rev-parse", "HEAD"], options.cwd);
+    const localStatus = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
+    if (localHead.exitCode !== 0 || localHead.stdout.trim() !== continuation.headSha
+      || localStatus.exitCode !== 0 || localStatus.stdout.trim()) {
+      return haltDispatch("manual_intervention_required", "Recorded delivery stage requires the same local HEAD and a clean source workspace.");
+    }
+  }
+  if (!options.resumeStageOnly && !resumeRecordedStage) {
   // ==========================================
   // Phase 2: Run Project Validation
   // ==========================================
   log("[delivery-skill] Phase 2: Running project validation...");
   if (options.validationCommand) {
     log(`[delivery-skill] Executing validation command: ${options.validationCommand}`);
-    const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
+    const validationPreflightTimeout = await totalTimeout("validation");
+    if (validationPreflightTimeout) return validationPreflightTimeout;
+    await enterBudgetPhase("validation", "initial");
+    const validationTotalTimeout = await totalTimeout("validation");
+    if (validationTotalTimeout) return validationTotalTimeout;
+    const validationEntryTimeout = await phaseTimeout("validation", "initial");
+    if (validationEntryTimeout) return validationEntryTimeout;
+    const valRes = await runner.exec(options.validationCommand, options.cwd, Math.max(1, Math.min(validationTimeoutMs, phaseRemainingMs("validation", "initial"))));
+    const validationObservationTimeout = await phaseTimeout("validation", "initial");
+    if (validationObservationTimeout) return validationObservationTimeout;
+    const validationCompletionTimeout = await totalTimeout("validation");
+    if (validationCompletionTimeout) return validationCompletionTimeout;
     if (valRes.exitCode !== 0) {
       return haltDispatch(
         "manual_intervention_required",
         `Project validation command '${options.validationCommand}' failed with exit code ${valRes.exitCode}: ${valRes.stderr || valRes.stdout}`,
       );
     }
+    const completedValidation = await completeBudgetPhase("validation", "initial");
+    if (completedValidation) return completedValidation;
     log("[delivery-skill] Project validation succeeded.");
   }
 
   // ==========================================
   // Phase 3: Commit Changes
   // ==========================================
+  const commitTimeout = await totalTimeout("commit");
+  if (commitTimeout) return commitTimeout;
   log("[delivery-skill] Phase 3: Committing changes...");
   const statusRes = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
   if (statusRes.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${statusRes.stderr}`);
   if (statusRes.stdout.trim().length > 0) {
-    const staged = await stageSourceChanges(runner, options.cwd);
+    const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+    const stagingTimeout = await totalTimeout("source staging");
+    if (stagingTimeout) return stagingTimeout;
     if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
     const commitType = options.commitType ?? "feat";
     const commitMsg =
       options.commitMessage ?? `${commitType}: implement delivery for issue #${context.issueNumber} (${context.workspaceKey})`;
-    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd);
+    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+    const commitCompletedTimeout = await totalTimeout("commit completion");
+    if (commitCompletedTimeout) return commitCompletedTimeout;
     if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
       return haltDispatch("manual_intervention_required", `Git commit failed: ${commitRes.stderr}`);
     }
@@ -973,13 +1184,14 @@ async function runDeliverySkillLocked(
   // ==========================================
   // Phase 4: Push to Remote
   // ==========================================
+  const pushTimeout = await totalTimeout("push");
+  if (pushTimeout) return pushTimeout;
   log("[delivery-skill] Phase 4: Pushing branch to remote...");
-  const pushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+  const pushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+  const pushCompletedTimeout = await totalTimeout("push completion");
+  if (pushCompletedTimeout) return pushCompletedTimeout;
   if (pushRes.exitCode !== 0) {
-    const pushUpstream = await runner.git(["push", "-u", "origin", context.headBranch], options.cwd);
-    if (pushUpstream.exitCode !== 0) {
-      return haltDispatch("manual_intervention_required", `Git push failed: ${pushUpstream.stderr}`);
-    }
+    return haltDispatch("manual_intervention_required", `Git push outcome requires reconciliation: ${pushRes.stderr}`);
   }
 
   const revParse = await runner.git(["rev-parse", "HEAD"], options.cwd);
@@ -990,6 +1202,8 @@ async function runDeliverySkillLocked(
   // Phase 5: Ensure PR (Create if not exists)
   // ==========================================
   if (prNumber === null) {
+    const prCreationTimeout = await totalTimeout("pull request creation");
+    if (prCreationTimeout) return prCreationTimeout;
     log("[delivery-skill] Phase 5: Creating Pull Request...");
     const prTitle = options.prTitle ?? `feat: delivery for #${context.issueNumber} (${context.workspaceKey})`;
     const prBody = formatPrBody({
@@ -1012,8 +1226,10 @@ async function runDeliverySkillLocked(
         "--body",
         prBody,
       ],
-      options.cwd,
+      options.cwd, Math.max(1, deadlineTimestampMs - now()),
     );
+    const creationCompletedTimeout = await totalTimeout("pull request creation completion");
+    if (creationCompletedTimeout) return creationCompletedTimeout;
 
     if (createRes.exitCode !== 0) {
       return haltDispatch("manual_intervention_required", `Failed to create PR: ${createRes.stderr}`);
@@ -1051,7 +1267,17 @@ async function runDeliverySkillLocked(
   }
 
   }
-  await checkpoint("ci");
+  const resumedReviewIdentity = continuation?.headSha === currentHeadSha
+    && ["review_intent", "review_wait", "result_observed"].includes(continuation.phase)
+    ? continuation.reviewOperationKey : undefined;
+  if (resumedReviewIdentity && budget && (budget.activePhase?.phase === "review" && budget.activePhase.identity === resumedReviewIdentity
+    || budget.phaseHistory.some(phase => phase.phase === "review" && phase.identity === resumedReviewIdentity))) {
+    await enterBudgetPhase("review", resumedReviewIdentity);
+  }
+  if (!(continuation?.headSha === currentHeadSha && (continuation.phase === "ci_passed"
+    || budget?.activePhase?.phase === "review" && ["review_intent", "review_wait", "result_observed"].includes(continuation.phase)))) {
+    await checkpoint("ci");
+  }
 
   // ==========================================
   // Phase 6: Inspect CI checks & Repair Loop
@@ -1168,15 +1394,22 @@ async function runDeliverySkillLocked(
   delivery_loop: while (true) {
     let ciPassedChecks: PrCheck[] = [];
     let ciReason = "";
+    const ciIdentity = currentHeadSha!;
+    const reobservingForReview = budget?.activePhase?.phase === "review" && continuation?.headSha === ciIdentity
+      && ["review_intent", "review_wait", "result_observed"].includes(continuation.phase);
+    const reobservingPassedCi = continuation?.headSha === ciIdentity && continuation.phase === "ci_passed";
+    const ciBudgetPhase = reobservingForReview ? "review" : "ci";
+    const ciBudgetIdentity = reobservingForReview ? budget!.activePhase!.identity : ciIdentity;
+    const ciEntryTimeout = await totalTimeout("CI");
+    if (ciEntryTimeout) return ciEntryTimeout;
+    if (!reobservingForReview) await enterBudgetPhase("ci", ciIdentity);
 
     while (true) {
       const elapsedWait = getElapsedWaitSeconds();
-      if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
-        return haltDispatch(
-          "ci_wait_timeout",
-          `Timed out waiting for CI checks after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
-        );
-      }
+      const ciTimeout = reobservingPassedCi ? null : await phaseTimeout(ciBudgetPhase, ciBudgetIdentity);
+      if (ciTimeout) return ciTimeout;
+      const totalCiTimeout = await totalTimeout("CI");
+      if (totalCiTimeout) return totalCiTimeout;
 
       // 在进入等待/轮询检查前立即持久化当前等待状态与绝对截止时间
       await persistCurrentState();
@@ -1186,12 +1419,18 @@ async function runDeliverySkillLocked(
       const prViewRes = await runner.gh(
         ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid,statusCheckRollup,mergeable,state"],
         options.cwd,
+        Math.max(1, reobservingPassedCi ? deadlineTimestampMs - now() : phaseRemainingMs(ciBudgetPhase, ciBudgetIdentity)),
       );
+      const ciObservationTimeout = reobservingPassedCi ? null : await phaseTimeout(ciBudgetPhase, ciBudgetIdentity);
+      if (ciObservationTimeout) return ciObservationTimeout;
+      const totalCiObservationTimeout = await totalTimeout("CI observation");
+      if (totalCiObservationTimeout) return totalCiObservationTimeout;
 
       if (prViewRes.exitCode !== 0) {
+        if (reobservingPassedCi) { const expired = await phaseTimeout("ci", ciIdentity); if (expired) return expired; }
         log(`[delivery-skill] Warning: Failed to fetch PR view for checks: ${prViewRes.stderr}. Retrying in ${pollInterval}s...`);
         await persistCurrentState();
-        await sleep(pollInterval);
+        await sleep(Math.min(pollInterval, phaseRemainingMs(ciBudgetPhase, ciBudgetIdentity) / 1000));
         continue;
       }
 
@@ -1205,19 +1444,21 @@ async function runDeliverySkillLocked(
       try {
         prViewData = JSON.parse(prViewRes.stdout || "{}");
       } catch (err) {
+        if (reobservingPassedCi) { const expired = await phaseTimeout("ci", ciIdentity); if (expired) return expired; }
         log(`[delivery-skill] Warning: Failed to parse PR view response: ${String(err)}`);
         await persistCurrentState();
-        await sleep(pollInterval);
+        await sleep(Math.min(pollInterval, phaseRemainingMs(ciBudgetPhase, ciBudgetIdentity) / 1000));
         continue;
       }
 
       // 严格核对 PR 上的 headRefOid 必须存在且与当前已推送 head SHA 完全一致
       if (!prViewData.headRefOid || prViewData.headRefOid !== currentHeadSha) {
+        if (reobservingPassedCi) { const expired = await phaseTimeout("ci", ciIdentity); if (expired) return expired; }
         log(
           `[delivery-skill] CI checks pending: PR headRefOid (${prViewData.headRefOid ?? "missing"}) does not match current HEAD (${currentHeadSha}) yet. Waiting ${pollInterval}s...`,
         );
         await persistCurrentState();
-        await sleep(pollInterval);
+        await sleep(Math.min(pollInterval, phaseRemainingMs(ciBudgetPhase, ciBudgetIdentity) / 1000));
         continue;
       }
 
@@ -1244,9 +1485,15 @@ async function runDeliverySkillLocked(
       // 6a. Checks Green -> 进入 Review Gate
       if (evaluation.canAutoMerge) {
         log(`[delivery-skill] CI checks green! (${evaluation.reason})`);
+        if (!reobservingForReview) await checkpoint("ci_passed");
         ciPassedChecks = parsedChecks;
         ciReason = evaluation.reason;
         break;
+      }
+
+      if (reobservingPassedCi) {
+        const expired = await phaseTimeout("ci", ciIdentity);
+        if (expired) return expired;
       }
 
       // 6b. Checks Failed -> 进入 Repair Loop
@@ -1295,26 +1542,32 @@ async function runDeliverySkillLocked(
           );
         }
 
-        // 如果未配置 repairFn 也未配置 repairCommand，绝不凭空宣称 repair 成功并重复空提交！
-        if (!options.repairFn && !options.repairCommand) {
+        if (!options.repairCommand) {
           return haltDispatch(
             "ci_failed_max_repairs",
-            `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but no repairFn or repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
+            `CI checks failed on [${failedChecks.map((c) => c.name).join(", ")}], but no repairCommand was provided to execute repair. Diagnostic: ${diagResult.diagnostics.slice(0, 300)}. Halting dispatch.`,
           );
         }
 
+        const reservationTimeout = await totalTimeout("repair reservation");
+        if (reservationTimeout) return reservationTimeout;
         spentRepairs++;
         log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs}...`);
 
         // 在修复副作用执行前立即持久化预算消耗
         await checkpoint("repair_pending");
+        const repairPreflightTimeout = await totalTimeout("repair");
+        if (repairPreflightTimeout) return repairPreflightTimeout;
+        const repairIdentity = `repair:${spentRepairs}`;
+        await enterBudgetPhase("repair", repairIdentity);
+        const repairTotalTimeout = await totalTimeout("repair");
+        if (repairTotalTimeout) return repairTotalTimeout;
+        const repairEntryTimeout = await phaseTimeout("repair", repairIdentity);
+        if (repairEntryTimeout) return repairEntryTimeout;
 
         let repairSuccess = false;
         try {
-          if (options.repairFn) {
-            guard();
-            repairSuccess = await options.repairFn(diagResult.diagnostics);
-          } else if (options.repairCommand) {
+          if (options.repairCommand) {
             log(`[delivery-skill] Executing repair command: ${options.repairCommand}`);
             const repairRes = await runner.exec(
               options.repairCommand,
@@ -1328,11 +1581,16 @@ async function runDeliverySkillLocked(
             }
           }
         } catch (err) {
+          const exhausted = await phaseTimeout("repair", repairIdentity);
+          if (exhausted) return exhausted;
           return haltDispatch(
             "ci_failed_max_repairs",
             `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
           );
         }
+
+        const repairObservationTimeout = await phaseTimeout("repair", repairIdentity);
+        if (repairObservationTimeout) return repairObservationTimeout;
 
         if (!repairSuccess) {
           return haltDispatch(
@@ -1340,19 +1598,37 @@ async function runDeliverySkillLocked(
             `Repair attempt ${spentRepairs} failed to fix CI failure: ${diagResult.diagnostics.slice(0, 300)}`,
           );
         }
+        const completedRepair = await completeBudgetPhase("repair", repairIdentity);
+        if (completedRepair) return completedRepair;
 
         // 修复完成后重新执行项目验证
         if (options.validationCommand) {
           log(`[delivery-skill] Re-running validation command after repair: ${options.validationCommand}`);
-          const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
+          const validationPreflightTimeout = await totalTimeout("repair validation");
+          if (validationPreflightTimeout) return validationPreflightTimeout;
+          const validationIdentity = `repair:${spentRepairs}`;
+          await enterBudgetPhase("validation", validationIdentity);
+          const validationTotalTimeout = await totalTimeout("repair validation");
+          if (validationTotalTimeout) return validationTotalTimeout;
+          const validationEntryTimeout = await phaseTimeout("validation", validationIdentity);
+          if (validationEntryTimeout) return validationEntryTimeout;
+          const valRes = await runner.exec(options.validationCommand, options.cwd, Math.max(1, Math.min(validationTimeoutMs, phaseRemainingMs("validation", validationIdentity))));
+          const validationObservationTimeout = await phaseTimeout("validation", validationIdentity);
+          if (validationObservationTimeout) return validationObservationTimeout;
+          const validationCompletionTimeout = await totalTimeout("repair validation");
+          if (validationCompletionTimeout) return validationCompletionTimeout;
           if (valRes.exitCode !== 0) {
             return haltDispatch(
               "ci_failed_max_repairs",
               `Project validation failed after repair attempt ${spentRepairs}: ${valRes.stderr || valRes.stdout}`,
             );
           }
+          const completedValidation = await completeBudgetPhase("validation", validationIdentity);
+          if (completedValidation) return completedValidation;
         }
 
+        const postRepairTimeout = await totalTimeout("repair completion");
+        if (postRepairTimeout) return postRepairTimeout;
         // 核对是否有代码改动
         const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
         if (diffCheck.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${diffCheck.stderr}`);
@@ -1363,17 +1639,27 @@ async function runDeliverySkillLocked(
           );
         }
 
-        const staged = await stageSourceChanges(runner, options.cwd);
+        const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+        const stagingTimeout = await totalTimeout("repair source staging");
+        if (stagingTimeout) return stagingTimeout;
         if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
+        const repairCommitTimeout = await totalTimeout("repair commit");
+        if (repairCommitTimeout) return repairCommitTimeout;
         const fixCommitRes = await runner.git(
           ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
-          options.cwd,
+          options.cwd, Math.max(1, deadlineTimestampMs - now()),
         );
+        const repairCommitCompletedTimeout = await totalTimeout("repair commit completion");
+        if (repairCommitCompletedTimeout) return repairCommitCompletedTimeout;
         if (fixCommitRes.exitCode !== 0) {
           return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
         }
 
-        const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+        const repairPushTimeout = await totalTimeout("repair push");
+        if (repairPushTimeout) return repairPushTimeout;
+        const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+        const repairPushCompletedTimeout = await totalTimeout("repair push completion");
+        if (repairPushCompletedTimeout) return repairPushCompletedTimeout;
         if (fixPushRes.exitCode !== 0) {
           return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
         }
@@ -1389,15 +1675,15 @@ async function runDeliverySkillLocked(
         // New exact HEAD acknowledges the complete repair/commit/push sequence.
         await checkpoint("ci");
 
-        await sleep(pollInterval);
-        continue;
+        await sleep(Math.min(pollInterval, Math.max(0, (deadlineTimestampMs - now()) / 1000)));
+        continue delivery_loop;
       }
 
       // 6c. Checks Pending -> 等待下一次轮询
       log(`[delivery-skill] CI checks pending (${evaluation.reason}). Waiting ${pollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
       await persistCurrentState();
       if (options.yieldOnWait) return waiting();
-      await sleep(pollInterval);
+      await sleep(Math.min(pollInterval, phaseRemainingMs(ciBudgetPhase, ciBudgetIdentity) / 1000));
     }
 
     // ----------------------------------------------------
@@ -1415,6 +1701,8 @@ async function runDeliverySkillLocked(
       break delivery_loop;
     }
 
+    const reviewContextTimeout = await totalTimeout("review context");
+    if (reviewContextTimeout) return reviewContextTimeout;
     log(`[delivery-skill] Entering Review Gate for PR #${prNumber} @ ${currentHeadSha}...`);
 
     const reviewTarget: DecisionReviewTarget = {
@@ -1524,7 +1812,21 @@ async function runDeliverySkillLocked(
     );
     if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
       // If local git is missing objects (e.g. shallow clone), attempt fetch of baseSha
-      await runner.git(["fetch", "origin", baseSha], options.cwd);
+      const fetchTimeout = await totalTimeout("fetch");
+      if (fetchTimeout) return fetchTimeout;
+      const fetchPhase = budget?.activePhase;
+      if (fetchPhase) {
+        const exhausted = await phaseTimeout(fetchPhase.phase, fetchPhase.identity);
+        if (exhausted) return exhausted;
+      }
+      await runner.git(["fetch", "origin", baseSha], options.cwd, Math.max(1, fetchPhase
+        ? phaseRemainingMs(fetchPhase.phase, fetchPhase.identity) : deadlineTimestampMs - now()));
+      if (fetchPhase) {
+        const exhausted = await phaseTimeout(fetchPhase.phase, fetchPhase.identity);
+        if (exhausted) return exhausted;
+      }
+      const fetchCompletedTimeout = await totalTimeout("fetch completion");
+      if (fetchCompletedTimeout) return fetchCompletedTimeout;
       diffRes = await runner.git(
         ["diff", `${baseSha}...${currentHeadSha}`],
         options.cwd,
@@ -1595,7 +1897,7 @@ async function runDeliverySkillLocked(
         title: issueTitle,
         body: issueBody,
       },
-      plan: options.plan ?? null,
+      plan: plan ?? null,
       pullRequest: {
         repository: context.repo.toLowerCase(),
         prNumber: prNumber!,
@@ -1626,8 +1928,15 @@ async function runDeliverySkillLocked(
     };
 
     const sameReviewTarget = continuation?.headSha === currentHeadSha && continuation.prNumber === prNumber;
-    const operationKey = (sameReviewTarget ? continuation?.reviewOperationKey : undefined) ?? `delivery-review:${sameReviewTarget ? continuation!.intentId : randomUUID()}:${options.plan?.taskId ?? "none"}:${options.plan?.revision ?? 0}`;
+    const operationKey = (sameReviewTarget ? continuation?.reviewOperationKey : undefined) ?? `delivery-review:${sameReviewTarget ? continuation!.intentId : randomUUID()}:${plan?.taskId ?? "none"}:${plan?.revision ?? 0}`;
     await checkpoint("review_intent", { reviewOperationKey: operationKey });
+    const reviewPreflightTimeout = await totalTimeout("review");
+    if (reviewPreflightTimeout) return reviewPreflightTimeout;
+    await enterBudgetPhase("review", operationKey);
+    const reviewTotalTimeout = await totalTimeout("review");
+    if (reviewTotalTimeout) return reviewTotalTimeout;
+    const reviewEntryTimeout = await phaseTimeout("review", operationKey);
+    if (reviewEntryTimeout) return reviewEntryTimeout;
     let reviewTask: DecisionTask;
     try {
       guard();
@@ -1635,7 +1944,7 @@ async function runDeliverySkillLocked(
         resolvedSessionId,
         reviewTarget,
         reviewContext,
-        { operationKey, reuseCompleted: true },
+        { operationKey, reuseCompleted: true, signal: reviewSignal(Math.min(deadlineTimestampMs, budget!.activePhase!.deadlineAtMs)) },
       );
       if (reviewTask.kind !== "review" || reviewTask.sessionId !== resolvedSessionId
         || reviewTask.target.headSha !== currentHeadSha || reviewTask.target.prNumber !== prNumber
@@ -1648,23 +1957,29 @@ async function runDeliverySkillLocked(
       await checkpoint("review_wait", { reviewTaskId: reviewTask.id, reviewRevision: reviewTask.revision });
       log(`[delivery-skill] Ensured ReviewTask: ${reviewTask.id} (status: ${reviewTask.status})`);
     } catch (err) {
+      const exhausted = await phaseTimeout("review", operationKey);
+      if (exhausted) return exhausted;
+      const totalExhausted = await totalTimeout("review task creation");
+      if (totalExhausted) return totalExhausted;
       return haltDispatch(
         "manual_intervention_required",
         `Failed to ensure review task for PR #${prNumber} @ ${currentHeadSha}: ${String(err)}`,
       );
     }
+    const ensuredReviewTimeout = await phaseTimeout("review", operationKey);
+    if (ensuredReviewTimeout) return ensuredReviewTimeout;
+    const ensuredTotalTimeout = await totalTimeout("review task creation");
+    if (ensuredTotalTimeout) return ensuredTotalTimeout;
 
     const reviewPollInterval = options.reviewPollIntervalSeconds ?? pollInterval;
 
     // Review status polling loop
     while (true) {
       const elapsedWait = getElapsedWaitSeconds();
-      if (elapsedWait >= maxWaitSeconds || (deadlineTimestampMs !== undefined && now() >= deadlineTimestampMs)) {
-        return haltDispatch(
-          "ci_wait_timeout",
-          `Timed out waiting for review after ${elapsedWait}s (max ${maxWaitSeconds}s).`,
-        );
-      }
+      const reviewTimeout = await phaseTimeout("review", operationKey);
+      if (reviewTimeout) return reviewTimeout;
+      const totalReviewTimeout = await totalTimeout("review");
+      if (totalReviewTimeout) return totalReviewTimeout;
 
       await persistCurrentState();
 
@@ -1672,7 +1987,12 @@ async function runDeliverySkillLocked(
       const headCheckRes = await runner.gh(
         ["pr", "view", String(prNumber), "--repo", context.repo, "--json", "headRefOid"],
         options.cwd,
+        Math.max(1, phaseRemainingMs("review", operationKey)),
       );
+      const headObservationTimeout = await phaseTimeout("review", operationKey);
+      if (headObservationTimeout) return headObservationTimeout;
+      const headTotalTimeout = await totalTimeout("review HEAD observation");
+      if (headTotalTimeout) return headTotalTimeout;
       if (headCheckRes.exitCode === 0) {
         try {
           const headCheckObj = JSON.parse(headCheckRes.stdout || "{}");
@@ -1682,7 +2002,7 @@ async function runDeliverySkillLocked(
             );
             if (options.reviewGate.supersedeReviewTask) {
               guard();
-              await options.reviewGate.supersedeReviewTask(reviewTask.id);
+              await options.reviewGate.supersedeReviewTask(reviewTask.id, reviewSignal(deadlineTimestampMs));
             }
             currentHeadSha = headCheckObj.headRefOid;
             continue delivery_loop;
@@ -1694,9 +2014,13 @@ async function runDeliverySkillLocked(
 
       let statusResult: DeliveryReviewStatusResult;
       try {
-        statusResult = await options.reviewGate.getReviewStatus(reviewTask.id);
+        statusResult = await options.reviewGate.getReviewStatus(reviewTask.id, reviewSignal(Math.min(deadlineTimestampMs, budget!.activePhase!.deadlineAtMs)));
       } catch (err) {
         guard();
+        const exhausted = await phaseTimeout("review", operationKey);
+        if (exhausted) return exhausted;
+        const totalExhausted = await totalTimeout("review observation");
+        if (totalExhausted) return totalExhausted;
         const failures = (continuation?.reviewReadFailures ?? 0) + 1;
         await checkpoint("review_wait", { reviewReadFailures: failures });
         if (!isTransientReadError(err) || failures >= 3) {
@@ -1705,11 +2029,14 @@ async function runDeliverySkillLocked(
         }
         log(`[delivery-skill] Review read unavailable (${failures}/3): ${String(err)}`);
         if (options.yieldOnWait) return waiting();
-        await sleep(Math.min(reviewPollInterval, Math.max(0, (deadlineTimestampMs! - now()) / 1000)));
+        await sleep(Math.min(reviewPollInterval, phaseRemainingMs("review", operationKey) / 1000));
         continue;
       }
       guard();
-      if (now() >= deadlineTimestampMs!) return haltDispatch("ci_wait_timeout", "Review observation exceeded delivery deadline");
+      const observedReviewTimeout = await phaseTimeout("review", operationKey);
+      if (observedReviewTimeout) return observedReviewTimeout;
+      const totalReviewObservationTimeout = await totalTimeout("review observation");
+      if (totalReviewObservationTimeout) return totalReviewObservationTimeout;
       if (continuation?.reviewReadFailures) await checkpoint("review_wait", { reviewReadFailures: 0 });
       if (statusResult.taskId !== reviewTask.id) {
         return haltDispatch("manual_intervention_required", "Review status identity changed during continuation");
@@ -1747,7 +2074,11 @@ async function runDeliverySkillLocked(
               title: issueTitle,
               body: issueBody,
             },
-          });
+          }, reviewSignal(Math.min(deadlineTimestampMs, budget!.activePhase!.deadlineAtMs)));
+          const approvalTimeout = await phaseTimeout("review", operationKey);
+          if (approvalTimeout) return approvalTimeout;
+          const approvalTotalTimeout = await totalTimeout("review approval verification");
+          if (approvalTotalTimeout) return approvalTotalTimeout;
           if (!approvalVerify.approved) {
             return haltDispatch(
               "manual_intervention_required",
@@ -1776,23 +2107,30 @@ async function runDeliverySkillLocked(
             );
           }
 
-          if (!options.repairFn && !options.repairCommand) {
+          if (!options.repairCommand) {
             return haltDispatch(
               "review_changes_requested_max_repairs",
-              `Review requested changes:\n${findingSummary}\nNo repairFn or repairCommand provided to execute repair. Halting dispatch.`,
+              `Review requested changes:\n${findingSummary}\nNo repairCommand provided to execute repair. Halting dispatch.`,
             );
           }
 
+          const reservationTimeout = await totalTimeout("review repair reservation");
+          if (reservationTimeout) return reservationTimeout;
           spentRepairs++;
           log(`[delivery-skill] Entering repair attempt ${spentRepairs}/${maxRepairs} for review feedback...`);
           await checkpoint("repair_pending");
+          const repairPreflightTimeout = await totalTimeout("review repair");
+          if (repairPreflightTimeout) return repairPreflightTimeout;
+          const repairIdentity = `repair:${spentRepairs}`;
+          await enterBudgetPhase("repair", repairIdentity);
+          const repairTotalTimeout = await totalTimeout("review repair");
+          if (repairTotalTimeout) return repairTotalTimeout;
+          const repairEntryTimeout = await phaseTimeout("repair", repairIdentity);
+          if (repairEntryTimeout) return repairEntryTimeout;
 
           let repairSuccess = false;
           try {
-            if (options.repairFn) {
-              guard();
-              repairSuccess = await options.repairFn(findingSummary);
-            } else if (options.repairCommand) {
+            if (options.repairCommand) {
               log(`[delivery-skill] Executing repair command for review: ${options.repairCommand}`);
               const repRes = await runner.exec(
                 options.repairCommand,
@@ -1806,11 +2144,16 @@ async function runDeliverySkillLocked(
               }
             }
           } catch (err) {
+            const exhausted = await phaseTimeout("repair", repairIdentity);
+            if (exhausted) return exhausted;
             return haltDispatch(
               "review_changes_requested_max_repairs",
               `Repair attempt ${spentRepairs} failed with exception: ${String(err)}`,
             );
           }
+
+          const repairObservationTimeout = await phaseTimeout("repair", repairIdentity);
+          if (repairObservationTimeout) return repairObservationTimeout;
 
           if (!repairSuccess) {
             return haltDispatch(
@@ -1818,18 +2161,36 @@ async function runDeliverySkillLocked(
               `Repair attempt ${spentRepairs} failed to address review findings:\n${findingSummary}`,
             );
           }
+          const completedRepair = await completeBudgetPhase("repair", repairIdentity);
+          if (completedRepair) return completedRepair;
 
           if (options.validationCommand) {
             log(`[delivery-skill] Re-running validation command after review repair: ${options.validationCommand}`);
-            const valRes = await runner.exec(options.validationCommand, options.cwd, validationTimeoutMs);
+            const validationPreflightTimeout = await totalTimeout("review repair validation");
+            if (validationPreflightTimeout) return validationPreflightTimeout;
+            const validationIdentity = `repair:${spentRepairs}`;
+            await enterBudgetPhase("validation", validationIdentity);
+            const validationTotalTimeout = await totalTimeout("review repair validation");
+            if (validationTotalTimeout) return validationTotalTimeout;
+            const validationEntryTimeout = await phaseTimeout("validation", validationIdentity);
+            if (validationEntryTimeout) return validationEntryTimeout;
+            const valRes = await runner.exec(options.validationCommand, options.cwd, Math.max(1, Math.min(validationTimeoutMs, phaseRemainingMs("validation", validationIdentity))));
+            const validationObservationTimeout = await phaseTimeout("validation", validationIdentity);
+            if (validationObservationTimeout) return validationObservationTimeout;
+            const validationCompletionTimeout = await totalTimeout("review repair validation");
+            if (validationCompletionTimeout) return validationCompletionTimeout;
             if (valRes.exitCode !== 0) {
               return haltDispatch(
                 "review_changes_requested_max_repairs",
                 `Project validation failed after review repair attempt ${spentRepairs}: ${valRes.stderr || valRes.stdout}`,
               );
             }
+            const completedValidation = await completeBudgetPhase("validation", validationIdentity);
+            if (completedValidation) return completedValidation;
           }
 
+          const postRepairTimeout = await totalTimeout("review repair completion");
+          if (postRepairTimeout) return postRepairTimeout;
           const diffCheck = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
           if (diffCheck.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${diffCheck.stderr}`);
           if (diffCheck.stdout.trim().length === 0) {
@@ -1839,17 +2200,27 @@ async function runDeliverySkillLocked(
             );
           }
 
-          const staged = await stageSourceChanges(runner, options.cwd);
+          const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+          const stagingTimeout = await totalTimeout("review repair source staging");
+          if (stagingTimeout) return stagingTimeout;
           if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
+          const repairCommitTimeout = await totalTimeout("review repair commit");
+          if (repairCommitTimeout) return repairCommitTimeout;
           const fixCommitRes = await runner.git(
             ["commit", "--only", "-m", `fix(review): address review findings (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
-            options.cwd,
+            options.cwd, Math.max(1, deadlineTimestampMs - now()),
           );
+          const repairCommitCompletedTimeout = await totalTimeout("review repair commit completion");
+          if (repairCommitCompletedTimeout) return repairCommitCompletedTimeout;
           if (fixCommitRes.exitCode !== 0) {
             return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
           }
 
-          const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd);
+          const repairPushTimeout = await totalTimeout("review repair push");
+          if (repairPushTimeout) return repairPushTimeout;
+          const fixPushRes = await runner.git(["push", "origin", context.headBranch], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+          const repairPushCompletedTimeout = await totalTimeout("review repair push completion");
+          if (repairPushCompletedTimeout) return repairPushCompletedTimeout;
           if (fixPushRes.exitCode !== 0) {
             return haltDispatch("manual_intervention_required", `Failed to push repair commit: ${fixPushRes.stderr}`);
           }
@@ -1862,7 +2233,7 @@ async function runDeliverySkillLocked(
 
           if (options.reviewGate.supersedeReviewTask) {
             guard();
-              await options.reviewGate.supersedeReviewTask(reviewTask.id);
+              await options.reviewGate.supersedeReviewTask(reviewTask.id, reviewSignal(deadlineTimestampMs));
           }
 
           currentHeadSha = newHeadSha;
@@ -1870,7 +2241,7 @@ async function runDeliverySkillLocked(
 
           await checkpoint("ci");
           if (options.yieldOnWait) return waiting();
-          await sleep(pollInterval);
+          await sleep(Math.min(pollInterval, Math.max(0, (deadlineTimestampMs - now()) / 1000)));
           continue delivery_loop;
         }
 
@@ -1899,7 +2270,7 @@ async function runDeliverySkillLocked(
       log(`[delivery-skill] Review status: ${statusResult.status}. Waiting ${reviewPollInterval}s... (${elapsedWait}/${maxWaitSeconds}s)`);
       await persistCurrentState();
       if (options.yieldOnWait) return waiting();
-      await sleep(reviewPollInterval);
+      await sleep(Math.min(reviewPollInterval, phaseRemainingMs("review", operationKey) / 1000));
     }
   }
 
@@ -1907,6 +2278,8 @@ async function runDeliverySkillLocked(
   // Phase 7: Land Evaluation & Squash Merge
   // ==========================================
   log("[delivery-skill] Phase 7: Land evaluation & squash merge...");
+  const landEvaluationTimeout = await totalTimeout("land evaluation");
+  if (landEvaluationTimeout) return landEvaluationTimeout;
 
   // 默认绝不自动 land，必须显式 optInLand
   if (options.optInLand !== true) {
@@ -2048,7 +2421,9 @@ async function runDeliverySkillLocked(
     headSha: currentHeadSha ?? "",
     sessionId: resolvedSessionId,
     requirements: { title: latestTitle, body: latestBody },
-  });
+  }, reviewSignal(deadlineTimestampMs));
+  const preMergeBudgetTimeout = await totalTimeout("pre-merge approval");
+  if (preMergeBudgetTimeout) return preMergeBudgetTimeout;
   if (!preMergeApproval.approved) {
     return haltDispatch(
       "manual_intervention_required",
@@ -2072,16 +2447,21 @@ async function runDeliverySkillLocked(
         // did not land. Do not clear it on a failed or ambiguous observation.
         landing = undefined;
       }
-      await assertRepairWorkspace(runner, options.cwd, currentHeadSha!);
+      await assertRepairWorkspace(runner, options.cwd, currentHeadSha!, conflictRepairOptions().timeout);
       spentRepairs++;
       mergeConflictRepair = { cause: "merge_conflict", operationId: randomUUID(), attempt: spentRepairs,
         prNumber, expectedHeadSha: currentHeadSha!, baseSha: observed.remoteBaseSha, phase: "reserved" };
       await checkpoint("repair_pending");
+      await enterBudgetPhase("repair", `repair:${spentRepairs}`);
+      const conflictTotalTimeout = await totalTimeout("merge-conflict repair");
+      if (conflictTotalTimeout) return conflictTotalTimeout;
+      const conflictPhaseTimeout = await phaseTimeout("repair", `repair:${spentRepairs}`);
+      if (conflictPhaseTimeout) return conflictPhaseTimeout;
       log(`[delivery-skill] merge_conflict repair ${spentRepairs}/${maxRepairs}: HEAD=${currentHeadSha}, base=${observed.remoteBaseSha}`);
       currentHeadSha = await executeMergeConflictRepair(conflictRepairOptions());
       if (lastReviewTaskId && options.reviewGate.supersedeReviewTask) {
         guard();
-        await options.reviewGate.supersedeReviewTask(lastReviewTaskId);
+        await options.reviewGate.supersedeReviewTask(lastReviewTaskId, reviewSignal(deadlineTimestampMs));
       }
       await checkpoint("ci");
       log(`[delivery-skill] Conflict repair pushed ${currentHeadSha}; requiring new CI and exact-HEAD review.`);
@@ -2089,14 +2469,23 @@ async function runDeliverySkillLocked(
       continue landing_loop;
     } catch (error) {
       if (mergeConflictRepair) mergeConflictRepair = { ...mergeConflictRepair, outcome: String(error) };
+      const phase = budget?.activePhase;
+      if (phase && ["repair", "validation"].includes(phase.phase)) { const exhausted = await phaseTimeout(phase.phase, phase.identity); if (exhausted) return exhausted; }
+      const exhausted = await totalTimeout("merge-conflict repair");
+      if (exhausted) return exhausted;
       return haltDispatch("manual_intervention_required", String(error));
     }
   }
 
+  const landingTimeout = await totalTimeout("landing");
+  if (landingTimeout) return landingTimeout;
   if (!landing || landing.headSha !== currentHeadSha || landing.prNumber !== prNumber) {
     landing = { intentId: randomUUID(), context, prNumber, headSha: currentHeadSha ?? "", optIn: true, phase: "intent" };
   }
   await persistCurrentState();
+
+  const mergeTimeout = await totalTimeout("merge");
+  if (mergeTimeout) return mergeTimeout;
 
   // 执行 squash merge
   const mergeArgs = ["pr", "merge", String(prNumber), "--repo", context.repo, "--squash"];
@@ -2105,7 +2494,9 @@ async function runDeliverySkillLocked(
   }
 
   // A timeout may follow a successful merge: always observe before deciding.
-  try { await runner.gh(mergeArgs, options.cwd); } catch { /* preserve intent; read below */ }
+  try { await runner.gh(mergeArgs, options.cwd, Math.max(1, deadlineTimestampMs - now())); } catch { /* preserve intent; read below */ }
+  const mergeCompletedTimeout = await totalTimeout("merge completion");
+  if (mergeCompletedTimeout) return mergeCompletedTimeout;
 
   // 严格验证 PR 终态是否确实为 MERGED
   const verifyRes = await runner.gh(
