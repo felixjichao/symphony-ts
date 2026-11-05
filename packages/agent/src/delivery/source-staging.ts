@@ -7,12 +7,17 @@ export const SOURCE_PATHS = [":(top)**", ":(top,exclude).symphony", ":(top,exclu
  * Wildcard git-add pathspecs can report ignored .symphony as an error after
  * partially staging source. NUL records + literal top paths also handle filenames
  * containing whitespace, newlines or pathspec magic, from a nested cwd. */
-export async function stageSourceChanges(runner: DeliveryGitGhRunner, cwd: string, timeoutMs?: number): Promise<DeliverySubprocessResult> {
-  const files = await runner.git(["ls-files", "--full-name", "--cached", "--others", "--exclude-standard", "-z", "--", ...SOURCE_PATHS], cwd, timeoutMs);
+export async function stageSourceChanges(runner: DeliveryGitGhRunner, cwd: string, timeoutMs?: number | (() => number)): Promise<DeliverySubprocessResult> {
+  const remaining = () => typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  const initialTimeout = remaining();
+  if (initialTimeout !== undefined && initialTimeout <= 0) return { stdout: "", stderr: "delivery deadline exhausted", exitCode: 1 };
+  const files = await runner.git(["ls-files", "--full-name", "--cached", "--others", "--exclude-standard", "-z", "--", ...SOURCE_PATHS], cwd, initialTimeout);
   if (files.exitCode !== 0) return files;
   const paths = [...new Set(files.stdout.split("\0").filter(p => p && p !== ".symphony" && !p.startsWith(".symphony/")))];
   for (let start = 0; start < paths.length; start += 100) {
-    const result = await runner.git(["add", "-A", "--", ...paths.slice(start, start + 100).map(p => `:(top,literal)${p}`)], cwd, timeoutMs);
+    const timeout = remaining();
+    if (timeout !== undefined && timeout <= 0) return { stdout: "", stderr: "delivery deadline exhausted", exitCode: 1 };
+    const result = await runner.git(["add", "-A", "--", ...paths.slice(start, start + 100).map(p => `:(top,literal)${p}`)], cwd, timeout);
     if (result.exitCode !== 0) return result;
   }
   return { stdout: "", stderr: "", exitCode: 0 };

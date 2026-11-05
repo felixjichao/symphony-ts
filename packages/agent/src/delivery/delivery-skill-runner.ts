@@ -1166,12 +1166,16 @@ async function runDeliverySkillLocked(
   const statusRes = await runner.git(["status", "--porcelain", "--", ...SOURCE_PATHS], options.cwd);
   if (statusRes.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source status failed: ${statusRes.stderr}`);
   if (statusRes.stdout.trim().length > 0) {
-    const staged = await stageSourceChanges(runner, options.cwd);
+    const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+    const stagingTimeout = await totalTimeout("source staging");
+    if (stagingTimeout) return stagingTimeout;
     if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
     const commitType = options.commitType ?? "feat";
     const commitMsg =
       options.commitMessage ?? `${commitType}: implement delivery for issue #${context.issueNumber} (${context.workspaceKey})`;
-    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd);
+    const commitRes = await runner.git(["commit", "--only", "-m", commitMsg, "--", ...SOURCE_PATHS], options.cwd, Math.max(1, deadlineTimestampMs - now()));
+    const commitCompletedTimeout = await totalTimeout("commit completion");
+    if (commitCompletedTimeout) return commitCompletedTimeout;
     if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
       return haltDispatch("manual_intervention_required", `Git commit failed: ${commitRes.stderr}`);
     }
@@ -1222,8 +1226,10 @@ async function runDeliverySkillLocked(
         "--body",
         prBody,
       ],
-      options.cwd,
+      options.cwd, Math.max(1, deadlineTimestampMs - now()),
     );
+    const creationCompletedTimeout = await totalTimeout("pull request creation completion");
+    if (creationCompletedTimeout) return creationCompletedTimeout;
 
     if (createRes.exitCode !== 0) {
       return haltDispatch("manual_intervention_required", `Failed to create PR: ${createRes.stderr}`);
@@ -1633,14 +1639,18 @@ async function runDeliverySkillLocked(
           );
         }
 
-        const staged = await stageSourceChanges(runner, options.cwd);
+        const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+        const stagingTimeout = await totalTimeout("repair source staging");
+        if (stagingTimeout) return stagingTimeout;
         if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
         const repairCommitTimeout = await totalTimeout("repair commit");
         if (repairCommitTimeout) return repairCommitTimeout;
         const fixCommitRes = await runner.git(
           ["commit", "--only", "-m", `fix(ci): repair failed checks (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
-          options.cwd,
+          options.cwd, Math.max(1, deadlineTimestampMs - now()),
         );
+        const repairCommitCompletedTimeout = await totalTimeout("repair commit completion");
+        if (repairCommitCompletedTimeout) return repairCommitCompletedTimeout;
         if (fixCommitRes.exitCode !== 0) {
           return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
         }
@@ -1802,7 +1812,21 @@ async function runDeliverySkillLocked(
     );
     if (diffRes.exitCode !== 0 || !diffRes.stdout || diffRes.stdout.trim().length === 0) {
       // If local git is missing objects (e.g. shallow clone), attempt fetch of baseSha
-      await runner.git(["fetch", "origin", baseSha], options.cwd);
+      const fetchTimeout = await totalTimeout("fetch");
+      if (fetchTimeout) return fetchTimeout;
+      const fetchPhase = budget?.activePhase;
+      if (fetchPhase) {
+        const exhausted = await phaseTimeout(fetchPhase.phase, fetchPhase.identity);
+        if (exhausted) return exhausted;
+      }
+      await runner.git(["fetch", "origin", baseSha], options.cwd, Math.max(1, fetchPhase
+        ? phaseRemainingMs(fetchPhase.phase, fetchPhase.identity) : deadlineTimestampMs - now()));
+      if (fetchPhase) {
+        const exhausted = await phaseTimeout(fetchPhase.phase, fetchPhase.identity);
+        if (exhausted) return exhausted;
+      }
+      const fetchCompletedTimeout = await totalTimeout("fetch completion");
+      if (fetchCompletedTimeout) return fetchCompletedTimeout;
       diffRes = await runner.git(
         ["diff", `${baseSha}...${currentHeadSha}`],
         options.cwd,
@@ -2176,14 +2200,18 @@ async function runDeliverySkillLocked(
             );
           }
 
-          const staged = await stageSourceChanges(runner, options.cwd);
+          const staged = await stageSourceChanges(runner, options.cwd, () => deadlineTimestampMs - now());
+          const stagingTimeout = await totalTimeout("review repair source staging");
+          if (stagingTimeout) return stagingTimeout;
           if (staged.exitCode !== 0) return haltDispatch("manual_intervention_required", `Git source staging failed: ${staged.stderr || staged.stdout}`);
           const repairCommitTimeout = await totalTimeout("review repair commit");
           if (repairCommitTimeout) return repairCommitTimeout;
           const fixCommitRes = await runner.git(
             ["commit", "--only", "-m", `fix(review): address review findings (attempt ${spentRepairs})`, "--", ...SOURCE_PATHS],
-            options.cwd,
+            options.cwd, Math.max(1, deadlineTimestampMs - now()),
           );
+          const repairCommitCompletedTimeout = await totalTimeout("review repair commit completion");
+          if (repairCommitCompletedTimeout) return repairCommitCompletedTimeout;
           if (fixCommitRes.exitCode !== 0) {
             return haltDispatch("manual_intervention_required", `Failed to commit repair changes: ${fixCommitRes.stderr}`);
           }

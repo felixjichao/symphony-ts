@@ -173,6 +173,26 @@ execFileSync("git", ["add", "source.txt"]);
 }
 
 describe("#192 transient delivery failures (real Git)", () => {
+  it("preserves landing intent when merge crosses the total deadline", async () => {
+    const f = fixture();
+    let clock = 1_000_000;
+    let mergeCalls = 0;
+    const runner: DeliveryGitGhRunner = { ...f.options.runner, async gh(args, cwd, timeout) {
+      if (args[0] === "pr" && args[1] === "merge") {
+        mergeCalls++;
+        expect(timeout).toBe(100_000);
+        const result = await f.options.runner.gh(args, cwd, timeout);
+        clock += 100_001;
+        return result;
+      }
+      return f.options.runner.gh(args, cwd, timeout);
+    } };
+    const result = await runDeliverySkill({ ...f.options, runner, nowFn: () => clock, sleepFn: async () => { clock += 1000; } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(mergeCalls).toBe(1);
+    expect(f.storage.readState()?.landing?.phase).toBe("intent");
+  });
+
   it("persists CI completion before review materialization and reobserves it after a crash", async () => {
     const f = fixture();
     const gate = f.options.reviewGate!;

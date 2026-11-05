@@ -98,6 +98,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
   };
   const git = async (args: readonly string[]) => {
     const result = await o.runner.git(args, o.cwd, o.timeout());
+    o.timeout();
     if (result.exitCode !== 0) throw new Error(`merge_conflict_git_${args[0]}: ${result.stderr || result.stdout}`);
     return result.stdout.trim();
   };
@@ -129,6 +130,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     await o.assertIdentity();
     await phase("merging");
     const merge = await o.runner.git(["merge", "--no-commit", "--no-ff", operation.baseSha], o.cwd, o.timeout());
+    o.timeout();
     const unmerged = await git(["diff", "--name-only", "--diff-filter=U"]);
     if (merge.exitCode !== 0 && (merge.exitCode !== 1 || !unmerged)) throw new Error(`merge_conflict_merge_failed: ${merge.stderr}`);
     if (merge.exitCode === 0 && !unmerged) {
@@ -176,7 +178,7 @@ export async function executeMergeConflictRepair(o: RepairOptions, recovering = 
     if (validation.exitCode !== 0) throw new Error(`merge_conflict_validation_failed: ${validation.stderr || validation.stdout}`);
     if (await git(["rev-parse", "HEAD"]) !== operation.expectedHeadSha
       || await git(["rev-parse", "MERGE_HEAD"]) !== operation.baseSha) throw new Error("merge_conflict_validation_changed_history");
-    const staged = await stageSourceChanges(o.runner, o.cwd, o.timeout());
+    const staged = await stageSourceChanges(o.runner, o.cwd, o.timeout);
     if (staged.exitCode !== 0) throw new Error(`merge_conflict_git_add: ${staged.stderr || staged.stdout}`);
     if (await git(["diff", "--name-only", "--diff-filter=U"])) throw new Error("merge_conflict_unresolved_paths");
     await git(["diff", "--cached", "--check"]);

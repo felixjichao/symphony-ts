@@ -57,6 +57,24 @@ describe("third-review delivery regressions", () => {
     expect(result.reason).toBe("budget_exhausted");
     expect(f.calls.some(args => args[0] === "pr" && args[1] === "create")).toBe(false);
   });
+  it("stops after an initial commit crosses the total deadline", async () => {
+    let clock = 100_000;
+    let state: PersistedDeliveryState | null = null;
+    const f = fixture();
+    const runner: DeliveryGitGhRunner = { ...f.runner, async git(args, cwd, timeout) {
+      if (args[0] === "status") return { stdout: " M source.txt", stderr: "", exitCode: 0 };
+      if (args[0] === "commit") {
+        expect(timeout).toBe(5_000);
+        clock += 5_001;
+        return ok({});
+      }
+      return f.runner.git(args, cwd, timeout);
+    } };
+    const result = await runDeliverySkill({ ...options, runner, nowFn: () => clock,
+      stateStorage: { readState: () => state, writeState: value => { state = value; } } });
+    expect(result.reason).toBe("budget_exhausted");
+    expect(f.calls.some(args => args[0] === "push")).toBe(false);
+  });
   it("rejects an unbounded in-process repair before reading state or starting effects", async () => {
     const f = fixture();
     let invoked = false;
